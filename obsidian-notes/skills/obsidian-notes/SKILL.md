@@ -18,42 +18,56 @@ author: "mstefanko"
 
 ## Overview
 
-One command to save, one to search. Claude decides the note structure.
+One command to save, one to search, one to set up.
 
 | Command | Purpose |
 |---------|---------|
+| `/obsidian-notes:setup` | Configure vault path and notes directory |
 | `/obsidian-notes:save` | Write a note — Claude picks decision vs freeform |
 | `/obsidian-notes:search` | Find notes by keyword, tag, or topic |
 
 ## Config
 
-| Setting | Value |
-|---------|-------|
-| Vault path | `~/Documents/Notes` |
-| Notes dir | `Dev/notes` |
-| Default project | `enovis-plugins` |
+Config is stored at `~/.obsidian-notes.json`. Created by `/obsidian-notes:setup`.
+
+```json
+{
+  "vault_path": "/path/to/vault",
+  "notes_dir": "Dev/notes",
+  "project": "project-name"
+}
+```
+
+**Before running :save or :search**, read this config file. If it doesn't
+exist, tell the user to run `/obsidian-notes:setup` first and stop.
+
+To get the full notes path: `<vault_path>/<notes_dir>`
+To get the full vault path (for --all searches): `<vault_path>`
 
 ## Save Process
 
-1. Determine note type from conversation context:
+1. Read config from `~/.obsidian-notes.json` (error if missing)
+2. Determine note type from conversation context:
    - Alternatives evaluated + choice made → `type: decision`
    - Anything else (gotcha, pattern, discovery) → `type: note`
-2. If a bead ID was provided, run `bd show <bead-id>` for context
-3. Synthesize from the conversation — do NOT dump raw discussion
-4. Generate a filename slug from the title (lowercase, hyphens,
+3. If a bead ID was provided, run `bd show <bead-id>` for context
+4. Synthesize from the conversation — do NOT dump raw discussion
+5. Generate a filename slug from the title (lowercase, hyphens,
    no special characters). Prefix with today's date: `YYYY-MM-DD-slug.md`
-5. Ensure `~/Documents/Notes/Dev/notes/` exists (mkdir -p via Bash)
-6. Use the Write tool to create the file
-7. Report the file path to the user
+6. Ensure the notes directory exists (mkdir -p via Bash)
+7. Use the Write tool to create the file at:
+   `<vault_path>/<notes_dir>/YYYY-MM-DD-slug.md`
+8. Report the file path to the user
 
 ## Search Process
 
-1. Parse query and --all flag
-2. Default scope: `~/Documents/Notes/Dev/notes/`
-   With --all: `~/Documents/Notes/`
-3. Use Grep for content search, Glob for file listing
-4. Read matches, present as: title, type, date, 1-2 line preview
-5. Empty query = list all notes by date
+1. Read config from `~/.obsidian-notes.json` (error if missing)
+2. Parse query and --all flag
+3. Default scope: `<vault_path>/<notes_dir>`
+   With --all: `<vault_path>`
+4. Use Grep for content search, Glob for file listing
+5. Read matches, present as: title, type, date, 1-2 line preview
+6. Empty query = list all notes by date
 
 ## YAML Frontmatter Safety
 

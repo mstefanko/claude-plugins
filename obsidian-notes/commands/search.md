@@ -5,8 +5,12 @@ argument-hint: "<query> [--all]"
 
 Search the user's Obsidian vault for notes matching the query.
 
-**Default scope:** `~/Documents/Notes/Dev/notes/` (Claude Code notes only)
-**With --all flag:** `~/Documents/Notes/` (entire vault)
+**First:** Read `~/.obsidian-notes.json` for vault_path and notes_dir.
+If the file doesn't exist, tell the user to run `/obsidian-notes:setup`
+first and stop.
+
+**Default scope:** `<vault_path>/<notes_dir>` (Claude Code notes only)
+**With --all flag:** `<vault_path>` (entire vault)
 
 Process:
 1. Parse the query and --all flag from the argument

@@ -1,19 +1,24 @@
 # obsidian-notes
 
-Personal Claude Code plugin for saving notes to an Obsidian vault
-and searching them later.
+Claude Code plugin for saving notes to an Obsidian vault and searching
+them later.
 
 ## Setup
 
-1. Create the notes directory:
-   ```bash
-   mkdir -p ~/Documents/Notes/Dev/notes
+1. Install the plugin:
+   ```
+   /plugin install obsidian-notes@mstefanko-plugins
    ```
 
-2. Install the plugin:
+2. Run setup to configure your vault:
    ```
-   /plugin add ~/.claude/my-plugins/obsidian-notes
+   /obsidian-notes:setup
    ```
+   Setup auto-detects your Obsidian vaults. If you have multiple vaults,
+   it lists them for you to choose. It also creates the notes directory
+   inside your vault.
+
+Config is saved to `~/.obsidian-notes.json`.
 
 ## Usage
 
@@ -41,7 +46,7 @@ Otherwise, it writes a freeform note. You never pick the type.
 ### Searching notes
 
 ```
-/obsidian-notes:search auth timeout        # search Dev/notes/ only
+/obsidian-notes:search auth timeout        # search notes directory only
 /obsidian-notes:search --all MySQL          # search entire vault
 /obsidian-notes:search                      # list all notes by date
 ```
@@ -53,14 +58,14 @@ Or just say:
 
 ## Where notes go
 
-All notes land in `~/Documents/Notes/Dev/notes/` with filenames like
-`2026-04-02-three-step-auth.md`. The `type` field in frontmatter
-(`decision` or `note`) distinguishes them.
+Notes land in `<vault>/<notes_dir>/` (configured during setup) with
+filenames like `2026-04-02-three-step-auth.md`. The `type` field in
+frontmatter (`decision` or `note`) distinguishes them.
 
 ## Optional: Obsidian Templates
 
-To create notes manually in Obsidian, add templates to
-`~/Documents/Notes/templates/`:
+To create notes manually in Obsidian, add templates to your vault's
+`templates/` folder:
 
 **Decision template:**
 
