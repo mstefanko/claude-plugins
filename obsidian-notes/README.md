@@ -62,6 +62,14 @@ Notes land in `<vault>/<notes_dir>/` (configured during setup) with
 filenames like `2026-04-02-three-step-auth.md`. The `type` field in
 frontmatter (`decision` or `note`) distinguishes them.
 
+## Project detection
+
+The `project` frontmatter field reflects what the note is *about*, not
+which repo you're sitting in. Claude evaluates the conversation topic
+first — if you were discussing `mstefanko-plugins` work while your cwd
+is `enovis-plugins`, the note gets `project: mstefanko-plugins`. Falls
+back to the current git repo name, then to the default in config.
+
 ## Optional: Obsidian Templates
 
 To create notes manually in Obsidian, add templates to your vault's
