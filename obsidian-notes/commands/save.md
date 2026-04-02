@@ -10,6 +10,10 @@ skill for format and process.
 project. If the file doesn't exist, tell the user to run
 `/obsidian-notes:setup` first and stop.
 
+Ensure the notes directory exists before writing (mkdir -p via Bash).
+Check if a file with the same slug already exists — if so, append a
+numeric suffix (-2, -3, etc.) to avoid overwriting.
+
 The user is calling this mid-conversation while context is fresh.
 Synthesize from what was just discussed.
 

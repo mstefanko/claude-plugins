@@ -8,10 +8,11 @@ and configuring where notes are stored.
 
 ## Process
 
-1. **Auto-detect vaults** by reading Obsidian's config:
-   ```bash
-   cat ~/Library/Application\ Support/obsidian/obsidian.json
-   ```
+1. **Auto-detect vaults** by reading Obsidian's config. Check both
+   platform paths and use whichever exists:
+   - macOS: `~/Library/Application Support/obsidian/obsidian.json`
+   - Linux: `~/.config/obsidian/obsidian.json`
+
    Parse the JSON to extract vault paths from the `vaults` object
    (each value has a `path` field).
 

@@ -55,9 +55,11 @@ To get the full vault path (for --all searches): `<vault_path>`
 5. Generate a filename slug from the title (lowercase, hyphens,
    no special characters). Prefix with today's date: `YYYY-MM-DD-slug.md`
 6. Ensure the notes directory exists (mkdir -p via Bash)
-7. Use the Write tool to create the file at:
+7. Check if a file with that slug already exists. If so, append a
+   numeric suffix: `YYYY-MM-DD-slug-2.md`, `-3`, etc.
+8. Use the Write tool to create the file at:
    `<vault_path>/<notes_dir>/YYYY-MM-DD-slug.md`
-8. Report the file path to the user
+9. Report the file path to the user
 
 ## Search Process
 
