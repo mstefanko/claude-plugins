@@ -46,14 +46,21 @@ To get the full vault path (for --all searches): `<vault_path>`
 
 ## Project Detection
 
-Detect the project name at save time, don't use a static value:
+Determine the project name at save time using conversation context, not
+just the current working directory:
 
-1. Run `basename $(git rev-parse --show-toplevel 2>/dev/null)` via Bash
-2. If that returns a name → use it as the `project` frontmatter value
-3. If not in a git repo → fall back to the `project` field from config
+1. **Evaluate the topic.** Look at what the note is actually about. If
+   the conversation focused on a specific project or repo (e.g., building
+   a plugin in `mstefanko-plugins` while the cwd is `enovis-plugins`),
+   use the topic's project name — not the cwd's.
+2. **Fall back to git cwd.** If the note topic matches the current repo
+   or is ambiguous, run `basename $(git rev-parse --show-toplevel 2>/dev/null)`
+   and use that.
+3. **Fall back to config.** If not in a git repo, use the `project`
+   field from `~/.obsidian-notes.json`.
 
-This means the project field automatically matches wherever you're
-working: `enovis-plugins`, `motionmd-web`, etc.
+The goal: `project` should reflect what the note is *about*, not where
+you happened to be sitting when you saved it.
 
 ## Save Process
 

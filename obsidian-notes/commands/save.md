@@ -22,9 +22,12 @@ Decide the note type based on the conversation:
   (structured: Context, Decision, Ruled Out, Consequences)
 - Otherwise → type: note (freeform body, whatever structure fits)
 
-Detect the project name from the current git repo:
-`basename $(git rev-parse --show-toplevel 2>/dev/null)`
-If not in a git repo, fall back to the `project` value from config.
+Determine the project name by evaluating the conversation topic first.
+If the note is clearly about a specific project (e.g., you were discussing
+`mstefanko-plugins` work), use that project name even if the cwd is a
+different repo. Fall back to `basename $(git rev-parse --show-toplevel
+2>/dev/null)` when the topic matches the cwd or is ambiguous. If not in
+a git repo, use the `project` value from config.
 
 If the argument looks like a bead ID (beads-xxx), run `bd show <bead-id>`
 to pull in additional context. Otherwise, treat the argument as a topic
