@@ -1,0 +1,15 @@
+{
+  "name": "my-plugins",
+  "description": "Personal Claude Code plugins",
+  "owner": {
+    "name": "mstefanko"
+  },
+  "plugins": [
+    {
+      "name": "obsidian-notes",
+      "source": "./obsidian-notes",
+      "description": "Save notes and decision records to your Obsidian vault and search them later.",
+      "category": "documentation"
+    }
+  ]
+}

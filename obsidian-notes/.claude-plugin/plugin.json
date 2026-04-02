@@ -1,0 +1,6 @@
+{
+  "name": "obsidian-notes",
+  "description": "Save notes to your Obsidian vault and search them later.",
+  "author": { "name": "mstefanko" },
+  "keywords": ["obsidian", "adr", "decisions", "notes", "documentation"]
+}
