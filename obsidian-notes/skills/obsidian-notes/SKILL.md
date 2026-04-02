@@ -44,22 +44,34 @@ exist, tell the user to run `/obsidian-notes:setup` first and stop.
 To get the full notes path: `<vault_path>/<notes_dir>`
 To get the full vault path (for --all searches): `<vault_path>`
 
+## Project Detection
+
+Detect the project name at save time, don't use a static value:
+
+1. Run `basename $(git rev-parse --show-toplevel 2>/dev/null)` via Bash
+2. If that returns a name → use it as the `project` frontmatter value
+3. If not in a git repo → fall back to the `project` field from config
+
+This means the project field automatically matches wherever you're
+working: `enovis-plugins`, `motionmd-web`, etc.
+
 ## Save Process
 
 1. Read config from `~/.obsidian-notes.json` (error if missing)
-2. Determine note type from conversation context:
+2. Detect project name (see Project Detection above)
+3. Determine note type from conversation context:
    - Alternatives evaluated + choice made → `type: decision`
    - Anything else (gotcha, pattern, discovery) → `type: note`
-3. If a bead ID was provided, run `bd show <bead-id>` for context
-4. Synthesize from the conversation — do NOT dump raw discussion
-5. Generate a filename slug from the title (lowercase, hyphens,
+4. If a bead ID was provided, run `bd show <bead-id>` for context
+5. Synthesize from the conversation — do NOT dump raw discussion
+6. Generate a filename slug from the title (lowercase, hyphens,
    no special characters). Prefix with today's date: `YYYY-MM-DD-slug.md`
-6. Ensure the notes directory exists (mkdir -p via Bash)
-7. Check if a file with that slug already exists. If so, append a
+7. Ensure the notes directory exists (mkdir -p via Bash)
+8. Check if a file with that slug already exists. If so, append a
    numeric suffix: `YYYY-MM-DD-slug-2.md`, `-3`, etc.
-8. Use the Write tool to create the file at:
+9. Use the Write tool to create the file at:
    `<vault_path>/<notes_dir>/YYYY-MM-DD-slug.md`
-9. Report the file path to the user
+10. Report the file path to the user
 
 ## Search Process
 

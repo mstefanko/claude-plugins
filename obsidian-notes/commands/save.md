@@ -6,8 +6,8 @@ argument-hint: "[bead-id or topic]"
 Save a note to the user's Obsidian vault. Follow the obsidian-notes
 skill for format and process.
 
-**First:** Read `~/.obsidian-notes.json` for vault_path, notes_dir, and
-project. If the file doesn't exist, tell the user to run
+**First:** Read `~/.obsidian-notes.json` for vault_path and notes_dir.
+If the file doesn't exist, tell the user to run
 `/obsidian-notes:setup` first and stop.
 
 Ensure the notes directory exists before writing (mkdir -p via Bash).
@@ -22,7 +22,9 @@ Decide the note type based on the conversation:
   (structured: Context, Decision, Ruled Out, Consequences)
 - Otherwise → type: note (freeform body, whatever structure fits)
 
-Use the `project` value from config as the default project in frontmatter.
+Detect the project name from the current git repo:
+`basename $(git rev-parse --show-toplevel 2>/dev/null)`
+If not in a git repo, fall back to the `project` value from config.
 
 If the argument looks like a bead ID (beads-xxx), run `bd show <bead-id>`
 to pull in additional context. Otherwise, treat the argument as a topic

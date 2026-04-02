@@ -24,8 +24,10 @@ and configuring where notes are stored.
 3. **Ask for notes subdirectory.** Suggest `Dev/notes` as default.
    The user can accept or specify a different path within the vault.
 
-4. **Ask for default project name.** This is the `project` field in
-   frontmatter. Suggest the current working directory's repo name.
+4. **Ask for fallback project name.** This is used as the `project`
+   frontmatter value only when you're not inside a git repo. Normally,
+   the project is auto-detected from the current repo at save time.
+   Suggest the current working directory's repo name as default.
 
 5. **Write config** to `~/.obsidian-notes.json`:
    ```json
