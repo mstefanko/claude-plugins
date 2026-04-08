@@ -1,76 +1,138 @@
 ---
-description: "Register a project's tech stack for radar scans"
-argument-hint: "[no arguments — run from any project directory]"
+description: "Manage your tech radar project registry"
+argument-hint: "[--list | --remove <project> | no args to add projects]"
 ---
 
 # Tech Radar Setup
 
-Add or update the current project in `~/.tech-radar.json`. Run from different project directories to build up a multi-project registry. **Setup is optional** — scan works without it, just without project-specific grouping.
+Discover git repos, register their tech stacks, and manage the project registry in `~/.tech-radar.json`. **Setup is optional** — scan works without it, just without project-specific grouping.
 
-## Process
+## Arguments
 
-1. **Detect project identity** from the current working directory:
-   - Project name: basename of the git root (e.g., `myorthomd-web`, `enovis-plugins`)
-   - Project path: absolute path to the git root
-   - If not in a git repo, use the current directory name and path
+- No arguments: discover and add projects (interactive)
+- `--list`: show registered projects and their stacks
+- `--remove <project>`: remove a project from the registry
 
-2. **Read project files** to extract tech keywords:
-   - `Gemfile` — Ruby/Rails gems, database adapters, test frameworks
-   - `package.json` — npm packages, JS frameworks, bundlers
-   - `CLAUDE.md` — mentioned technologies, migration plans
-   - `docker-compose.yml` / `Dockerfile` — infra tools
-   - Skip any that don't exist
+## Add Projects (default)
 
-3. **Extract tech keywords** into categories:
-   - `backend` — language, framework, database, test framework, ORM
-   - `frontend` — JS framework, CSS framework, bundler, asset pipeline
-   - `infra` — containerization, web server, CI, deployment
-   - `migrating_from` — deprecated tech, upgrade comments, old versions
-   - `migrating_to` — target tech, migration plans, new versions
+### Phase 1: Discover Git Repos
 
-4. **Check for existing config** at `~/.tech-radar.json`:
-   - If exists, load it and check if this project is already registered
-   - If project exists: show current stack vs proposed changes, ask to confirm
-   - If project is new: show proposed stack, ask to confirm before adding
-   - If no config file: create fresh with this project as the first entry
+Scan common locations for git repositories:
 
-5. **Ask user to confirm or edit** before saving. Show:
-   - Project name and path
-   - Extracted stack keywords by category
-   - Global interests (suggest additions based on project domain)
+1. `~/` — top-level home directory repos
+2. `~/code/`, `~/projects/`, `~/dev/`, `~/src/`, `~/work/` — common dev directories
+3. `~/.claude/plugins/marketplaces/*/` — plugin marketplaces
 
-6. **Detect installed plugins** by listing directories in `~/.claude/plugins/cache/*/` (where Claude Code installs plugins). Extract plugin names from directory names. Update `installed_plugins` in config.
+For each location, find directories containing `.git/` (one level deep — don't recurse into nested repos). Collect the list of discovered repos.
 
-7. **Write `~/.tech-radar.json`** — merge this project into the existing registry:
-   ```json
-   {
-     "projects": {
-       "myorthomd-web": {
-         "path": "/Users/mstefanko/myorthomd-web",
-         "stack": {
-           "backend": ["ruby", "rails", "mysql", "rspec"],
-           "frontend": ["stimulus", "turbo", "bootstrap", "esbuild"],
-           "infra": ["docker", "caddy"],
-           "migrating_from": ["coffeescript", "backbone", "jquery", "bootstrap 4"],
-           "migrating_to": ["stimulus", "turbo", "bootstrap 5", "es6"]
-         }
-       }
-     },
-     "interests": ["healthcare", "hipaa", "hotwire", "claude-code"],
-     "min_stars": 1000,
-     "installed_plugins": ["claude-mem", "context-mode", "obsidian-notes"],
-     "last_scan": null
-   }
-   ```
+### Phase 2: Present Choices
 
-8. **Verify obsidian-notes config** exists at `~/.obsidian-notes.json` (needed for scan output). If missing, suggest running `/obsidian-notes:setup` first — but this is a warning, not a blocker.
+Show the user a numbered list of discovered repos:
+
+```
+Found git repositories:
+  1. myorthomd-web          ~/myorthomd-web
+  2. enovis-plugins         ~/.claude/plugins/marketplaces/enovis-plugins
+  3. mstefanko-plugins      ~/.claude/plugins/marketplaces/mstefanko-plugins
+  4. dotfiles               ~/dotfiles
+
+Already registered: (none)
+
+Which projects to add? (comma-separated numbers, or "all"):
+```
+
+- Mark projects already in the registry so the user knows
+- Already-registered projects can be re-selected to update their stack
+- User picks by number, comma-separated, or "all"
+
+### Phase 3: Analyze Selected Projects
+
+For each selected project, read its files to extract tech keywords:
+
+- `Gemfile` — Ruby/Rails gems, database adapters, test frameworks
+- `package.json` — npm packages, JS frameworks, bundlers
+- `CLAUDE.md` — mentioned technologies, migration plans
+- `docker-compose.yml` / `Dockerfile` — infra tools
+- Skip any that don't exist
+
+Extract into categories:
+- `backend` — language, framework, database, test framework, ORM
+- `frontend` — JS framework, CSS framework, bundler, asset pipeline
+- `infra` — containerization, web server, CI, deployment
+- `migrating_from` — deprecated tech, upgrade comments, old versions
+- `migrating_to` — target tech, migration plans, new versions
+
+### Phase 4: Confirm & Save
+
+Show the extracted stacks for all selected projects at once:
+
+```
+Proposed additions:
+
+myorthomd-web (~/myorthomd-web)
+  backend:        ruby, rails, mysql, rspec
+  frontend:       stimulus, turbo, bootstrap, esbuild
+  infra:          docker, caddy
+  migrating_from: coffeescript, backbone, jquery, bootstrap 4
+  migrating_to:   stimulus, turbo, bootstrap 5, es6
+
+enovis-plugins (~/.claude/plugins/marketplaces/enovis-plugins)
+  backend:        bash, node, typescript, sqlite
+  frontend:       (none)
+  infra:          (none)
+
+Suggested interests: healthcare, hipaa, hotwire, claude-code
+
+Confirm? (y/edit/cancel):
+```
+
+- User can confirm all, edit individual projects, or cancel
+- Detect installed plugins from `~/.claude/plugins/cache/*/`
+- Write to `~/.tech-radar.json`
+- Verify `~/.obsidian-notes.json` exists (warning if missing, not a blocker)
+
+## List Projects (`--list`)
+
+Read `~/.tech-radar.json` and display:
+
+```
+Tech Radar Registry (3 projects)
+
+myorthomd-web (~/myorthomd-web)
+  backend:        ruby, rails, mysql, rspec
+  frontend:       stimulus, turbo, bootstrap, esbuild
+  migrating_from: coffeescript, backbone
+  migrating_to:   stimulus, turbo, bootstrap 5
+
+enovis-plugins (~/.claude/plugins/marketplaces/enovis-plugins)
+  backend:        bash, node, typescript, sqlite
+
+mstefanko-plugins (~/.claude/plugins/marketplaces/mstefanko-plugins)
+  backend:        (none)
+
+Global interests: healthcare, hipaa, hotwire, claude-code
+Min stars: 1000
+Last scan: 2026-04-08
+```
+
+If no config exists, say so and suggest running `/tech-radar:setup`.
+
+## Remove Project (`--remove <name>`)
+
+Remove a project from the registry by name:
+
+1. Read `~/.tech-radar.json`
+2. Find the project by name (case-insensitive match)
+3. Show what will be removed and ask for confirmation
+4. Remove the project entry and write the file
+5. If that was the last project, keep the config file with empty `projects: {}`
 
 ## Rules
 
-- **Never writes to the project repo** — only `~/.tech-radar.json`
-- **Additive** — running from a new project adds it; never removes existing projects
+- **Never writes to project repos** — only `~/.tech-radar.json`
+- **Additive by default** — add flow never removes existing projects
 - Never overwrite without showing the user what will change
-- `interests` are global (shared across projects) — suggest new ones based on project domain
+- `interests` are global (shared across projects) — suggest additions based on project domains
 - `min_stars` defaults to 1000 if not set
 - `last_scan` preserved across updates
-- To remove a project from the registry, user must explicitly ask
+- Repo discovery is best-effort — if a common directory doesn't exist, skip it silently

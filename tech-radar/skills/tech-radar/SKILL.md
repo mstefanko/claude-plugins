@@ -19,6 +19,8 @@ Scans the web for trending repositories, Claude Code plugins, and developer tool
 
 Reads `~/.tech-radar.json` (created/updated by `/tech-radar:setup`). **Setup is optional** — scan works without it, you just lose project-specific grouping.
 
+Setup auto-discovers git repos from common locations (`~/`, `~/code/`, `~/projects/`, etc.) and lets the user pick which to register. Use `--list` to view registered projects, `--remove <name>` to remove one.
+
 Schema:
 ```json
 {

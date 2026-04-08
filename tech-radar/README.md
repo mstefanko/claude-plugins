@@ -5,10 +5,12 @@ Scan trending repos, Claude Code plugins, and ecosystem tools against your tech 
 ## Setup
 
 ```
-/tech-radar:setup
+/tech-radar:setup              # discover git repos and register projects
+/tech-radar:setup --list       # show registered projects and stacks
+/tech-radar:setup --remove X   # remove a project from the registry
 ```
 
-Run from any project directory to register its tech stack. Reads `Gemfile`, `package.json`, and `CLAUDE.md` to extract keywords. Additive — run from multiple projects to build a registry.
+Auto-discovers git repos from common locations (`~/`, `~/code/`, `~/projects/`, plugin marketplaces) and presents a list to choose from. Analyzes `Gemfile`, `package.json`, and `CLAUDE.md` to extract tech stacks. Run from anywhere — no need to be in the project directory.
 
 **Setup is optional.** Scan works without it using generic queries.
 
