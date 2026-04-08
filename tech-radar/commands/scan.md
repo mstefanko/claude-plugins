@@ -5,7 +5,9 @@ argument-hint: "[--weekly | --quarterly]"
 
 # Tech Radar Scan
 
-Run a web scan for trending tools, repos, and plugins filtered against your tech stack.
+Run a web scan for trending tools, repos, and plugins. Results are grouped by which of your registered projects they're relevant to.
+
+**Works without setup.** If `~/.tech-radar.json` doesn't exist, runs generic developer tool searches and suggests running `/tech-radar:setup` afterward.
 
 ## Arguments
 
@@ -17,10 +19,12 @@ Run a web scan for trending tools, repos, and plugins filtered against your tech
 
 ### Phase 1: Load Context
 
-1. Read `~/.tech-radar.json` — if missing, tell user to run `/tech-radar:setup` and stop
-2. Read `~/.obsidian-notes.json` — need `vault_path` and `notes_dir` for output
+1. Read `~/.tech-radar.json` — if missing, enter **no-config mode** (see below)
+2. Read `~/.obsidian-notes.json` — need `vault_path` and `notes_dir` for output. If missing, print results to conversation only.
 3. Calculate date range from the timeframe argument
-4. Build search queries from `resources/search-queries.md` templates, substituting stack keywords and dates
+4. Build search queries from `resources/search-queries.md` templates:
+   - **With config:** substitute each project's stack keywords into templates. Generate queries per project.
+   - **No-config mode:** use generic queries only (trending dev tools, Claude plugins, HN signal)
 
 ### Phase 2: Web Searches
 
@@ -32,12 +36,14 @@ Run all WebSearch queries. These run in the main thread (WebSearch doesn't work 
 
 ### Phase 3: Filter & Group
 
-1. **Discard junk** — skip results without a GitHub or registry URL, skip below `min_stars`
+1. **Discard junk** — skip results without a GitHub or registry URL, skip below `min_stars` (default 1000)
 2. **Dedup** — merge same project found across multiple searches
-3. **Group by relevance tier:**
-   - **Direct fit** — matches `stack.backend`, `stack.frontend`, or `stack.migrating_to` keywords
-   - **Adjacent** — matches `interests` or `stack.infra`, or is a Claude Code plugin
-   - **General** — developer tool, no specific stack match
+3. **Match to projects:**
+   - For each result, check against each registered project's stack keywords
+   - A result matching `backend`, `frontend`, `migrating_to`, or `infra` keywords goes under that project
+   - A result can appear under multiple projects if relevant to both
+   - Claude Code plugins always go in the **Plugins** section
+   - Everything else goes in **General Dev Tools**
 4. **Sort by popularity within each group** (star tiers: 1k-5k / 5k-20k / 20k+)
 5. **Flag installed plugins** from `installed_plugins` config
 6. **Cap at 30 results total**
@@ -56,23 +62,30 @@ tags: [tech-radar, {timeframe}]
 
 # Tech Radar — {Month Year}
 
-Stack: {one-line summary from config}
+Projects: myorthomd-web, enovis-plugins
 Scanned: {N}/{total} searches succeeded
 
 ## Key Takeaways
 
-- {3-5 bullets: what's new, what's worth trying, what's missing}
+- {3-5 bullets: what's relevant to which project, what's worth trying}
 
-## Direct Stack Match
+## For myorthomd-web
 
 | Project | What | Stars | URL | Verdict |
 |---------|------|-------|-----|---------|
-| ... | one-line description | tier | url | natural language verdict |
+| Herb 0.9 | HTML-aware ERB linter/formatter | 5k+ | github.com/marcoroth/herb | Try on ERB templates |
 
-## Adjacent / Plugins
+## For enovis-plugins
+
+| Project | What | Stars | URL | Verdict |
+|---------|------|-------|-----|---------|
+| sqlite-fts5-tool | FTS5 query builder | 2k+ | github.com/... | Could improve Trello search |
+
+## Plugins
 
 | Project | What | Stars | URL | Installed? | Verdict |
 |---------|------|-------|-----|------------|---------|
+| Superpowers | TDD/planning enforcement | 29k | github.com/obra/superpowers | No | Try on one task |
 
 ## General Dev Tools
 
@@ -84,13 +97,19 @@ Also print a short summary (3-5 lines) to the conversation.
 
 ### Phase 5: Update Config
 
-Update `last_scan` in `~/.tech-radar.json` to today's date.
+Update `last_scan` in `~/.tech-radar.json` to today's date. (Skip if no-config mode.)
+
+## No-Config Mode
+
+When `~/.tech-radar.json` doesn't exist:
+- Run generic queries only: trending dev tools, Claude Code plugins, HN signal
+- Group as "Plugins" and "General Dev Tools" only (no per-project sections)
+- At the end, suggest: "Run `/tech-radar:setup` from your project directories to get project-specific results next time."
 
 ## Error Handling
 
 - Individual WebSearch failures: continue, report at top of output
-- Config missing: stop with clear instruction to run setup
-- Obsidian config missing: stop with instruction to run `/obsidian-notes:setup`
+- Obsidian config missing: print results to conversation instead of writing file
 - Zero results after filtering: write a note saying "no notable results this period"
 
 ## Quality Rules
@@ -99,3 +118,4 @@ Update `last_scan` in `~/.tech-radar.json` to today's date.
 - Star counts are approximate from web results — use tiers not exact numbers
 - Executive summary is the most important section — make it actionable
 - Don't include tools the user obviously already knows about
+- Tag verdicts to specific projects when possible ("useful for myorthomd-web's Bootstrap migration")

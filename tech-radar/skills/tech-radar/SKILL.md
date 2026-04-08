@@ -11,28 +11,61 @@ USE THIS SKILL when the user says: "tech radar", "scan for tools", "what's trend
 
 ## Overview
 
-Scans the web for trending repositories, Claude Code plugins, and developer tools. Filters results against your configured tech stack and produces a grouped, ranked Obsidian note.
+Scans the web for trending repositories, Claude Code plugins, and developer tools. Filters results against your registered projects' tech stacks and produces a grouped, ranked Obsidian note.
 
-**Not a scoring formula.** Results are grouped by relevance tier and sorted by popularity. You make the judgment calls.
+**Not a scoring formula.** Results are grouped by which project they're relevant to, then sorted by popularity. You make the judgment calls.
 
 ## Config
 
-Reads `~/.tech-radar.json` (created by `/tech-radar:setup`).
+Reads `~/.tech-radar.json` (created/updated by `/tech-radar:setup`). **Setup is optional** — scan works without it, you just lose project-specific grouping.
 
 Schema:
-- `stack.backend` — array of backend tech keywords (e.g., ["ruby", "rails", "mysql", "rspec"])
-- `stack.frontend` — array of frontend tech keywords (e.g., ["stimulus", "turbo", "bootstrap", "esbuild"])
-- `stack.infra` — array of infra keywords (e.g., ["docker", "caddy"])
-- `stack.migrating_from` — tech you're moving away from (e.g., ["coffeescript", "backbone"])
-- `stack.migrating_to` — tech you're moving toward (e.g., ["stimulus", "turbo", "bootstrap 5"])
-- `interests` — additional topic keywords (e.g., ["healthcare", "hipaa", "hotwire"])
+```json
+{
+  "projects": {
+    "myorthomd-web": {
+      "path": "/Users/mstefanko/myorthomd-web",
+      "stack": {
+        "backend": ["ruby", "rails", "mysql", "rspec"],
+        "frontend": ["stimulus", "turbo", "bootstrap", "esbuild"],
+        "infra": ["docker", "caddy"],
+        "migrating_from": ["coffeescript", "backbone", "jquery", "bootstrap 4"],
+        "migrating_to": ["stimulus", "turbo", "bootstrap 5", "es6"]
+      }
+    },
+    "enovis-plugins": {
+      "path": "~/.claude/plugins/marketplaces/enovis-plugins",
+      "stack": {
+        "backend": ["bash", "node", "typescript", "sqlite"],
+        "frontend": [],
+        "infra": [],
+        "migrating_from": [],
+        "migrating_to": []
+      }
+    }
+  },
+  "interests": ["healthcare", "hipaa", "hotwire", "claude-code"],
+  "min_stars": 1000,
+  "installed_plugins": ["claude-mem", "context-mode", "obsidian-notes"],
+  "last_scan": null
+}
+```
+
+- `projects` — registry of projects, each with a name, path, and stack breakdown. Added incrementally via `/tech-radar:setup`.
+- `interests` — global topic keywords that apply across all projects
 - `min_stars` — minimum GitHub stars to include (default: 1000)
-- `installed_plugins` — list of installed Claude Code plugins (to flag in output)
+- `installed_plugins` — Claude Code plugins to flag in output
 - `last_scan` — ISO date of last scan run
 
 Output path: reads `vault_path` and `notes_dir` from `~/.obsidian-notes.json`. No `output_dir` in tech-radar config.
 
-If config is missing, tell the user to run `/tech-radar:setup`.
+## No-Config Mode
+
+If `~/.tech-radar.json` doesn't exist, scan still runs:
+- Uses `interests` defaults: `["developer-tools", "claude-code"]`
+- Runs generic queries (no stack-specific filtering)
+- Groups results as "General Dev Tools" and "Plugins" only
+- Suggests running `/tech-radar:setup` at the end for better results next time
 
 ## Scan Process
 
@@ -43,11 +76,12 @@ See `/tech-radar:scan` command and `resources/search-queries.md` for query templ
 After collecting search results:
 1. **Discard** results without a GitHub/registry URL or below `min_stars`
 2. **Dedup** same project found across multiple searches
-3. **Group by relevance:**
-   - **Direct fit** — matches `backend`, `frontend`, or `migrating_to` keywords
-   - **Adjacent** — matches `interests` or `infra`, or is a Claude Code plugin
-   - **General** — developer tool, no specific stack match
-4. **Sort by popularity within group** (star tiers: 1k-5k / 5k-20k / 20k+)
+3. **Group by project relevance:**
+   - For each registered project, check if the result matches that project's `backend`, `frontend`, `migrating_to`, or `infra` keywords
+   - A result can appear under multiple projects if relevant to both
+   - **Plugins** — Claude Code plugins get their own section
+   - **General** — developer tools that don't match any specific project
+4. **Sort by popularity within each group** (star tiers: 1k-5k / 5k-20k / 20k+)
 5. **Flag installed plugins** from config
 6. **Cap at 30 results total**
 
@@ -68,6 +102,12 @@ date: {today}
 tags: [tech-radar, {timeframe}]
 ```
 
-Include: executive summary (3-5 bullets), then tables grouped by tier. Each row: Project | What | Stars | URL | Verdict. Adjacent/Plugins table adds an "Installed?" column.
+Sections:
+1. **Key Takeaways** — 3-5 actionable bullets
+2. **For {project-name}** — one section per registered project, with results tagged to that project's stack
+3. **Plugins** — Claude Code plugin discoveries
+4. **General Dev Tools** — everything else
+
+Each table row: Project | What | Stars | URL | Verdict. Plugin tables add an "Installed?" column.
 
 Also print a short summary to the conversation after writing the file.
