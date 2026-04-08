@@ -36,7 +36,7 @@ Run all WebSearch queries. These run in the main thread (WebSearch doesn't work 
 
 ### Phase 3: Filter & Group
 
-1. **Discard junk** — skip results without a GitHub or registry URL, skip below `min_stars` (default 1000)
+1. **Discard junk** — skip results without a GitHub or registry URL, skip below `min_stars` (default 1000). **Exception:** Claude Code plugins are exempt from `min_stars` — most plugins have low star counts
 2. **Dedup** — merge same project found across multiple searches
 3. **Match to projects:**
    - For each result, check against each registered project's stack keywords

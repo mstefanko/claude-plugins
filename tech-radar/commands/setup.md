@@ -39,7 +39,7 @@ Add or update the current project in `~/.tech-radar.json`. Run from different pr
    - Extracted stack keywords by category
    - Global interests (suggest additions based on project domain)
 
-6. **Detect installed plugins** by listing directories in `~/.claude/plugins/marketplaces/*/` and extracting plugin names. Update `installed_plugins` in config.
+6. **Detect installed plugins** by listing directories in `~/.claude/plugins/cache/*/` (where Claude Code installs plugins). Extract plugin names from directory names. Update `installed_plugins` in config.
 
 7. **Write `~/.tech-radar.json`** — merge this project into the existing registry:
    ```json

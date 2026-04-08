@@ -1,7 +1,7 @@
 ---
 name: tech-radar
 description: "Scan trending repos, plugins, and ecosystem tools against your tech stack and produce a ranked Obsidian note."
-allowed-tools: ["WebSearch", "Read", "Write", "Bash", "Glob"]
+allowed-tools: "WebSearch,Read,Write,Bash,Glob"
 author: mstefanko
 ---
 
@@ -74,7 +74,7 @@ See `/tech-radar:scan` command and `resources/search-queries.md` for query templ
 ## Grouping Rules
 
 After collecting search results:
-1. **Discard** results without a GitHub/registry URL or below `min_stars`
+1. **Discard** results without a GitHub/registry URL or below `min_stars` (Claude Code plugins are exempt from `min_stars` — most have low star counts)
 2. **Dedup** same project found across multiple searches
 3. **Group by project relevance:**
    - For each registered project, check if the result matches that project's `backend`, `frontend`, `migrating_to`, or `infra` keywords
