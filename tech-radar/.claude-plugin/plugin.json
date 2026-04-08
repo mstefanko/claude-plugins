@@ -1,0 +1,6 @@
+{
+  "name": "tech-radar",
+  "description": "Scan trending repos, plugins, and tools against your tech stack. Produces a ranked Obsidian note.",
+  "author": { "name": "mstefanko" },
+  "keywords": ["tech-radar", "trending", "tools", "discovery", "obsidian"]
+}

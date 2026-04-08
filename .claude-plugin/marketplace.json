@@ -10,6 +10,12 @@
       "source": "./obsidian-notes",
       "description": "Save notes and decision records to your Obsidian vault and search them later.",
       "category": "documentation"
+    },
+    {
+      "name": "tech-radar",
+      "source": "./tech-radar",
+      "description": "Scan trending repos, plugins, and tools against your tech stack. Produces a ranked Obsidian note.",
+      "category": "discovery"
     }
   ]
 }
