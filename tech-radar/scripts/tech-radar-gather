@@ -1,0 +1,627 @@
+#!/usr/bin/env python3
+"""tech-radar-gather: Collect trending repos from GitHub Search API.
+
+Outputs structured JSON to stdout. All diagnostics go to stderr.
+Phase 1 — GitHub source only; HN is stubbed.
+"""
+
+import sys
+
+if sys.version_info < (3, 8):
+    print("ERROR: Python 3.8+ required (found {}.{})".format(*sys.version_info[:2]), file=sys.stderr)
+    sys.exit(1)
+
+import argparse
+import concurrent.futures
+import json
+import os
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Optional
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+GITHUB_SEARCH_REPOS = "https://api.github.com/search/repositories"
+GITHUB_SEARCH_CODE = "https://api.github.com/search/code"
+TIMEFRAME_DAYS = {"weekly": 7, "monthly": 30, "quarterly": 90}
+MAX_RESULTS = 30
+MAX_UNDER_RADAR = 5
+UNAUTHENTICATED_MAX_QUERIES = 4
+UNAUTHENTICATED_DELAY = 6  # seconds between sequential calls
+THREAD_POOL_SIZE = 4
+RATE_LIMIT_BATCH_SIZE = 25       # max queries before pausing (GitHub allows 30/min)
+RATE_LIMIT_BATCH_PAUSE = 60      # seconds to wait between batches
+PER_REQUEST_DELAY = 0.1          # seconds between individual requests in thread pool
+
+# Keywords that should be skipped by the "too-specific" heuristic even if
+# they appear for only one project.
+SKIP_TESTING_TOOLS = frozenset([
+    "factory_bot", "cucumber", "rspec", "minitest", "capybara",
+    "shoulda", "vcr", "webmock", "faker", "simplecov",
+])
+
+# Primary language/framework keywords that should never be skipped.
+PRIMARY_KEYWORDS = frozenset([
+    "ruby", "rails", "python", "node", "typescript", "javascript",
+    "go", "rust", "java", "elixir", "bash", "sqlite", "mysql",
+    "postgres", "redis", "docker", "react", "vue", "angular",
+    "stimulus", "turbo", "hotwire", "playwright", "markdown",
+    "esbuild", "webpack", "sidekiq", "puma",
+])
+
+_VERSION_CHARS = set("0123456789.")
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def warn(msg: str) -> None:
+    print(f"tech-radar-gather: {msg}", file=sys.stderr)
+
+
+def looks_like_version(keyword: str) -> bool:
+    """Return True if keyword contains a version-number-like segment."""
+    parts = keyword.replace("-", " ").replace("_", " ").split()
+    for p in parts:
+        stripped = p.strip()
+        if stripped and all(c in _VERSION_CHARS for c in stripped) and "." in stripped:
+            return True
+    return False
+
+
+def strip_version(keyword: str) -> str:
+    """Remove trailing version numbers: 'ruby 3.3' -> 'ruby'."""
+    parts = keyword.strip().split()
+    cleaned = []
+    for p in parts:
+        if all(c in _VERSION_CHARS for c in p) and p:
+            continue
+        cleaned.append(p)
+    return " ".join(cleaned) if cleaned else ""
+
+
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
+
+DEFAULT_CONFIG = {
+    "projects": {},
+    "interests": [],
+    "min_stars": 1000,
+}
+
+
+def load_config(path: str) -> dict:
+    expanded = os.path.expanduser(path)
+    if os.path.isfile(expanded):
+        try:
+            with open(expanded, "r") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError) as exc:
+            warn(f"Could not load config {expanded}: {exc}")
+    else:
+        warn(f"Config not found at {expanded}, using defaults")
+    return dict(DEFAULT_CONFIG)
+
+
+# ---------------------------------------------------------------------------
+# Inverted index & query builder
+# ---------------------------------------------------------------------------
+
+def build_inverted_index(projects: dict) -> dict:
+    """keyword (lowercase, version-stripped) -> set of project names."""
+    index = {}
+    for proj_name, proj_data in projects.items():
+        for category in ("backend", "frontend", "infra", "migrating_from", "migrating_to"):
+            for raw_kw in proj_data.get(category, []):
+                kw = strip_version(raw_kw).lower()
+                if not kw:
+                    continue
+                index.setdefault(kw, set()).add(proj_name)
+    return index
+
+
+def cluster_keywords(index: dict) -> list:
+    """Group keywords that map to the exact same project set."""
+    clusters = {}
+    for kw, proj_set in index.items():
+        key = frozenset(proj_set)
+        clusters.setdefault(key, []).append(kw)
+    return [(kws, projs) for projs, kws in clusters.items()]
+
+
+def should_skip_keyword(kw: str, proj_set: set) -> bool:
+    """Return True if keyword is too specific to be worth a query."""
+    if kw in PRIMARY_KEYWORDS:
+        return False
+    if len(proj_set) > 1:
+        return False
+    if kw in SKIP_TESTING_TOOLS:
+        return True
+    if looks_like_version(kw):
+        return True
+    return False
+
+
+def build_queries(config: dict) -> list:
+    """Return list of (label, query_string, search_type, is_under_radar) tuples."""
+    projects = config.get("projects", {})
+    interests = config.get("interests", [])
+    min_stars = config.get("min_stars", 1000)
+
+    index = build_inverted_index(projects)
+    clusters = cluster_keywords(index)
+
+    queries = []
+
+    # Stack-match cluster queries
+    for keywords, proj_set in clusters:
+        filtered = [kw for kw in keywords if not should_skip_keyword(kw, proj_set)]
+        if not filtered:
+            continue
+        # Take up to 5 keywords per query to avoid overly long q strings
+        for i in range(0, len(filtered), 5):
+            batch = filtered[i:i + 5]
+            q_keywords = "+".join(urllib.parse.quote(kw) for kw in batch)
+            label = f"stack:{','.join(sorted(proj_set))}:{'+'.join(batch)}"
+            queries.append((label, q_keywords, "repos", False))
+
+    # Interest queries
+    for interest in interests:
+        label = f"interest:{interest}"
+        queries.append((label, urllib.parse.quote(interest), "repos", False))
+
+    # Plugin discovery
+    queries.append(("plugin-discovery", "filename:plugin.json+path:.claude-plugin", "code", False))
+
+    # Under the Radar: same clusters but lower star threshold
+    for keywords, proj_set in clusters:
+        filtered = [kw for kw in keywords if not should_skip_keyword(kw, proj_set)]
+        if not filtered:
+            continue
+        for i in range(0, len(filtered), 5):
+            batch = filtered[i:i + 5]
+            q_keywords = "+".join(urllib.parse.quote(kw) for kw in batch)
+            label = f"under-radar:{','.join(sorted(proj_set))}:{'+'.join(batch)}"
+            queries.append((label, q_keywords, "repos", True))
+
+    return queries
+
+
+# ---------------------------------------------------------------------------
+# Date range
+# ---------------------------------------------------------------------------
+
+def date_range(timeframe: str):
+    now = datetime.now(timezone.utc)
+    days = TIMEFRAME_DAYS[timeframe]
+    date_from = (now - timedelta(days=days)).strftime("%Y-%m-%d")
+    date_to = now.strftime("%Y-%m-%d")
+    return date_from, date_to
+
+
+# ---------------------------------------------------------------------------
+# GitHub API
+# ---------------------------------------------------------------------------
+
+def github_request(url: str, token: Optional[str]) -> dict:
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "tech-radar-gather/1.0",
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def build_repo_url(q_keywords: str, date_from: str, min_stars: int) -> str:
+    q = f"{q_keywords}+created:>{date_from}+stars:>{min_stars}"
+    return f"{GITHUB_SEARCH_REPOS}?q={q}&sort=stars&order=desc&per_page=30"
+
+
+def build_under_radar_url(q_keywords: str, date_from: str, min_stars: int) -> str:
+    q = f"{q_keywords}+created:>{date_from}+stars:100..{min_stars}"
+    return f"{GITHUB_SEARCH_REPOS}?q={q}&sort=stars&order=desc&per_page=30"
+
+
+def build_code_url(q_keywords: str) -> str:
+    # GitHub Code Search API does not support the created: qualifier
+    return f"{GITHUB_SEARCH_CODE}?q={q_keywords}&per_page=30"
+
+
+def fetch_query(label: str, q_keywords: str, search_type: str,
+                is_under_radar: bool, date_from: str, min_stars: int,
+                token: Optional[str]) -> dict:
+    """Execute a single GitHub search query. Returns parsed JSON or error dict."""
+    # Small delay to avoid burst-firing all requests at the same instant
+    time.sleep(PER_REQUEST_DELAY)
+    try:
+        if search_type == "code":
+            url = build_code_url(q_keywords)
+        elif is_under_radar:
+            url = build_under_radar_url(q_keywords, date_from, min_stars)
+        else:
+            url = build_repo_url(q_keywords, date_from, min_stars)
+
+        data = github_request(url, token)
+        return {"label": label, "is_under_radar": is_under_radar,
+                "search_type": search_type, "items": data.get("items", []),
+                "total_count": data.get("total_count", 0)}
+    except (urllib.error.HTTPError, urllib.error.URLError, OSError) as exc:
+        warn(f"Query '{label}' failed: {exc}")
+        return {"label": label, "is_under_radar": is_under_radar,
+                "search_type": search_type, "items": [], "error": str(exc)}
+
+
+def fetch_all_github(queries: list, date_from: str, min_stars: int,
+                     token: Optional[str]) -> tuple:
+    """Fire all queries, return (results_list, error_message_or_None)."""
+    results = []
+    has_error = False
+
+    if token:
+        # Batch queries to respect GitHub's 30 requests/minute rate limit
+        batches = [queries[i:i + RATE_LIMIT_BATCH_SIZE]
+                   for i in range(0, len(queries), RATE_LIMIT_BATCH_SIZE)]
+        for batch_idx, batch in enumerate(batches):
+            if batch_idx > 0:
+                warn(f"Rate-limit pause: waiting {RATE_LIMIT_BATCH_PAUSE}s before batch "
+                     f"{batch_idx + 1}/{len(batches)}")
+                time.sleep(RATE_LIMIT_BATCH_PAUSE)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=THREAD_POOL_SIZE) as pool:
+                futures = {
+                    pool.submit(fetch_query, label, q_kw, stype, is_ur,
+                                date_from, min_stars, token): label
+                    for label, q_kw, stype, is_ur in batch
+                }
+                for future in concurrent.futures.as_completed(futures):
+                    result = future.result()
+                    if "error" in result:
+                        has_error = True
+                    results.append(result)
+    else:
+        # No token: sequential, rate-limited, capped queries
+        warn("GITHUB_TOKEN not set. Using unauthenticated mode (max {} queries, "
+             "{}s delay).".format(UNAUTHENTICATED_MAX_QUERIES, UNAUTHENTICATED_DELAY))
+        for i, (label, q_kw, stype, is_ur) in enumerate(queries[:UNAUTHENTICATED_MAX_QUERIES]):
+            if i > 0:
+                time.sleep(UNAUTHENTICATED_DELAY)
+            result = fetch_query(label, q_kw, stype, is_ur, date_from, min_stars, token)
+            if "error" in result:
+                has_error = True
+            results.append(result)
+
+    error_msg = "one or more queries failed" if has_error else None
+    return results, error_msg
+
+
+# ---------------------------------------------------------------------------
+# Dry-run mode
+# ---------------------------------------------------------------------------
+
+def load_fixture(script_dir: str) -> list:
+    fixture_path = os.path.join(script_dir, "fixtures", "sample-github.json")
+    try:
+        with open(fixture_path, "r") as f:
+            data = json.load(f)
+        return data.get("items", [])
+    except (json.JSONDecodeError, OSError) as exc:
+        warn(f"Could not load fixture: {exc}")
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Post-processing
+# ---------------------------------------------------------------------------
+
+def parse_repo_item(item: dict) -> dict:
+    """Normalize a GitHub API item into our repo schema."""
+    full_name = item.get("full_name", "")
+    parts = full_name.split("/", 1)
+    owner = parts[0] if len(parts) == 2 else ""
+    name = parts[1] if len(parts) == 2 else full_name
+
+    created_str = item.get("created_at", "")
+    created_date = created_str[:10] if created_str else ""
+    stars = item.get("stargazers_count", 0)
+
+    # Compute stars_per_day
+    days_since = 1
+    if created_str:
+        try:
+            created_dt = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
+            delta = datetime.now(timezone.utc) - created_dt
+            days_since = max(1, delta.days)
+        except (ValueError, TypeError):
+            pass
+
+    return {
+        "id": full_name,
+        "source": "github",
+        "name": name,
+        "owner": owner,
+        "description": item.get("description", ""),
+        "url": item.get("html_url", ""),
+        "stars": stars,
+        "language": item.get("language", ""),
+        "topics": item.get("topics", []),
+        "created": created_date,
+        "stars_per_day": round(stars / days_since, 1),
+        "is_new": True,
+        "first_seen": None,
+        "stars_delta": None,
+        "stars_delta_pct": None,
+        "scans_seen": 0,
+        "matched_projects": [],
+        "matched_keywords": [],
+        "category": "general",
+        "reddit_validate": False,
+    }
+
+
+def tag_repos(repos: dict, config: dict) -> None:
+    """Tag each repo with matched projects, keywords, and category."""
+    projects = config.get("projects", {})
+    interests = [i.lower() for i in config.get("interests", [])]
+    index = build_inverted_index(projects)
+
+    for repo in repos.values():
+        searchable = set()
+        if repo["language"]:
+            searchable.add(repo["language"].lower())
+        for t in repo["topics"]:
+            searchable.add(t.lower())
+        # Also check description words for interest matching
+        desc_words = set(repo.get("description", "").lower().split())
+
+        matched_kws = set()
+        matched_projs = set()
+
+        # Check against inverted index
+        for kw, proj_set in index.items():
+            if kw in searchable:
+                matched_kws.add(kw)
+                matched_projs.update(proj_set)
+
+        # Check for plugin category
+        is_plugin = ".claude-plugin" in searchable or "claude-plugin" in searchable
+
+        # Check interests
+        matched_interests = []
+        for interest in interests:
+            if interest in searchable or interest in desc_words:
+                matched_interests.append(interest)
+
+        repo["matched_projects"] = sorted(matched_projs)
+        repo["matched_keywords"] = sorted(matched_kws | set(matched_interests))
+
+        if is_plugin:
+            repo["category"] = "plugin"
+        elif matched_projs:
+            repo["category"] = "stack-match"
+        elif matched_interests:
+            repo["category"] = "interest-match"
+        else:
+            repo["category"] = "general"
+
+
+def process_results(raw_results: list, config: dict, date_from: str) -> tuple:
+    """Dedup, tag, categorize, cap. Returns (repos_list, under_radar_list)."""
+    min_stars = config.get("min_stars", 1000)
+
+    # Separate main results from under-the-radar results
+    main_items = {}
+    radar_items = {}
+
+    for result in raw_results:
+        is_ur = result.get("is_under_radar", False)
+        for item in result.get("items", []):
+            full_name = item.get("full_name", "")
+            if not full_name:
+                # Code search results have repository.full_name
+                repo_info = item.get("repository", {})
+                full_name = repo_info.get("full_name", "")
+                if not full_name:
+                    continue
+                # Reconstruct a repo-like item from code search
+                item = {
+                    "full_name": full_name,
+                    "description": repo_info.get("description", ""),
+                    "html_url": repo_info.get("html_url", ""),
+                    "stargazers_count": repo_info.get("stargazers_count", 0),
+                    "language": repo_info.get("language", ""),
+                    "topics": repo_info.get("topics", []),
+                    "created_at": repo_info.get("created_at", ""),
+                }
+
+            parsed = parse_repo_item(item)
+            if is_ur:
+                if full_name not in radar_items:
+                    radar_items[full_name] = parsed
+            else:
+                if full_name not in main_items:
+                    main_items[full_name] = parsed
+
+    # Tag all repos
+    tag_repos(main_items, config)
+    tag_repos(radar_items, config)
+
+    # Under the Radar filtering: high velocity OR very new
+    filtered_radar = []
+    for repo in radar_items.values():
+        if repo["id"] in main_items:
+            continue  # skip if already in main results
+        # 15+ stars/day = viral growth (e.g. a 2-week-old repo at 200+ stars)
+        if repo["stars_per_day"] > 15:
+            repo["reddit_validate"] = True
+            filtered_radar.append(repo)
+        elif repo["created"] >= date_from:
+            repo["reddit_validate"] = True
+            filtered_radar.append(repo)
+
+    filtered_radar.sort(key=lambda r: r["stars_per_day"], reverse=True)
+    filtered_radar = filtered_radar[:MAX_UNDER_RADAR]
+
+    # Main results: sort by stars desc, cap
+    main_list = sorted(main_items.values(), key=lambda r: r["stars"], reverse=True)
+    main_list = main_list[:MAX_RESULTS]
+
+    return main_list, filtered_radar
+
+
+def process_dry_run(items: list, config: dict, date_from: str) -> tuple:
+    """Process fixture items the same way as live results."""
+    min_stars = config.get("min_stars", 1000)
+
+    all_items = {}
+    radar_items = {}
+    for item in items:
+        parsed = parse_repo_item(item)
+        stars = parsed["stars"]
+        if stars < 100:
+            continue
+        if stars < min_stars:
+            radar_items[parsed["id"]] = parsed
+        else:
+            all_items[parsed["id"]] = parsed
+
+    tag_repos(all_items, config)
+    tag_repos(radar_items, config)
+
+    # Under the Radar filtering
+    filtered_radar = []
+    for repo in radar_items.values():
+        # 15+ stars/day = viral growth (e.g. a 2-week-old repo at 200+ stars)
+        if repo["stars_per_day"] > 15 or repo["created"] >= date_from:
+            repo["reddit_validate"] = True
+            filtered_radar.append(repo)
+
+    filtered_radar.sort(key=lambda r: r["stars_per_day"], reverse=True)
+    filtered_radar = filtered_radar[:MAX_UNDER_RADAR]
+
+    main_list = sorted(all_items.values(), key=lambda r: r["stars"], reverse=True)
+    main_list = main_list[:MAX_RESULTS]
+
+    return main_list, filtered_radar
+
+
+# ---------------------------------------------------------------------------
+# Output
+# ---------------------------------------------------------------------------
+
+def build_output(repos: list, under_radar: list, timeframe: str,
+                 date_from: str, date_to: str, query_count: int,
+                 total_raw: int, error_msg: Optional[str]) -> dict:
+    github_status = "ok" if error_msg is None else "error"
+    github_meta = {
+        "status": github_status,
+        "queries": query_count,
+        "results": total_raw,
+    }
+    if error_msg:
+        github_meta["error_message"] = error_msg
+
+    return {
+        "meta": {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timeframe": timeframe,
+            "date_range": {"from": date_from, "to": date_to},
+            "sources": {
+                "github": github_meta,
+                "hn": {"status": "skipped", "queries": 0, "results": 0},
+            },
+            "history": {
+                "total_tracked": 0,
+                "new_this_scan": len(repos) + len(under_radar),
+                "returning": 0,
+                "rising": 0,
+            },
+        },
+        "repos": repos,
+        "under_the_radar": under_radar,
+        "hn_stories": [],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Gather trending repos from GitHub for tech-radar analysis."
+    )
+    parser.add_argument(
+        "--timeframe", choices=["weekly", "monthly", "quarterly"],
+        default="monthly", help="Lookback window (default: monthly)"
+    )
+    parser.add_argument(
+        "--source", choices=["github", "hn", "all"],
+        default="all", help="Data source (default: all; Phase 1 only implements github)"
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Read from fixtures instead of making HTTP calls"
+    )
+    parser.add_argument(
+        "--config", default="~/.tech-radar.json",
+        help="Config file path (default: ~/.tech-radar.json)"
+    )
+    parser.add_argument(
+        "--history-dir", default="~/.tech-radar/",
+        help="History directory path (default: ~/.tech-radar/)"
+    )
+    args = parser.parse_args()
+
+    # Load config
+    config = load_config(args.config)
+    min_stars = config.get("min_stars", 1000)
+
+    # Date range
+    date_from, date_to = date_range(args.timeframe)
+
+    # Script directory (for fixtures)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+
+    if args.dry_run:
+        warn("Dry-run mode: reading from fixtures")
+        items = load_fixture(script_dir)
+        repos, under_radar = process_dry_run(items, config, date_from)
+        output = build_output(
+            repos, under_radar, args.timeframe, date_from, date_to,
+            query_count=0, total_raw=len(items), error_msg=None
+        )
+    else:
+        # Build queries
+        queries = build_queries(config)
+        warn(f"Generated {len(queries)} queries for timeframe={args.timeframe}")
+
+        # Fetch
+        token = os.environ.get("GITHUB_TOKEN")
+        raw_results, error_msg = fetch_all_github(queries, date_from, min_stars, token)
+
+        total_raw = sum(len(r.get("items", [])) for r in raw_results)
+        query_count = len(raw_results)
+
+        # Process
+        repos, under_radar = process_results(raw_results, config, date_from)
+        output = build_output(
+            repos, under_radar, args.timeframe, date_from, date_to,
+            query_count=query_count, total_raw=total_raw, error_msg=error_msg
+        )
+
+    # Output JSON to stdout
+    print(json.dumps(output, indent=2))
+
+
+if __name__ == "__main__":
+    main()

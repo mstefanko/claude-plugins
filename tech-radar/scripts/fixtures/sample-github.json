@@ -1,0 +1,94 @@
+{
+  "items": [
+    {
+      "full_name": "rails/solid_queue",
+      "description": "Database-backed Active Job backend for Rails with multi-server support, concurrency controls, and recurring tasks",
+      "html_url": "https://github.com/rails/solid_queue",
+      "stargazers_count": 4200,
+      "language": "Ruby",
+      "topics": ["rails", "ruby", "active-job", "background-jobs", "sidekiq-alternative"],
+      "created_at": "2026-03-01T00:00:00Z"
+    },
+    {
+      "full_name": "hotwired/turbo-native-android",
+      "description": "Android framework for building hybrid native/web apps with Turbo and Stimulus",
+      "html_url": "https://github.com/hotwired/turbo-native-android",
+      "stargazers_count": 3100,
+      "language": "Ruby",
+      "topics": ["turbo", "stimulus", "hotwire", "rails", "android"],
+      "created_at": "2026-03-10T00:00:00Z"
+    },
+    {
+      "full_name": "fractaledmind/litestream-ruby",
+      "description": "Seamless SQLite replication for Ruby on Rails applications using Litestream",
+      "html_url": "https://github.com/fractaledmind/litestream-ruby",
+      "stargazers_count": 2800,
+      "language": "Ruby",
+      "topics": ["ruby", "rails", "sqlite", "litestream", "database"],
+      "created_at": "2026-03-05T00:00:00Z"
+    },
+    {
+      "full_name": "basecamp/kamal-proxy",
+      "description": "Lightweight HTTP proxy for zero-downtime Rails deployments with Kamal",
+      "html_url": "https://github.com/basecamp/kamal-proxy",
+      "stargazers_count": 5800,
+      "language": "Ruby",
+      "topics": ["ruby", "rails", "deployment", "docker", "proxy"],
+      "created_at": "2026-02-20T00:00:00Z"
+    },
+    {
+      "full_name": "anthropics/claude-plugin-starter",
+      "description": "Starter template for building Claude Code plugins with TypeScript and Node.js",
+      "html_url": "https://github.com/anthropics/claude-plugin-starter",
+      "stargazers_count": 1800,
+      "language": "TypeScript",
+      "topics": ["claude-code", "plugin", "typescript", "node", ".claude-plugin"],
+      "created_at": "2026-03-15T00:00:00Z"
+    },
+    {
+      "full_name": "nicolo-ribaudo/tc39-proposal-sqlite",
+      "description": "TC39 proposal to add SQLite as a built-in module to JavaScript runtimes",
+      "html_url": "https://github.com/nicolo-ribaudo/tc39-proposal-sqlite",
+      "stargazers_count": 2200,
+      "language": "JavaScript",
+      "topics": ["sqlite", "javascript", "tc39", "node", "typescript"],
+      "created_at": "2026-03-08T00:00:00Z"
+    },
+    {
+      "full_name": "medplum/hipaa-audit-toolkit",
+      "description": "Open-source HIPAA compliance audit toolkit for healthcare SaaS applications",
+      "html_url": "https://github.com/medplum/hipaa-audit-toolkit",
+      "stargazers_count": 1500,
+      "language": "TypeScript",
+      "topics": ["hipaa", "healthcare", "compliance", "audit", "security"],
+      "created_at": "2026-03-12T00:00:00Z"
+    },
+    {
+      "full_name": "tenderlove/query_count",
+      "description": "Detect N+1 queries in Rails apps at test time with zero configuration",
+      "html_url": "https://github.com/tenderlove/query_count",
+      "stargazers_count": 620,
+      "language": "Ruby",
+      "topics": ["ruby", "rails", "performance", "n-plus-one", "testing"],
+      "created_at": "2026-03-28T00:00:00Z"
+    },
+    {
+      "full_name": "stimulus-components/stimulus-datepicker",
+      "description": "A lightweight datepicker component for Stimulus.js with zero dependencies",
+      "html_url": "https://github.com/stimulus-components/stimulus-datepicker",
+      "stargazers_count": 480,
+      "language": "JavaScript",
+      "topics": ["stimulus", "hotwire", "datepicker", "javascript", "frontend"],
+      "created_at": "2026-04-01T00:00:00Z"
+    },
+    {
+      "full_name": "vercel/ai-sdk",
+      "description": "Build AI-powered applications with React, Svelte, Vue, and Node.js",
+      "html_url": "https://github.com/vercel/ai-sdk",
+      "stargazers_count": 12500,
+      "language": "TypeScript",
+      "topics": ["ai", "llm", "react", "typescript", "machine-learning"],
+      "created_at": "2026-01-15T00:00:00Z"
+    }
+  ]
+}
