@@ -27,8 +27,9 @@ Run a hybrid scan for trending tools, repos, and plugins. A Python script gather
 
 1. Run the gathering script via Bash:
    ```
-   $CLAUDE_PLUGIN_ROOT/scripts/tech-radar-gather --timeframe {tf} --source all --config ~/.tech-radar.json --history-dir ~/.tech-radar/
+   $CLAUDE_PLUGIN_ROOT/scripts/tech-radar-gather --timeframe {tf} --source all --config ~/.tech-radar.json --history-dir ~/.tech-radar/ [--max-repos N]
    ```
+   - Default max repos is 20. For weekly scans, consider `--max-repos 12` for faster results.
    - In no-config mode, omit the `--config` flag (script falls back to generic queries)
 2. Capture the JSON output from stdout
 3. Check `meta.sources` — if a source has `status: "error"`, note it in the report header and optionally fall back to 2-3 WebSearches for that source's coverage area
@@ -141,3 +142,5 @@ When `~/.tech-radar.json` doesn't exist:
 - If vault config missing, print report to conversation instead of file
 - **Contradiction surfacing:** When a repo has high stars but is flagged divisive on HN, or when Reddit sentiment contradicts GitHub growth, present both signals in the verdict — don't smooth them into a single recommendation. Example: "★ 12k and growing fast, but HN thread (340 comments) flagged migration pain and breaking changes — evaluate carefully before adopting."
 - **Reddit specificity:** When Reddit validation informs a verdict, cite the specific concern or community thread — not just "Reddit confirms interest." Example: "r/rails thread flagged ORM performance issues at scale" rather than "discussed on Reddit."
+- **Relevance scoring:** Repos in the JSON include a `relevance_score` field (3=stack-match, 2=plugin, 1=interest, 0=general, +1 for viral growth). Prioritize higher-scored repos for detailed verdicts. Lower-scored general repos can get shorter verdicts.
+- **Interest query mode:** Interest and phrase queries use `pushed:>` (recently active repos) instead of `created:>` (brand-new repos). This means interest results include established ecosystem repos with recent activity — not just new projects. Account for this when writing verdicts.

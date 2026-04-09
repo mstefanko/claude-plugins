@@ -34,7 +34,7 @@ GITHUB_SEARCH_REPOS = "https://api.github.com/search/repositories"
 GITHUB_SEARCH_CODE = "https://api.github.com/search/code"
 HN_ALGOLIA_SEARCH = "https://hn.algolia.com/api/v1/search"
 TIMEFRAME_DAYS = {"weekly": 7, "monthly": 30, "quarterly": 90}
-MAX_RESULTS = 30
+MAX_RESULTS = 20
 MAX_UNDER_RADAR = 5
 MAX_HN_STORIES = 15
 HN_MIN_POINTS = 50
@@ -184,7 +184,7 @@ def should_skip_keyword(kw: str, proj_set: set) -> bool:
 
 
 def build_queries(config: dict) -> list:
-    """Return list of (label, query_string, search_type, is_under_radar) tuples."""
+    """Return list of (label, query_string, search_type, query_type) tuples."""
     projects = config.get("projects", {})
     interests = config.get("interests", [])
     min_stars = config.get("min_stars", 1000)
@@ -207,36 +207,22 @@ def build_queries(config: dict) -> list:
                 for kw in batch
             )
             label = f"stack:{','.join(sorted(proj_set))}:{'+'.join(batch)}"
-            queries.append((label, q_keywords, "repos", False))
+            queries.append((label, q_keywords, "repos", "stack"))
 
     # Interest queries
     for interest in interests:
         label = f"interest:{interest}"
         q_kw = "+".join(urllib.parse.quote(word) for word in interest.split())
-        queries.append((label, q_kw, "repos", False))
+        queries.append((label, q_kw, "repos", "interest"))
 
     # Phrase queries (exact multi-word matches)
     for phrase in config.get("phrase_queries", []):
         label = f"phrase:{phrase}"
-        q_kw = urllib.parse.quote(f'"{phrase}"')
-        queries.append((label, q_kw, "repos", False))
+        q_kw = f'"{"+".join(urllib.parse.quote(word) for word in phrase.split())}"'
+        queries.append((label, q_kw, "repos", "phrase"))
 
     # Plugin discovery
-    queries.append(("plugin-discovery", "filename:plugin.json+path:.claude-plugin", "code", False))
-
-    # Under the Radar: same clusters but lower star threshold
-    for keywords, proj_set in clusters:
-        filtered = [kw for kw in keywords if not should_skip_keyword(kw, proj_set)]
-        if not filtered:
-            continue
-        for i in range(0, len(filtered), 5):
-            batch = filtered[i:i + 5]
-            q_keywords = "+".join(
-                "+".join(urllib.parse.quote(word) for word in kw.split())
-                for kw in batch
-            )
-            label = f"under-radar:{','.join(sorted(proj_set))}:{'+'.join(batch)}"
-            queries.append((label, q_keywords, "repos", True))
+    queries.append(("plugin-discovery", "filename:plugin.json+path:.claude-plugin", "code", "code"))
 
     return queries
 
@@ -319,8 +305,9 @@ def build_repo_url(q_keywords: str, date_from: str, min_stars: int) -> str:
     return f"{GITHUB_SEARCH_REPOS}?q={q}&sort=stars&order=desc&per_page=30"
 
 
-def build_under_radar_url(q_keywords: str, date_from: str, min_stars: int) -> str:
-    q = f"{q_keywords}+created:>{date_from}+stars:100..{min_stars}"
+def build_merged_stack_url(q_keywords: str, date_from: str) -> str:
+    """Stack queries use stars:>100 and post-filter by min_stars threshold."""
+    q = f"{q_keywords}+created:>{date_from}+stars:>100"
     return f"{GITHUB_SEARCH_REPOS}?q={q}&sort=stars&order=desc&per_page=30"
 
 
@@ -329,25 +316,33 @@ def build_code_url(q_keywords: str) -> str:
     return f"{GITHUB_SEARCH_CODE}?q={q_keywords}&per_page=30"
 
 
+def build_interest_url(q_keywords: str, date_from: str, min_stars: int) -> str:
+    """Interest queries find established repos with recent activity."""
+    q = f"{q_keywords}+pushed:>{date_from}+stars:>{min_stars}"
+    return f"{GITHUB_SEARCH_REPOS}?q={q}&sort=stars&order=desc&per_page=30"
+
+
 def fetch_query(label: str, q_keywords: str, search_type: str,
-                is_under_radar: bool, date_from: str, min_stars: int,
+                query_type: str, date_from: str, min_stars: int,
                 token: Optional[str]) -> dict:
     """Execute a single GitHub search query. Returns parsed JSON or error dict."""
     try:
-        if search_type == "code":
+        if query_type == "code":
             url = build_code_url(q_keywords)
-        elif is_under_radar:
-            url = build_under_radar_url(q_keywords, date_from, min_stars)
+        elif query_type == "stack":
+            url = build_merged_stack_url(q_keywords, date_from)
+        elif query_type in ("interest", "phrase"):
+            url = build_interest_url(q_keywords, date_from, min_stars)
         else:
             url = build_repo_url(q_keywords, date_from, min_stars)
 
         data = github_request(url, token)
-        return {"label": label, "is_under_radar": is_under_radar,
+        return {"label": label, "query_type": query_type,
                 "search_type": search_type, "items": data.get("items", []),
                 "total_count": data.get("total_count", 0)}
     except (urllib.error.HTTPError, urllib.error.URLError, OSError) as exc:
         warn(f"Query '{label}' failed: {exc}")
-        return {"label": label, "is_under_radar": is_under_radar,
+        return {"label": label, "query_type": query_type,
                 "search_type": search_type, "items": [], "error": str(exc)}
 
 
@@ -368,9 +363,9 @@ def fetch_all_github(queries: list, date_from: str, min_stars: int,
                 time.sleep(RATE_LIMIT_BATCH_PAUSE)
             with concurrent.futures.ThreadPoolExecutor(max_workers=THREAD_POOL_SIZE) as pool:
                 futures = {
-                    pool.submit(fetch_query, label, q_kw, stype, is_ur,
+                    pool.submit(fetch_query, label, q_kw, stype, qtype,
                                 date_from, min_stars, token): label
-                    for label, q_kw, stype, is_ur in batch
+                    for label, q_kw, stype, qtype in batch
                 }
                 for future in concurrent.futures.as_completed(futures):
                     result = future.result()
@@ -382,10 +377,10 @@ def fetch_all_github(queries: list, date_from: str, min_stars: int,
         warn("No GitHub auth found. Set GITHUB_TOKEN or run `gh auth login`. "
              "Using unauthenticated mode (max {} queries, "
              "{}s delay).".format(UNAUTHENTICATED_MAX_QUERIES, UNAUTHENTICATED_DELAY))
-        for i, (label, q_kw, stype, is_ur) in enumerate(queries[:UNAUTHENTICATED_MAX_QUERIES]):
+        for i, (label, q_kw, stype, qtype) in enumerate(queries[:UNAUTHENTICATED_MAX_QUERIES]):
             if i > 0:
                 time.sleep(UNAUTHENTICATED_DELAY)
-            result = fetch_query(label, q_kw, stype, is_ur, date_from, min_stars, token)
+            result = fetch_query(label, q_kw, stype, qtype, date_from, min_stars, token)
             if "error" in result:
                 has_error = True
             results.append(result)
@@ -683,7 +678,7 @@ def process_results(raw_results: list, config: dict, date_from: str) -> tuple:
     plugin_discovery_repos = set()
 
     for result in raw_results:
-        is_ur = result.get("is_under_radar", False)
+        query_type = result.get("query_type", "stack")
         is_plugin_query = result.get("label", "").startswith("plugin-discovery")
         for item in result.get("items", []):
             full_name = item.get("full_name", "")
@@ -708,10 +703,18 @@ def process_results(raw_results: list, config: dict, date_from: str) -> tuple:
                 plugin_discovery_repos.add(full_name)
 
             parsed = parse_repo_item(item)
-            if is_ur:
-                if full_name not in radar_items:
-                    radar_items[full_name] = parsed
+            stars = parsed["stars"]
+
+            if query_type == "stack":
+                # Stack results: split by star count
+                if stars >= min_stars:
+                    if full_name not in main_items:
+                        main_items[full_name] = parsed
+                elif stars >= 100:
+                    if full_name not in radar_items:
+                        radar_items[full_name] = parsed
             else:
+                # Interest/phrase/code results: always main
                 if full_name not in main_items:
                     main_items[full_name] = parsed
 
@@ -740,9 +743,8 @@ def process_results(raw_results: list, config: dict, date_from: str) -> tuple:
     filtered_radar.sort(key=lambda r: r["stars_per_day"], reverse=True)
     filtered_radar = filtered_radar[:MAX_UNDER_RADAR]
 
-    # Main results: sort by stars desc, cap
-    main_list = sorted(main_items.values(), key=lambda r: r["stars"], reverse=True)
-    main_list = main_list[:MAX_RESULTS]
+    # Main results: return full list (sort + cap happens in main() after scoring)
+    main_list = list(main_items.values())
 
     return main_list, filtered_radar
 
@@ -777,8 +779,8 @@ def process_dry_run(items: list, config: dict, date_from: str) -> tuple:
     filtered_radar.sort(key=lambda r: r["stars_per_day"], reverse=True)
     filtered_radar = filtered_radar[:MAX_UNDER_RADAR]
 
-    main_list = sorted(all_items.values(), key=lambda r: r["stars"], reverse=True)
-    main_list = main_list[:MAX_RESULTS]
+    # Return full list (sort + cap happens in main() after scoring)
+    main_list = list(all_items.values())
 
     return main_list, filtered_radar
 
@@ -901,6 +903,22 @@ def diff_hn_stories(stories: list, history: dict, today: str) -> None:
             }
 
 
+def score_repos(repos: list) -> None:
+    """Add relevance_score for ranking. Called after diff_repos() in main()."""
+    for repo in repos:
+        score = 0
+        cat = repo.get("category", "general")
+        if cat == "stack-match":
+            score += 3
+        elif cat == "plugin":
+            score += 2
+        elif cat == "interest-match":
+            score += 1
+        if repo.get("stars_per_day", 0) > 50:
+            score += 1
+        repo["relevance_score"] = score
+
+
 def apply_post_diff_flags(repos: list, under_radar: list) -> None:
     """Set reddit_validate flags after diffing."""
     for repo in repos:
@@ -1006,7 +1024,13 @@ def main() -> None:
         "--history-dir", default="~/.tech-radar/",
         help="History directory path (default: ~/.tech-radar/)"
     )
+    parser.add_argument(
+        "--max-repos", type=int, default=None,
+        help="Maximum main repos in output (default: %(default)s)"
+    )
     args = parser.parse_args()
+
+    max_repos = args.max_repos or MAX_RESULTS
 
     # Load config
     config = load_config(args.config)
@@ -1055,22 +1079,41 @@ def main() -> None:
             hn_query_count = 1
             hn_total_raw = len(hn_hits)
     else:
+        # Build query lists before fetching (needed by both paths)
+        queries = build_queries(config) if run_github else []
+        hn_keywords = build_hn_keywords(config) if run_hn else []
+        token = resolve_github_token() if run_github else None
+
         if run_github:
-            queries = build_queries(config)
             warn(f"Generated {len(queries)} GitHub queries for timeframe={args.timeframe}")
-            token = resolve_github_token()
-            raw_results, github_error = fetch_all_github(queries, date_from, min_stars, token)
+        if run_hn:
+            warn(f"Generated {len(hn_keywords)} HN queries")
+
+        if run_github and run_hn:
+            # Parallel fetch when both sources requested
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                gh_future = pool.submit(fetch_all_github, queries, date_from, min_stars, token)
+                hn_future = pool.submit(fetch_all_hn, hn_keywords, since_unix)
+                raw_results, github_error = gh_future.result()
+                raw_hn_results, hn_error = hn_future.result()
             github_total_raw = sum(len(r.get("items", [])) for r in raw_results)
             github_query_count = len(raw_results)
             repos, under_radar = process_results(raw_results, config, date_from)
-
-        if run_hn:
-            hn_keywords = build_hn_keywords(config)
-            warn(f"Generated {len(hn_keywords)} HN queries")
-            raw_hn_results, hn_error = fetch_all_hn(hn_keywords, since_unix)
             hn_total_raw = sum(len(r.get("hits", [])) for r in raw_hn_results)
             hn_query_count = len(raw_hn_results)
             hn_stories = process_hn_results(raw_hn_results, config)
+        else:
+            if run_github:
+                raw_results, github_error = fetch_all_github(queries, date_from, min_stars, token)
+                github_total_raw = sum(len(r.get("items", [])) for r in raw_results)
+                github_query_count = len(raw_results)
+                repos, under_radar = process_results(raw_results, config, date_from)
+
+            if run_hn:
+                raw_hn_results, hn_error = fetch_all_hn(hn_keywords, since_unix)
+                hn_total_raw = sum(len(r.get("hits", [])) for r in raw_hn_results)
+                hn_query_count = len(raw_hn_results)
+                hn_stories = process_hn_results(raw_hn_results, config)
 
     # --- HN cross-reference ---
     if run_github and run_hn and hn_stories:
@@ -1091,6 +1134,11 @@ def main() -> None:
 
     # Post-diff flag updates
     apply_post_diff_flags(repos, under_radar)
+
+    # Relevance scoring and sort+cap (Phase 3)
+    score_repos(repos)
+    repos.sort(key=lambda r: (r.get("relevance_score", 0), r["stars"]), reverse=True)
+    repos = repos[:max_repos]
 
     # Append scan entry
     history.setdefault("scans", []).append({

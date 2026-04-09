@@ -61,6 +61,15 @@ Schema:
 
 Output path: reads `vault_path` and `notes_dir` from `~/.obsidian-notes.json`. No `output_dir` in tech-radar config.
 
+## CLI Flags
+
+- `--timeframe` — `weekly`, `monthly` (default), or `quarterly`
+- `--source` — `all` (default), `github`, or `hn`
+- `--max-repos N` — cap on main repos in output (default 20). Use `--max-repos 12` for faster weekly scans.
+- `--dry-run` — use fixture data, no API calls
+- `--config` — path to config file (default `~/.tech-radar.json`)
+- `--history-dir` — path to history directory (default `~/.tech-radar/`)
+
 ## State Directory
 
 `~/.tech-radar/` contains `history.json` for cross-scan persistence. The script uses this to track:
@@ -95,6 +104,12 @@ The script handles initial categorization. Items arrive pre-grouped as:
 - `general` — developer tools that don't match any specific project
 
 Claude renders each category into the appropriate report section.
+
+## JSON Output Fields
+
+Each repo in the script's JSON output includes:
+- `query_type` — `"stack"`, `"interest"`, `"phrase"`, or `"code"`. Stack queries use `created:>` (new repos only). Interest and phrase queries use `pushed:>` (established repos with recent activity).
+- `relevance_score` — priority ranking (3=stack-match, 2=plugin, 1=interest, 0=general, +1 for viral growth >50 stars/day). Higher-scored repos get detailed verdicts; lower-scored general repos can get shorter verdicts.
 
 ## Error Handling
 
