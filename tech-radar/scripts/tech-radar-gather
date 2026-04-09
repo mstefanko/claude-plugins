@@ -479,16 +479,19 @@ def parse_hn_hit(hit: dict) -> dict:
 def match_hn_keywords(story: dict, config: dict) -> list:
     """Match a story's title against project keywords and interests."""
     title_lower = story["title"].lower()
+    title_normalized = title_lower.replace("-", " ").replace("'s", " ").replace("\u2019s", " ")
     projects = config.get("projects", {})
     interests = config.get("interests", [])
     index, _ = build_inverted_index(projects)
 
     matched = set()
     for kw in index.keys():
-        if kw in title_lower:
+        kw_normalized = kw.replace("-", " ")
+        if kw_normalized in title_normalized:
             matched.add(kw)
     for interest in interests:
-        if interest.lower() in title_lower:
+        interest_normalized = interest.lower().replace("-", " ")
+        if interest_normalized in title_normalized:
             matched.add(interest.lower())
 
     return sorted(matched)
@@ -498,7 +501,8 @@ def match_hn_projects(story: dict, config: dict) -> list:
     """Match HN story title against project keywords."""
     index, broad_kws = build_inverted_index(config.get("projects", {}))
     title = story.get("title", "").lower()
-    title_normalized = title.replace("-", " ")
+    # Normalize: hyphens to spaces, strip possessives, collapse whitespace
+    title_normalized = title.replace("-", " ").replace("'s", " ").replace("'s", " ")
     title_words = set(title_normalized.split())
 
     matched_projs = set()
@@ -506,7 +510,7 @@ def match_hn_projects(story: dict, config: dict) -> list:
         if kw in broad_kws:
             continue
         kw_normalized = kw.replace("-", " ")
-        # Check word boundary match and substring match (for multi-word keywords)
+        # Word match for single-word keywords, substring for multi-word
         if kw_normalized in title_words or kw_normalized in title_normalized:
             matched_projs.update(proj_set)
     return sorted(matched_projs)
