@@ -126,6 +126,7 @@ def resolve_github_token() -> Optional[str]:
 DEFAULT_CONFIG = {
     "projects": {},
     "interests": [],
+    "phrase_queries": [],
     "min_stars": 1000,
 }
 
@@ -214,6 +215,12 @@ def build_queries(config: dict) -> list:
         q_kw = "+".join(urllib.parse.quote(word) for word in interest.split())
         queries.append((label, q_kw, "repos", False))
 
+    # Phrase queries (exact multi-word matches)
+    for phrase in config.get("phrase_queries", []):
+        label = f"phrase:{phrase}"
+        q_kw = urllib.parse.quote(f'"{phrase}"')
+        queries.append((label, q_kw, "repos", False))
+
     # Plugin discovery
     queries.append(("plugin-discovery", "filename:plugin.json+path:.claude-plugin", "code", False))
 
@@ -262,6 +269,13 @@ def build_hn_keywords(config: dict) -> list:
         if kw not in seen:
             seen.add(kw)
             keywords.append((f"hn-interest:{kw}", kw))
+
+    # Phrase queries as exact-match HN searches
+    for phrase in config.get("phrase_queries", []):
+        phrase_lower = phrase.lower()
+        if phrase_lower not in seen:
+            seen.add(phrase_lower)
+            keywords.append((f"hn-phrase:{phrase_lower}", f'"{phrase}"'))
 
     return keywords
 
@@ -598,6 +612,7 @@ def parse_repo_item(item: dict) -> dict:
         "language": item.get("language", ""),
         "topics": item.get("topics", []),
         "created": created_date,
+        "pushed": item.get("pushed_at", "")[:10] if item.get("pushed_at") else "",
         "stars_per_day": round(stars / days_since, 1),
         "is_new": True,
         "first_seen": None,
@@ -624,7 +639,7 @@ def tag_repos(repos: dict, config: dict) -> None:
         for t in repo["topics"]:
             searchable.add(t.lower())
         # Also check description words for interest matching
-        desc_words = set(repo.get("description", "").lower().split())
+        desc_words = set((repo.get("description") or "").lower().split())
 
         matched_kws = set()
         matched_projs = set()

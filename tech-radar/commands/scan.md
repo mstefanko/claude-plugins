@@ -139,3 +139,5 @@ When `~/.tech-radar.json` doesn't exist:
 - Don't include tools the user obviously already knows about
 - Tag verdicts to specific projects when possible
 - If vault config missing, print report to conversation instead of file
+- **Contradiction surfacing:** When a repo has high stars but is flagged divisive on HN, or when Reddit sentiment contradicts GitHub growth, present both signals in the verdict — don't smooth them into a single recommendation. Example: "★ 12k and growing fast, but HN thread (340 comments) flagged migration pain and breaking changes — evaluate carefully before adopting."
+- **Reddit specificity:** When Reddit validation informs a verdict, cite the specific concern or community thread — not just "Reddit confirms interest." Example: "r/rails thread flagged ORM performance issues at scale" rather than "discussed on Reddit."

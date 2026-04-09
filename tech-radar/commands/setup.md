@@ -82,10 +82,12 @@ enovis-plugins (~/.claude/plugins/marketplaces/enovis-plugins)
   infra:          (none)
 
 Suggested interests: healthcare, hipaa, hotwire, claude-code
+Suggested phrase queries: "generative UI", "design system"
 
 Confirm? (y/edit/cancel):
 ```
 
+- When multi-word interests are detected (interests containing spaces or hyphens that represent multi-word concepts like "design-system"), suggest adding them to `phrase_queries` as well — without hyphens, as natural phrases (e.g., "design-system" becomes "design system" in phrase_queries). Phrase queries are searched as exact quoted strings in GitHub Search and HN Algolia, which produces far better results for multi-word concepts than searching each word separately.
 - User can confirm all, edit individual projects, or cancel
 - Detect installed plugins from `~/.claude/plugins/cache/*/`
 - Write to `~/.tech-radar.json`

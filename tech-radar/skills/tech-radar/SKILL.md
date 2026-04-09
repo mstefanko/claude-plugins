@@ -54,6 +54,7 @@ Schema:
 
 - `projects` — registry of projects, each with a name, path, and stack breakdown. Added incrementally via `/tech-radar:setup`.
 - `interests` — global topic keywords that apply across all projects
+- `phrase_queries` — optional array of multi-word terms to search as exact phrases (quoted in GitHub Search and HN Algolia). Example: `["generative UI", "design system"]`. Single-word interests don't need this — they work fine as individual keywords.
 - `min_stars` — minimum GitHub stars to include (default: 1000)
 - `installed_plugins` — Claude Code plugins to flag in output
 - `last_scan` — ISO date of last scan run
