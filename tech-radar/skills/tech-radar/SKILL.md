@@ -11,9 +11,20 @@ USE THIS SKILL when the user says: "tech radar", "scan for tools", "what's trend
 
 ## Overview
 
-Scans the web for trending repositories, Claude Code plugins, and developer tools. Filters results against your registered projects' tech stacks and produces a grouped, ranked Obsidian note.
+Scans for trending repositories, Claude Code plugins, and developer tools using a hybrid architecture:
+
+- **Python script** (`scripts/tech-radar-gather`) handles data gathering: GitHub Search API, HN Algolia API, keyword deduplication, concurrent HTTP requests, and history/diffing across scans
+- **Claude** handles judgment: verdict writing, targeted Reddit validation via WebSearch, and Obsidian note rendering
+
+The script outputs structured JSON with categorized repos, HN stories, and flags for items needing Reddit validation. Claude then synthesizes this into an actionable report.
 
 **Not a scoring formula.** Results are grouped by which project they're relevant to, then sorted by popularity. You make the judgment calls.
+
+## Requirements
+
+- **`GITHUB_TOKEN` env var** — required for GitHub Search API access. Without it, GitHub queries will fail or be severely rate-limited. Set via `export GITHUB_TOKEN=ghp_...` in your shell profile.
+- **Python 3.8+** — the gathering script uses only stdlib modules (no pip install needed)
+- **Bash** tool — needed to invoke the gathering script
 
 ## Config
 
@@ -34,16 +45,6 @@ Schema:
         "migrating_from": ["coffeescript", "backbone", "jquery", "bootstrap 4"],
         "migrating_to": ["stimulus", "turbo", "bootstrap 5", "es6"]
       }
-    },
-    "enovis-plugins": {
-      "path": "~/.claude/plugins/marketplaces/enovis-plugins",
-      "stack": {
-        "backend": ["bash", "node", "typescript", "sqlite"],
-        "frontend": [],
-        "infra": [],
-        "migrating_from": [],
-        "migrating_to": []
-      }
     }
   },
   "interests": ["healthcare", "hipaa", "hotwire", "claude-code"],
@@ -61,36 +62,45 @@ Schema:
 
 Output path: reads `vault_path` and `notes_dir` from `~/.obsidian-notes.json`. No `output_dir` in tech-radar config.
 
+## State Directory
+
+`~/.tech-radar/` contains `history.json` for cross-scan persistence. The script uses this to track:
+- Which repos have been seen before vs. new this scan
+- Star count deltas between scans (powers the "Rising Stars" section)
+- Scan count per repo (how many consecutive scans a repo appears in)
+
 ## No-Config Mode
 
 If `~/.tech-radar.json` doesn't exist, scan still runs:
 - Uses `interests` defaults: `["developer-tools", "claude-code"]`
 - Runs generic queries (no stack-specific filtering)
-- Groups results as "General Dev Tools" and "Plugins" only
+- Groups results as "General Dev Tools", "Plugins", and "HN Highlights" only
 - Suggests running `/tech-radar:setup` at the end for better results next time
 
 ## Scan Process
 
-See `/tech-radar:scan` command and `resources/search-queries.md` for query templates.
+1. **Script gathers data** — `tech-radar-gather` queries GitHub Search API and HN Algolia API, deduplicates, categorizes, and diffs against history
+2. **Claude validates via Reddit** — targeted WebSearch for items flagged `reddit_validate: true` (hard cap: 6 searches)
+3. **Claude writes report** — renders structured JSON into an Obsidian note with verdicts, key takeaways, and per-project grouping
+
+See `/tech-radar:scan` command for the full process and report template.
 
 ## Grouping Rules
 
-After collecting search results:
-1. **Discard** results without a GitHub/registry URL or below `min_stars` (Claude Code plugins are exempt from `min_stars` — most have low star counts)
-2. **Dedup** same project found across multiple searches
-3. **Group by project relevance:**
-   - For each registered project, check if the result matches that project's `backend`, `frontend`, `migrating_to`, or `infra` keywords
-   - A result can appear under multiple projects if relevant to both
-   - **Plugins** — Claude Code plugins get their own section
-   - **General** — developer tools that don't match any specific project
-4. **Sort by popularity within each group** (star tiers: 1k-5k / 5k-20k / 20k+)
-5. **Flag installed plugins** from config
-6. **Cap at 30 results total**
+The script handles initial categorization. Items arrive pre-grouped as:
+- `stack-match` — matches a registered project's tech stack keywords
+- `plugin` — Claude Code plugins
+- `under-the-radar` — young repos with high stars-per-day
+- `rising-star` — repos with significant growth since last scan
+- `interest-match` — matches global interest keywords (wild cards)
+- `general` — developer tools that don't match any specific project
+
+Claude renders each category into the appropriate report section.
 
 ## Error Handling
 
-- If a WebSearch call fails, continue with remaining results
-- Report which searches succeeded/failed at top of output
+- If the script fails entirely (non-zero exit), fall back to WebSearch-only approach using `resources/search-queries.md` templates
+- If individual sources fail (`meta.sources.X.status == "error"`), note it in the report header and continue
 - If zero results after filtering, say so explicitly
 
 ## Output Format
@@ -106,10 +116,9 @@ tags: [tech-radar, {timeframe}]
 
 Sections:
 1. **Key Takeaways** — 3-5 actionable bullets
-2. **For {project-name}** — one section per registered project, with results tagged to that project's stack
+2. **For {project-name}** — one section per registered project with matching results
 3. **Plugins** — Claude Code plugin discoveries
-4. **General Dev Tools** — everything else
-
-Each table row: Project | What | Stars | URL | Verdict. Plugin tables add an "Installed?" column.
+4. **Discovery & Inspiration** — Under the Radar, Rising Stars, Wild Cards, HN Highlights
+5. **General Dev Tools** — everything else
 
 Also print a short summary to the conversation after writing the file.
