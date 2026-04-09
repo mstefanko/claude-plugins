@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""tech-radar-gather: Collect trending repos from GitHub Search API.
+"""tech-radar-gather: Collect trending repos and HN stories for tech-radar analysis.
 
 Outputs structured JSON to stdout. All diagnostics go to stderr.
-Phase 1 — GitHub source only; HN is stubbed.
+Phase 2 — GitHub + HN Algolia sources with history/diffing.
 """
 
 import sys
@@ -12,9 +12,11 @@ if sys.version_info < (3, 8):
     sys.exit(1)
 
 import argparse
+import calendar
 import concurrent.futures
 import json
 import os
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -29,15 +31,24 @@ from typing import Optional
 
 GITHUB_SEARCH_REPOS = "https://api.github.com/search/repositories"
 GITHUB_SEARCH_CODE = "https://api.github.com/search/code"
+HN_ALGOLIA_SEARCH = "https://hn.algolia.com/api/v1/search"
 TIMEFRAME_DAYS = {"weekly": 7, "monthly": 30, "quarterly": 90}
 MAX_RESULTS = 30
 MAX_UNDER_RADAR = 5
+MAX_HN_STORIES = 15
+HN_MIN_POINTS = 50
+CONTROVERSY_THRESHOLD = 1.5
 UNAUTHENTICATED_MAX_QUERIES = 4
 UNAUTHENTICATED_DELAY = 6  # seconds between sequential calls
 THREAD_POOL_SIZE = 4
 RATE_LIMIT_BATCH_SIZE = 25       # max queries before pausing (GitHub allows 30/min)
 RATE_LIMIT_BATCH_PAUSE = 60      # seconds to wait between batches
 PER_REQUEST_DELAY = 0.1          # seconds between individual requests in thread pool
+
+HISTORY_VERSION = 1
+
+# Star tier boundaries for rising-star detection
+STAR_TIERS = [1000, 5000, 20000]
 
 # Keywords that should be skipped by the "too-specific" heuristic even if
 # they appear for only one project.
@@ -196,6 +207,38 @@ def build_queries(config: dict) -> list:
 
 
 # ---------------------------------------------------------------------------
+# HN query builder
+# ---------------------------------------------------------------------------
+
+def build_hn_keywords(config: dict) -> list:
+    """Extract deduplicated primary keywords for HN Algolia queries.
+
+    Takes the first 1-2 items from each project's backend array plus
+    each interest. Returns a deduplicated list of (label, keyword) tuples.
+    """
+    seen = set()
+    keywords = []
+    projects = config.get("projects", {})
+    interests = config.get("interests", [])
+
+    for proj_name, proj_data in projects.items():
+        backend = proj_data.get("backend", [])
+        for raw_kw in backend[:2]:
+            kw = strip_version(raw_kw).lower()
+            if kw and kw not in seen:
+                seen.add(kw)
+                keywords.append((f"hn-stack:{proj_name}:{kw}", kw))
+
+    for interest in interests:
+        kw = interest.lower()
+        if kw not in seen:
+            seen.add(kw)
+            keywords.append((f"hn-interest:{kw}", kw))
+
+    return keywords
+
+
+# ---------------------------------------------------------------------------
 # Date range
 # ---------------------------------------------------------------------------
 
@@ -205,6 +248,12 @@ def date_range(timeframe: str):
     date_from = (now - timedelta(days=days)).strftime("%Y-%m-%d")
     date_to = now.strftime("%Y-%m-%d")
     return date_from, date_to
+
+
+def date_to_unix(date_str: str) -> int:
+    """Convert YYYY-MM-DD to Unix timestamp."""
+    dt = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    return int(dt.timestamp())
 
 
 # ---------------------------------------------------------------------------
@@ -305,18 +354,169 @@ def fetch_all_github(queries: list, date_from: str, min_stars: int,
 
 
 # ---------------------------------------------------------------------------
+# HN Algolia API
+# ---------------------------------------------------------------------------
+
+def hn_request(url: str) -> dict:
+    headers = {"User-Agent": "tech-radar-gather/1.0"}
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def fetch_hn_query(label: str, keyword: str, since_unix: int) -> dict:
+    """Execute a single HN Algolia search query."""
+    time.sleep(PER_REQUEST_DELAY)
+    try:
+        params = urllib.parse.urlencode({
+            "query": keyword,
+            "tags": "story",
+            "numericFilters": f"created_at_i>{since_unix},points>{HN_MIN_POINTS}",
+            "hitsPerPage": "10",
+        })
+        url = f"{HN_ALGOLIA_SEARCH}?{params}"
+        data = hn_request(url)
+        return {"label": label, "hits": data.get("hits", []), "keyword": keyword}
+    except (urllib.error.HTTPError, urllib.error.URLError, OSError) as exc:
+        warn(f"HN query '{label}' failed: {exc}")
+        return {"label": label, "hits": [], "keyword": keyword, "error": str(exc)}
+
+
+def fetch_all_hn(hn_keywords: list, since_unix: int) -> tuple:
+    """Fire all HN queries concurrently. Returns (results_list, error_msg_or_None)."""
+    results = []
+    has_error = False
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=THREAD_POOL_SIZE) as pool:
+        futures = {
+            pool.submit(fetch_hn_query, label, kw, since_unix): label
+            for label, kw in hn_keywords
+        }
+        for future in concurrent.futures.as_completed(futures):
+            result = future.result()
+            if "error" in result:
+                has_error = True
+            results.append(result)
+
+    error_msg = "one or more HN queries failed" if has_error else None
+    return results, error_msg
+
+
+def parse_hn_hit(hit: dict) -> dict:
+    """Normalize a single HN Algolia hit into our story schema."""
+    object_id = str(hit.get("objectID", ""))
+    points = hit.get("points", 0)
+    comments = hit.get("num_comments", 0)
+    controversy = round(comments / max(1, points), 2)
+    divisive = controversy > CONTROVERSY_THRESHOLD
+
+    created_unix = hit.get("created_at_i", 0)
+    if created_unix:
+        date_str = datetime.fromtimestamp(created_unix, tz=timezone.utc).strftime("%Y-%m-%d")
+    else:
+        date_str = ""
+
+    return {
+        "id": object_id,
+        "title": hit.get("title", ""),
+        "url": hit.get("url", "") or "",
+        "hn_url": f"https://news.ycombinator.com/item?id={object_id}",
+        "points": points,
+        "comments": comments,
+        "controversy_score": controversy,
+        "divisive": divisive,
+        "date": date_str,
+        "matched_keywords": [],
+        "category": "hn-buzz",
+        "reddit_validate": divisive,
+    }
+
+
+def match_hn_keywords(story: dict, config: dict) -> list:
+    """Match a story's title against project keywords and interests."""
+    title_lower = story["title"].lower()
+    projects = config.get("projects", {})
+    interests = config.get("interests", [])
+    index = build_inverted_index(projects)
+
+    matched = set()
+    for kw in index.keys():
+        if kw in title_lower:
+            matched.add(kw)
+    for interest in interests:
+        if interest.lower() in title_lower:
+            matched.add(interest.lower())
+
+    return sorted(matched)
+
+
+def process_hn_results(raw_results: list, config: dict) -> list:
+    """Dedup, keyword-match, sort, cap HN results."""
+    seen_ids = set()
+    stories = []
+
+    for result in raw_results:
+        for hit in result.get("hits", []):
+            oid = str(hit.get("objectID", ""))
+            if not oid or oid in seen_ids:
+                continue
+            seen_ids.add(oid)
+            story = parse_hn_hit(hit)
+            story["matched_keywords"] = match_hn_keywords(story, config)
+            stories.append(story)
+
+    # Sort by points descending, cap at MAX_HN_STORIES
+    stories.sort(key=lambda s: s["points"], reverse=True)
+    return stories[:MAX_HN_STORIES]
+
+
+# ---------------------------------------------------------------------------
+# HN cross-reference for Under the Radar
+# ---------------------------------------------------------------------------
+
+def crossref_hn(under_radar: list, hn_stories: list) -> None:
+    """Add hn_crossref field to under-the-radar repos whose URL appears in HN stories."""
+    hn_url_index = {}
+    for story in hn_stories:
+        story_url = story.get("url", "")
+        if story_url:
+            hn_url_index[story_url] = story
+
+    for repo in under_radar:
+        repo_url = repo.get("url", "")
+        if repo_url and repo_url in hn_url_index:
+            story = hn_url_index[repo_url]
+            repo["hn_crossref"] = {
+                "title": story["title"],
+                "points": story["points"],
+                "hn_url": story["hn_url"],
+            }
+            # HN cross-ref auto-qualifies for under_the_radar
+            repo["reddit_validate"] = True
+
+
+# ---------------------------------------------------------------------------
 # Dry-run mode
 # ---------------------------------------------------------------------------
 
-def load_fixture(script_dir: str) -> list:
-    fixture_path = os.path.join(script_dir, "fixtures", "sample-github.json")
+def load_fixture(script_dir: str, name: str) -> dict:
+    fixture_path = os.path.join(script_dir, "fixtures", name)
     try:
         with open(fixture_path, "r") as f:
-            data = json.load(f)
-        return data.get("items", [])
+            return json.load(f)
     except (json.JSONDecodeError, OSError) as exc:
-        warn(f"Could not load fixture: {exc}")
-        return []
+        warn(f"Could not load fixture {name}: {exc}")
+        return {}
+
+
+def load_github_fixture(script_dir: str) -> list:
+    data = load_fixture(script_dir, "sample-github.json")
+    return data.get("items", [])
+
+
+def load_hn_fixture(script_dir: str) -> list:
+    data = load_fixture(script_dir, "sample-hn.json")
+    return data.get("hits", [])
 
 
 # ---------------------------------------------------------------------------
@@ -515,20 +715,177 @@ def process_dry_run(items: list, config: dict, date_from: str) -> tuple:
 
 
 # ---------------------------------------------------------------------------
+# History / Diffing
+# ---------------------------------------------------------------------------
+
+def load_history(history_dir: str) -> dict:
+    """Load history.json from the state directory, or return empty structure."""
+    history_path = os.path.join(history_dir, "history.json")
+    if os.path.isfile(history_path):
+        try:
+            with open(history_path, "r") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError) as exc:
+            warn(f"Could not load history: {exc}")
+    return {
+        "version": HISTORY_VERSION,
+        "repos": {},
+        "hn_stories": {},
+        "scans": [],
+    }
+
+
+def save_history(history: dict, history_dir: str) -> None:
+    """Atomically write history.json to the state directory."""
+    os.makedirs(history_dir, exist_ok=True)
+    history_path = os.path.join(history_dir, "history.json")
+    try:
+        fd, tmp_path = tempfile.mkstemp(dir=history_dir, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(history, f, indent=2)
+            os.rename(tmp_path, history_path)
+        except Exception:
+            # Clean up temp file on error
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+    except OSError as exc:
+        warn(f"Could not save history: {exc}")
+
+
+def crossed_tier(stars_first: int, stars_last: int) -> bool:
+    """Return True if stars crossed a tier boundary between first and last."""
+    for tier in STAR_TIERS:
+        if stars_first < tier <= stars_last:
+            return True
+    return False
+
+
+def diff_repos(repos: list, history: dict, today: str) -> dict:
+    """Apply history diffing to repos. Returns counts dict."""
+    hist_repos = history.setdefault("repos", {})
+    new_count = 0
+    returning_count = 0
+    rising_count = 0
+
+    for repo in repos:
+        repo_id = repo["id"]
+        stars = repo.get("stars", 0)
+
+        if repo_id in hist_repos:
+            entry = hist_repos[repo_id]
+            repo["is_new"] = False
+            repo["first_seen"] = entry["first_seen"]
+            repo["scans_seen"] = entry["scans_seen"] + 1
+
+            stars_first = entry.get("stars_first", stars)
+            stars_delta = stars - entry.get("stars_last", stars)
+            stars_delta_pct = round((stars_delta / max(1, stars_first)) * 100, 1)
+
+            repo["stars_delta"] = stars_delta
+            repo["stars_delta_pct"] = stars_delta_pct
+
+            # Rising star detection
+            is_rising = (stars_delta_pct > 20) or crossed_tier(stars_first, stars)
+            if is_rising:
+                repo["category"] = "rising-star"
+                rising_count += 1
+
+            # Update history entry
+            entry["last_seen"] = today
+            entry["stars_last"] = stars
+            entry["scans_seen"] = repo["scans_seen"]
+
+            returning_count += 1
+        else:
+            repo["is_new"] = True
+            repo["first_seen"] = today
+            repo["scans_seen"] = 1
+            repo["stars_delta"] = None
+            repo["stars_delta_pct"] = None
+
+            # Add to history
+            hist_repos[repo_id] = {
+                "first_seen": today,
+                "last_seen": today,
+                "stars_first": stars,
+                "stars_last": stars,
+                "scans_seen": 1,
+            }
+            new_count += 1
+
+    return {"new": new_count, "returning": returning_count, "rising": rising_count}
+
+
+def diff_hn_stories(stories: list, history: dict, today: str) -> None:
+    """Track HN stories in history."""
+    hist_hn = history.setdefault("hn_stories", {})
+    for story in stories:
+        sid = story["id"]
+        if sid not in hist_hn:
+            hist_hn[sid] = {
+                "first_seen": today,
+                "title": story.get("title", ""),
+            }
+
+
+def apply_post_diff_flags(repos: list, under_radar: list) -> None:
+    """Set reddit_validate flags after diffing."""
+    for repo in repos:
+        # Rising Stars with >100% growth
+        if repo.get("stars_delta_pct") is not None and repo["stars_delta_pct"] > 100:
+            repo["reddit_validate"] = True
+        # Interest-match repos (Wild Cards)
+        if repo.get("category") == "interest-match":
+            repo["reddit_validate"] = True
+
+    for repo in under_radar:
+        if repo.get("stars_delta_pct") is not None and repo["stars_delta_pct"] > 100:
+            repo["reddit_validate"] = True
+        if repo.get("category") == "interest-match":
+            repo["reddit_validate"] = True
+
+
+# ---------------------------------------------------------------------------
 # Output
 # ---------------------------------------------------------------------------
 
-def build_output(repos: list, under_radar: list, timeframe: str,
-                 date_from: str, date_to: str, query_count: int,
-                 total_raw: int, error_msg: Optional[str]) -> dict:
-    github_status = "ok" if error_msg is None else "error"
-    github_meta = {
-        "status": github_status,
-        "queries": query_count,
-        "results": total_raw,
-    }
-    if error_msg:
-        github_meta["error_message"] = error_msg
+def build_output(repos: list, under_radar: list, hn_stories: list,
+                 timeframe: str, date_from: str, date_to: str,
+                 github_query_count: int, github_total_raw: int,
+                 github_error: Optional[str],
+                 hn_query_count: int, hn_total_raw: int,
+                 hn_error: Optional[str],
+                 history_counts: dict, source: str) -> dict:
+
+    # GitHub meta
+    if source == "hn":
+        github_meta = {"status": "skipped", "queries": 0, "results": 0}
+    else:
+        github_status = "ok" if github_error is None else "error"
+        github_meta = {
+            "status": github_status,
+            "queries": github_query_count,
+            "results": github_total_raw,
+        }
+        if github_error:
+            github_meta["error_message"] = github_error
+
+    # HN meta
+    if source == "github":
+        hn_meta = {"status": "skipped", "queries": 0, "results": 0}
+    else:
+        hn_status = "ok" if hn_error is None else "error"
+        hn_meta = {
+            "status": hn_status,
+            "queries": hn_query_count,
+            "results": hn_total_raw,
+        }
+        if hn_error:
+            hn_meta["error_message"] = hn_error
 
     return {
         "meta": {
@@ -537,18 +894,18 @@ def build_output(repos: list, under_radar: list, timeframe: str,
             "date_range": {"from": date_from, "to": date_to},
             "sources": {
                 "github": github_meta,
-                "hn": {"status": "skipped", "queries": 0, "results": 0},
+                "hn": hn_meta,
             },
             "history": {
-                "total_tracked": 0,
-                "new_this_scan": len(repos) + len(under_radar),
-                "returning": 0,
-                "rising": 0,
+                "total_tracked": history_counts.get("total_tracked", 0),
+                "new_this_scan": history_counts.get("new", len(repos) + len(under_radar)),
+                "returning": history_counts.get("returning", 0),
+                "rising": history_counts.get("rising", 0),
             },
         },
         "repos": repos,
         "under_the_radar": under_radar,
-        "hn_stories": [],
+        "hn_stories": hn_stories,
     }
 
 
@@ -558,7 +915,7 @@ def build_output(repos: list, under_radar: list, timeframe: str,
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Gather trending repos from GitHub for tech-radar analysis."
+        description="Gather trending repos and HN stories for tech-radar analysis."
     )
     parser.add_argument(
         "--timeframe", choices=["weekly", "monthly", "quarterly"],
@@ -566,7 +923,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--source", choices=["github", "hn", "all"],
-        default="all", help="Data source (default: all; Phase 1 only implements github)"
+        default="all", help="Data source (default: all)"
     )
     parser.add_argument(
         "--dry-run", action="store_true",
@@ -588,38 +945,103 @@ def main() -> None:
 
     # Date range
     date_from, date_to = date_range(args.timeframe)
+    since_unix = date_to_unix(date_from)
 
     # Script directory (for fixtures)
     script_dir = os.path.dirname(os.path.abspath(__file__))
 
+    # History
+    history_dir = os.path.expanduser(args.history_dir)
+    history = load_history(history_dir)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    # Source flags
+    run_github = args.source in ("github", "all")
+    run_hn = args.source in ("hn", "all")
+
+    # --- Collect data ---
+    repos = []
+    under_radar = []
+    hn_stories = []
+    github_query_count = 0
+    github_total_raw = 0
+    github_error = None
+    hn_query_count = 0
+    hn_total_raw = 0
+    hn_error = None
+
     if args.dry_run:
         warn("Dry-run mode: reading from fixtures")
-        items = load_fixture(script_dir)
-        repos, under_radar = process_dry_run(items, config, date_from)
-        output = build_output(
-            repos, under_radar, args.timeframe, date_from, date_to,
-            query_count=0, total_raw=len(items), error_msg=None
-        )
+
+        if run_github:
+            gh_items = load_github_fixture(script_dir)
+            repos, under_radar = process_dry_run(gh_items, config, date_from)
+            github_total_raw = len(gh_items)
+
+        if run_hn:
+            hn_hits = load_hn_fixture(script_dir)
+            # Wrap each hit as a result for process_hn_results
+            raw_hn = [{"hits": hn_hits}]
+            hn_stories = process_hn_results(raw_hn, config)
+            hn_query_count = 1
+            hn_total_raw = len(hn_hits)
     else:
-        # Build queries
-        queries = build_queries(config)
-        warn(f"Generated {len(queries)} queries for timeframe={args.timeframe}")
+        if run_github:
+            queries = build_queries(config)
+            warn(f"Generated {len(queries)} GitHub queries for timeframe={args.timeframe}")
+            token = os.environ.get("GITHUB_TOKEN")
+            raw_results, github_error = fetch_all_github(queries, date_from, min_stars, token)
+            github_total_raw = sum(len(r.get("items", [])) for r in raw_results)
+            github_query_count = len(raw_results)
+            repos, under_radar = process_results(raw_results, config, date_from)
 
-        # Fetch
-        token = os.environ.get("GITHUB_TOKEN")
-        raw_results, error_msg = fetch_all_github(queries, date_from, min_stars, token)
+        if run_hn:
+            hn_keywords = build_hn_keywords(config)
+            warn(f"Generated {len(hn_keywords)} HN queries")
+            raw_hn_results, hn_error = fetch_all_hn(hn_keywords, since_unix)
+            hn_total_raw = sum(len(r.get("hits", [])) for r in raw_hn_results)
+            hn_query_count = len(raw_hn_results)
+            hn_stories = process_hn_results(raw_hn_results, config)
 
-        total_raw = sum(len(r.get("items", [])) for r in raw_results)
-        query_count = len(raw_results)
+    # --- HN cross-reference ---
+    if run_github and run_hn and hn_stories:
+        crossref_hn(under_radar, hn_stories)
 
-        # Process
-        repos, under_radar = process_results(raw_results, config, date_from)
-        output = build_output(
-            repos, under_radar, args.timeframe, date_from, date_to,
-            query_count=query_count, total_raw=total_raw, error_msg=error_msg
-        )
+    # --- History diffing ---
+    repo_counts = diff_repos(repos, history, today)
+    utr_counts = diff_repos(under_radar, history, today)
 
-    # Output JSON to stdout
+    combined_counts = {
+        "new": repo_counts["new"] + utr_counts["new"],
+        "returning": repo_counts["returning"] + utr_counts["returning"],
+        "rising": repo_counts["rising"] + utr_counts["rising"],
+        "total_tracked": len(history.get("repos", {})),
+    }
+
+    diff_hn_stories(hn_stories, history, today)
+
+    # Post-diff flag updates
+    apply_post_diff_flags(repos, under_radar)
+
+    # Append scan entry
+    history.setdefault("scans", []).append({
+        "date": today,
+        "timeframe": args.timeframe,
+        "repos_found": len(repos) + len(under_radar),
+    })
+
+    # Save history (atomic write)
+    save_history(history, history_dir)
+
+    # --- Build and emit output ---
+    output = build_output(
+        repos, under_radar, hn_stories,
+        args.timeframe, date_from, date_to,
+        github_query_count, github_total_raw, github_error,
+        hn_query_count, hn_total_raw, hn_error,
+        combined_counts, args.source,
+    )
+
     print(json.dumps(output, indent=2))
 
 

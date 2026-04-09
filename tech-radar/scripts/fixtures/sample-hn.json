@@ -1,0 +1,58 @@
+{
+  "hits": [
+    {
+      "objectID": "47347064",
+      "title": "Returning to Rails in 2026: What's Changed",
+      "url": "https://example.com/returning-to-rails-2026",
+      "points": 350,
+      "num_comments": 120,
+      "created_at_i": 1743465600,
+      "author": "dhh_fan"
+    },
+    {
+      "objectID": "47348100",
+      "title": "Ruby 3.4 YJIT Performance Is Now Competitive with Go",
+      "url": "https://example.com/ruby-yjit-performance",
+      "points": 280,
+      "num_comments": 95,
+      "created_at_i": 1743552000,
+      "author": "tenderlove"
+    },
+    {
+      "objectID": "47349200",
+      "title": "Open-Source HIPAA Compliance Toolkit for Healthcare SaaS",
+      "url": "https://github.com/medplum/hipaa-audit-toolkit",
+      "points": 190,
+      "num_comments": 45,
+      "created_at_i": 1743638400,
+      "author": "healthdev"
+    },
+    {
+      "objectID": "47350300",
+      "title": "TypeScript 6.0: Native AOT Compilation for Node.js",
+      "url": "https://example.com/typescript-6-aot",
+      "points": 520,
+      "num_comments": 210,
+      "created_at_i": 1743724800,
+      "author": "ts_dev"
+    },
+    {
+      "objectID": "47351400",
+      "title": "Why We Left Rails for Go: A Postmortem",
+      "url": "https://example.com/rails-to-go-postmortem",
+      "points": 210,
+      "num_comments": 580,
+      "created_at_i": 1743811200,
+      "author": "startup_cto"
+    },
+    {
+      "objectID": "47353600",
+      "title": "SQLite as a Production Database: Litestream Changes Everything",
+      "url": "https://github.com/fractaledmind/litestream-ruby",
+      "points": 410,
+      "num_comments": 130,
+      "created_at_i": 1743984000,
+      "author": "sqlite_fan"
+    }
+  ]
+}
