@@ -144,3 +144,6 @@ When `~/.tech-radar.json` doesn't exist:
 - **Reddit specificity:** When Reddit validation informs a verdict, cite the specific concern or community thread — not just "Reddit confirms interest." Example: "r/rails thread flagged ORM performance issues at scale" rather than "discussed on Reddit."
 - **Relevance scoring:** Repos in the JSON include a `relevance_score` field (3=stack-match, 2=plugin, 1=interest, 0=general, +1 for viral growth). Prioritize higher-scored repos for detailed verdicts. Lower-scored general repos can get shorter verdicts.
 - **Interest query mode:** Interest and phrase queries use `pushed:>` (recently active repos) instead of `created:>` (brand-new repos). This means interest results include established ecosystem repos with recent activity — not just new projects. Account for this when writing verdicts.
+- **Category diversity:** The script guarantees representation across stack-match, interest-match, general, and plugin categories via reserved slot allocations.
+- **Broad keyword filtering:** Keywords appearing in 3+ registered projects (e.g., redis, bash) don't drive category assignment — they still appear in `matched_keywords` but don't force stack-match.
+- **Per-project minimum:** Every registered project with available repos gets at least one slot, displacing the lowest-scored repo from the largest category if needed.

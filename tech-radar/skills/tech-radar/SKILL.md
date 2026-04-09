@@ -109,7 +109,10 @@ Claude renders each category into the appropriate report section.
 
 Each repo in the script's JSON output includes:
 - `query_type` — `"stack"`, `"interest"`, `"phrase"`, or `"code"`. Stack queries use `created:>` (new repos only). Interest and phrase queries use `pushed:>` (established repos with recent activity).
-- `relevance_score` — priority ranking (3=stack-match, 2=plugin, 1=interest, 0=general, +1 for viral growth >50 stars/day). Higher-scored repos get detailed verdicts; lower-scored general repos can get shorter verdicts.
+- `relevance_score` — priority ranking (3=stack-match, 2=plugin, 1=interest, 0=general, +1 for viral growth >50 stars/day). Higher-scored repos get detailed verdicts; lower-scored general repos can get shorter verdicts. Category diversity slots ensure all four categories are represented in the final output.
+- `matched_projects` — (HN stories) list of registered project names the story is relevant to, used for cross-referencing in report rendering.
+
+Constants: `BROAD_KEYWORD_THRESHOLD = 3` (keywords in 3+ projects are treated as broad and don't drive stack-match assignment), `DIVERSITY_SLOTS` (reserved per-category minimums ensuring category representation in capped output).
 
 ## Error Handling
 

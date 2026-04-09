@@ -46,6 +46,14 @@ RATE_LIMIT_BATCH_SIZE = 25       # max queries before pausing (GitHub allows 30/
 RATE_LIMIT_BATCH_PAUSE = 60      # seconds to wait between batches
 PER_REQUEST_DELAY = 0.1          # seconds between individual requests in thread pool
 
+BROAD_KEYWORD_THRESHOLD = 3  # Keywords in N+ projects are "broad" — don't drive category
+DIVERSITY_SLOTS = {
+    "stack-match": 12,
+    "interest-match": 3,
+    "general": 3,
+    "plugin": 2,
+}
+
 HISTORY_VERSION = 1
 
 # Star tier boundaries for rising-star detection
@@ -148,8 +156,8 @@ def load_config(path: str) -> dict:
 # Inverted index & query builder
 # ---------------------------------------------------------------------------
 
-def build_inverted_index(projects: dict) -> dict:
-    """keyword (lowercase, version-stripped) -> set of project names."""
+def build_inverted_index(projects: dict) -> tuple:
+    """keyword (lowercase, version-stripped) -> set of project names, plus broad keyword set."""
     index = {}
     for proj_name, proj_data in projects.items():
         for category in ("backend", "frontend", "infra", "migrating_from", "migrating_to"):
@@ -158,7 +166,8 @@ def build_inverted_index(projects: dict) -> dict:
                 if not kw:
                     continue
                 index.setdefault(kw, set()).add(proj_name)
-    return index
+    broad = {kw for kw, projs in index.items() if len(projs) >= BROAD_KEYWORD_THRESHOLD}
+    return index, broad
 
 
 def cluster_keywords(index: dict) -> list:
@@ -189,7 +198,7 @@ def build_queries(config: dict) -> list:
     interests = config.get("interests", [])
     min_stars = config.get("min_stars", 1000)
 
-    index = build_inverted_index(projects)
+    index, _ = build_inverted_index(projects)
     clusters = cluster_keywords(index)
 
     queries = []
@@ -472,7 +481,7 @@ def match_hn_keywords(story: dict, config: dict) -> list:
     title_lower = story["title"].lower()
     projects = config.get("projects", {})
     interests = config.get("interests", [])
-    index = build_inverted_index(projects)
+    index, _ = build_inverted_index(projects)
 
     matched = set()
     for kw in index.keys():
@@ -483,6 +492,24 @@ def match_hn_keywords(story: dict, config: dict) -> list:
             matched.add(interest.lower())
 
     return sorted(matched)
+
+
+def match_hn_projects(story: dict, config: dict) -> list:
+    """Match HN story title against project keywords."""
+    index, broad_kws = build_inverted_index(config.get("projects", {}))
+    title = story.get("title", "").lower()
+    title_normalized = title.replace("-", " ")
+    title_words = set(title_normalized.split())
+
+    matched_projs = set()
+    for kw, proj_set in index.items():
+        if kw in broad_kws:
+            continue
+        kw_normalized = kw.replace("-", " ")
+        # Check word boundary match and substring match (for multi-word keywords)
+        if kw_normalized in title_words or kw_normalized in title_normalized:
+            matched_projs.update(proj_set)
+    return sorted(matched_projs)
 
 
 def process_hn_results(raw_results: list, config: dict) -> list:
@@ -498,6 +525,7 @@ def process_hn_results(raw_results: list, config: dict) -> list:
             seen_ids.add(oid)
             story = parse_hn_hit(hit)
             story["matched_keywords"] = match_hn_keywords(story, config)
+            story["matched_projects"] = match_hn_projects(story, config)
             stories.append(story)
 
     # Sort by points descending, cap at MAX_HN_STORIES
@@ -625,7 +653,7 @@ def tag_repos(repos: dict, config: dict) -> None:
     """Tag each repo with matched projects, keywords, and category."""
     projects = config.get("projects", {})
     interests = [i.lower() for i in config.get("interests", [])]
-    index = build_inverted_index(projects)
+    index, broad_kws = build_inverted_index(projects)
 
     for repo in repos.values():
         searchable = set()
@@ -643,7 +671,8 @@ def tag_repos(repos: dict, config: dict) -> None:
         for kw, proj_set in index.items():
             if kw in searchable:
                 matched_kws.add(kw)
-                matched_projs.update(proj_set)
+                if kw not in broad_kws:
+                    matched_projs.update(proj_set)
 
         # Check for plugin category
         is_plugin = ".claude-plugin" in searchable or "claude-plugin" in searchable
@@ -919,6 +948,49 @@ def score_repos(repos: list) -> None:
         repo["relevance_score"] = score
 
 
+def select_diverse(repos: list, max_repos: int) -> list:
+    """Select repos with category diversity guarantees."""
+    buckets = {}
+    for repo in repos:
+        cat = repo.get("category", "general")
+        buckets.setdefault(cat, []).append(repo)
+
+    for cat in buckets:
+        buckets[cat].sort(
+            key=lambda r: (r.get("relevance_score", 0), r["stars"]),
+            reverse=True
+        )
+
+    selected = []
+    remaining_slots = max_repos
+    unused_slots = 0
+
+    for cat, allocation in sorted(DIVERSITY_SLOTS.items(), key=lambda x: -x[1]):
+        available = buckets.get(cat, [])
+        take = min(allocation, len(available), remaining_slots)
+        selected.extend(available[:take])
+        remaining_slots -= take
+        unused_slots += allocation - take
+
+    if unused_slots > 0 and remaining_slots > 0:
+        already = {r["id"] for r in selected}
+        overflow_priority = ["stack-match", "interest-match", "general", "plugin"]
+        for cat in overflow_priority:
+            if unused_slots <= 0:
+                break
+            available = [r for r in buckets.get(cat, []) if r["id"] not in already]
+            take = min(len(available), unused_slots, remaining_slots)
+            selected.extend(available[:take])
+            unused_slots -= take
+            remaining_slots -= take
+
+    selected.sort(
+        key=lambda r: (r.get("relevance_score", 0), r["stars"]),
+        reverse=True
+    )
+    return selected
+
+
 def apply_post_diff_flags(repos: list, under_radar: list) -> None:
     """Set reddit_validate flags after diffing."""
     for repo in repos:
@@ -1137,8 +1209,34 @@ def main() -> None:
 
     # Relevance scoring and sort+cap (Phase 3)
     score_repos(repos)
-    repos.sort(key=lambda r: (r.get("relevance_score", 0), r["stars"]), reverse=True)
-    repos = repos[:max_repos]
+    full_repos = list(repos)
+    repos = select_diverse(repos, max_repos)
+
+    # Per-project minimum: ensure registered projects have coverage
+    registered = set(config.get("projects", {}).keys())
+    covered = {p for r in repos for p in r.get("matched_projects", [])}
+    uncovered = registered - covered
+
+    if uncovered and full_repos:
+        for proj in sorted(uncovered):
+            candidates = [r for r in full_repos
+                          if proj in r.get("matched_projects", [])
+                          and r["id"] not in {x["id"] for x in repos}]
+            if candidates:
+                candidates.sort(key=lambda r: r["stars"], reverse=True)
+                best = candidates[0]
+                # Displace lowest-scored repo from largest category
+                cat_counts = {}
+                for r in repos:
+                    c = r.get("category", "general")
+                    cat_counts[c] = cat_counts.get(c, 0) + 1
+                largest_cat = max(cat_counts, key=cat_counts.get)
+                cat_repos = [(i, r) for i, r in enumerate(repos)
+                             if r.get("category") == largest_cat]
+                cat_repos.sort(key=lambda x: (x[1].get("relevance_score", 0), x[1]["stars"]))
+                if cat_repos:
+                    repos.pop(cat_repos[0][0])
+                    repos.append(best)
 
     # Append scan entry
     history.setdefault("scans", []).append({
