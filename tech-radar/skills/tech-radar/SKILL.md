@@ -22,7 +22,7 @@ The script outputs structured JSON with categorized repos, HN stories, and flags
 
 ## Requirements
 
-- **`GITHUB_TOKEN` env var** — required for GitHub Search API access. Without it, GitHub queries will fail or be severely rate-limited. Set via `export GITHUB_TOKEN=ghp_...` in your shell profile.
+- **GitHub auth** — needed for GitHub Search API access. Resolved automatically: `GITHUB_TOKEN` env var, then `gh auth token` (GitHub CLI). Without auth, queries are severely rate-limited. Set via `export GITHUB_TOKEN=ghp_...` or run `gh auth login`.
 - **Python 3.8+** — the gathering script uses only stdlib modules (no pip install needed)
 - **Bash** tool — needed to invoke the gathering script
 
@@ -38,13 +38,11 @@ Schema:
   "projects": {
     "myorthomd-web": {
       "path": "/Users/mstefanko/myorthomd-web",
-      "stack": {
-        "backend": ["ruby", "rails", "mysql", "rspec"],
-        "frontend": ["stimulus", "turbo", "bootstrap", "esbuild"],
-        "infra": ["docker", "caddy"],
-        "migrating_from": ["coffeescript", "backbone", "jquery", "bootstrap 4"],
-        "migrating_to": ["stimulus", "turbo", "bootstrap 5", "es6"]
-      }
+      "backend": ["ruby", "rails", "mysql", "rspec"],
+      "frontend": ["stimulus", "turbo", "bootstrap", "esbuild"],
+      "infra": ["docker", "caddy"],
+      "migrating_from": ["coffeescript", "backbone", "jquery", "bootstrap 4"],
+      "migrating_to": ["stimulus", "turbo", "bootstrap 5", "es6"]
     }
   },
   "interests": ["healthcare", "hipaa", "hotwire", "claude-code"],

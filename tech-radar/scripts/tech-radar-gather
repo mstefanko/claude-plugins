@@ -16,6 +16,7 @@ import calendar
 import concurrent.futures
 import json
 import os
+import subprocess
 import tempfile
 import time
 import urllib.error
@@ -96,6 +97,26 @@ def strip_version(keyword: str) -> str:
             continue
         cleaned.append(p)
     return " ".join(cleaned) if cleaned else ""
+
+
+def resolve_github_token() -> Optional[str]:
+    """Resolve GitHub token: GITHUB_TOKEN env var > gh CLI > None."""
+    token = os.environ.get("GITHUB_TOKEN")
+    if token:
+        return token
+
+    # Try gh CLI fallback
+    try:
+        result = subprocess.run(
+            ["gh", "auth", "token"],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -180,14 +201,18 @@ def build_queries(config: dict) -> list:
         # Take up to 5 keywords per query to avoid overly long q strings
         for i in range(0, len(filtered), 5):
             batch = filtered[i:i + 5]
-            q_keywords = "+".join(urllib.parse.quote(kw) for kw in batch)
+            q_keywords = "+".join(
+                "+".join(urllib.parse.quote(word) for word in kw.split())
+                for kw in batch
+            )
             label = f"stack:{','.join(sorted(proj_set))}:{'+'.join(batch)}"
             queries.append((label, q_keywords, "repos", False))
 
     # Interest queries
     for interest in interests:
         label = f"interest:{interest}"
-        queries.append((label, urllib.parse.quote(interest), "repos", False))
+        q_kw = "+".join(urllib.parse.quote(word) for word in interest.split())
+        queries.append((label, q_kw, "repos", False))
 
     # Plugin discovery
     queries.append(("plugin-discovery", "filename:plugin.json+path:.claude-plugin", "code", False))
@@ -199,7 +224,10 @@ def build_queries(config: dict) -> list:
             continue
         for i in range(0, len(filtered), 5):
             batch = filtered[i:i + 5]
-            q_keywords = "+".join(urllib.parse.quote(kw) for kw in batch)
+            q_keywords = "+".join(
+                "+".join(urllib.parse.quote(word) for word in kw.split())
+                for kw in batch
+            )
             label = f"under-radar:{','.join(sorted(proj_set))}:{'+'.join(batch)}"
             queries.append((label, q_keywords, "repos", True))
 
@@ -291,8 +319,6 @@ def fetch_query(label: str, q_keywords: str, search_type: str,
                 is_under_radar: bool, date_from: str, min_stars: int,
                 token: Optional[str]) -> dict:
     """Execute a single GitHub search query. Returns parsed JSON or error dict."""
-    # Small delay to avoid burst-firing all requests at the same instant
-    time.sleep(PER_REQUEST_DELAY)
     try:
         if search_type == "code":
             url = build_code_url(q_keywords)
@@ -339,7 +365,8 @@ def fetch_all_github(queries: list, date_from: str, min_stars: int,
                     results.append(result)
     else:
         # No token: sequential, rate-limited, capped queries
-        warn("GITHUB_TOKEN not set. Using unauthenticated mode (max {} queries, "
+        warn("No GitHub auth found. Set GITHUB_TOKEN or run `gh auth login`. "
+             "Using unauthenticated mode (max {} queries, "
              "{}s delay).".format(UNAUTHENTICATED_MAX_QUERIES, UNAUTHENTICATED_DELAY))
         for i, (label, q_kw, stype, is_ur) in enumerate(queries[:UNAUTHENTICATED_MAX_QUERIES]):
             if i > 0:
@@ -366,7 +393,6 @@ def hn_request(url: str) -> dict:
 
 def fetch_hn_query(label: str, keyword: str, since_unix: int) -> dict:
     """Execute a single HN Algolia search query."""
-    time.sleep(PER_REQUEST_DELAY)
     try:
         params = urllib.parse.urlencode({
             "query": keyword,
@@ -475,7 +501,7 @@ def process_hn_results(raw_results: list, config: dict) -> list:
 # ---------------------------------------------------------------------------
 
 def crossref_hn(under_radar: list, hn_stories: list) -> None:
-    """Add hn_crossref field to under-the-radar repos whose URL appears in HN stories."""
+    """Add hn_crossref field to under-the-radar repos whose URL or name appears in HN stories."""
     hn_url_index = {}
     for story in hn_stories:
         story_url = story.get("url", "")
@@ -484,12 +510,29 @@ def crossref_hn(under_radar: list, hn_stories: list) -> None:
 
     for repo in under_radar:
         repo_url = repo.get("url", "")
+        matched_story = None
+
+        # Check exact URL match
         if repo_url and repo_url in hn_url_index:
-            story = hn_url_index[repo_url]
+            matched_story = hn_url_index[repo_url]
+        else:
+            # Check if repo full_name appears in any HN story title
+            full_name = repo.get("id", "")
+            if full_name:
+                # Match on repo name (e.g. "litestream-ruby") or full path (e.g. "fractaledmind/litestream-ruby")
+                name_lower = full_name.lower()
+                repo_name_lower = full_name.split("/", 1)[-1].lower() if "/" in full_name else name_lower
+                for story in hn_stories:
+                    title_lower = story.get("title", "").lower()
+                    if repo_name_lower in title_lower or name_lower in title_lower:
+                        matched_story = story
+                        break
+
+        if matched_story:
             repo["hn_crossref"] = {
-                "title": story["title"],
-                "points": story["points"],
-                "hn_url": story["hn_url"],
+                "title": matched_story["title"],
+                "points": matched_story["points"],
+                "hn_url": matched_story["hn_url"],
             }
             # HN cross-ref auto-qualifies for under_the_radar
             repo["reddit_validate"] = True
@@ -622,8 +665,11 @@ def process_results(raw_results: list, config: dict, date_from: str) -> tuple:
     main_items = {}
     radar_items = {}
 
+    plugin_discovery_repos = set()
+
     for result in raw_results:
         is_ur = result.get("is_under_radar", False)
+        is_plugin_query = result.get("label", "").startswith("plugin-discovery")
         for item in result.get("items", []):
             full_name = item.get("full_name", "")
             if not full_name:
@@ -643,6 +689,9 @@ def process_results(raw_results: list, config: dict, date_from: str) -> tuple:
                     "created_at": repo_info.get("created_at", ""),
                 }
 
+            if is_plugin_query:
+                plugin_discovery_repos.add(full_name)
+
             parsed = parse_repo_item(item)
             if is_ur:
                 if full_name not in radar_items:
@@ -654,6 +703,11 @@ def process_results(raw_results: list, config: dict, date_from: str) -> tuple:
     # Tag all repos
     tag_repos(main_items, config)
     tag_repos(radar_items, config)
+
+    # Force plugin category for repos from plugin-discovery queries
+    for full_name in plugin_discovery_repos:
+        if full_name in main_items:
+            main_items[full_name]["category"] = "plugin"
 
     # Under the Radar filtering: high velocity OR very new
     filtered_radar = []
@@ -752,7 +806,7 @@ def save_history(history: dict, history_dir: str) -> None:
             except OSError:
                 pass
             raise
-    except OSError as exc:
+    except Exception as exc:
         warn(f"Could not save history: {exc}")
 
 
@@ -989,7 +1043,7 @@ def main() -> None:
         if run_github:
             queries = build_queries(config)
             warn(f"Generated {len(queries)} GitHub queries for timeframe={args.timeframe}")
-            token = os.environ.get("GITHUB_TOKEN")
+            token = resolve_github_token()
             raw_results, github_error = fetch_all_github(queries, date_from, min_stars, token)
             github_total_raw = sum(len(r.get("items", [])) for r in raw_results)
             github_query_count = len(raw_results)

@@ -5,7 +5,12 @@ Scan trending repos, Claude Code plugins, and ecosystem tools against your tech 
 ## Prerequisites
 
 - **Python 3.8+** — the gathering script uses only stdlib modules (no pip install needed)
-- **`GITHUB_TOKEN` env var** — required for GitHub Search API access. Without it, GitHub queries will fail or be severely rate-limited.
+- **GitHub authentication** — needed for GitHub Search API. The script auto-detects auth in this order:
+  1. `GITHUB_TOKEN` env var (if set)
+  2. `gh auth token` (if GitHub CLI is installed and authenticated)
+  3. Falls back to unauthenticated mode (severely rate-limited, max 4 queries)
+
+  If you have `gh` CLI installed (`brew install gh && gh auth login`), no extra setup is needed. Otherwise:
 
   ```bash
   # Add to your shell profile (~/.zshrc or ~/.bashrc)
