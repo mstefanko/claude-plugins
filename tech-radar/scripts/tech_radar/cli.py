@@ -111,11 +111,47 @@ def cmd_dashboard(args):
     app.run()
 
 
-def cmd_stub(name):
-    """Return a stub handler for not-yet-implemented subcommands."""
-    def handler(args):
-        print(f"'{name}' is not yet implemented (coming in a later phase).")
-    return handler
+def cmd_export(args):
+    """Export scan results to Obsidian markdown."""
+    from .export import export_scan
+    db = db_module.open_db(args.db)
+    scan_id = None
+    if hasattr(args, 'date') and args.date:
+        row = db.execute(
+            "SELECT id FROM scans WHERE scan_date = ? ORDER BY id DESC LIMIT 1",
+            [args.date],
+        ).fetchone()
+        if row:
+            scan_id = row[0]
+        else:
+            print(f"No scan found for date {args.date}")
+            sys.exit(1)
+    result = export_scan(db, scan_id=scan_id, output_path=args.output)
+    if result != "stdout":
+        print(f"Exported to: {result}")
+
+
+def cmd_annotate(args):
+    """Add or update an annotation on a repo."""
+    db = db_module.open_db(args.db)
+    repo = db_module.get_repo_by_name(db, args.repo)
+    if not repo:
+        print(f"Repo '{args.repo}' not found")
+        sys.exit(1)
+    db_module.save_annotation(db, repo["id"], args.status, notes=args.notes, reason=args.reason)
+    print(f"Annotated {args.repo} as {args.status}")
+
+
+def cmd_search(args):
+    """Search repos or verdicts via FTS."""
+    db = db_module.open_db(args.db)
+    results = db_module.search_fts(db, args.query, table=args.table)
+    for r in results[:20]:
+        if args.table == "repos":
+            print(f"  {r['full_name']}: {(r.get('description') or '')[:80]}")
+        else:
+            print(f"  {(r.get('verdict_text') or '')[:100]}")
+    print(f"\n{len(results)} result(s)")
 
 
 def build_parser():
@@ -171,15 +207,30 @@ def build_parser():
     p_dashboard.add_argument("--db", default=None, help="Path to database (default: ~/.tech-radar/radar.db)")
     p_dashboard.set_defaults(func=cmd_dashboard)
 
-    # -- stubs for future phases --
-    for name, helptext in [
-        ("export", "Export scan results to Obsidian markdown"),
-        ("annotate", "Add annotations to repos"),
-        ("search", "Search repos and verdicts via FTS"),
-    ]:
-        p = subparsers.add_parser(name, help=helptext)
-        p.add_argument("--db", default=None, help="Path to database (default: ~/.tech-radar/radar.db)")
-        p.set_defaults(func=cmd_stub(name))
+    # -- export --
+    p_export = subparsers.add_parser("export", help="Export scan results to Obsidian markdown")
+    p_export.add_argument("--db", default=None, help="Path to database (default: ~/.tech-radar/radar.db)")
+    p_export.add_argument("--date", default=None, help="Scan date to export (YYYY-MM-DD)")
+    p_export.add_argument("--output", default=None, help="Output file path (default: Obsidian vault or stdout)")
+    p_export.set_defaults(func=cmd_export)
+
+    # -- annotate --
+    p_annotate = subparsers.add_parser("annotate", help="Add annotations to repos")
+    p_annotate.add_argument("repo", help="Repo full_name (e.g. owner/repo)")
+    p_annotate.add_argument("status", choices=["watching", "tested", "adopted", "rejected", "archived"],
+                            help="Annotation status")
+    p_annotate.add_argument("--notes", default=None, help="Free-text notes")
+    p_annotate.add_argument("--reason", default=None, help="Rejection reason (used with 'rejected' status)")
+    p_annotate.add_argument("--db", default=None, help="Path to database (default: ~/.tech-radar/radar.db)")
+    p_annotate.set_defaults(func=cmd_annotate)
+
+    # -- search --
+    p_search = subparsers.add_parser("search", help="Search repos and verdicts via FTS")
+    p_search.add_argument("query", help="Search query")
+    p_search.add_argument("--table", choices=["repos", "verdicts"], default="repos",
+                          help="Table to search (default: repos)")
+    p_search.add_argument("--db", default=None, help="Path to database (default: ~/.tech-radar/radar.db)")
+    p_search.set_defaults(func=cmd_search)
 
     return parser
 
