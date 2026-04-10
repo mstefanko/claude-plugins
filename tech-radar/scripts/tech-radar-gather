@@ -270,36 +270,30 @@ def should_skip_keyword(kw: str, proj_set: set) -> bool:
     return False
 
 
-def _batch_or_keywords(keywords: list, max_len: int = 240) -> list:
-    """Group keywords into OR-combined query strings within max_len.
+def _batch_or_keywords(keywords: list, max_terms: int = 6) -> list:
+    """Group keywords into OR-combined query strings with max_terms per batch.
 
-    GitHub query string max is ~256 chars. Leave room for qualifiers.
+    GitHub REST API supports OR between search terms but silently caps at
+    6 OR operands — queries with 7+ terms return HTTP 422. This limit was
+    empirically determined (not documented).
 
-    Semantics note: Multi-word keywords like "ruby on rails" are quoted
-    as exact phrases ("ruby on rails"), not AND-of-words (ruby+on+rails).
-    Single-word keywords are unquoted. Terms are joined with +OR+ (uppercase
-    OR required by GitHub).
+    Multi-word keywords are quoted as exact phrases. Single-word keywords
+    are unquoted. Terms are joined with +OR+ (uppercase OR required).
     """
     batches = []
     current_parts = []
-    current_len = 0
 
     for kw in keywords:
         if " " in kw:
-            # Multi-word: exact phrase search
             encoded = urllib.parse.quote(f'"{kw}"')
         else:
             encoded = urllib.parse.quote(kw)
 
-        addition = len(encoded) + (4 if current_parts else 0)  # +OR+ is 4 chars
+        current_parts.append(encoded)
 
-        if current_parts and current_len + addition > max_len:
+        if len(current_parts) >= max_terms:
             batches.append("+OR+".join(current_parts))
-            current_parts = [encoded]
-            current_len = len(encoded)
-        else:
-            current_parts.append(encoded)
-            current_len += addition
+            current_parts = []
 
     if current_parts:
         batches.append("+OR+".join(current_parts))
@@ -422,24 +416,24 @@ def github_request(url: str, token: Optional[str]) -> dict:
 
 
 def build_repo_url(q_keywords: str, date_from: str, min_stars: int) -> str:
-    q = f"({q_keywords})+created:>{date_from}+stars:>{min_stars}"
+    q = f"{q_keywords}+created:>{date_from}+stars:>{min_stars}"
     return f"{GITHUB_SEARCH_REPOS}?q={q}&sort=stars&order=desc&per_page=30"
 
 
 def build_merged_stack_url(q_keywords: str, date_from: str) -> str:
     """Stack queries use stars:>100 and post-filter by min_stars threshold."""
-    q = f"({q_keywords})+created:>{date_from}+stars:>100"
+    q = f"{q_keywords}+created:>{date_from}+stars:>100"
     return f"{GITHUB_SEARCH_REPOS}?q={q}&sort=stars&order=desc&per_page=30"
 
 
 def build_code_url(q_keywords: str) -> str:
     # GitHub Code Search API does not support the created: qualifier
-    return f"{GITHUB_SEARCH_CODE}?q=({q_keywords})&per_page=30"
+    return f"{GITHUB_SEARCH_CODE}?q={q_keywords}&per_page=30"
 
 
 def build_interest_url(q_keywords: str, date_from: str, min_stars: int) -> str:
     """Interest queries find established repos with recent activity."""
-    q = f"({q_keywords})+pushed:>{date_from}+stars:>{min_stars}"
+    q = f"{q_keywords}+pushed:>{date_from}+stars:>{min_stars}"
     return f"{GITHUB_SEARCH_REPOS}?q={q}&sort=stars&order=desc&per_page=30"
 
 
