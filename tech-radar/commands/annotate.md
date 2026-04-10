@@ -14,20 +14,24 @@ $CLAUDE_PLUGIN_ROOT/scripts/tech-radar annotate <full_name> <status> [--note "re
 ```
 
 - `<full_name>`: GitHub repo in `owner/repo` format
-- `<status>`: One of `approved`, `rejected`, `bookmarked`
-- `--note`: Optional reason for the annotation
+- `<status>`: One of `watching`, `tested`, `adopted`, `rejected`, `archived`
+- `--notes`: Optional free-text notes
+- `--reason`: Optional rejection reason (used with `rejected` status)
 
 ## Examples
 
 ```bash
-# Approve a repo you want to track
-$CLAUDE_PLUGIN_ROOT/scripts/tech-radar annotate rails/rails approved --note "Core framework"
+# Watch a repo you want to track
+$CLAUDE_PLUGIN_ROOT/scripts/tech-radar annotate rails/rails watching --notes "Core framework"
+
+# Mark as adopted
+$CLAUDE_PLUGIN_ROOT/scripts/tech-radar annotate hotwired/turbo-rails adopted --notes "Using in myorthomd-web"
 
 # Reject a repo to skip future evaluations
-$CLAUDE_PLUGIN_ROOT/scripts/tech-radar annotate some/spam rejected --note "Not relevant"
+$CLAUDE_PLUGIN_ROOT/scripts/tech-radar annotate some/spam rejected --reason "Not relevant to our stack"
 
-# Bookmark for later review
-$CLAUDE_PLUGIN_ROOT/scripts/tech-radar annotate cool/tool bookmarked --note "Check after v2 release"
+# Archive a repo you've moved on from
+$CLAUDE_PLUGIN_ROOT/scripts/tech-radar annotate old/tool archived --notes "Replaced by new/tool"
 ```
 
 Annotations can also be managed interactively via `/tech-radar:dashboard`.

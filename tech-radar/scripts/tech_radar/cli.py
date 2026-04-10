@@ -81,27 +81,26 @@ def cmd_status(args):
     print(f"  Last scan date:    {last_scan_date}")
 
 
-def cmd_evaluate(args):
-    """Handle the evaluate subcommand: --pending or --save."""
+def cmd_evaluate_pending(args):
+    """Output pending repos as JSON to stdout."""
     database = db_module.open_db(args.db)
+    result = get_pending_repos(database)
+    print(json.dumps(result, indent=2))
 
-    if args.pending:
-        result = get_pending_repos(database)
-        print(json.dumps(result, indent=2))
-    elif args.save:
-        raw = sys.stdin.read()
-        verdicts_list = json.loads(raw)
-        result = save_verdicts(
-            database,
-            verdicts_list,
-            tokens_in=args.tokens_in,
-            tokens_out=args.tokens_out,
-            web_searches=args.web_searches,
-        )
-        print(json.dumps(result, indent=2))
-    else:
-        print("Specify --pending or --save. See 'tech-radar evaluate -h' for usage.")
-        sys.exit(1)
+
+def cmd_evaluate_save(args):
+    """Read verdict JSON from stdin and save to DB."""
+    database = db_module.open_db(args.db)
+    raw = sys.stdin.read()
+    verdicts_list = json.loads(raw)
+    result = save_verdicts(
+        database,
+        verdicts_list,
+        tokens_in=args.tokens_in,
+        tokens_out=args.tokens_out,
+        web_searches=args.web_searches,
+    )
+    print(json.dumps(result, indent=2))
 
 
 def cmd_dashboard(args):
@@ -194,13 +193,21 @@ def build_parser():
 
     # -- evaluate --
     p_eval = subparsers.add_parser("evaluate", help="Run Claude evaluation on pending repos")
-    p_eval.add_argument("--db", default=None, help="Path to database (default: ~/.tech-radar/radar.db)")
-    p_eval.add_argument("--pending", action="store_true", help="Output pending repos as JSON to stdout")
-    p_eval.add_argument("--save", action="store_true", help="Read verdict JSON from stdin and save to DB")
-    p_eval.add_argument("--tokens-in", type=int, default=None, help="Input tokens used during evaluation")
-    p_eval.add_argument("--tokens-out", type=int, default=None, help="Output tokens used during evaluation")
-    p_eval.add_argument("--web-searches", type=int, default=None, help="Web searches performed during evaluation")
-    p_eval.set_defaults(func=cmd_evaluate)
+    eval_sub = p_eval.add_subparsers(dest="eval_command", help="Evaluate subcommands")
+
+    p_eval_pending = eval_sub.add_parser("pending", help="Output pending repos as JSON to stdout")
+    p_eval_pending.add_argument("--db", default=None, help="Path to database (default: ~/.tech-radar/radar.db)")
+    p_eval_pending.set_defaults(func=cmd_evaluate_pending)
+
+    p_eval_save = eval_sub.add_parser("save", help="Read verdict JSON from stdin and save to DB")
+    p_eval_save.add_argument("--db", default=None, help="Path to database (default: ~/.tech-radar/radar.db)")
+    p_eval_save.add_argument("--tokens-in", type=int, default=None, help="Input tokens used during evaluation")
+    p_eval_save.add_argument("--tokens-out", type=int, default=None, help="Output tokens used during evaluation")
+    p_eval_save.add_argument("--web-searches", type=int, default=None, help="Web searches performed during evaluation")
+    p_eval_save.set_defaults(func=cmd_evaluate_save)
+
+    # Default: show help if no subcommand
+    p_eval.set_defaults(func=lambda args: p_eval.print_help() or sys.exit(1))
 
     # -- dashboard --
     p_dashboard = subparsers.add_parser("dashboard", help="Launch interactive TUI dashboard")
