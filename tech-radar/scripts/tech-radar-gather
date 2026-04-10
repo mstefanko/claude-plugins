@@ -16,9 +16,11 @@ import calendar
 import concurrent.futures
 import json
 import os
+import re
 import subprocess
 import tempfile
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -76,6 +78,17 @@ PRIMARY_KEYWORDS = frozenset([
 ])
 
 _VERSION_CHARS = set("0123456789.")
+
+
+def normalize(text: str) -> str:
+    """Normalize text for matching: lowercase, strip hyphens/underscores/dots/possessives."""
+    text = unicodedata.normalize('NFKD', text)
+    text = text.lower()
+    text = re.sub(r"[-_.]", " ", text)
+    text = re.sub(r"['\u2019]s\b", "", text)
+    text = re.sub(r"[^a-z0-9 ]", "", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -157,12 +170,12 @@ def load_config(path: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def build_inverted_index(projects: dict) -> tuple:
-    """keyword (lowercase, version-stripped) -> set of project names, plus broad keyword set."""
+    """keyword (normalized, version-stripped) -> set of project names, plus broad keyword set."""
     index = {}
     for proj_name, proj_data in projects.items():
         for category in ("backend", "frontend", "infra", "migrating_from", "migrating_to"):
             for raw_kw in proj_data.get(category, []):
-                kw = strip_version(raw_kw).lower()
+                kw = normalize(strip_version(raw_kw))
                 if not kw:
                     continue
                 index.setdefault(kw, set()).add(proj_name)
@@ -254,13 +267,13 @@ def build_hn_keywords(config: dict) -> list:
     for proj_name, proj_data in projects.items():
         backend = proj_data.get("backend", [])
         for raw_kw in backend[:2]:
-            kw = strip_version(raw_kw).lower()
+            kw = normalize(strip_version(raw_kw))
             if kw and kw not in seen:
                 seen.add(kw)
                 keywords.append((f"hn-stack:{proj_name}:{kw}", kw))
 
     for interest in interests:
-        kw = interest.lower()
+        kw = normalize(interest)
         if kw not in seen:
             seen.add(kw)
             keywords.append((f"hn-interest:{kw}", kw))
@@ -478,20 +491,19 @@ def parse_hn_hit(hit: dict) -> dict:
 
 def match_hn_keywords(story: dict, config: dict) -> list:
     """Match a story's title against project keywords and interests."""
-    title_lower = story["title"].lower()
-    title_normalized = title_lower.replace("-", " ").replace("'s", " ").replace("\u2019s", " ")
+    title_norm = normalize(story["title"])
     projects = config.get("projects", {})
     interests = config.get("interests", [])
     index, _ = build_inverted_index(projects)
 
     matched = set()
     for kw in index.keys():
-        kw_normalized = kw.replace("-", " ")
-        if kw_normalized in title_normalized:
+        kw_norm = normalize(kw)
+        if kw_norm in title_norm:
             matched.add(kw)
     for interest in interests:
-        interest_normalized = interest.lower().replace("-", " ")
-        if interest_normalized in title_normalized:
+        interest_norm = normalize(interest)
+        if interest_norm in title_norm:
             matched.add(interest.lower())
 
     return sorted(matched)
@@ -500,18 +512,16 @@ def match_hn_keywords(story: dict, config: dict) -> list:
 def match_hn_projects(story: dict, config: dict) -> list:
     """Match HN story title against project keywords."""
     index, broad_kws = build_inverted_index(config.get("projects", {}))
-    title = story.get("title", "").lower()
-    # Normalize: hyphens to spaces, strip possessives, collapse whitespace
-    title_normalized = title.replace("-", " ").replace("'s", " ").replace("'s", " ")
-    title_words = set(title_normalized.split())
+    title_norm = normalize(story.get("title", ""))
+    title_words = set(title_norm.split())
 
     matched_projs = set()
     for kw, proj_set in index.items():
         if kw in broad_kws:
             continue
-        kw_normalized = kw.replace("-", " ")
+        kw_norm = normalize(kw)
         # Word match for single-word keywords, substring for multi-word
-        if kw_normalized in title_words or kw_normalized in title_normalized:
+        if kw_norm in title_words or kw_norm in title_norm:
             matched_projs.update(proj_set)
     return sorted(matched_projs)
 
@@ -662,29 +672,33 @@ def tag_repos(repos: dict, config: dict) -> None:
     for repo in repos.values():
         searchable = set()
         if repo["language"]:
-            searchable.add(repo["language"].lower())
+            searchable.add(normalize(repo["language"]))
         for t in repo["topics"]:
-            searchable.add(t.lower())
-        # Also check description words for interest matching
-        desc_words = set((repo.get("description") or "").lower().split())
+            searchable.add(normalize(t))
+        desc_norm = normalize(repo.get("description") or "")
+        desc_words = set(desc_norm.split())
+        name_norm = normalize(repo.get("name") or "")
 
         matched_kws = set()
         matched_projs = set()
 
         # Check against inverted index
         for kw, proj_set in index.items():
-            if kw in searchable:
+            kw_norm = normalize(kw)
+            if kw_norm in searchable or kw_norm in desc_norm or kw_norm in name_norm:
                 matched_kws.add(kw)
                 if kw not in broad_kws:
                     matched_projs.update(proj_set)
 
-        # Check for plugin category
-        is_plugin = ".claude-plugin" in searchable or "claude-plugin" in searchable
+        # Check for plugin category (use raw topics — normalize strips dots)
+        raw_topics = [t.lower() for t in repo.get("topics", [])]
+        is_plugin = ".claude-plugin" in raw_topics or "claude-plugin" in raw_topics
 
         # Check interests
         matched_interests = []
         for interest in interests:
-            if interest in searchable or interest in desc_words:
+            interest_norm = normalize(interest)
+            if interest_norm in searchable or interest_norm in desc_words or interest_norm in desc_norm:
                 matched_interests.append(interest)
 
         repo["matched_projects"] = sorted(matched_projs)
