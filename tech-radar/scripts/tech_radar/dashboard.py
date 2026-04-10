@@ -79,6 +79,8 @@ def _staleness(scan_date_str: str | None) -> tuple[str, str]:
         return ("unknown", "stale-red")
     try:
         scan_dt = datetime.fromisoformat(scan_date_str.replace("Z", "+00:00"))
+        if scan_dt.tzinfo is None:
+            scan_dt = scan_dt.replace(tzinfo=timezone.utc)
     except (ValueError, TypeError):
         return ("unknown", "stale-red")
     now = datetime.now(timezone.utc)
@@ -105,7 +107,10 @@ def _load_project_names(config_path: str = "~/.tech-radar.json") -> list[str]:
     try:
         with open(path) as f:
             cfg = json.load(f)
-        return [p.get("name", p.get("id", "")) for p in cfg.get("projects", [])]
+        projects = cfg.get("projects", {})
+        if isinstance(projects, dict):
+            return list(projects.keys())
+        return [p.get("name", p.get("id", "")) for p in projects]
     except (json.JSONDecodeError, KeyError, TypeError):
         return []
 
