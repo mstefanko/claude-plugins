@@ -10,6 +10,7 @@ def get_pending_repos(db, config_path="~/.tech-radar.json"):
     """Return a JSON-serializable dict of repos needing verdicts from the latest scan.
 
     Includes project config so Claude has stack context for evaluation.
+    Single query fetches all data including previous verdicts (#2: no N+1).
     """
     scan_id = get_latest_scan_id(db)
     if scan_id is None:
@@ -19,24 +20,24 @@ def get_pending_repos(db, config_path="~/.tech-radar.json"):
     config_path = os.path.expanduser(config_path)
     projects = {}
     if os.path.exists(config_path):
-        with open(config_path, "r") as f:
+        with open(config_path, "r", encoding="utf-8") as f:
             config = json.load(f)
         projects = config.get("projects", {})
 
-    # Fetch pending snapshots from the latest scan joined with repo metadata
+    # Single query: pending snapshots + repo metadata + previous verdict (#2)
     rows = db.execute("""
         SELECT
-            r.full_name,
-            r.description,
-            ss.stars,
-            ss.stars_delta,
-            ss.stars_delta_pct,
-            ss.category,
-            ss.matched_projects,
-            ss.matched_keywords,
-            ss.hn_context
+            r.full_name, r.description,
+            ss.stars, ss.stars_delta, ss.stars_delta_pct,
+            ss.category, ss.matched_projects, ss.matched_keywords, ss.hn_context,
+            prev_v.verdict_text as previous_verdict
         FROM scan_snapshots ss
         JOIN repos r ON r.id = ss.repo_id
+        LEFT JOIN verdicts prev_v ON prev_v.repo_id = ss.repo_id
+            AND prev_v.scan_id = (
+                SELECT MAX(v2.scan_id) FROM verdicts v2
+                WHERE v2.repo_id = ss.repo_id AND v2.scan_id < ss.scan_id
+            )
         WHERE ss.scan_id = ?
           AND ss.needs_verdict = 1
         ORDER BY ss.stars DESC
@@ -44,45 +45,18 @@ def get_pending_repos(db, config_path="~/.tech-radar.json"):
 
     repos = []
     for row in rows:
-        full_name = row[0]
-        description = row[1]
-        stars = row[2]
-        stars_delta = row[3]
-        stars_delta_pct = row[4]
-        category = row[5]
-        matched_projects_raw = row[6]
-        matched_keywords_raw = row[7]
-        hn_context = row[8]
-
-        # Parse JSON list fields
-        matched_projects = _parse_json_list(matched_projects_raw)
-        matched_keywords = _parse_json_list(matched_keywords_raw)
-
-        # Look up previous verdict
-        prev = db.execute("""
-            SELECT v.verdict_text
-            FROM verdicts v
-            JOIN repos r2 ON r2.id = v.repo_id
-            WHERE r2.full_name = ?
-            ORDER BY v.scan_id DESC
-            LIMIT 1
-        """, [full_name]).fetchone()
-
-        is_new = prev is None
-        previous_verdict = prev[0] if prev else None
-
         repos.append({
-            "full_name": full_name,
-            "description": description or "",
-            "stars": stars,
-            "stars_delta": stars_delta,
-            "stars_delta_pct": stars_delta_pct,
-            "category": category,
-            "matched_projects": matched_projects,
-            "matched_keywords": matched_keywords,
-            "is_new": is_new,
-            "hn_context": hn_context or "",
-            "previous_verdict": previous_verdict,
+            "full_name": row[0],
+            "description": row[1] or "",
+            "stars": row[2],
+            "stars_delta": row[3],
+            "stars_delta_pct": row[4],
+            "category": row[5],
+            "matched_projects": _parse_json_list(row[6]),
+            "matched_keywords": _parse_json_list(row[7]),
+            "is_new": row[9] is None,
+            "hn_context": row[8] or "",
+            "previous_verdict": row[9],
         })
 
     return {
@@ -99,45 +73,58 @@ def save_verdicts(db, verdicts_json, scan_id=None, tokens_in=None,
     Each verdict dict must have: full_name, verdict_text, project_relevance.
     Optionally: reddit_validation.
 
-    If scan_id is None, uses the latest scan. Updates scans.metadata with
-    token tracking info if provided.
+    Wrapped in a transaction for atomicity + performance (#3).
+    Batch-fetches repo IDs upfront to avoid N+1 (#3).
     """
     if scan_id is None:
         scan_id = get_latest_scan_id(db)
     if scan_id is None:
         raise ValueError("No scans exist in the database")
 
+    # Batch-fetch all repo IDs in one query (#3)
+    full_names = [v["full_name"] for v in verdicts_json]
+    if not full_names:
+        return {"saved": 0, "scan_id": scan_id}
+
+    placeholders = ",".join("?" * len(full_names))
+    rows = db.execute(
+        f"SELECT id, full_name FROM repos WHERE full_name IN ({placeholders})",
+        full_names
+    ).fetchall()
+    repo_id_map = {row[1]: row[0] for row in rows}
+
     saved = 0
-    for v in verdicts_json:
-        repo = get_repo_by_name(db, v["full_name"])
-        if repo is None:
-            print(f"Warning: repo '{v['full_name']}' not found in DB, skipping")
-            continue
+    with db.conn:  # Transaction: atomic writes + batched WAL flushes (#3)
+        for v in verdicts_json:
+            repo_id = repo_id_map.get(v["full_name"])
+            if repo_id is None:
+                print(f"Warning: repo '{v['full_name']}' not found in DB, skipping")
+                continue
 
-        verdict_data = {
-            "verdict_text": v["verdict_text"],
-            "project_relevance": v.get("project_relevance", ""),
-            "reddit_validation": v.get("reddit_validation", ""),
-        }
-        save_verdict(db, repo["id"], scan_id, verdict_data)
-        # Clear needs_verdict flag so this repo isn't re-evaluated
-        db.execute(
-            "UPDATE scan_snapshots SET needs_verdict = 0 WHERE repo_id = ? AND scan_id = ?",
-            [repo["id"], scan_id]
-        )
-        saved += 1
+            verdict_data = {
+                "verdict_text": v["verdict_text"],
+                "project_relevance": v.get("project_relevance", ""),
+                "reddit_validation": v.get("reddit_validation", ""),
+            }
+            save_verdict(db, repo_id, scan_id, verdict_data)
+            # Clear needs_verdict flag so this repo isn't re-evaluated
+            db.execute(
+                "UPDATE scan_snapshots SET needs_verdict = 0 WHERE repo_id = ? AND scan_id = ?",
+                [repo_id, scan_id]
+            )
+            saved += 1
 
-    # Update scans.metadata with token tracking
-    tracking = {}
-    if tokens_in is not None:
-        tracking["tokens_in"] = tokens_in
-    if tokens_out is not None:
-        tracking["tokens_out"] = tokens_out
-    if web_searches is not None:
-        tracking["web_searches"] = web_searches
+        # Update scans.metadata with token tracking (inside same transaction)
+        tracking = {}
+        if tokens_in is not None:
+            tracking["tokens_in"] = tokens_in
+        if tokens_out is not None:
+            tracking["tokens_out"] = tokens_out
+        if web_searches is not None:
+            tracking["web_searches"] = web_searches
 
-    if tracking:
-        _merge_scan_metadata(db, scan_id, tracking)
+        if tracking:
+            _merge_scan_metadata(db, scan_id, tracking)
 
     return {"saved": saved, "scan_id": scan_id}
 

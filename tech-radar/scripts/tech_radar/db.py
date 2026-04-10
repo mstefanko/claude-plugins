@@ -169,6 +169,7 @@ def upsert_repo(db, repo_data):
     """Upsert a repo by full_name. Returns the repo row dict.
 
     repo_data must contain 'full_name'. Other fields are updated on conflict.
+    Uses INSERT ... ON CONFLICT for single-statement upsert (#7).
     """
     full_name = repo_data["full_name"]
     # Split owner/repo_name if not provided
@@ -183,16 +184,23 @@ def upsert_repo(db, repo_data):
     # Serialize topics if it's a list
     if isinstance(repo_data.get("topics"), list):
         repo_data["topics"] = json.dumps(repo_data["topics"])
-    # Upsert — update everything except first_seen on conflict
-    existing = get_repo_by_name(db, full_name)
-    if existing:
-        # Preserve first_seen from existing record
-        repo_data["first_seen"] = existing["first_seen"]
-        db["repos"].update(existing["id"], repo_data)
-        return db["repos"].get(existing["id"])
-    else:
-        db["repos"].insert(repo_data)
-        return get_repo_by_name(db, full_name)
+    # Single-statement upsert: preserve first_seen on conflict
+    db.execute("""
+        INSERT INTO repos (full_name, owner, repo_name, description, language,
+                           topics, url, homepage, license, archived, is_fork,
+                           created_at, pushed_at, first_seen, last_seen)
+        VALUES (:full_name, :owner, :repo_name, :description, :language,
+                :topics, :url, :homepage, :license, :archived, :is_fork,
+                :created_at, :pushed_at, :first_seen, :last_seen)
+        ON CONFLICT(full_name) DO UPDATE SET
+            owner=excluded.owner, repo_name=excluded.repo_name,
+            description=excluded.description, language=excluded.language,
+            topics=excluded.topics, url=excluded.url, homepage=excluded.homepage,
+            license=excluded.license, archived=excluded.archived,
+            is_fork=excluded.is_fork, created_at=excluded.created_at,
+            pushed_at=excluded.pushed_at, last_seen=excluded.last_seen
+    """, repo_data)
+    return get_repo_by_name(db, full_name)
 
 
 def insert_scan(db, scan_data):
@@ -211,8 +219,8 @@ def insert_snapshot(db, snapshot_data):
 
 def get_latest_scan_id(db):
     """Return the most recent scan_id, or None if no scans exist."""
-    row = list(db.execute("SELECT id FROM scans ORDER BY id DESC LIMIT 1").fetchall())
-    return row[0][0] if row else None
+    row = db.execute("SELECT id FROM scans ORDER BY id DESC LIMIT 1").fetchone()
+    return row[0] if row else None
 
 
 def get_repo_by_name(db, full_name):
@@ -223,11 +231,11 @@ def get_repo_by_name(db, full_name):
 
 def get_previous_stars(db, repo_id):
     """Return the star count from the most recent snapshot for a repo, or None."""
-    row = list(db.execute(
+    row = db.execute(
         "SELECT stars FROM scan_snapshots WHERE repo_id = ? ORDER BY scan_id DESC LIMIT 1",
         [repo_id]
-    ).fetchall())
-    return row[0][0] if row else None
+    ).fetchone()
+    return row[0] if row else None
 
 
 def save_verdict(db, repo_id, scan_id, verdict_data):
@@ -247,15 +255,18 @@ def save_verdict(db, repo_id, scan_id, verdict_data):
     # Serialize project_relevance if dict
     if isinstance(record["project_relevance"], dict):
         record["project_relevance"] = json.dumps(record["project_relevance"])
-    # Upsert by repo_id + scan_id (unique constraint)
-    existing = db.execute(
-        "SELECT id FROM verdicts WHERE repo_id = ? AND scan_id = ?",
-        [repo_id, scan_id]
-    ).fetchone()
-    if existing:
-        db["verdicts"].update(existing[0], record)
-    else:
-        db["verdicts"].insert(record)
+    # Single-statement upsert by (repo_id, scan_id) unique constraint (#8)
+    db.execute("""
+        INSERT INTO verdicts (repo_id, scan_id, verdict_text, project_relevance,
+                              reddit_validation, generated_at)
+        VALUES (:repo_id, :scan_id, :verdict_text, :project_relevance,
+                :reddit_validation, :generated_at)
+        ON CONFLICT(repo_id, scan_id) DO UPDATE SET
+            verdict_text=excluded.verdict_text,
+            project_relevance=excluded.project_relevance,
+            reddit_validation=excluded.reddit_validation,
+            generated_at=excluded.generated_at
+    """, record)
 
 
 def save_annotation(db, repo_id, status, notes=None, reason=None):
@@ -358,7 +369,7 @@ def migrate_from_history(db, history_path=None):
     if not os.path.exists(history_path):
         raise FileNotFoundError(f"History file not found: {history_path}")
 
-    with open(history_path, "r") as f:
+    with open(history_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
     repos_data = data.get("repos", {})
@@ -396,55 +407,56 @@ def migrate_from_history(db, history_path=None):
     })
 
     imported = 0
-    for full_name, repo_info in repos_data.items():
-        # Parse owner/repo from the key
-        parts = full_name.split("/", 1)
-        owner = parts[0]
-        repo_name = parts[1] if len(parts) > 1 else full_name
+    with db.conn:  # Transaction: atomic + batched WAL flushes (#22)
+        for full_name, repo_info in repos_data.items():
+            # Parse owner/repo from the key
+            parts = full_name.split("/", 1)
+            owner = parts[0]
+            repo_name = parts[1] if len(parts) > 1 else full_name
 
-        first_seen = repo_info.get("first_seen", earliest_date)
-        last_seen = repo_info.get("last_seen", earliest_date)
-        stars = repo_info.get("stars_last", 0)
+            first_seen = repo_info.get("first_seen", earliest_date)
+            last_seen = repo_info.get("last_seen", earliest_date)
+            stars = repo_info.get("stars_last", 0)
 
-        # Upsert repo
-        repo_row = upsert_repo(db, {
-            "full_name": full_name,
-            "owner": owner,
-            "repo_name": repo_name,
-            "description": "",
-            "language": "",
-            "topics": "[]",
-            "url": f"https://github.com/{full_name}",
-            "homepage": "",
-            "license": "",
-            "archived": 0,
-            "is_fork": 0,
-            "created_at": "",
-            "pushed_at": "",
-            "first_seen": first_seen,
-            "last_seen": last_seen,
-        })
+            # Upsert repo
+            repo_row = upsert_repo(db, {
+                "full_name": full_name,
+                "owner": owner,
+                "repo_name": repo_name,
+                "description": "",
+                "language": "",
+                "topics": "[]",
+                "url": f"https://github.com/{full_name}",
+                "homepage": "",
+                "license": "",
+                "archived": 0,
+                "is_fork": 0,
+                "created_at": "",
+                "pushed_at": "",
+                "first_seen": first_seen,
+                "last_seen": last_seen,
+            })
 
-        # Create one snapshot with the most recent star count
-        insert_snapshot(db, {
-            "repo_id": repo_row["id"],
-            "scan_id": scan_id,
-            "stars": stars,
-            "stars_delta": None,
-            "stars_delta_pct": None,
-            "stars_per_day": None,
-            "category": "general",  # unknown from history — default to general
-            "is_under_radar": 0,
-            "is_rising": 0,
-            "relevance_score": None,
-            "matched_keywords": "[]",
-            "matched_projects": "[]",
-            "reddit_validate": 0,
-            "hn_context": "",
-            "needs_verdict": 0,  # historical — no verdict needed
-        })
+            # Create one snapshot with the most recent star count
+            insert_snapshot(db, {
+                "repo_id": repo_row["id"],
+                "scan_id": scan_id,
+                "stars": stars,
+                "stars_delta": None,
+                "stars_delta_pct": None,
+                "stars_per_day": None,
+                "category": "general",  # unknown from history — default to general
+                "is_under_radar": 0,
+                "is_rising": 0,
+                "relevance_score": None,
+                "matched_keywords": "[]",
+                "matched_projects": "[]",
+                "reddit_validate": 0,
+                "hn_context": "",
+                "needs_verdict": 0,  # historical — no verdict needed
+            })
 
-        imported += 1
+            imported += 1
 
     # Rename history.json to .bak
     bak_path = history_path + ".bak"

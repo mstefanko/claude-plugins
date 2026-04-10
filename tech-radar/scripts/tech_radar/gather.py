@@ -73,7 +73,7 @@ def load_config(path: str = "~/.tech-radar.json") -> dict:
     expanded = os.path.expanduser(path)
     if os.path.isfile(expanded):
         try:
-            with open(expanded, "r") as f:
+            with open(expanded, "r", encoding="utf-8") as f:
                 return json.load(f)
         except (json.JSONDecodeError, OSError) as exc:
             warn(f"Could not load config {expanded}: {exc}")
@@ -271,7 +271,7 @@ def github_request(url: str, token: Optional[str]) -> dict:
         headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+        return json.load(resp)  # Stream-parse, no intermediate copy (#12)
 
 
 def build_repo_url(q_keywords: str, date_from: str, min_stars: int) -> str:
@@ -328,12 +328,13 @@ def fetch_all_github(queries: list, date_from: str, min_stars: int,
     if token:
         batches = [queries[i:i + RATE_LIMIT_BATCH_SIZE]
                    for i in range(0, len(queries), RATE_LIMIT_BATCH_SIZE)]
-        for batch_idx, batch in enumerate(batches):
-            if batch_idx > 0:
-                warn(f"Rate-limit pause: waiting {RATE_LIMIT_BATCH_PAUSE}s before batch "
-                     f"{batch_idx + 1}/{len(batches)}")
-                time.sleep(RATE_LIMIT_BATCH_PAUSE)
-            with concurrent.futures.ThreadPoolExecutor(max_workers=THREAD_POOL_SIZE) as pool:
+        # Single pool reused across batches (#16)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=THREAD_POOL_SIZE) as pool:
+            for batch_idx, batch in enumerate(batches):
+                if batch_idx > 0:
+                    warn(f"Rate-limit pause: waiting {RATE_LIMIT_BATCH_PAUSE}s before batch "
+                         f"{batch_idx + 1}/{len(batches)}")
+                    time.sleep(RATE_LIMIT_BATCH_PAUSE)
                 futures = {
                     pool.submit(fetch_query, label, q_kw, stype, qtype,
                                 date_from, min_stars, token): label
@@ -368,7 +369,7 @@ def hn_request(url: str) -> dict:
     headers = {"User-Agent": "tech-radar-gather/1.0"}
     req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+        return json.load(resp)  # Stream-parse (#12)
 
 
 def fetch_hn_query(label: str, keyword: str, since_unix: int) -> dict:
@@ -502,11 +503,17 @@ def parse_hn_hit(hit: dict) -> dict:
 # Tagging / matching
 # ---------------------------------------------------------------------------
 
-def tag_repos(repos: dict, config: dict) -> None:
-    """Tag each repo with matched projects, keywords, and category."""
+def tag_repos(repos: dict, config: dict, inv_index: tuple = None) -> None:
+    """Tag each repo with matched projects, keywords, and category.
+
+    inv_index: optional pre-built (index, broad_kws) tuple (#5).
+    """
     projects = config.get("projects", {})
     interests = [i.lower() for i in config.get("interests", [])]
-    index, broad_kws = build_inverted_index(projects)
+    if inv_index is not None:
+        index, broad_kws = inv_index
+    else:
+        index, broad_kws = build_inverted_index(projects)
 
     for repo in repos.values():
         searchable_text = " ".join([
@@ -548,12 +555,18 @@ def tag_repos(repos: dict, config: dict) -> None:
             repo["category"] = "general"
 
 
-def match_hn_keywords(story: dict, config: dict) -> list:
-    """Match a story's title against project keywords and interests."""
+def match_hn_keywords(story: dict, config: dict, inv_index: tuple = None) -> list:
+    """Match a story's title against project keywords and interests.
+
+    inv_index: optional pre-built (index, broad_kws) tuple (#6).
+    """
     title = story["title"]
     projects = config.get("projects", {})
     interests = config.get("interests", [])
-    index, _ = build_inverted_index(projects)
+    if inv_index is not None:
+        index, _ = inv_index
+    else:
+        index, _ = build_inverted_index(projects)
 
     matched = set()
     for kw in index.keys():
@@ -568,9 +581,15 @@ def match_hn_keywords(story: dict, config: dict) -> list:
     return sorted(matched)
 
 
-def match_hn_projects(story: dict, config: dict) -> list:
-    """Match HN story title against project keywords."""
-    index, broad_kws = build_inverted_index(config.get("projects", {}))
+def match_hn_projects(story: dict, config: dict, inv_index: tuple = None) -> list:
+    """Match HN story title against project keywords.
+
+    inv_index: optional pre-built (index, broad_kws) tuple (#6).
+    """
+    if inv_index is not None:
+        index, broad_kws = inv_index
+    else:
+        index, broad_kws = build_inverted_index(config.get("projects", {}))
     title = story.get("title", "")
 
     matched_projs = set()
@@ -583,8 +602,14 @@ def match_hn_projects(story: dict, config: dict) -> list:
     return sorted(matched_projs)
 
 
-def process_hn_results(raw_results: list, config: dict) -> list:
-    """Dedup, keyword-match, sort, cap HN results."""
+def process_hn_results(raw_results: list, config: dict, inv_index: tuple = None) -> list:
+    """Dedup, keyword-match, sort, cap HN results.
+
+    inv_index: optional pre-built (index, broad_kws) tuple (#6).
+    """
+    # Build index once for all stories instead of per-story (#6)
+    if inv_index is None:
+        inv_index = build_inverted_index(config.get("projects", {}))
     seen_ids = set()
     stories = []
 
@@ -595,8 +620,8 @@ def process_hn_results(raw_results: list, config: dict) -> list:
                 continue
             seen_ids.add(oid)
             story = parse_hn_hit(hit)
-            story["matched_keywords"] = match_hn_keywords(story, config)
-            story["matched_projects"] = match_hn_projects(story, config)
+            story["matched_keywords"] = match_hn_keywords(story, config, inv_index=inv_index)
+            story["matched_projects"] = match_hn_projects(story, config, inv_index=inv_index)
             stories.append(story)
 
     stories.sort(key=lambda s: s["points"], reverse=True)
@@ -641,7 +666,7 @@ def crossref_hn(under_radar: list, hn_stories: list) -> None:
 # Processing
 # ---------------------------------------------------------------------------
 
-def process_results(raw_results: list, config: dict, date_from: str) -> tuple:
+def process_results(raw_results: list, config: dict, date_from: str, inv_index: tuple = None) -> tuple:
     """Dedup, tag, categorize, cap. Returns (repos_list, under_radar_list)."""
     min_stars = config.get("min_stars", 1000)
 
@@ -686,8 +711,8 @@ def process_results(raw_results: list, config: dict, date_from: str) -> tuple:
                 if full_name not in main_items:
                     main_items[full_name] = parsed
 
-    tag_repos(main_items, config)
-    tag_repos(radar_items, config)
+    tag_repos(main_items, config, inv_index=inv_index)
+    tag_repos(radar_items, config, inv_index=inv_index)
 
     for full_name in plugin_discovery_repos:
         if full_name in main_items:
@@ -711,7 +736,7 @@ def process_results(raw_results: list, config: dict, date_from: str) -> tuple:
     return main_list, filtered_radar
 
 
-def process_dry_run(items: list, config: dict, date_from: str) -> tuple:
+def process_dry_run(items: list, config: dict, date_from: str, inv_index: tuple = None) -> tuple:
     """Process fixture items the same way as live results."""
     min_stars = config.get("min_stars", 1000)
 
@@ -727,8 +752,8 @@ def process_dry_run(items: list, config: dict, date_from: str) -> tuple:
         else:
             all_items[parsed["id"]] = parsed
 
-    tag_repos(all_items, config)
-    tag_repos(radar_items, config)
+    tag_repos(all_items, config, inv_index=inv_index)
+    tag_repos(radar_items, config, inv_index=inv_index)
 
     filtered_radar = []
     for repo in radar_items.values():
@@ -860,25 +885,62 @@ def apply_post_diff_flags(repos: list, under_radar: list) -> None:
 def diff_repos_db(db, repos: list, today: str) -> dict:
     """Apply DB-based diffing to repos. Returns counts dict.
 
-    For each repo:
-    - Look up by full_name in the DB
-    - If found: compute stars_delta from most recent snapshot
-    - If new: stars_delta = None, is_new = True
-    - Respect annotations: skip rejected, always refresh watching
+    Batch-fetches all existing repos, annotations, and latest snapshots
+    in 3 bulk queries upfront (#4), then does dict lookups in the loop.
     """
     new_count = 0
     returning_count = 0
     rising_count = 0
     skipped_rejected = 0
 
+    # Batch-fetch all data upfront (#4: 3 queries instead of ~90)
+    full_names = [r["id"] for r in repos]
+    if not full_names:
+        return {"new": 0, "returning": 0, "rising": 0, "skipped_rejected": 0}
+
+    placeholders = ",".join("?" * len(full_names))
+
+    # 1. Bulk fetch repos by full_name
+    repo_rows = db.execute(
+        f"SELECT id, full_name, first_seen FROM repos WHERE full_name IN ({placeholders})",
+        full_names
+    ).fetchall()
+    existing_repos = {row[1]: {"id": row[0], "first_seen": row[2]} for row in repo_rows}
+
+    # 2. Bulk fetch annotation statuses for existing repo IDs
+    repo_ids = [r["id"] for r in existing_repos.values()]
+    annotation_map = {}
+    if repo_ids:
+        id_placeholders = ",".join("?" * len(repo_ids))
+        ann_rows = db.execute(
+            f"SELECT repo_id, status FROM annotations WHERE repo_id IN ({id_placeholders})",
+            repo_ids
+        ).fetchall()
+        annotation_map = {row[0]: row[1] for row in ann_rows}
+
+    # 3. Bulk fetch latest star counts for existing repo IDs
+    prev_stars_map = {}
+    if repo_ids:
+        star_rows = db.execute(f"""
+            SELECT ss.repo_id, ss.stars
+            FROM scan_snapshots ss
+            INNER JOIN (
+                SELECT repo_id, MAX(scan_id) as max_scan_id
+                FROM scan_snapshots
+                WHERE repo_id IN ({id_placeholders})
+                GROUP BY repo_id
+            ) latest ON ss.repo_id = latest.repo_id AND ss.scan_id = latest.max_scan_id
+        """, repo_ids).fetchall()
+        prev_stars_map = {row[0]: row[1] for row in star_rows}
+
     filtered_repos = []
     for repo in repos:
         full_name = repo["id"]
-        existing = db_module.get_repo_by_name(db, full_name)
+        existing = existing_repos.get(full_name)
 
         # Check annotation status
         if existing:
-            annotation_status = db_module.get_annotation_status(db, existing["id"])
+            annotation_status = annotation_map.get(existing["id"])
             if annotation_status == "rejected":
                 skipped_rejected += 1
                 continue  # skip rejected repos entirely
@@ -887,8 +949,8 @@ def diff_repos_db(db, repos: list, today: str) -> dict:
             repo["is_new"] = False
             repo["first_seen"] = existing.get("first_seen")
 
-            # Get previous stars from most recent snapshot
-            prev_stars = db_module.get_previous_stars(db, existing["id"])
+            # Get previous stars from pre-fetched map
+            prev_stars = prev_stars_map.get(existing["id"])
             if prev_stars is not None:
                 stars = repo.get("stars", 0)
                 stars_delta = stars - prev_stars
@@ -1001,13 +1063,15 @@ def write_to_db(db, scan_id, repos, under_radar, hn_stories):
         }
         db_module.insert_snapshot(db, snapshot)
 
-    # Write main repos
-    for repo in repos:
-        _write_repo(repo, is_under_radar=False)
+    # Transaction: atomic writes + batched WAL flushes (#1)
+    with db.conn:
+        # Write main repos
+        for repo in repos:
+            _write_repo(repo, is_under_radar=False)
 
-    # Write under-the-radar repos
-    for repo in under_radar:
-        _write_repo(repo, is_under_radar=True)
+        # Write under-the-radar repos
+        for repo in under_radar:
+            _write_repo(repo, is_under_radar=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1027,7 +1091,9 @@ def run_gather(timeframe="monthly", source="all", max_repos=None,
     6. Open DB, create scan entry, write results via write_to_db()
     7. Return summary stats
     """
+    # Temporarily disable rapidfuzz if requested, restore on exit (#9)
     import tech_radar.normalize as norm_module
+    _orig_rapidfuzz = norm_module.HAS_RAPIDFUZZ
     if no_fuzzy:
         norm_module.HAS_RAPIDFUZZ = False
 
@@ -1060,6 +1126,9 @@ def run_gather(timeframe="monthly", source="all", max_repos=None,
     run_github = source in ("github", "all")
     run_hn = source in ("hn", "all")
 
+    # Build inverted index once, pass through all functions (#5/#6)
+    inv_index = build_inverted_index(config.get("projects", {}))
+
     # Script directory (for fixtures)
     script_dir = os.path.dirname(os.path.abspath(__file__))
     # Fixtures are in the parent scripts/ directory
@@ -1082,13 +1151,13 @@ def run_gather(timeframe="monthly", source="all", max_repos=None,
         warn("Dry-run mode: reading from fixtures")
         if run_github:
             gh_items = load_github_fixture(scripts_dir)
-            repos, under_radar = process_dry_run(gh_items, config, date_from)
+            repos, under_radar = process_dry_run(gh_items, config, date_from, inv_index=inv_index)
             github_total_raw = len(gh_items)
 
         if run_hn:
             hn_hits = load_hn_fixture(scripts_dir)
             raw_hn = [{"hits": hn_hits}]
-            hn_stories = process_hn_results(raw_hn, config)
+            hn_stories = process_hn_results(raw_hn, config, inv_index=inv_index)
             hn_query_count = 1
             hn_total_raw = len(hn_hits)
     else:
@@ -1109,22 +1178,22 @@ def run_gather(timeframe="monthly", source="all", max_repos=None,
                 raw_hn_results, hn_error = hn_future.result()
             github_total_raw = sum(len(r.get("items", [])) for r in raw_results)
             github_query_count = len(raw_results)
-            repos, under_radar = process_results(raw_results, config, date_from)
+            repos, under_radar = process_results(raw_results, config, date_from, inv_index=inv_index)
             hn_total_raw = sum(len(r.get("hits", [])) for r in raw_hn_results)
             hn_query_count = len(raw_hn_results)
-            hn_stories = process_hn_results(raw_hn_results, config)
+            hn_stories = process_hn_results(raw_hn_results, config, inv_index=inv_index)
         else:
             if run_github:
                 raw_results, github_error = fetch_all_github(queries, date_from, min_stars, token)
                 github_total_raw = sum(len(r.get("items", [])) for r in raw_results)
                 github_query_count = len(raw_results)
-                repos, under_radar = process_results(raw_results, config, date_from)
+                repos, under_radar = process_results(raw_results, config, date_from, inv_index=inv_index)
 
             if run_hn:
                 raw_hn_results, hn_error = fetch_all_hn(hn_keywords, since_unix)
                 hn_total_raw = sum(len(r.get("hits", [])) for r in raw_hn_results)
                 hn_query_count = len(raw_hn_results)
-                hn_stories = process_hn_results(raw_hn_results, config)
+                hn_stories = process_hn_results(raw_hn_results, config, inv_index=inv_index)
 
     # HN cross-reference
     if run_github and run_hn and hn_stories:
@@ -1151,19 +1220,21 @@ def run_gather(timeframe="monthly", source="all", max_repos=None,
     full_repos = list(repos)
     repos = select_diverse(repos, max_repos)
 
-    # Per-project minimum: ensure registered projects have coverage
+    # Per-project minimum: ensure registered projects have coverage (#10/#11)
     registered = set(config.get("projects", {}).keys())
     covered = {p for r in repos for p in r.get("matched_projects", [])}
     uncovered = registered - covered
 
     if uncovered and full_repos:
+        selected_ids = {x["id"] for x in repos}  # Build once (#11)
         for proj in sorted(uncovered):
             candidates = [r for r in full_repos
                           if proj in r.get("matched_projects", [])
-                          and r["id"] not in {x["id"] for x in repos}]
+                          and r["id"] not in selected_ids]
             if candidates:
                 candidates.sort(key=lambda r: r["stars"], reverse=True)
                 best = candidates[0]
+                # Find largest category and displace its weakest member
                 cat_counts = {}
                 for r in repos:
                     c = r.get("category", "general")
@@ -1174,8 +1245,10 @@ def run_gather(timeframe="monthly", source="all", max_repos=None,
                                  if r.get("category") == largest_cat]
                     cat_repos.sort(key=lambda x: (x[1].get("relevance_score", 0), x[1]["stars"]))
                     if cat_repos:
-                        repos.pop(cat_repos[0][0])
+                        removed = repos.pop(cat_repos[0][0])
+                        selected_ids.discard(removed["id"])
                         repos.append(best)
+                        selected_ids.add(best["id"])
 
     duration = round(time.time() - start_time, 1)
 
@@ -1228,5 +1301,8 @@ def run_gather(timeframe="monthly", source="all", max_repos=None,
          f"{combined_counts['new']} new, {combined_counts['returning']} returning, "
          f"{combined_counts['rising']} rising "
          f"({duration}s)")
+
+    # Restore rapidfuzz state (#9)
+    norm_module.HAS_RAPIDFUZZ = _orig_rapidfuzz
 
     return summary

@@ -11,15 +11,21 @@ try:
 except ImportError:
     HAS_RAPIDFUZZ = False
 
+# Pre-compiled regexes (#17: avoid recompiling on every normalize() call)
+_RE_SEPARATORS = re.compile(r"[-_.]")
+_RE_POSSESSIVES = re.compile(r"['\u2019]s\b")
+_RE_NON_ALNUM = re.compile(r"[^a-z0-9 ]")
+_RE_WHITESPACE = re.compile(r"\s+")
+
 
 def normalize(text: str) -> str:
     """Normalize text for matching: lowercase, strip hyphens/underscores/dots/possessives."""
     text = unicodedata.normalize('NFKD', text)
     text = text.lower()
-    text = re.sub(r"[-_.]", " ", text)
-    text = re.sub(r"['\u2019]s\b", "", text)
-    text = re.sub(r"[^a-z0-9 ]", "", text)
-    text = re.sub(r"\s+", " ", text).strip()
+    text = _RE_SEPARATORS.sub(" ", text)
+    text = _RE_POSSESSIVES.sub("", text)
+    text = _RE_NON_ALNUM.sub("", text)
+    text = _RE_WHITESPACE.sub(" ", text).strip()
     return text
 
 
