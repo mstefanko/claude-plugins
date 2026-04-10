@@ -1,1 +1,2 @@
 rapidfuzz>=3.0
+sqlite-utils>=3.35
