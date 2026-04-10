@@ -7,6 +7,21 @@ argument-hint: "[--list | --remove <project> | no args to add projects]"
 
 Discover git repos, register their tech stacks, and manage the project registry in `~/.tech-radar.json`. **Setup is optional** — scan works without it, just without project-specific grouping.
 
+## Phase 0: Install Dependencies
+
+Before anything else, ensure Python dependencies are installed:
+
+```bash
+pip3 install -r $CLAUDE_PLUGIN_ROOT/scripts/requirements.txt
+```
+
+Verify the install succeeded by running:
+```bash
+$CLAUDE_PLUGIN_ROOT/scripts/tech-radar status
+```
+
+If the command runs without import errors, dependencies are good. If `textual` or `sqlite-utils` fail to import, check that `pip3` points to the same Python as `python3`.
+
 ## Arguments
 
 - No arguments: discover and add projects (interactive)
