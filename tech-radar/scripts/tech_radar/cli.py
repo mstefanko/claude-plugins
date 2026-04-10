@@ -3,7 +3,26 @@
 import argparse
 import sys
 
+import json
+
 from . import db as db_module
+from .gather import run_gather
+
+
+def cmd_gather(args):
+    """Run the gather pipeline: scan GitHub/HN and write to DB."""
+    summary = run_gather(
+        timeframe=args.timeframe,
+        source=args.source,
+        max_repos=args.max_repos,
+        dry_run=args.dry_run,
+        show_queries=args.show_queries,
+        no_fuzzy=args.no_fuzzy,
+        db_path=args.db,
+        config_path=args.config,
+    )
+    # Print summary as JSON to stdout
+    print(json.dumps(summary, indent=2))
 
 
 def cmd_migrate(args):
@@ -87,9 +106,27 @@ def build_parser():
     p_status.add_argument("--db", default=None, help="Path to database (default: ~/.tech-radar/radar.db)")
     p_status.set_defaults(func=cmd_status)
 
+    # -- gather --
+    p_gather = subparsers.add_parser("gather", help="Scan GitHub and HN for trending repos")
+    p_gather.add_argument("--db", default=None, help="Path to database (default: ~/.tech-radar/radar.db)")
+    p_gather.add_argument("--timeframe", choices=["weekly", "monthly", "quarterly"],
+                          default="monthly", help="Lookback window (default: monthly)")
+    p_gather.add_argument("--source", choices=["github", "hn", "all"],
+                          default="all", help="Data source (default: all)")
+    p_gather.add_argument("--max-repos", type=int, default=None,
+                          help="Maximum main repos in output")
+    p_gather.add_argument("--dry-run", action="store_true",
+                          help="Read from fixtures instead of making HTTP calls")
+    p_gather.add_argument("--show-queries", action="store_true",
+                          help="Print generated queries to stderr and exit")
+    p_gather.add_argument("--no-fuzzy", action="store_true",
+                          help="Disable rapidfuzz matching (exact substring only)")
+    p_gather.add_argument("--config", default="~/.tech-radar.json",
+                          help="Config file path (default: ~/.tech-radar.json)")
+    p_gather.set_defaults(func=cmd_gather)
+
     # -- stubs for future phases --
     for name, helptext in [
-        ("gather", "Scan GitHub and HN for trending repos"),
         ("evaluate", "Run Claude evaluation on pending repos"),
         ("dashboard", "Launch interactive TUI dashboard"),
         ("export", "Export scan results to Obsidian markdown"),

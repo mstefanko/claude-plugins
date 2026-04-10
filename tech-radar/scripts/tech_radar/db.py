@@ -273,6 +273,55 @@ def save_annotation(db, repo_id, status, notes=None, reason=None):
         db["annotations"].insert(record)
 
 
+def compute_needs_verdict(db, repo_id, current_stars):
+    """Determine if a repo needs a fresh Claude verdict.
+
+    Rules:
+    - rejected annotation -> never re-evaluate
+    - watching annotation -> always refresh
+    - no previous verdict -> needs verdict
+    - tested/adopted annotation -> only if stars changed >50%
+    - default -> if stars changed >20%
+    """
+    annotation = db.execute(
+        "SELECT status FROM annotations WHERE repo_id = ?", [repo_id]
+    ).fetchone()
+
+    if annotation:
+        status = annotation[0]
+        if status == "rejected":
+            return False  # never re-evaluate rejected repos
+        if status == "watching":
+            return True   # always refresh watched repos
+
+    # Check star delta since last verdict
+    last_verdict_scan = db.execute("""
+        SELECT ss.stars FROM verdicts v
+        JOIN scan_snapshots ss ON ss.scan_id = v.scan_id AND ss.repo_id = v.repo_id
+        WHERE v.repo_id = ?
+        ORDER BY v.generated_at DESC LIMIT 1
+    """, [repo_id]).fetchone()
+
+    if not last_verdict_scan:
+        return True  # no previous verdict
+
+    prev_stars = last_verdict_scan[0]
+    if prev_stars == 0:
+        return True
+
+    delta_pct = abs(current_stars - prev_stars) / prev_stars * 100
+    threshold = 50 if annotation and annotation[0] in ("tested", "adopted") else 20
+    return delta_pct >= threshold
+
+
+def get_annotation_status(db, repo_id):
+    """Return annotation status for a repo, or None if no annotation exists."""
+    row = db.execute(
+        "SELECT status FROM annotations WHERE repo_id = ?", [repo_id]
+    ).fetchone()
+    return row[0] if row else None
+
+
 def search_fts(db, query, table="repos"):
     """Search FTS index. Returns list of row dicts from the base table.
 
