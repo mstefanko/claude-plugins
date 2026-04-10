@@ -4,6 +4,13 @@ import sys
 import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from tech_radar.cli import main
+
+try:
+    from tech_radar.cli import main
+except ImportError as e:
+    req_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "requirements.txt")
+    print(f"Error: {e}", file=sys.stderr)
+    print(f"\nInstall dependencies with:\n  pip3 install -r {req_path}", file=sys.stderr)
+    sys.exit(1)
 
 main()

@@ -1,3 +1,4 @@
 rapidfuzz>=3.0
 sqlite-utils>=3.35
 textual>=0.80.0
+textual-serve>=1.1.0

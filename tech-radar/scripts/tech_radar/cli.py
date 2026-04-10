@@ -1,6 +1,7 @@
 """CLI entry point with argparse subcommands."""
 
 import argparse
+import os
 import sys
 
 import json
@@ -105,9 +106,50 @@ def cmd_evaluate_save(args):
 
 def cmd_dashboard(args):
     """Launch the interactive TUI dashboard."""
-    from .dashboard import TechRadarApp
-    app = TechRadarApp(db_path=args.db)
-    app.run()
+    if args.web:
+        _launch_web_dashboard(args)
+    else:
+        from .dashboard import TechRadarApp
+        app = TechRadarApp(db_path=args.db)
+        app.run()
+
+
+def _launch_web_dashboard(args):
+    """Launch dashboard in browser via textual-serve."""
+    import socket
+    import threading
+    import webbrowser
+
+    try:
+        from textual_serve.server import Server
+    except ImportError:
+        print("textual-serve not installed. Install with:", file=sys.stderr)
+        req_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "requirements.txt")
+        print(f"  pip3 install -r {req_path}", file=sys.stderr)
+        sys.exit(1)
+
+    # Find a free port
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        port = s.getsockname()[1]
+
+    # Build the command that textual-serve will spawn
+    script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    entry = os.path.join(script_dir, "tech-radar")
+    serve_cmd = f"{sys.executable} {entry} dashboard"
+    if args.db:
+        serve_cmd += f" --db {args.db}"
+
+    url = f"http://localhost:{port}"
+    print(f"Starting tech-radar dashboard at {url}")
+    print("Press Ctrl+C to stop.\n")
+
+    # Open browser after a short delay to let server start
+    threading.Timer(1.5, webbrowser.open, args=[url]).start()
+
+    server = Server(command=serve_cmd, host="localhost", port=port,
+                    title="Tech Radar Dashboard")
+    server.serve()
 
 
 def cmd_export(args):
@@ -212,6 +254,7 @@ def build_parser():
     # -- dashboard --
     p_dashboard = subparsers.add_parser("dashboard", help="Launch interactive TUI dashboard")
     p_dashboard.add_argument("--db", default=None, help="Path to database (default: ~/.tech-radar/radar.db)")
+    p_dashboard.add_argument("--web", action="store_true", help="Launch in browser via textual-serve instead of terminal TUI")
     p_dashboard.set_defaults(func=cmd_dashboard)
 
     # -- export --
