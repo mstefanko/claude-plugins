@@ -1,0 +1,90 @@
+Screen {
+    layout: grid;
+    grid-size: 2;
+    grid-columns: 2fr 1fr;
+    grid-rows: auto auto 1fr auto;
+}
+
+#header-bar {
+    column-span: 2;
+    height: 1;
+    background: $primary;
+    color: $text;
+    text-style: bold;
+    padding: 0 2;
+}
+
+#tab-bar {
+    column-span: 2;
+    height: auto;
+}
+
+#search-input {
+    display: none;
+    column-span: 2;
+    height: 1;
+    margin: 0 1;
+}
+
+#search-input.visible {
+    display: block;
+}
+
+#main-table {
+    height: 1fr;
+    scrollbar-gutter: stable;
+}
+
+#detail {
+    height: 1fr;
+    border-left: tall $primary;
+    padding: 1 2;
+    overflow-y: auto;
+}
+
+Footer {
+    column-span: 2;
+}
+
+DataTable > .datatable--header {
+    background: $primary-darken-2;
+    color: $text;
+    text-style: bold;
+}
+
+DataTable > .datatable--cursor {
+    background: $primary-lighten-1;
+}
+
+.status-watching { color: $warning; }
+.status-tested   { color: $success; }
+.status-rejected { color: $error; }
+.status-adopted  { color: $success; text-style: bold; }
+
+.stale-green  { color: $success; }
+.stale-yellow { color: $warning; }
+.stale-red    { color: $error; text-style: bold; }
+
+.detail-heading {
+    color: $text-muted;
+    text-style: bold;
+    margin-top: 1;
+}
+
+.detail-verdict {
+    margin: 0 0 1 0;
+}
+
+AnnotationModal {
+    align: center middle;
+    width: 60;
+    height: auto;
+    max-height: 80%;
+    border: thick $primary;
+    padding: 1 2;
+}
+
+AnnotationModal TextArea {
+    height: 4;
+    margin: 1 0;
+}

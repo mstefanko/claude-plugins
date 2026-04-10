@@ -247,7 +247,15 @@ def save_verdict(db, repo_id, scan_id, verdict_data):
     # Serialize project_relevance if dict
     if isinstance(record["project_relevance"], dict):
         record["project_relevance"] = json.dumps(record["project_relevance"])
-    db["verdicts"].upsert(record, pk="id", alter=True)
+    # Upsert by repo_id + scan_id (unique constraint)
+    existing = db.execute(
+        "SELECT id FROM verdicts WHERE repo_id = ? AND scan_id = ?",
+        [repo_id, scan_id]
+    ).fetchone()
+    if existing:
+        db["verdicts"].update(existing[0], record)
+    else:
+        db["verdicts"].insert(record)
 
 
 def save_annotation(db, repo_id, status, notes=None, reason=None):
