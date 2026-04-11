@@ -1,6 +1,6 @@
 ---
 description: "Export scan results to Obsidian markdown"
-argument-hint: "[--scan-id ID] [--output PATH]"
+argument-hint: "[--date YYYY-MM-DD] [--output PATH]"
 ---
 
 # Tech Radar Export
@@ -14,7 +14,7 @@ Run via Bash:
 $CLAUDE_PLUGIN_ROOT/scripts/tech-radar export [--scan-id ID] [--output PATH]
 ```
 
-- `--scan-id`: Export a specific scan (defaults to latest)
+- `--date`: Export a specific scan by date, e.g. `--date 2026-04-10` (defaults to latest)
 - `--output`: Write to a specific path (defaults to `{vault_path}/{notes_dir}/{YYYY-MM-DD}-tech-radar.md`)
 
 Reads `~/.obsidian-notes.json` for vault path. If missing, prints to stdout.

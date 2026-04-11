@@ -13,6 +13,6 @@ Run via Bash:
 $CLAUDE_PLUGIN_ROOT/scripts/tech-radar migrate
 ```
 
-This reads `~/.tech-radar/history.json` and imports all repos and scan snapshots into `~/.tech-radar/tech-radar.db`. The migration is idempotent — running it again won't create duplicates (uses upsert).
+This reads `~/.tech-radar/history.json` and imports all repos and scan snapshots into `~/.tech-radar/radar.db`. The migration is idempotent — running it again won't create duplicates (uses upsert).
 
 Only needed if you have scan data from before the database refactor. New installations start with an empty database automatically.

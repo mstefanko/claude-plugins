@@ -36,7 +36,6 @@ def cmd_migrate(args):
 
 def cmd_status(args):
     """Show database statistics."""
-    import os
     db_path = args.db or db_module.DEFAULT_DB_PATH
     if not os.path.exists(db_path):
         print(f"Database not found at {db_path}")
@@ -116,6 +115,7 @@ def cmd_dashboard(args):
 
 def _launch_web_dashboard(args):
     """Launch dashboard in browser via textual-serve."""
+    import shlex
     import socket
     import threading
     import webbrowser
@@ -136,9 +136,9 @@ def _launch_web_dashboard(args):
     # Build the command that textual-serve will spawn
     script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     entry = os.path.join(script_dir, "tech-radar")
-    serve_cmd = f"{sys.executable} {entry} dashboard"
+    serve_cmd = f"{shlex.quote(sys.executable)} {shlex.quote(entry)} dashboard"
     if args.db:
-        serve_cmd += f" --db {args.db}"
+        serve_cmd += f" --db {shlex.quote(args.db)}"
 
     url = f"http://localhost:{port}"
     print(f"Starting tech-radar dashboard at {url}")

@@ -19,7 +19,6 @@ from textual.widgets import (
     TextArea,
     Button,
 )
-from textual.widgets._data_table import RowKey
 
 from . import db as db_module
 

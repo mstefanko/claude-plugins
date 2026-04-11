@@ -22,7 +22,7 @@ Returns JSON with `pending_count`, `projects` (stack context), and `repos` array
 
 Save Claude's verdicts back to the database. Reads JSON from stdin:
 ```
-echo '$VERDICTS_JSON' | $CLAUDE_PLUGIN_ROOT/scripts/tech-radar evaluate save --scan-id ID
+echo '$VERDICTS_JSON' | $CLAUDE_PLUGIN_ROOT/scripts/tech-radar evaluate save
 ```
 
 Each verdict in the JSON array must have: `full_name`, `verdict_text`, `project_relevance`. Optionally: `reddit_validation`.

@@ -1097,6 +1097,19 @@ def run_gather(timeframe="monthly", source="all", max_repos=None,
     if no_fuzzy:
         norm_module.HAS_RAPIDFUZZ = False
 
+    try:
+        return _run_gather_inner(
+            timeframe=timeframe, source=source, max_repos=max_repos,
+            dry_run=dry_run, show_queries=show_queries, db_path=db_path,
+            config_path=config_path,
+        )
+    finally:
+        norm_module.HAS_RAPIDFUZZ = _orig_rapidfuzz
+
+
+def _run_gather_inner(*, timeframe, source, max_repos, dry_run, show_queries,
+                      db_path, config_path):
+    """Inner gather logic, called by run_gather with fuzzy state protected."""
     max_repos = max_repos or MAX_RESULTS
 
     # Load config
@@ -1301,8 +1314,5 @@ def run_gather(timeframe="monthly", source="all", max_repos=None,
          f"{combined_counts['new']} new, {combined_counts['returning']} returning, "
          f"{combined_counts['rising']} rising "
          f"({duration}s)")
-
-    # Restore rapidfuzz state (#9)
-    norm_module.HAS_RAPIDFUZZ = _orig_rapidfuzz
 
     return summary

@@ -129,8 +129,10 @@ def _format_report(db, scan_id, config):
     lines.append("")
 
     # Per-project sections
-    projects = config.get("projects", [])
-    if isinstance(projects, list):
+    projects = config.get("projects", {})
+    if isinstance(projects, dict):
+        project_names = list(projects.keys())
+    elif isinstance(projects, list):
         project_names = [p.get("name", p) if isinstance(p, dict) else p for p in projects]
     else:
         project_names = []

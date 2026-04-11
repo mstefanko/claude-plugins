@@ -1,6 +1,6 @@
 ---
 description: "Add annotations (approve/reject/bookmark) to repos"
-argument-hint: "<repo-name> <status> [--note 'reason']"
+argument-hint: "<repo-name> <status> [--notes 'text'] [--reason 'why']"
 ---
 
 # Tech Radar Annotate
