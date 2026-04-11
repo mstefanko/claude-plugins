@@ -221,8 +221,9 @@ def _cmux_pane_alive(surface_id):
     """Check if a cmux pane is still active by reading its screen."""
     import subprocess as _sp
     try:
+        surface_arg = surface_id if surface_id.startswith("surface:") else f"surface:{surface_id}"
         result = _sp.run(
-            ["cmux", "read-screen", "--surface", surface_id],
+            ["cmux", "read-screen", "--surface", surface_arg],
             capture_output=True, text=True, timeout=3,
         )
         return result.returncode == 0

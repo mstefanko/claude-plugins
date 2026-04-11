@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import ScrollableContainer
+from textual.containers import Container, Horizontal, ScrollableContainer
 from textual.screen import ModalScreen
 from textual.widgets import (
     DataTable,
@@ -192,8 +192,9 @@ class TechRadarApp(App):
             id="tab-bar",
         )
         yield Input(placeholder="Search repos…", id="search-input")
-        yield DataTable(id="main-table")
-        yield ScrollableContainer(Static(id="detail-content"), id="detail")
+        with Horizontal(id="content-area"):
+            yield DataTable(id="main-table")
+            yield ScrollableContainer(Static(id="detail-content"), id="detail")
         yield Footer()
 
     def on_mount(self) -> None:
