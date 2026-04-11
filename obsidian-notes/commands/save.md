@@ -30,8 +30,11 @@ different repo. Fall back to `basename $(git rev-parse --show-toplevel
 a git repo, use the `project` value from config.
 
 If the argument looks like a bead ID (beads-xxx), run `bd show <bead-id>`
-to pull in additional context. Otherwise, treat the argument as a topic
-hint for what to capture.
+to pull in additional context. If the argument contains a Trello URL
+(trello.com/c/...) or if a Trello card was referenced during the
+conversation, include the `trello:` field in the frontmatter with the
+card URL. Otherwise, treat the argument as a topic hint for what to
+capture.
 
 If no argument and the conversation doesn't make it obvious what to
 capture, ask the user what they want to save.

@@ -103,14 +103,80 @@ def cmd_evaluate_save(args):
     print(json.dumps(result, indent=2))
 
 
+def _run_tui(db_path):
+    """Launch the Textual TUI dashboard directly."""
+    from .dashboard import TechRadarApp
+    app = TechRadarApp(db_path=db_path)
+    app.run()
+
+
 def cmd_dashboard(args):
     """Launch the interactive TUI dashboard."""
     if args.web:
         _launch_web_dashboard(args)
+    elif _in_cmux():
+        _launch_cmux_dashboard(args)
     else:
-        from .dashboard import TechRadarApp
-        app = TechRadarApp(db_path=args.db)
-        app.run()
+        _run_tui(args.db)
+
+
+def _in_cmux() -> bool:
+    """Return True if running inside cmux with CLI available (and not already spawned)."""
+    import shutil
+    if os.environ.get("TECH_RADAR_CMUX_PANE"):
+        return False
+    return bool(os.environ.get("CMUX_WORKSPACE_ID")) and shutil.which("cmux") is not None
+
+
+def _launch_cmux_dashboard(args):
+    """Launch dashboard TUI in a new cmux pane (split right)."""
+    import re
+    import shlex
+    import subprocess
+    import time
+
+    script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    entry = os.path.join(script_dir, "tech-radar")
+    # TECH_RADAR_CMUX_PANE=1 prevents recursive cmux spawning
+    cmd = f"TECH_RADAR_CMUX_PANE=1 {shlex.quote(sys.executable)} {shlex.quote(entry)} dashboard"
+    if args.db:
+        cmd += f" --db {shlex.quote(args.db)}"
+
+    try:
+        # Create a right-split pane and parse the surface ID from output
+        result = subprocess.run(
+            ["cmux", "new-pane", "--direction", "right"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        # Output: "OK surface:7 pane:7 workspace:4"
+        match = re.search(r"(surface:\S+)", result.stdout)
+        surface = match.group(1) if match else None
+
+        # Wait for the shell to initialize before sending the command
+        send_args = ["cmux", "send"]
+        if surface:
+            send_args += ["--surface", surface]
+
+        # Poll read-screen until we see a prompt (up to 2s)
+        for _ in range(8):
+            time.sleep(0.25)
+            screen = subprocess.run(
+                ["cmux", "read-screen"] + (["--surface", surface] if surface else []),
+                capture_output=True, text=True,
+            )
+            if screen.stdout.strip():
+                break
+
+        send_args.append(cmd + "\n")
+        subprocess.run(send_args, check=True, capture_output=True, text=True)
+        print("Tech Radar dashboard opened in cmux split pane.")
+    except (FileNotFoundError, subprocess.CalledProcessError) as e:
+        detail = getattr(e, "stderr", str(e))
+        print(f"cmux launch failed: {detail}", file=sys.stderr)
+        print("Falling back to --web mode.", file=sys.stderr)
+        _launch_web_dashboard(args)
 
 
 def _launch_web_dashboard(args):

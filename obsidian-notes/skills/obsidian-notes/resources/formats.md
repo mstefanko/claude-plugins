@@ -16,6 +16,7 @@ Both decisions and notes use this frontmatter:
 
     status: accepted | superseded | deprecated
     bead: beads-xxx
+    trello: https://trello.com/c/xxxxx
     superseded_by: [[filename]]
 
 ### Field definitions
@@ -29,6 +30,7 @@ Both decisions and notes use this frontmatter:
 | tags | Always | Array | 2-5 specific, searchable tags |
 | status | Decisions only | String | Start as `accepted` |
 | bead | Optional | `beads-xxx` | Link to bead if one exists |
+| trello | Optional | URL | Link to Trello card if work originated from one |
 | superseded_by | Optional | `[[wikilink]]` | If this decision was replaced |
 
 ## Decision Record Body (4 sections, all required)
