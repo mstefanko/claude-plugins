@@ -2,6 +2,7 @@
 
 import argparse
 import os
+import signal
 import sys
 
 import json
@@ -9,6 +10,80 @@ import json
 from . import db as db_module
 from .gather import run_gather
 from .evaluate import get_pending_repos, save_verdicts
+
+
+# -- Dashboard state directory & file paths --
+
+_DASHBOARD_STATE_DIR = os.path.join(os.path.expanduser("~"), ".tech-radar")
+
+
+def _dashboard_pidfile():
+    """Return path to the dashboard PID/port file (web mode)."""
+    return os.path.join(_DASHBOARD_STATE_DIR, "dashboard.pid")
+
+
+def _dashboard_panefile():
+    """Return path to the cmux pane state file."""
+    return os.path.join(_DASHBOARD_STATE_DIR, "dashboard-pane.json")
+
+
+def _is_process_alive(pid, expected_name="tech-radar"):
+    """Check if a process is alive AND matches expected name (avoid PID reuse)."""
+    import subprocess as _sp
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    # Verify process name on macOS to guard against PID reuse
+    try:
+        result = _sp.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            capture_output=True, text=True, timeout=2,
+        )
+        cmd_line = result.stdout.strip()
+        return expected_name in cmd_line or "textual" in cmd_line
+    except Exception:
+        # If ps fails, fall back to optimistic (process exists)
+        return True
+
+
+def _cleanup_stale_processes():
+    """Kill any orphan dashboard processes left by previous runs."""
+    import subprocess as _sp
+    try:
+        result = _sp.run(
+            ["pgrep", "-f", "tech-radar dashboard"],
+            capture_output=True, text=True, timeout=5,
+        )
+        my_pid = os.getpid()
+        parent_pid = os.getppid()
+        for line in result.stdout.strip().splitlines():
+            try:
+                pid = int(line.strip())
+                if pid in (my_pid, parent_pid):
+                    continue
+                if _is_process_alive(pid, "tech-radar"):
+                    os.kill(pid, signal.SIGTERM)
+            except (ValueError, OSError):
+                pass
+    except Exception:
+        pass
+
+    # Also clean stale textual-serve processes
+    try:
+        result = _sp.run(
+            ["pgrep", "-f", "textual-serve"],
+            capture_output=True, text=True, timeout=5,
+        )
+        for line in result.stdout.strip().splitlines():
+            try:
+                pid = int(line.strip())
+                if _is_process_alive(pid, "textual"):
+                    os.kill(pid, signal.SIGTERM)
+            except (ValueError, OSError):
+                pass
+    except Exception:
+        pass
 
 
 def cmd_gather(args):
@@ -112,6 +187,20 @@ def _run_tui(db_path):
 
 def cmd_dashboard(args):
     """Launch the interactive TUI dashboard."""
+    # --kill: explicit cleanup of all dashboard processes
+    if getattr(args, "kill", False):
+        print("Cleaning up dashboard processes...")
+        _cleanup_stale_processes()
+        # Remove state files
+        for path in (_dashboard_pidfile(), _dashboard_panefile()):
+            try:
+                os.remove(path)
+                print(f"  Removed {path}")
+            except OSError:
+                pass
+        print("Done.")
+        return
+
     if args.web:
         _launch_web_dashboard(args)
     elif _in_cmux():
@@ -128,12 +217,63 @@ def _in_cmux() -> bool:
     return bool(os.environ.get("CMUX_WORKSPACE_ID")) and shutil.which("cmux") is not None
 
 
+def _cmux_pane_alive(surface_id):
+    """Check if a cmux pane is still active by reading its screen."""
+    import subprocess as _sp
+    try:
+        result = _sp.run(
+            ["cmux", "read-screen", "--surface", surface_id],
+            capture_output=True, text=True, timeout=3,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def _read_cmux_pane_state():
+    """Read saved cmux pane state. Returns (surface_id,) or None."""
+    panefile = _dashboard_panefile()
+    if not os.path.exists(panefile):
+        return None
+    try:
+        with open(panefile) as f:
+            data = json.loads(f.read())
+        surface_id = data.get("surface_id")
+        if surface_id and _cmux_pane_alive(surface_id):
+            return surface_id
+        # Stale — clean up
+        os.remove(panefile)
+    except (OSError, json.JSONDecodeError, KeyError):
+        try:
+            os.remove(panefile)
+        except OSError:
+            pass
+    return None
+
+
+def _write_cmux_pane_state(surface_id):
+    """Save cmux pane state for singleton detection."""
+    panefile = _dashboard_panefile()
+    os.makedirs(os.path.dirname(panefile), exist_ok=True)
+    with open(panefile, "w") as f:
+        f.write(json.dumps({"surface_id": surface_id}))
+
+
 def _launch_cmux_dashboard(args):
-    """Launch dashboard TUI in a new cmux pane (split right)."""
+    """Launch dashboard TUI in a new cmux pane (split right), with singleton guard."""
     import re
     import shlex
     import subprocess
     import time
+
+    # Singleton: check if a dashboard pane already exists
+    existing_surface = _read_cmux_pane_state()
+    if existing_surface:
+        print(f"Tech Radar dashboard already running in cmux pane (surface {existing_surface}).")
+        return
+
+    # Clean up any orphan processes before launching
+    _cleanup_stale_processes()
 
     script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     entry = os.path.join(script_dir, "tech-radar")
@@ -151,19 +291,25 @@ def _launch_cmux_dashboard(args):
             text=True,
         )
         # Output: "OK surface:7 pane:7 workspace:4"
-        match = re.search(r"(surface:\S+)", result.stdout)
+        match = re.search(r"surface:(\S+)", result.stdout)
         surface = match.group(1) if match else None
+
+        # Save pane state for singleton detection
+        if surface:
+            _write_cmux_pane_state(surface)
+
+        surface_flag = f"surface:{surface}" if surface else None
 
         # Wait for the shell to initialize before sending the command
         send_args = ["cmux", "send"]
-        if surface:
-            send_args += ["--surface", surface]
+        if surface_flag:
+            send_args += ["--surface", surface_flag]
 
         # Poll read-screen until we see a prompt (up to 2s)
         for _ in range(8):
             time.sleep(0.25)
             screen = subprocess.run(
-                ["cmux", "read-screen"] + (["--surface", surface] if surface else []),
+                ["cmux", "read-screen"] + (["--surface", surface_flag] if surface_flag else []),
                 capture_output=True, text=True,
             )
             if screen.stdout.strip():
@@ -176,17 +322,16 @@ def _launch_cmux_dashboard(args):
         detail = getattr(e, "stderr", str(e))
         print(f"cmux launch failed: {detail}", file=sys.stderr)
         print("Falling back to --web mode.", file=sys.stderr)
+        # Clean up pane state on failure
+        try:
+            os.remove(_dashboard_panefile())
+        except OSError:
+            pass
         _launch_web_dashboard(args)
-
-
-def _dashboard_pidfile():
-    """Return path to the dashboard PID/port file."""
-    return os.path.join(os.path.expanduser("~"), ".tech-radar", "dashboard.pid")
 
 
 def _running_dashboard_url():
     """If a dashboard is already running, return its URL; otherwise None."""
-    import signal
     import socket
 
     pidfile = _dashboard_pidfile()
@@ -196,8 +341,9 @@ def _running_dashboard_url():
         with open(pidfile) as f:
             data = json.loads(f.read())
         pid, port = data["pid"], data["port"]
-        # Check if process is alive
-        os.kill(pid, 0)
+        # Check process alive AND matches expected name (guards against PID reuse)
+        if not _is_process_alive(pid, "tech-radar"):
+            raise OSError("stale pid")
         # Check if port is actually listening
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(1)
@@ -220,8 +366,8 @@ def _write_dashboard_pidfile(port):
         f.write(json.dumps({"pid": os.getpid(), "port": port}))
 
 
-def _cleanup_dashboard_pidfile():
-    """Remove PID file on exit."""
+def _cleanup_dashboard_pidfile(*_args):
+    """Remove PID file on exit (works as both atexit and signal handler)."""
     try:
         os.remove(_dashboard_pidfile())
     except OSError:
@@ -233,6 +379,9 @@ def _launch_web_dashboard(args):
     import atexit
     import shlex
     import socket
+
+    # Clean up any orphan processes before launching
+    _cleanup_stale_processes()
 
     # Check for already-running instance — just print URL, never auto-open browser
     existing = _running_dashboard_url()
@@ -253,9 +402,17 @@ def _launch_web_dashboard(args):
         s.bind(("", 0))
         port = s.getsockname()[1]
 
-    # Write PID file and register cleanup
+    # Write PID file and register cleanup via atexit AND signal handlers
     _write_dashboard_pidfile(port)
     atexit.register(_cleanup_dashboard_pidfile)
+
+    # Install signal handlers so PID file is cleaned even on SIGTERM/SIGINT
+    def _signal_cleanup(signum, frame):
+        _cleanup_dashboard_pidfile()
+        sys.exit(128 + signum)
+
+    signal.signal(signal.SIGTERM, _signal_cleanup)
+    signal.signal(signal.SIGINT, _signal_cleanup)
 
     # Build the command that textual-serve will spawn
     script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -376,6 +533,7 @@ def build_parser():
     p_dashboard = subparsers.add_parser("dashboard", help="Launch interactive TUI dashboard")
     p_dashboard.add_argument("--db", default=None, help="Path to database (default: ~/.tech-radar/radar.db)")
     p_dashboard.add_argument("--web", action="store_true", help="Launch in browser via textual-serve instead of terminal TUI")
+    p_dashboard.add_argument("--kill", action="store_true", help="Kill all running dashboard processes and clean up state files")
     p_dashboard.set_defaults(func=cmd_dashboard)
 
     # -- export --
