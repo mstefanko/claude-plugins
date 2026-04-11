@@ -179,12 +179,66 @@ def _launch_cmux_dashboard(args):
         _launch_web_dashboard(args)
 
 
+def _dashboard_pidfile():
+    """Return path to the dashboard PID/port file."""
+    return os.path.join(os.path.expanduser("~"), ".tech-radar", "dashboard.pid")
+
+
+def _running_dashboard_url():
+    """If a dashboard is already running, return its URL; otherwise None."""
+    import signal
+    import socket
+
+    pidfile = _dashboard_pidfile()
+    if not os.path.exists(pidfile):
+        return None
+    try:
+        with open(pidfile) as f:
+            data = json.loads(f.read())
+        pid, port = data["pid"], data["port"]
+        # Check if process is alive
+        os.kill(pid, 0)
+        # Check if port is actually listening
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(1)
+            s.connect(("localhost", port))
+        return f"http://localhost:{port}"
+    except (OSError, KeyError, json.JSONDecodeError, ConnectionRefusedError):
+        # Stale pidfile — clean up
+        try:
+            os.remove(pidfile)
+        except OSError:
+            pass
+        return None
+
+
+def _write_dashboard_pidfile(port):
+    """Write PID file with current process ID and port."""
+    pidfile = _dashboard_pidfile()
+    os.makedirs(os.path.dirname(pidfile), exist_ok=True)
+    with open(pidfile, "w") as f:
+        f.write(json.dumps({"pid": os.getpid(), "port": port}))
+
+
+def _cleanup_dashboard_pidfile():
+    """Remove PID file on exit."""
+    try:
+        os.remove(_dashboard_pidfile())
+    except OSError:
+        pass
+
+
 def _launch_web_dashboard(args):
     """Launch dashboard in browser via textual-serve."""
+    import atexit
     import shlex
     import socket
-    import threading
-    import webbrowser
+
+    # Check for already-running instance — just print URL, never auto-open browser
+    existing = _running_dashboard_url()
+    if existing:
+        print(f"Dashboard already running at {existing}")
+        return
 
     try:
         from textual_serve.server import Server
@@ -199,6 +253,10 @@ def _launch_web_dashboard(args):
         s.bind(("", 0))
         port = s.getsockname()[1]
 
+    # Write PID file and register cleanup
+    _write_dashboard_pidfile(port)
+    atexit.register(_cleanup_dashboard_pidfile)
+
     # Build the command that textual-serve will spawn
     script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     entry = os.path.join(script_dir, "tech-radar")
@@ -209,9 +267,6 @@ def _launch_web_dashboard(args):
     url = f"http://localhost:{port}"
     print(f"Starting tech-radar dashboard at {url}")
     print("Press Ctrl+C to stop.\n")
-
-    # Open browser after a short delay to let server start
-    threading.Timer(1.5, webbrowser.open, args=[url]).start()
 
     server = Server(command=serve_cmd, host="localhost", port=port,
                     title="Tech Radar Dashboard")
