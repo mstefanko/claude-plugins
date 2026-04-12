@@ -11,7 +11,7 @@ Export scan results to an Obsidian-formatted markdown note.
 
 Run via Bash:
 ```
-$CLAUDE_PLUGIN_ROOT/scripts/tech-radar export [--scan-id ID] [--output PATH]
+~/.claude/plugins/marketplaces/mstefanko-plugins/tech-radar/scripts/tech-radar export [--scan-id ID] [--output PATH]
 ```
 
 - `--date`: Export a specific scan by date, e.g. `--date 2026-04-10` (defaults to latest)

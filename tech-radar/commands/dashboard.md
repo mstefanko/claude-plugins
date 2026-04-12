@@ -10,7 +10,7 @@ Launch the interactive Textual TUI dashboard for browsing scan results, adding a
 
 Run via Bash:
 ```
-$CLAUDE_PLUGIN_ROOT/scripts/tech-radar dashboard
+~/.claude/plugins/marketplaces/mstefanko-plugins/tech-radar/scripts/tech-radar dashboard
 ```
 
 **cmux (automatic):** When running inside cmux, the dashboard opens in a right-split pane automatically — no flags needed. The TUI runs in its own pane next to Claude Code. Close the pane when done.
@@ -18,7 +18,7 @@ $CLAUDE_PLUGIN_ROOT/scripts/tech-radar dashboard
 **`--web` (fallback):** If not in cmux, use `--web` to launch via textual-serve in the browser. The terminal TUI cannot run inside Claude Code's Bash tool (no stdin forwarding). The server prints a URL — share it with the user to open manually. Repeated invocations reuse the existing server (singleton via PID file).
 
 ```
-$CLAUDE_PLUGIN_ROOT/scripts/tech-radar dashboard --web
+~/.claude/plugins/marketplaces/mstefanko-plugins/tech-radar/scripts/tech-radar dashboard --web
 ```
 
 **Singleton behavior:** The `--web` server writes a PID file to `~/.tech-radar/dashboard.pid`. If a dashboard is already running, the command prints the existing URL and exits immediately — no new processes or browser tabs are spawned.

@@ -13,7 +13,7 @@ Prepare pending repos for Claude evaluation or save verdict results back to the 
 
 Show repos from the latest scan that need Claude verdicts:
 ```
-$CLAUDE_PLUGIN_ROOT/scripts/tech-radar evaluate pending
+~/.claude/plugins/marketplaces/mstefanko-plugins/tech-radar/scripts/tech-radar evaluate pending
 ```
 
 Returns JSON with `pending_count`, `projects` (stack context), and `repos` array. Each repo includes stars, delta, category, matched projects/keywords, HN context, and previous verdict if any.
@@ -22,7 +22,7 @@ Returns JSON with `pending_count`, `projects` (stack context), and `repos` array
 
 Save Claude's verdicts back to the database. Reads JSON from stdin:
 ```
-echo '$VERDICTS_JSON' | $CLAUDE_PLUGIN_ROOT/scripts/tech-radar evaluate save
+echo '$VERDICTS_JSON' | ~/.claude/plugins/marketplaces/mstefanko-plugins/tech-radar/scripts/tech-radar evaluate save
 ```
 
 Each verdict in the JSON array must have: `full_name`, `verdict_text`, `project_relevance`. Optionally: `reddit_validation`.

@@ -10,7 +10,7 @@ One-time migration: import existing `~/.tech-radar/history.json` data into the S
 
 Run via Bash:
 ```
-$CLAUDE_PLUGIN_ROOT/scripts/tech-radar migrate
+~/.claude/plugins/marketplaces/mstefanko-plugins/tech-radar/scripts/tech-radar migrate
 ```
 
 This reads `~/.tech-radar/history.json` and imports all repos and scan snapshots into `~/.tech-radar/radar.db`. The migration is idempotent — running it again won't create duplicates (uses upsert).

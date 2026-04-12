@@ -12,12 +12,12 @@ Discover git repos, register their tech stacks, and manage the project registry 
 Before anything else, ensure Python dependencies are installed:
 
 ```bash
-pip3 install -r $CLAUDE_PLUGIN_ROOT/scripts/requirements.txt
+pip3 install -r ~/.claude/plugins/marketplaces/mstefanko-plugins/tech-radar/scripts/requirements.txt
 ```
 
 Verify the install succeeded by running:
 ```bash
-$CLAUDE_PLUGIN_ROOT/scripts/tech-radar status
+~/.claude/plugins/marketplaces/mstefanko-plugins/tech-radar/scripts/tech-radar status
 ```
 
 If the command runs without import errors, dependencies are good. If `textual` or `sqlite-utils` fail to import, check that `pip3` points to the same Python as `python3`.

@@ -10,7 +10,7 @@ Show database statistics: scan count, repo count, verdict count, annotation brea
 
 Run via Bash:
 ```
-$CLAUDE_PLUGIN_ROOT/scripts/tech-radar status
+~/.claude/plugins/marketplaces/mstefanko-plugins/tech-radar/scripts/tech-radar status
 ```
 
 Display the output directly to the user. If the database doesn't exist yet, suggest running `/tech-radar:scan` first.

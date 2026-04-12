@@ -11,7 +11,7 @@ Search repos and verdicts in the tech radar database using FTS5 full-text search
 
 Run via Bash:
 ```
-$CLAUDE_PLUGIN_ROOT/scripts/tech-radar search "<query>"
+~/.claude/plugins/marketplaces/mstefanko-plugins/tech-radar/scripts/tech-radar search "<query>"
 ```
 
 Searches across repo names, descriptions, and verdict text. Returns matching repos with stars, category, and verdict summary.

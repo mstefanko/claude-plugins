@@ -27,7 +27,7 @@ Run a hybrid scan for trending tools, repos, and plugins. A Python script gather
 
 1. Run the gathering script via Bash:
    ```
-   $CLAUDE_PLUGIN_ROOT/scripts/tech-radar gather --timeframe {tf} --source all --config ~/.tech-radar.json --max-repos N
+   ~/.claude/plugins/marketplaces/mstefanko-plugins/tech-radar/scripts/tech-radar gather --timeframe {tf} --source all --config ~/.tech-radar.json --max-repos N
    ```
    - Default max repos is 20. For weekly scans, consider `--max-repos 12` for faster results.
    - In no-config mode, omit the `--config` flag (script falls back to generic queries)

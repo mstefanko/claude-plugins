@@ -10,7 +10,7 @@ Add annotations to repos in the database. Annotations persist across scans and i
 ## Usage
 
 ```
-$CLAUDE_PLUGIN_ROOT/scripts/tech-radar annotate <full_name> <status> [--note "reason"]
+~/.claude/plugins/marketplaces/mstefanko-plugins/tech-radar/scripts/tech-radar annotate <full_name> <status> [--note "reason"]
 ```
 
 - `<full_name>`: GitHub repo in `owner/repo` format
@@ -22,16 +22,16 @@ $CLAUDE_PLUGIN_ROOT/scripts/tech-radar annotate <full_name> <status> [--note "re
 
 ```bash
 # Watch a repo you want to track
-$CLAUDE_PLUGIN_ROOT/scripts/tech-radar annotate rails/rails watching --notes "Core framework"
+~/.claude/plugins/marketplaces/mstefanko-plugins/tech-radar/scripts/tech-radar annotate rails/rails watching --notes "Core framework"
 
 # Mark as adopted
-$CLAUDE_PLUGIN_ROOT/scripts/tech-radar annotate hotwired/turbo-rails adopted --notes "Using in myorthomd-web"
+~/.claude/plugins/marketplaces/mstefanko-plugins/tech-radar/scripts/tech-radar annotate hotwired/turbo-rails adopted --notes "Using in myorthomd-web"
 
 # Reject a repo to skip future evaluations
-$CLAUDE_PLUGIN_ROOT/scripts/tech-radar annotate some/spam rejected --reason "Not relevant to our stack"
+~/.claude/plugins/marketplaces/mstefanko-plugins/tech-radar/scripts/tech-radar annotate some/spam rejected --reason "Not relevant to our stack"
 
 # Archive a repo you've moved on from
-$CLAUDE_PLUGIN_ROOT/scripts/tech-radar annotate old/tool archived --notes "Replaced by new/tool"
+~/.claude/plugins/marketplaces/mstefanko-plugins/tech-radar/scripts/tech-radar annotate old/tool archived --notes "Replaced by new/tool"
 ```
 
 Annotations can also be managed interactively via `/tech-radar:dashboard`.
