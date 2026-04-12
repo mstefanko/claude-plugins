@@ -41,7 +41,7 @@ STATUS_EMOJI = {
     "tested": "✅",
     "rejected": "❌",
     "adopted": "🏆",
-    "new": "—",
+    "new": "·",
 }
 
 SORT_COLUMNS = ["stars", "delta", "category", "name"]
@@ -188,6 +188,7 @@ class TechRadarApp(App):
             Tab("All", id="tab-all"),
             Tab("Watching", id="tab-watching"),
             Tab("Tested", id="tab-tested"),
+            Tab("Adopted", id="tab-adopted"),
             Tab("Rejected", id="tab-rejected"),
             id="tab-bar",
         )
@@ -210,7 +211,7 @@ class TechRadarApp(App):
         # Setup table columns
         table = self.query_one("#main-table", DataTable)
         table.cursor_type = "row"
-        table.add_columns("Repo", "Stars", "Δ%", "Cat", "Status", "Flags")
+        table.add_columns("Repo", "★", "Δ%", "Description")
 
         self._update_header()
         self._load_repos()
@@ -222,11 +223,13 @@ class TechRadarApp(App):
     def _update_header(self) -> None:
         project_label = self._project_filter or "All"
         stale_label, stale_class = _staleness(self._last_scan_date)
+        sort_arrow = "▼" if self._sort_direction == "DESC" else "▲"
+        search_indicator = f"   🔍 '{self._search_query}'" if self._search_query else ""
         header = self.query_one("#header-bar", Static)
         header.update(
             f"Tech Radar Dashboard   Project: {project_label}   "
             f"Last scan: [{stale_class}]{stale_label}[/]   "
-            f"Sort: {self._sort_column} {self._sort_direction}"
+            f"Sort: {self._sort_column} {sort_arrow}{search_indicator}"
         )
 
     # ------------------------------------------------------------------
@@ -268,6 +271,7 @@ class TechRadarApp(App):
         tab_status = {
             "Watching": "watching",
             "Tested": "tested",
+            "Adopted": "adopted",
             "Rejected": "rejected",
         }.get(self._current_tab)
         if tab_status:
@@ -287,7 +291,10 @@ class TechRadarApp(App):
             "name": "r.full_name",
         }
         order_col = sort_map.get(self._sort_column, "ss.stars")
-        sql += f" ORDER BY {order_col} {self._sort_direction}"
+        rejected_prefix = ""
+        if self._current_tab == "All":
+            rejected_prefix = "CASE WHEN COALESCE(a.status, 'new') = 'rejected' THEN 1 ELSE 0 END, "
+        sql += f" ORDER BY {rejected_prefix}{order_col} {self._sort_direction}"
 
         rows = self._db.execute(sql, params).fetchall()
         columns = [
@@ -320,22 +327,25 @@ class TechRadarApp(App):
             key = str(repo_id)
             self._row_data[key] = data
 
-            flags = ""
-            if data.get("is_under_radar"):
-                flags += "🔬"
-            if data.get("is_rising"):
-                flags += "↑"
-
+            # Build composite repo cell: {status} {name} {lang} {cat} {flags}
+            status_icon = STATUS_EMOJI.get(data.get("annotation_status", "new"), "·")
             cat_abbrev = CATEGORY_ABBREV.get(data.get("category", ""), data.get("category", "")[:3])
-            status_icon = STATUS_EMOJI.get(data.get("annotation_status", "new"), "—")
+            lang = data.get("language", "")
+            lang_suffix = f" [dim]{lang[:4]}[/]" if lang else ""
+            cat_suffix = f" [dim]{cat_abbrev}[/]"
+            flag_suffix = ""
+            if data.get("is_under_radar"):
+                flag_suffix += " 🔬"
+            if data.get("is_rising"):
+                flag_suffix += " ↑"
+
+            repo_cell = f"{status_icon} {_truncate(data['full_name'], 38)}{lang_suffix}{cat_suffix}{flag_suffix}"
 
             table.add_row(
-                _truncate(data["full_name"]),
+                repo_cell,
                 _format_stars(data.get("stars")),
                 _format_delta_pct(data.get("stars_delta_pct")),
-                cat_abbrev,
-                status_icon,
-                flags,
+                _truncate(data.get("description", ""), 45),
                 key=key,
             )
             added += 1
@@ -374,24 +384,38 @@ class TechRadarApp(App):
             sign = "+" if delta >= 0 else ""
             delta_str = f" ({sign}{delta:,}, {_format_delta_pct(pct)})"
 
+        # 1. Name
         lines = [
             f"[bold]{data['full_name']}[/bold]",
-            f"★ {_format_stars(stars)}{delta_str}",
-            "",
         ]
 
-        # Metadata
-        for label, key in [
-            ("Language", "language"),
-            ("License", "license"),
-            ("Category", "category"),
-            ("First seen", "first_seen"),
-        ]:
-            val = data.get(key)
-            if val:
-                lines.append(f"[bold]{label}:[/bold] {val}")
+        # 2. Description
+        desc = data.get("description", "")
+        if desc:
+            lines.append(f"[italic]{desc}[/italic]")
 
-        # Sparkline
+        lines.append("")
+
+        # 3. Verdict (prominent)
+        verdict = data.get("verdict_text")
+        if verdict:
+            lines.append("[bold reverse] Verdict [/bold reverse]")
+            lines.append(verdict)
+        else:
+            lines.append("[dim]Pending evaluation[/dim]")
+
+        # 4. Project relevance
+        pr = data.get("project_relevance")
+        if pr:
+            lines.append("")
+            lines.append("[bold]Project Relevance:[/bold]")
+            lines.append(str(pr))
+
+        # 5. Stars + delta
+        lines.append("")
+        lines.append(f"★ {_format_stars(stars)}{delta_str}")
+
+        # 6. Sparkline
         repo_id = data["id"]
         spark_rows = self._db.execute(
             "SELECT stars FROM scan_snapshots WHERE repo_id = ? ORDER BY scan_id",
@@ -399,19 +423,9 @@ class TechRadarApp(App):
         ).fetchall()
         if spark_rows:
             values = [r[0] for r in spark_rows]
-            lines.append("")
             lines.append(f"[bold]Trend:[/bold] {_sparkline(values)}  ({len(values)} scans)")
 
-        # Flags
-        flags = []
-        if data.get("is_under_radar"):
-            flags.append("🔬 Under-radar")
-        if data.get("is_rising"):
-            flags.append("↑ Rising")
-        if flags:
-            lines.append(f"[bold]Flags:[/bold] {', '.join(flags)}")
-
-        # Matched projects
+        # 7. Matched projects
         mp = data.get("matched_projects")
         if mp:
             try:
@@ -422,31 +436,35 @@ class TechRadarApp(App):
                 if mp and mp != "[]":
                     lines.append(f"[bold]Projects:[/bold] {mp}")
 
-        # Verdict
-        verdict = data.get("verdict_text")
-        if verdict:
-            lines.append("")
-            lines.append("[bold]Verdict:[/bold]")
-            lines.append(verdict)
-        else:
-            lines.append("")
-            lines.append("[dim]Pending evaluation[/dim]")
+        # Flags
+        flags = []
+        if data.get("is_under_radar"):
+            flags.append("🔬 Under-radar")
+        if data.get("is_rising"):
+            flags.append("↑ Rising")
+        if flags:
+            lines.append(f"[bold]Flags:[/bold] {', '.join(flags)}")
 
-        # Project relevance
-        pr = data.get("project_relevance")
-        if pr:
-            lines.append("")
-            lines.append("[bold]Project Relevance:[/bold]")
-            lines.append(str(pr))
+        # 8. Metadata
+        lines.append("")
+        for label, key in [
+            ("Language", "language"),
+            ("License", "license"),
+            ("Category", "category"),
+            ("First seen", "first_seen"),
+        ]:
+            val = data.get(key)
+            if val:
+                lines.append(f"[bold]{label}:[/bold] {val}")
 
-        # HN Context
+        # 9. HN Context
         hn = data.get("hn_context")
         if hn:
             lines.append("")
             lines.append("[bold]HN Context:[/bold]")
             lines.append(hn)
 
-        # Annotation
+        # 10. Annotation
         status = data.get("annotation_status", "new")
         if status != "new":
             lines.append("")
@@ -461,7 +479,7 @@ class TechRadarApp(App):
             if rr:
                 lines.append(f"  Reason: {rr}")
 
-        # URL
+        # 11. URL
         url = data.get("url", "")
         if url:
             lines.append("")
@@ -615,6 +633,18 @@ class TechRadarApp(App):
                 self._project_filter = None
         self._update_header()
         self._load_repos()
+        # Show notification with count and next project hint
+        count = len(self._row_data)
+        label = self._project_filter or "All"
+        if self._project_filter is None:
+            next_name = self._project_names[0] if self._project_names else "All"
+        else:
+            try:
+                idx = self._project_names.index(self._project_filter)
+                next_name = self._project_names[idx + 1] if idx + 1 < len(self._project_names) else "All"
+            except ValueError:
+                next_name = "All"
+        self.notify(f"Project: {label} ({count} repos)  next: {next_name}")
 
     # ------------------------------------------------------------------
     # Search
@@ -637,6 +667,7 @@ class TechRadarApp(App):
         if event.input.id == "search-input":
             query = event.value.strip()
             self._search_query = query if query else None
+            self._update_header()
             self._load_repos()
 
     # ------------------------------------------------------------------
@@ -647,5 +678,5 @@ class TechRadarApp(App):
         self.notify(
             "Keys: s=sort S=reverse w=watch t=tested r=reject a=adopted "
             "o=open c=copy p=project /=search q=quit",
-            timeout=8,
+            timeout=0,
         )
