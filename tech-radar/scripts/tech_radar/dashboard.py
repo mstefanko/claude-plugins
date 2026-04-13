@@ -30,10 +30,13 @@ from . import db as db_module
 SPARKLINE_CHARS = "▁▂▃▄▅▆▇█"
 
 CATEGORY_ABBREV = {
-    "stack": "stk",
-    "integration": "int",
+    "stack-match": "stk",
+    "interest-match": "int",
     "plugin": "plg",
     "general": "gen",
+    "frontend": "fe",
+    "selfhosted": "sh",
+    "mcp": "mcp",
 }
 
 STATUS_EMOJI = {
@@ -45,6 +48,14 @@ STATUS_EMOJI = {
 }
 
 SORT_COLUMNS = ["stars", "delta", "category", "name"]
+
+VERTICAL_CYCLE = [None, "frontend", "selfhosted", "mcp"]
+VERTICAL_LABELS = {None: "All", "frontend": "Frontend", "selfhosted": "Self-Hosted", "mcp": "MCP"}
+VERTICAL_CATEGORIES = {
+    "frontend": ("frontend",),
+    "selfhosted": ("selfhosted",),
+    "mcp": ("mcp", "plugin"),
+}
 
 
 def _sparkline(values: list[int | float]) -> str:
@@ -164,6 +175,7 @@ class TechRadarApp(App):
         Binding("o", "open_url", "Open URL"),
         Binding("c", "copy_url", "Copy URL"),
         Binding("p", "cycle_project", "Project"),
+        Binding("v", "cycle_vertical", "Vertical"),
         Binding("slash", "search", "Search"),
         Binding("question_mark", "help", "Help"),
         Binding("escape", "dismiss_search", "Dismiss", show=False),
@@ -177,6 +189,7 @@ class TechRadarApp(App):
         self._sort_column = "stars"
         self._sort_direction = "DESC"
         self._project_filter: str | None = None
+        self._vertical_filter: str | None = None
         self._search_query: str | None = None
         self._project_names: list[str] = []
         self._row_data: dict[str, dict] = {}  # row_key -> full row dict
@@ -222,12 +235,14 @@ class TechRadarApp(App):
 
     def _update_header(self) -> None:
         project_label = self._project_filter or "All"
+        vertical_label = VERTICAL_LABELS.get(self._vertical_filter, "All")
         stale_label, stale_class = _staleness(self._last_scan_date)
         sort_arrow = "▼" if self._sort_direction == "DESC" else "▲"
         search_indicator = f"   🔍 '{self._search_query}'" if self._search_query else ""
+        vertical_indicator = f"   Vertical: {vertical_label}" if self._vertical_filter else ""
         header = self.query_one("#header-bar", Static)
         header.update(
-            f"Tech Radar Dashboard   Project: {project_label}   "
+            f"Tech Radar Dashboard   Project: {project_label}{vertical_indicator}   "
             f"Last scan: [{stale_class}]{stale_label}[/]   "
             f"Sort: {self._sort_column} {sort_arrow}{search_indicator}"
         )
@@ -277,11 +292,21 @@ class TechRadarApp(App):
         if tab_status:
             sql += " AND COALESCE(a.status, 'new') = ?"
             params.append(tab_status)
+        elif self._current_tab == "All":
+            # Hide rejected repos from All tab — they have their own tab
+            sql += " AND COALESCE(a.status, 'new') != 'rejected'"
 
         # Project filter
         if self._project_filter:
             sql += " AND ss.matched_projects LIKE ?"
             params.append(f"%{self._project_filter}%")
+
+        # Vertical filter
+        if self._vertical_filter:
+            cats = VERTICAL_CATEGORIES.get(self._vertical_filter, (self._vertical_filter,))
+            cat_placeholders = ",".join("?" * len(cats))
+            sql += f" AND ss.category IN ({cat_placeholders})"
+            params.extend(cats)
 
         # Sort
         sort_map = {
@@ -291,10 +316,16 @@ class TechRadarApp(App):
             "name": "r.full_name",
         }
         order_col = sort_map.get(self._sort_column, "ss.stars")
-        rejected_prefix = ""
+        promotion_sort = ""
         if self._current_tab == "All":
-            rejected_prefix = "CASE WHEN COALESCE(a.status, 'new') = 'rejected' THEN 1 ELSE 0 END, "
-        sql += f" ORDER BY {rejected_prefix}{order_col} {self._sort_direction}"
+            # Boost watching/adopted to top, everything else below
+            promotion_sort = (
+                "CASE COALESCE(a.status, 'new') "
+                "WHEN 'watching' THEN 0 "
+                "WHEN 'adopted' THEN 0 "
+                "ELSE 1 END, "
+            )
+        sql += f" ORDER BY {promotion_sort}{order_col} {self._sort_direction}"
 
         rows = self._db.execute(sql, params).fetchall()
         columns = [
@@ -328,7 +359,8 @@ class TechRadarApp(App):
             self._row_data[key] = data
 
             # Build composite repo cell: {status} {name} {lang} {cat} {flags}
-            status_icon = STATUS_EMOJI.get(data.get("annotation_status", "new"), "·")
+            ann_status = data.get("annotation_status", "new")
+            status_icon = STATUS_EMOJI.get(ann_status, "·")
             cat_abbrev = CATEGORY_ABBREV.get(data.get("category", ""), data.get("category", "")[:3])
             lang = data.get("language", "")
             lang_suffix = f" [dim]{lang[:4]}[/]" if lang else ""
@@ -339,7 +371,25 @@ class TechRadarApp(App):
             if data.get("is_rising"):
                 flag_suffix += " ↑"
 
-            repo_cell = f"{status_icon} {_truncate(data['full_name'], 38)}{lang_suffix}{cat_suffix}{flag_suffix}"
+            # Color-code by annotation status:
+            #   new = bold (untriaged work queue, needs attention)
+            #   watching = green (actively interesting)
+            #   tested = dim (handled, de-prioritized)
+            #   adopted = cyan (settled, in your stack)
+            #   rejected = dim (only visible on Rejected tab)
+            name_text = _truncate(data['full_name'], 38)
+            if ann_status == "new":
+                name_text = f"[bold]{name_text}[/]"
+            elif ann_status == "watching":
+                name_text = f"[green]{name_text}[/]"
+            elif ann_status == "tested":
+                name_text = f"[dim]{name_text}[/]"
+            elif ann_status == "adopted":
+                name_text = f"[cyan]{name_text}[/]"
+            elif ann_status == "rejected":
+                name_text = f"[dim]{name_text}[/]"
+
+            repo_cell = f"{status_icon} {name_text}{lang_suffix}{cat_suffix}{flag_suffix}"
 
             table.add_row(
                 repo_cell,
@@ -647,6 +697,22 @@ class TechRadarApp(App):
         self.notify(f"Project: {label} ({count} repos)  next: {next_name}")
 
     # ------------------------------------------------------------------
+    # Vertical filter
+    # ------------------------------------------------------------------
+
+    def action_cycle_vertical(self) -> None:
+        try:
+            idx = VERTICAL_CYCLE.index(self._vertical_filter)
+            self._vertical_filter = VERTICAL_CYCLE[(idx + 1) % len(VERTICAL_CYCLE)]
+        except ValueError:
+            self._vertical_filter = None
+        self._update_header()
+        self._load_repos()
+        label = VERTICAL_LABELS.get(self._vertical_filter, "All")
+        count = len(self._row_data)
+        self.notify(f"Vertical: {label} ({count} repos)")
+
+    # ------------------------------------------------------------------
     # Search
     # ------------------------------------------------------------------
 
@@ -677,6 +743,6 @@ class TechRadarApp(App):
     def action_help(self) -> None:
         self.notify(
             "Keys: s=sort S=reverse w=watch t=tested r=reject a=adopted "
-            "o=open c=copy p=project /=search q=quit",
+            "o=open c=copy p=project v=vertical /=search q=quit",
             timeout=0,
         )

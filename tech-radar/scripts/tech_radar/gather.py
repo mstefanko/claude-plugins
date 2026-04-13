@@ -40,6 +40,7 @@ from .constants import (
     UNAUTHENTICATED_DELAY,
     UNAUTHENTICATED_MAX_QUERIES,
 )
+from . import sources as sources_module
 from .normalize import (
     fuzzy_match_keyword,
     looks_like_version,
@@ -813,6 +814,8 @@ def score_repos(repos: list) -> None:
             score += 3
         elif cat == "plugin":
             score += 2
+        elif cat in ("frontend", "selfhosted", "mcp"):
+            score += 1.5
         elif cat == "interest-match":
             score += 1
         if repo.get("stars_per_day", 0) > 50:
@@ -846,7 +849,7 @@ def select_diverse(repos: list, max_repos: int) -> list:
 
     if unused_slots > 0 and remaining_slots > 0:
         already = {r["id"] for r in selected}
-        overflow_priority = ["stack-match", "interest-match", "general", "plugin"]
+        overflow_priority = ["stack-match", "interest-match", "selfhosted", "frontend", "mcp", "general", "plugin"]
         for cat in overflow_priority:
             if unused_slots <= 0:
                 break
@@ -1215,6 +1218,41 @@ def _run_gather_inner(*, timeframe, source, max_repos, dry_run, show_queries,
     # Open DB and diff against it
     db = db_module.open_db(db_path)
 
+    # ------------------------------------------------------------------
+    # External sources: verticals (awesome lists, topics, seed repos)
+    # ------------------------------------------------------------------
+    verticals = config.get("verticals", {})
+    vertical_repo_count = 0
+    if verticals and not dry_run and run_github:
+        vertical_results = sources_module.fetch_all_verticals(
+            config, token, date_from, db
+        )
+        existing_ids = {r["id"] for r in repos}
+        for vert_name, vert_items in vertical_results.items():
+            for item in vert_items:
+                full_name = item.get("full_name", "")
+                if not full_name or full_name in existing_ids:
+                    continue
+                parsed = parse_repo_item(item)
+                parsed["category"] = vert_name  # Set vertical category
+                repos.append(parsed)
+                existing_ids.add(full_name)
+                vertical_repo_count += 1
+
+        if vertical_repo_count:
+            warn(f"Added {vertical_repo_count} repos from external sources")
+            # Re-tag: tag_repos may promote to stack-match if keywords match
+            # Preserve vertical category for repos that don't get a stronger match
+            vertical_cats = set(verticals.keys())
+            prev_cats = {r["id"]: r["category"] for r in repos if r["category"] in vertical_cats}
+            repos_dict = {r["id"]: r for r in repos}
+            tag_repos(repos_dict, config, inv_index=inv_index)
+            # Restore vertical category for repos that fell through to "general"
+            for rid, repo in repos_dict.items():
+                if repo["category"] == "general" and rid in prev_cats:
+                    repo["category"] = prev_cats[rid]
+            repos = list(repos_dict.values())
+
     repo_counts = diff_repos_db(db, repos, today)
     utr_counts = diff_repos_db(db, under_radar, today)
 
@@ -1284,6 +1322,7 @@ def _run_gather_inner(*, timeframe, source, max_repos, dry_run, show_queries,
             "hn_error": hn_error,
             "dry_run": dry_run,
             "skipped_rejected": combined_counts["skipped_rejected"],
+            "vertical_repos": vertical_repo_count,
         }),
     }
     scan_id = db_module.insert_scan(db, scan_data)

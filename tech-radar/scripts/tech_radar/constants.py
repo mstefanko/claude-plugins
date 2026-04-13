@@ -13,7 +13,7 @@ HN_ALGOLIA_SEARCH = "https://hn.algolia.com/api/v1/search"
 # ---------------------------------------------------------------------------
 
 TIMEFRAME_DAYS = {"weekly": 7, "monthly": 30, "quarterly": 90}
-MAX_RESULTS = 20
+MAX_RESULTS = 90
 MAX_UNDER_RADAR = 5
 MAX_HN_STORIES = 15
 HN_MIN_POINTS = 50
@@ -65,11 +65,17 @@ SYNONYMS = {
 # ---------------------------------------------------------------------------
 
 DIVERSITY_SLOTS = {
-    "stack-match": 12,
-    "interest-match": 3,
-    "general": 3,
-    "plugin": 2,
+    "stack-match": 20,
+    "interest-match": 8,
+    "general": 10,
+    "plugin": 5,
+    "frontend": 15,
+    "selfhosted": 20,
+    "mcp": 12,
 }
+
+MAX_ENRICHMENT_BATCH = 300
+MAX_STARS_DEFAULT = 50000
 
 # Star tier boundaries for rising-star detection
 STAR_TIERS = [1000, 5000, 20000]

@@ -3,7 +3,7 @@
 import json
 import os
 
-from .db import get_latest_scan_id, get_repo_by_name, save_verdict
+from .db import get_latest_scan_id, get_repo_by_name, save_verdict, save_annotation
 
 
 def get_pending_repos(db, config_path="~/.tech-radar.json"):
@@ -19,10 +19,12 @@ def get_pending_repos(db, config_path="~/.tech-radar.json"):
     # Load project config
     config_path = os.path.expanduser(config_path)
     projects = {}
+    verticals = {}
     if os.path.exists(config_path):
         with open(config_path, "r", encoding="utf-8") as f:
             config = json.load(f)
         projects = config.get("projects", {})
+        verticals = config.get("verticals", {})
 
     # Single query: pending snapshots + repo metadata + previous verdict (#2)
     rows = db.execute("""
@@ -62,7 +64,14 @@ def get_pending_repos(db, config_path="~/.tech-radar.json"):
     return {
         "pending_count": len(repos),
         "projects": projects,
+        "verticals": verticals,
         "repos": repos,
+        "verdict_schema": {
+            "full_name": "owner/repo",
+            "verdict_text": "Brief evaluation of the repo",
+            "project_relevance": {"project_name": "relevance description"},
+            "recommendation": "investigate | skip | reject",
+        },
     }
 
 
@@ -112,6 +121,27 @@ def save_verdicts(db, verdicts_json, scan_id=None, tokens_in=None,
                 "UPDATE scan_snapshots SET needs_verdict = 0 WHERE repo_id = ? AND scan_id = ?",
                 [repo_id, scan_id]
             )
+
+            # Auto-annotation based on Claude recommendation
+            # Only if no existing annotation (don't override human decisions)
+            recommendation = v.get("recommendation", "").lower()
+            if recommendation in ("reject", "investigate"):
+                existing_ann = db.execute(
+                    "SELECT status FROM annotations WHERE repo_id = ?",
+                    [repo_id]
+                ).fetchone()
+                if existing_ann is None:
+                    if recommendation == "reject":
+                        save_annotation(
+                            db, repo_id, "rejected",
+                            reason=v.get("verdict_text", "Auto-rejected by Claude"),
+                        )
+                    elif recommendation == "investigate":
+                        save_annotation(
+                            db, repo_id, "watching",
+                            notes="Auto-promoted by Claude: " + v.get("verdict_text", ""),
+                        )
+
             saved += 1
 
         # Update scans.metadata with token tracking (inside same transaction)
