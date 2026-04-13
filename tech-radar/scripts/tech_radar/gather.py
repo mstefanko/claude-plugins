@@ -709,7 +709,8 @@ def process_results(raw_results: list, config: dict, date_from: str, inv_index: 
                     if full_name not in radar_items:
                         radar_items[full_name] = parsed
             else:
-                if full_name not in main_items:
+                # Code search results may have 0 stars — filter them out
+                if stars > 0 and full_name not in main_items:
                     main_items[full_name] = parsed
 
     tag_repos(main_items, config, inv_index=inv_index)
@@ -1211,8 +1212,9 @@ def _run_gather_inner(*, timeframe, source, max_repos, dry_run, show_queries,
                 hn_query_count = len(raw_hn_results)
                 hn_stories = process_hn_results(raw_hn_results, config, inv_index=inv_index)
 
-    # HN cross-reference
+    # HN cross-reference — enrich all repos, not just under-radar
     if run_github and run_hn and hn_stories:
+        crossref_hn(repos, hn_stories)
         crossref_hn(under_radar, hn_stories)
 
     # Open DB and diff against it
@@ -1242,9 +1244,9 @@ def _run_gather_inner(*, timeframe, source, max_repos, dry_run, show_queries,
         if vertical_repo_count:
             warn(f"Added {vertical_repo_count} repos from external sources")
             # Re-tag: tag_repos may promote to stack-match if keywords match
-            # Preserve vertical category for repos that don't get a stronger match
-            vertical_cats = set(verticals.keys())
-            prev_cats = {r["id"]: r["category"] for r in repos if r["category"] in vertical_cats}
+            # Preserve vertical and plugin categories for repos that don't get a stronger match
+            preserve_cats = set(verticals.keys()) | {"plugin"}
+            prev_cats = {r["id"]: r["category"] for r in repos if r["category"] in preserve_cats}
             repos_dict = {r["id"]: r for r in repos}
             tag_repos(repos_dict, config, inv_index=inv_index)
             # Restore vertical category for repos that fell through to "general"

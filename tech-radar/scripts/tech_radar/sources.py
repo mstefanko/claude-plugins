@@ -248,20 +248,21 @@ def fetch_vertical_repos(vertical_name: str, vertical_config: dict,
 
     Returns list of GitHub API-shaped dicts (ready for parse_repo_item).
     """
-    all_full_names = set()
+    # Collect in priority order: seed repos > topic results > awesome lists
+    # Use ordered list + seen set to deduplicate while preserving priority
+    ordered_names = []
+    seen = set()
 
-    # 1. Seed repos (always included)
+    def _add(slug):
+        if slug.lower() not in seen:
+            seen.add(slug.lower())
+            ordered_names.append(slug)
+
+    # 1. Seed repos (highest priority — always enriched first)
     for slug in vertical_config.get("seed_repos", []):
-        all_full_names.add(slug)
+        _add(slug)
 
-    # 2. Awesome lists
-    for list_slug in vertical_config.get("awesome_lists", []):
-        warn(f"  [{vertical_name}] Fetching awesome list: {list_slug}")
-        repos = fetch_awesome_list(list_slug, token)
-        warn(f"  [{vertical_name}]   Found {len(repos)} repos in {list_slug}")
-        all_full_names.update(repos)
-
-    # 3. Topic searches
+    # 2. Topic searches (pre-filtered by stars, high quality)
     min_stars = vertical_config.get("min_stars", 100)
     for topic in vertical_config.get("github_topics", []):
         warn(f"  [{vertical_name}] Topic search: {topic}")
@@ -269,20 +270,30 @@ def fetch_vertical_repos(vertical_name: str, vertical_config: dict,
         for item in items:
             fn = item.get("full_name", "")
             if fn:
-                all_full_names.add(fn)
+                _add(fn)
         warn(f"  [{vertical_name}]   Found {len(items)} repos for topic '{topic}'")
 
-    # 4. Code searches (MCP vertical)
+    # 3. Code searches (MCP vertical)
     for query in vertical_config.get("code_searches", []):
         warn(f"  [{vertical_name}] Code search: {query}")
         repos = fetch_repos_by_code_search(query, token)
-        all_full_names.update(repos)
+        for slug in repos:
+            _add(slug)
         warn(f"  [{vertical_name}]   Found {len(repos)} repos via code search")
 
-    warn(f"  [{vertical_name}] Total unique candidates: {len(all_full_names)}")
+    # 4. Awesome lists (lowest priority — bulk, unranked)
+    for list_slug in vertical_config.get("awesome_lists", []):
+        warn(f"  [{vertical_name}] Fetching awesome list: {list_slug}")
+        repos = fetch_awesome_list(list_slug, token)
+        warn(f"  [{vertical_name}]   Found {len(repos)} repos in {list_slug}")
+        for slug in repos:
+            _add(slug)
+
+    warn(f"  [{vertical_name}] Total unique candidates: {len(ordered_names)}")
 
     # 5. Batch enrich (skips repos already in DB)
-    enriched = enrich_repo_metadata(list(all_full_names), token, db, date_from)
+    # ordered_names is priority-sorted: seed > topic > code search > awesome list
+    enriched = enrich_repo_metadata(ordered_names, token, db, date_from)
     warn(f"  [{vertical_name}] Enriched {len(enriched)} new repos")
 
     return enriched

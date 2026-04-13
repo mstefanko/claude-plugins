@@ -13,15 +13,13 @@ Run via Bash:
 ~/.claude/plugins/marketplaces/mstefanko-plugins/tech-radar/scripts/tech-radar dashboard
 ```
 
-**cmux (automatic):** When running inside cmux, the dashboard opens in a right-split pane automatically — no flags needed. The TUI runs in its own pane next to Claude Code. Close the pane when done.
+The command auto-detects the environment:
+- **In cmux**: opens in a right-split pane automatically
+- **Otherwise**: launches a web server and prints a URL to share with the user
 
-**`--web` (fallback):** If not in cmux, use `--web` to launch via textual-serve in the browser. The terminal TUI cannot run inside Claude Code's Bash tool (no stdin forwarding). The server prints a URL — share it with the user to open manually. Repeated invocations reuse the existing server (singleton via PID file).
+Never pass `--web` manually — the command handles detection internally.
 
-```
-~/.claude/plugins/marketplaces/mstefanko-plugins/tech-radar/scripts/tech-radar dashboard --web
-```
-
-**Singleton behavior:** The `--web` server writes a PID file to `~/.tech-radar/dashboard.pid`. If a dashboard is already running, the command prints the existing URL and exits immediately — no new processes or browser tabs are spawned.
+**Singleton behavior:** If a dashboard is already running, the command prints the existing URL/pane and exits immediately.
 
 Features:
 - **Repos tab**: DataTable of all repos from the latest scan, sortable by stars/delta/category
@@ -29,10 +27,3 @@ Features:
 - **Search tab**: FTS5 full-text search across repos and verdicts
 - Detail panel with sparkline history, annotation status, and HN context
 - Keyboard-driven annotation workflow (approve/reject/bookmark)
-
-## Terminal Mode
-
-For direct terminal use (outside Claude Code), the user can run without `--web`:
-```
-~/.claude/plugins/marketplaces/mstefanko-plugins/tech-radar/scripts/tech-radar dashboard
-```

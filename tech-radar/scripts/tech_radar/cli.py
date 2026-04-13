@@ -205,8 +205,11 @@ def cmd_dashboard(args):
         _launch_web_dashboard(args)
     elif _in_cmux():
         _launch_cmux_dashboard(args)
-    else:
+    elif sys.stdin.isatty():
         _run_tui(args.db)
+    else:
+        # Non-interactive (e.g., Claude Code Bash tool) — auto-enable web mode
+        _launch_web_dashboard(args)
 
 
 def _in_cmux() -> bool:
