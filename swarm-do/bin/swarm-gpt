@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# swarm-gpt — alias for `swarm-run --backend codex`.
+# See the swarm-do plugin README.
+set -euo pipefail
+
+if [[ $# -gt 0 && "${1:-}" != -* ]]; then
+  set -- --issue "$1" "${@:2}"
+fi
+
+exec "$(dirname "$0")/swarm-run" --backend codex "$@"

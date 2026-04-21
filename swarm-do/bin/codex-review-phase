@@ -1,0 +1,235 @@
+#!/usr/bin/env bash
+# codex-review-phase — manual Phase 0 cross-model review wrapper.
+#
+# Invokes `codex exec` against gpt-5.4 with an explicit reasoning-effort
+# override. Mode A = scoped, no repo access. Mode B = same prompt plus
+# read-only repo sandbox rooted at --repo-root.
+#
+# This wrapper is for the Codex-swarm integration Phase 0 validation
+# experiment. It is invoked MANUALLY. It does not wire into /do, does not
+# gate merges, and does not fire on any event. It writes a normalized JSON
+# file conforming to the plugin's phase0/result-schema.json.
+
+set -euo pipefail
+
+# shellcheck source=_lib/paths.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_lib/paths.sh"
+
+readonly SCRIPT_NAME="codex-review-phase"
+readonly PERSONA_FILE="$AGENTS_DIR/agent-codex-review.md"
+readonly SCHEMA_FILE="$PHASE0_DIR/result-schema.json"
+
+usage() {
+  cat >&2 <<'USAGE'
+usage: codex-review-phase --mode {A|B} --phase-id <id>
+                          --diff <path>
+                          --analysis-notes <path>
+                          --acceptance-criteria <path>
+                          [--test-results <path>]
+                          [--repo-root <path>]         # required for mode B
+                          [--output <path>]            # default: ./codex-review-<phase-id>-mode<A|B>.json
+
+Modes:
+  A   scoped review: diff + analysis notes + acceptance criteria + changed-file
+      contents are assembled into a single prompt. No repo access.
+
+  B   repo-aware read-only: same prompt as A, plus `-s read-only -C <repo-root>`
+      so Codex can inspect additional context under the repo root.
+
+Both modes use:
+  codex exec --json -m gpt-5.4 -c model_reasoning_effort="high"
+             --skip-git-repo-check --ephemeral
+             --output-schema <plugin>/phase0/result-schema.json
+USAGE
+}
+
+die() {
+  printf '%s: error: %s\n' "$SCRIPT_NAME" "$*" >&2
+  exit 2
+}
+
+# --- arg parse -------------------------------------------------------------
+
+MODE=""
+PHASE_ID=""
+DIFF_PATH=""
+ANALYSIS_PATH=""
+CRITERIA_PATH=""
+TEST_RESULTS_PATH=""
+REPO_ROOT=""
+OUTPUT_PATH=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --mode)                  MODE="${2:-}";              shift 2 ;;
+    --phase-id)              PHASE_ID="${2:-}";          shift 2 ;;
+    --diff)                  DIFF_PATH="${2:-}";         shift 2 ;;
+    --analysis-notes)        ANALYSIS_PATH="${2:-}";     shift 2 ;;
+    --acceptance-criteria)   CRITERIA_PATH="${2:-}";     shift 2 ;;
+    --test-results)          TEST_RESULTS_PATH="${2:-}"; shift 2 ;;
+    --repo-root)             REPO_ROOT="${2:-}";         shift 2 ;;
+    --output)                OUTPUT_PATH="${2:-}";       shift 2 ;;
+    -h|--help)               usage; exit 0 ;;
+    *)                       die "unknown argument: $1" ;;
+  esac
+done
+
+# --- validate --------------------------------------------------------------
+
+command -v codex >/dev/null 2>&1 || die "\`codex\` binary not found on PATH. Install the Codex CLI first."
+
+[[ -n "$PHASE_ID" ]]       || die "--phase-id is required"
+[[ "$MODE" == "A" || "$MODE" == "B" ]] || die "--mode must be A or B (got: '${MODE:-}')"
+
+for v in DIFF_PATH ANALYSIS_PATH CRITERIA_PATH; do
+  path="${!v}"
+  [[ -n "$path" ]]          || die "missing --${v,,} argument"
+  [[ -r "$path" ]]          || die "cannot read file: $path"
+done
+
+if [[ -n "$TEST_RESULTS_PATH" ]]; then
+  [[ -r "$TEST_RESULTS_PATH" ]] || die "cannot read --test-results: $TEST_RESULTS_PATH"
+fi
+
+if [[ "$MODE" == "B" ]]; then
+  [[ -n "$REPO_ROOT" ]]     || die "--repo-root is required for mode B"
+  [[ -d "$REPO_ROOT" ]]     || die "--repo-root is not a directory: $REPO_ROOT"
+fi
+
+[[ -r "$PERSONA_FILE" ]]    || die "persona file missing: $PERSONA_FILE"
+[[ -r "$SCHEMA_FILE" ]]     || die "schema file missing: $SCHEMA_FILE"
+
+if [[ -z "$OUTPUT_PATH" ]]; then
+  OUTPUT_PATH="./codex-review-${PHASE_ID}-mode${MODE}.json"
+fi
+
+# --- assemble prompt -------------------------------------------------------
+#
+# Persona text is the body of agent-codex-review.md with YAML frontmatter
+# stripped. We then append the phase-specific inputs, each in a fenced
+# block, so the model gets one self-contained prompt on stdin.
+
+strip_frontmatter() {
+  # Drops a leading `---\n...\n---\n` block if present, then emits the rest.
+  awk '
+    BEGIN { in_fm = 0; done = 0 }
+    NR == 1 && /^---[[:space:]]*$/ { in_fm = 1; next }
+    in_fm && /^---[[:space:]]*$/   { in_fm = 0; done = 1; next }
+    in_fm                          { next }
+    { print }
+  ' "$1"
+}
+
+PERSONA_BODY="$(strip_frontmatter "$PERSONA_FILE")"
+
+# List of changed files (used both for Mode A inline content and Mode B
+# "here are the files the diff touched" hint).
+CHANGED_FILES="$(
+  awk '
+    /^diff --git / {
+      # lines look like: diff --git a/foo b/foo
+      split($0, parts, " ")
+      # strip leading "b/"
+      path = parts[4]
+      sub(/^b\//, "", path)
+      print path
+    }
+  ' "$DIFF_PATH" | sort -u
+)"
+
+build_prompt() {
+  printf '%s\n\n' "$PERSONA_BODY"
+
+  printf '## Phase under review\n\n'
+  printf 'phase_id: %s\nmode: %s\n\n' "$PHASE_ID" "$MODE"
+
+  printf '## Claude-side findings (for duplicate_of_claude detection)\n\n'
+  printf '(Operator: paste Claude reviewer findings here by editing the\n'
+  printf 'analysis-notes file or an extra appendix before invoking this\n'
+  printf 'wrapper. If none were provided, mark every finding\n'
+  printf '`duplicate_of_claude: unknown`.)\n\n'
+
+  printf '## Acceptance criteria\n\n```\n'
+  cat -- "$CRITERIA_PATH"
+  printf '\n```\n\n'
+
+  printf '## Analysis notes\n\n```\n'
+  cat -- "$ANALYSIS_PATH"
+  printf '\n```\n\n'
+
+  if [[ -n "$TEST_RESULTS_PATH" ]]; then
+    printf '## Test results\n\n```\n'
+    cat -- "$TEST_RESULTS_PATH"
+    printf '\n```\n\n'
+  fi
+
+  printf '## Diff\n\n```diff\n'
+  cat -- "$DIFF_PATH"
+  printf '\n```\n\n'
+
+  printf '## Changed files\n\n'
+  if [[ -z "$CHANGED_FILES" ]]; then
+    printf '(no files detected in diff)\n\n'
+  else
+    printf '%s\n\n' "$CHANGED_FILES"
+  fi
+
+  if [[ "$MODE" == "A" ]]; then
+    printf '## Mode A — scoped review\n\n'
+    printf 'You have no repo access. The diff and analysis notes above are\n'
+    printf 'the full context. For changed files whose content you need but\n'
+    printf 'do not have, emit an `info` finding with `duplicate_of_claude:\n'
+    printf 'unknown` calling out the missing context instead of guessing.\n\n'
+  else
+    printf '## Mode B — repo-aware read-only\n\n'
+    printf 'You have read-only access to the repo rooted at:\n'
+    printf '  %s\n\n' "$REPO_ROOT"
+    printf 'Changed files listed above are your starting point. You are\n'
+    printf 'invited to inspect additional files read-only to verify\n'
+    printf 'cross-file assumptions (callers, schemas, fixtures, migrations).\n'
+    printf 'You may re-run targeted tests or linters that the project exposes.\n'
+    printf 'You may NOT write, edit, or make network calls outside the sandbox.\n\n'
+  fi
+
+  printf '## Output\n\n'
+  printf 'Emit a single JSON object conforming to the provided output\n'
+  printf 'schema. Fill `findings` with at most 5 entries. The wrapper will\n'
+  printf 'fill top-level `phase_id`, `mode`, `model`, `effort` after\n'
+  printf 'the run.\n'
+}
+
+PROMPT="$(build_prompt)"
+
+# --- invoke codex ----------------------------------------------------------
+
+codex_args=(
+  exec
+  --json
+  -m gpt-5.4
+  -c model_reasoning_effort="high"
+  --skip-git-repo-check
+  --ephemeral
+  --output-schema "$SCHEMA_FILE"
+)
+
+if [[ "$MODE" == "B" ]]; then
+  codex_args+=( -s read-only -C "$REPO_ROOT" )
+fi
+
+printf '%s: invoking codex (mode=%s, phase_id=%s, model=gpt-5.4, effort=high)\n' \
+  "$SCRIPT_NAME" "$MODE" "$PHASE_ID" >&2
+
+start_epoch="$(date +%s)"
+
+# Run codex, capture JSON stdout to the output file. stderr passes through.
+if ! printf '%s' "$PROMPT" | codex "${codex_args[@]}" >"$OUTPUT_PATH"; then
+  rc=$?
+  printf '%s: codex exec failed (exit %d)\n' "$SCRIPT_NAME" "$rc" >&2
+  exit "$rc"
+fi
+
+end_epoch="$(date +%s)"
+elapsed=$(( end_epoch - start_epoch ))
+
+printf '%s: wrote %s\n' "$SCRIPT_NAME" "$OUTPUT_PATH" >&2
+printf '%s: wall-clock latency: %ds\n' "$SCRIPT_NAME" "$elapsed" >&2

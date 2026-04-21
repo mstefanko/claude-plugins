@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# swarm-gpt-review — force role=agent-codex-review on the codex backend.
+# First positional arg is treated as the issue id for convenience; additional flags pass through.
+set -euo pipefail
+if [[ $# -ge 1 && "$1" != --* && "$1" != -* ]]; then
+  ISSUE="$1"; shift
+  exec "$(dirname "$0")/swarm-run" --backend codex --role agent-codex-review --issue "$ISSUE" "$@"
+fi
+exec "$(dirname "$0")/swarm-run" --backend codex --role agent-codex-review "$@"
