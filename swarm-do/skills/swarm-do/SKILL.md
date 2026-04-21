@@ -27,23 +27,15 @@ Your job, exhaustively:
 
 ## Required Beads Rig
 
-Before creating any issue, verify that beads is already configured for this repo:
+Before creating any issue, invoke the preflight helper:
 
 ```bash
-bd where
+bash "$CLAUDE_PLUGIN_ROOT/bin/_lib/beads-preflight.sh" swarm-do
 ```
 
-If that command fails with `no beads database found`:
-- Halt immediately.
-- Do **not** auto-run `bd init`.
-- Do **not** fall back to the legacy non-beads subagent flow.
-- Tell the user exactly how to proceed:
-  1. Repo-local rig: `bd init --stealth`
-  2. Shared rig: `export BEADS_DIR=/path/to/.beads`
-  3. Verify with `bd where`
-  4. Rerun `/swarm-do:do <plan>`
+On success: exits 0 and prints the rig path — relay it in your next response and continue.
 
-If `bd where` succeeds, state the active rig path in your next response and continue.
+On failure: exits 1 with the canonical remediation message (choose `bd init --stealth` or set `BEADS_DIR`). **Halt immediately.** Do **not** auto-init. Do **not** fall back to a non-beads flow. Surface the helper's stderr to the user and stop.
 
 ## Complexity Rubric (if the plan lacks tags)
 
@@ -118,10 +110,10 @@ Run this loop for each phase. Do not start the next phase until the current phas
 Before phase dispatch:
 
 ```bash
-bd where
+bash "$CLAUDE_PLUGIN_ROOT/bin/_lib/beads-preflight.sh" swarm-do
 ```
 
-If this fails, stop before creating any issue and tell the user how to initialize a repo-local beads rig with `bd init --stealth` or point `BEADS_DIR` at an existing rig. Do not create one automatically.
+On failure: halt before creating any issue. The helper's stderr already contains the canonical setup message — do not paraphrase or re-author it.
 
 ### 1. Create beads issues
 

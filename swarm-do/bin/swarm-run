@@ -8,6 +8,8 @@ set -euo pipefail
 
 # shellcheck source=_lib/paths.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_lib/paths.sh"
+# shellcheck source=_lib/beads-preflight.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_lib/beads-preflight.sh"
 
 BACKEND=""; ISSUE=""; ROLE=""; MODE="normal"; DRY_RUN=0
 
@@ -58,30 +60,7 @@ die() { echo "swarm-run: $*" >&2; exit 1; }
 case "$BACKEND" in claude|codex) ;; *) die "--backend must be claude or codex (got: $BACKEND)";; esac
 case "$MODE"    in normal|fallback|competition) ;; *) die "--mode must be normal|fallback|competition (got: $MODE)";; esac
 
-command -v bd >/dev/null 2>&1 || die "bd not on PATH"
-missing_beads_db() {
-  cat >&2 <<EOF
-swarm-run: no beads database found for this repo.
-
-To enable /do + M1 fallback here, choose one:
-  1. Repo-local beads rig:
-     cd $PWD
-     bd init --stealth
-
-  2. Shared beads rig:
-     export BEADS_DIR=/path/to/.beads
-
-Then verify:
-  bd where
-
-Then rerun:
-  swarm-run --backend $BACKEND --issue <id> [--role <role>] [--mode <mode>]
-EOF
-  exit 1
-}
-
-BEADS_RIG="$(bd where 2>/dev/null || true)"
-[[ -n "$BEADS_RIG" ]] || missing_beads_db
+bd_preflight_or_die "swarm-run"
 
 HAS_JQ=0
 command -v jq >/dev/null 2>&1 && HAS_JQ=1
