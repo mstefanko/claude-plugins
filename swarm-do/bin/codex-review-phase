@@ -6,7 +6,7 @@
 # read-only repo sandbox rooted at --repo-root.
 #
 # This wrapper is for the Codex-swarm integration Phase 0 validation
-# experiment. It is invoked MANUALLY. It does not wire into /do, does not
+# experiment. It is invoked MANUALLY. It does not wire into /swarm-do:do, does not
 # gate merges, and does not fire on any event. It writes a normalized JSON
 # file conforming to the plugin's phase0/result-schema.json.
 

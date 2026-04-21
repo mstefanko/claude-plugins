@@ -191,7 +191,7 @@ if [[ "$BACKEND" == "codex" ]]; then
 else
   # Claude backend MVP stub.
   if ! command -v claude >/dev/null 2>&1; then
-    die "claude backend requires interactive Claude Code session; use /do from a Claude Code terminal for full hooks/skills support (exit 64)"
+    die "claude backend requires interactive Claude Code session; use /swarm-do:do from a Claude Code terminal for full hooks/skills support (exit 64)"
   fi
   if ! printf '%s' "$PROMPT" | claude -p >"$OUT_FILE" 2>&1; then
     echo "swarm-run: claude invocation failed (see output below)" >&2
