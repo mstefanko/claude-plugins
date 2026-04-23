@@ -1,0 +1,668 @@
+#!/usr/bin/env bash
+# swarm-telemetry — read-only reporter for the swarm-do telemetry ledgers.
+#
+# Usage:
+#   swarm-telemetry query <sql>
+#   swarm-telemetry report [--since Nd] [--role R] [--bucket K]
+#   swarm-telemetry dump <ledger>
+#   swarm-telemetry validate [<ledger>]
+#   swarm-telemetry --test
+#   swarm-telemetry -h | --help
+#
+# Subcommands:
+#   query <sql>       Load all four JSONL ledgers into sqlite3 :memory: and execute SQL.
+#                     Tables: runs, findings, outcomes, adjudications.
+#   report            Stratified markdown report from runs.jsonl.
+#                     --since Nd  filter to last N days (default: all time)
+#                     --role R    filter to a specific role (default: all roles)
+#                     --bucket K  stratify by: role | complexity | phase_kind | risk_tag
+#                                 (default: role)
+#   dump <ledger>     Pretty-print a ledger as a JSON array (jq -s .).
+#                     ledger: runs | findings | outcomes | adjudications
+#   validate          Parse + required-field check every row in every ledger.
+#                     Exits 1 if any row fails; 0 if all rows pass (or ledger absent/empty).
+#
+# Environment:
+#   CLAUDE_PLUGIN_DATA   base data directory; telemetry lives at $CLAUDE_PLUGIN_DATA/telemetry/
+#                        If unset, swarm-telemetry uses the default:
+#                        ~/.claude/plugin-data/mstefanko-plugins/swarm-do
+#
+# Fail-open: validate and dump print warnings for absent/empty ledgers and continue.
+# query and report die on missing CLAUDE_PLUGIN_DATA or missing runs.jsonl.
+
+set -euo pipefail
+
+_SELF="swarm-telemetry"
+_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+die() { echo "${_SELF}: $*" >&2; exit 1; }
+
+usage() {
+  cat <<'EOF'
+swarm-telemetry — read-only reporter for swarm-do telemetry ledgers.
+
+Usage:
+  swarm-telemetry query <sql>
+  swarm-telemetry report [--since Nd] [--role R] [--bucket K]
+  swarm-telemetry dump <ledger>
+  swarm-telemetry validate [<ledger>]
+  swarm-telemetry --test
+  swarm-telemetry -h | --help
+
+Subcommands:
+  query <sql>     Execute SQL against in-memory sqlite3 loaded from all four ledgers.
+  report          Stratified markdown report (role/complexity/phase_kind/risk_tag).
+  dump <ledger>   Pretty-print ledger as JSON array.
+  validate        jq parse + required-field check on every ledger row.
+
+Options for report:
+  --since Nd      Filter to last N days (e.g. --since 30d)
+  --role R        Filter to role R
+  --bucket K      Stratify by: role | complexity | phase_kind | risk_tag  (default: role)
+
+Ledger names: runs | findings | outcomes | adjudications
+EOF
+}
+
+_resolve_telemetry_dir() {
+  local base="${CLAUDE_PLUGIN_DATA:-${HOME}/.claude/plugin-data/mstefanko-plugins/swarm-do}"
+  echo "${base}/telemetry"
+}
+
+_resolve_ledger() {
+  local name="$1"
+  case "$name" in
+    runs|findings|outcomes|adjudications) ;;
+    *) die "unknown ledger '$name' — must be one of: runs findings outcomes adjudications";;
+  esac
+  local dir
+  dir="$(_resolve_telemetry_dir)"
+  echo "${dir}/${name}.jsonl"
+}
+
+# ---------------------------------------------------------------------------
+# Subcommand: dump
+# ---------------------------------------------------------------------------
+
+_cmd_dump() {
+  local ledger="${1:-}"
+  [[ -n "$ledger" ]] || die "dump requires a ledger name (runs|findings|outcomes|adjudications)"
+  local path
+  path="$(_resolve_ledger "$ledger")"
+  if [[ ! -f "$path" || ! -s "$path" ]]; then
+    echo "[]"
+    return 0
+  fi
+  jq -s '.' "$path"
+}
+
+# ---------------------------------------------------------------------------
+# Subcommand: validate
+# ---------------------------------------------------------------------------
+
+# Required fields per ledger (jq-parseable arrays as strings)
+_RUNS_REQUIRED='["run_id","timestamp_start","timestamp_end","backend","model","effort","role","phase_kind","phase_complexity","risk_tags","issue_id","repo","base_sha","head_sha","diff_size_bytes","input_tokens","cached_input_tokens","output_tokens","estimated_cost_usd","wall_clock_seconds","tool_call_count","cap_hit","budget_breach","schema_ok","exit_code","setting_source","writer_status","review_verdict","last_429_at","prompt_bundle_hash","config_hash"]'
+_FINDINGS_REQUIRED='["finding_id","run_id","timestamp","role","issue_id","severity","category","summary","schema_ok"]'
+_OUTCOMES_REQUIRED='["outcome_id","issue_id","timestamp","writer_run_id","review_run_id","verdict","schema_ok"]'
+_ADJUDICATIONS_REQUIRED='["adjudication_id","outcome_id","issue_id","timestamp","adjudicator","decision","schema_ok"]'
+
+_validate_ledger() {
+  local name="$1" path="$2" required="$3"
+  local row_num=0 fail_count=0 bad_json=0
+
+  if [[ ! -f "$path" ]]; then
+    echo "${_SELF}: validate: $name — ledger absent (skipped)" >&2
+    return 0
+  fi
+  if [[ ! -s "$path" ]]; then
+    echo "${_SELF}: validate: $name — ledger empty (skipped)" >&2
+    return 0
+  fi
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    (( row_num++ )) || true
+    # jq parse check
+    if ! printf '%s' "$line" | jq -e . >/dev/null 2>&1; then
+      echo "  FAIL row ${row_num}: JSON parse error in ${name}.jsonl" >&2
+      (( bad_json++ )) || true
+      (( fail_count++ )) || true
+      continue
+    fi
+    # Required-field check
+    local missing
+    missing="$(printf '%s' "$line" | jq -r \
+      --argjson req "${required}" \
+      '$req[] | select(. as $f | input | has($f) | not)' \
+      2>/dev/null || true)"
+    # The above approach is tricky with input; use a simpler inline method:
+    missing="$(printf '%s' "$line" | jq -r \
+      --argjson req "${required}" \
+      '($req - keys) | .[]' \
+      2>/dev/null || true)"
+    if [[ -n "$missing" ]]; then
+      echo "  FAIL row ${row_num} in ${name}.jsonl: missing required fields: $(echo "$missing" | tr '\n' ' ')" >&2
+      (( fail_count++ )) || true
+    fi
+  done < "$path"
+
+  if [[ "$fail_count" -eq 0 ]]; then
+    echo "  OK  ${name}.jsonl — ${row_num} row(s) valid" >&2
+  else
+    echo "  FAIL ${name}.jsonl — ${fail_count} of ${row_num} row(s) failed (${bad_json} JSON parse error(s))" >&2
+  fi
+  return "$fail_count"
+}
+
+_cmd_validate() {
+  local target_ledger="${1:-}"
+  local tel_dir
+  tel_dir="$(_resolve_telemetry_dir)"
+  local total_fail=0
+
+  echo "${_SELF}: validate — checking ledgers in ${tel_dir}" >&2
+
+  _run_validation() {
+    local name="$1" required="$2"
+    local path="${tel_dir}/${name}.jsonl"
+    _validate_ledger "$name" "$path" "$required" || (( total_fail += $? )) || true
+  }
+
+  if [[ -n "$target_ledger" ]]; then
+    case "$target_ledger" in
+      runs)          _run_validation runs          "$_RUNS_REQUIRED" ;;
+      findings)      _run_validation findings      "$_FINDINGS_REQUIRED" ;;
+      outcomes)      _run_validation outcomes      "$_OUTCOMES_REQUIRED" ;;
+      adjudications) _run_validation adjudications "$_ADJUDICATIONS_REQUIRED" ;;
+      *) die "unknown ledger '$target_ledger' — must be one of: runs findings outcomes adjudications";;
+    esac
+  else
+    _run_validation runs          "$_RUNS_REQUIRED"
+    _run_validation findings      "$_FINDINGS_REQUIRED"
+    _run_validation outcomes      "$_OUTCOMES_REQUIRED"
+    _run_validation adjudications "$_ADJUDICATIONS_REQUIRED"
+  fi
+
+  if [[ "$total_fail" -eq 0 ]]; then
+    echo "${_SELF}: validate — all ledgers OK" >&2
+    return 0
+  else
+    echo "${_SELF}: validate — FAILED (${total_fail} validation error(s))" >&2
+    return 1
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Subcommand: query
+# ---------------------------------------------------------------------------
+
+_cmd_query() {
+  local sql="${1:-}"
+  [[ -n "$sql" ]] || die "query requires a SQL argument"
+  command -v python3 >/dev/null 2>&1 || die "query requires python3"
+  command -v jq >/dev/null 2>&1 || die "query requires jq"
+
+  local tel_dir
+  tel_dir="$(_resolve_telemetry_dir)"
+
+  python3 - "$tel_dir" "$sql" <<'PYEOF'
+import sys, json, sqlite3, os
+
+tel_dir = sys.argv[1]
+sql     = sys.argv[2]
+
+conn = sqlite3.connect(":memory:")
+conn.row_factory = sqlite3.Row
+
+LEDGER_COLS = {
+    "runs": [
+        "run_id", "timestamp_start", "timestamp_end", "backend", "model", "effort",
+        "prompt_bundle_hash", "config_hash", "role", "phase_kind", "phase_complexity",
+        "issue_id", "repo", "base_sha", "head_sha", "diff_size_bytes", "input_tokens",
+        "cached_input_tokens", "output_tokens", "estimated_cost_usd", "wall_clock_seconds",
+        "tool_call_count", "cap_hit", "budget_breach", "schema_ok", "exit_code",
+        "setting_source", "writer_status", "review_verdict", "last_429_at",
+        "risk_tags",  # stored as JSON text
+    ],
+    "findings": [
+        "finding_id", "run_id", "timestamp", "role", "issue_id", "severity",
+        "category", "summary", "file_path", "line_start", "line_end", "schema_ok",
+        "stable_finding_hash_v1", "duplicate_cluster_id", "short_summary",
+    ],
+    "outcomes": [
+        "outcome_id", "issue_id", "timestamp", "writer_run_id", "review_run_id",
+        "verdict", "schema_ok",
+    ],
+    "adjudications": [
+        "adjudication_id", "outcome_id", "issue_id", "timestamp", "adjudicator",
+        "decision", "schema_ok",
+    ],
+}
+
+def load_ledger(name, cols):
+    path = os.path.join(tel_dir, f"{name}.jsonl")
+    if not os.path.isfile(path) or os.path.getsize(path) == 0:
+        return []
+    rows = []
+    with open(path) as f:
+        for lineno, line in enumerate(f, 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError as e:
+                print(f"swarm-telemetry: query: {name}.jsonl line {lineno} parse error: {e}", file=sys.stderr)
+                continue
+            # Serialize array/object fields to JSON text for SQLite
+            row = {}
+            for col in cols:
+                val = obj.get(col)
+                if isinstance(val, (list, dict)):
+                    val = json.dumps(val)
+                row[col] = val
+            rows.append(row)
+    return rows
+
+for tbl, cols in LEDGER_COLS.items():
+    col_defs = ", ".join(f'"{c}" TEXT' for c in cols)
+    conn.execute(f'CREATE TABLE "{tbl}" ({col_defs})')
+    rows = load_ledger(tbl, cols)
+    if rows:
+        placeholders = ", ".join("?" for _ in cols)
+        col_names    = ", ".join(f'"{c}"' for c in cols)
+        conn.executemany(
+            f'INSERT INTO "{tbl}" ({col_names}) VALUES ({placeholders})',
+            [[r.get(c) for c in cols] for r in rows]
+        )
+conn.commit()
+
+try:
+    cur = conn.execute(sql)
+    if cur.description is None:
+        conn.commit()
+        sys.exit(0)
+    headers = [d[0] for d in cur.description]
+    print("\t".join(headers))
+    for row in cur.fetchall():
+        print("\t".join("" if v is None else str(v) for v in row))
+except sqlite3.Error as e:
+    print(f"swarm-telemetry: query error: {e}", file=sys.stderr)
+    sys.exit(1)
+PYEOF
+}
+
+# ---------------------------------------------------------------------------
+# Subcommand: report
+# ---------------------------------------------------------------------------
+
+_cmd_report() {
+  local since_days="" filter_role="" bucket="role"
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --since) since_days="${2:-}"; shift 2;;
+      --role)  filter_role="${2:-}"; shift 2;;
+      --bucket) bucket="${2:-}"; shift 2;;
+      *) die "report: unknown option '$1'";;
+    esac
+  done
+
+  case "$bucket" in
+    role|complexity|phase_kind|risk_tag) ;;
+    *) die "report: --bucket must be one of: role complexity phase_kind risk_tag";;
+  esac
+
+  local runs_path
+  runs_path="$(_resolve_ledger "runs")"
+
+  if [[ ! -f "$runs_path" || ! -s "$runs_path" ]]; then
+    die "report: runs.jsonl absent or empty at ${runs_path} — no data to report"
+  fi
+
+  command -v python3 >/dev/null 2>&1 || die "report requires python3"
+  command -v jq >/dev/null 2>&1 || die "report requires jq"
+
+  python3 - "$runs_path" "$since_days" "$filter_role" "$bucket" <<'PYEOF'
+import sys, json, datetime, collections, math
+
+RUNS_PATH   = sys.argv[1]
+SINCE_DAYS  = sys.argv[2]   # "" means all time
+FILTER_ROLE = sys.argv[3]   # "" means all roles
+BUCKET      = sys.argv[4]   # role | complexity | phase_kind | risk_tag
+
+# ---------------------------------------------------------------------------
+# Parse cutoff timestamp
+# ---------------------------------------------------------------------------
+now = datetime.datetime(2026, 4, 23, 12, 0, 0, tzinfo=datetime.timezone.utc)
+
+cutoff = None
+if SINCE_DAYS:
+    n_str = SINCE_DAYS.rstrip("d").strip()
+    try:
+        n = int(n_str)
+        cutoff = now - datetime.timedelta(days=n)
+    except ValueError:
+        print(f"swarm-telemetry: report: invalid --since value '{SINCE_DAYS}' — expected Nd (e.g. 30d)", file=sys.stderr)
+        sys.exit(1)
+
+def parse_ts(s):
+    if not s:
+        return None
+    try:
+        return datetime.datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return None
+
+# ---------------------------------------------------------------------------
+# Load runs
+# ---------------------------------------------------------------------------
+rows = []
+with open(RUNS_PATH) as f:
+    for lineno, line in enumerate(f, 1):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError as e:
+            print(f"swarm-telemetry: report: runs.jsonl line {lineno} parse error: {e} — skipping", file=sys.stderr)
+            continue
+        rows.append(obj)
+
+# ---------------------------------------------------------------------------
+# Apply filters
+# ---------------------------------------------------------------------------
+filtered = []
+excluded_window = 0
+excluded_role   = 0
+
+for r in rows:
+    ts = parse_ts(r.get("timestamp_start") or r.get("timestamp_end"))
+    if cutoff and ts and ts < cutoff:
+        excluded_window += 1
+        continue
+    role = r.get("role", "")
+    if FILTER_ROLE and role != FILTER_ROLE:
+        excluded_role += 1
+        continue
+    filtered.append(r)
+
+# ---------------------------------------------------------------------------
+# Bucket assignment — NEVER global means; always stratify
+# ---------------------------------------------------------------------------
+def get_bucket_keys(row):
+    """Return list of bucket keys for this row (list to handle risk_tag explosion)."""
+    if BUCKET == "role":
+        return [row.get("role") or "(none)"]
+    elif BUCKET == "complexity":
+        return [row.get("phase_complexity") or "(none)"]
+    elif BUCKET == "phase_kind":
+        return [row.get("phase_kind") or "(none)"]
+    elif BUCKET == "risk_tag":
+        tags = row.get("risk_tags")
+        if isinstance(tags, list) and len(tags) > 0:
+            return tags  # explode: each tag is its own bucket contribution
+        return ["(untagged)"]
+    return ["(unknown)"]
+
+# Build per-bucket accumulators (dict-of-lists; means computed at render time, always within bucket)
+buckets = collections.defaultdict(lambda: {
+    "count": 0,
+    "success_count": 0,
+    "wall_secs": [],
+    "cost": [],
+    "budget_breach_count": 0,
+    "cap_hit_count": 0,
+})
+
+for row in filtered:
+    keys = get_bucket_keys(row)
+    for key in keys:
+        b = buckets[key]
+        b["count"] += 1
+        exit_code = row.get("exit_code")
+        if exit_code == 0:
+            b["success_count"] += 1
+        ws = row.get("wall_clock_seconds")
+        if ws is not None:
+            b["wall_secs"].append(float(ws))
+        cost = row.get("estimated_cost_usd")
+        if cost is not None:
+            b["cost"].append(float(cost))
+        if row.get("budget_breach") is True:
+            b["budget_breach_count"] += 1
+        if row.get("cap_hit") is True:
+            b["cap_hit_count"] += 1
+
+# ---------------------------------------------------------------------------
+# Render markdown — stratified, never global means
+# ---------------------------------------------------------------------------
+filter_desc_parts = []
+if cutoff:
+    filter_desc_parts.append(f"since {SINCE_DAYS}")
+if FILTER_ROLE:
+    filter_desc_parts.append(f"role={FILTER_ROLE}")
+filter_desc = ", ".join(filter_desc_parts) if filter_desc_parts else "all time, all roles"
+
+print(f"# Swarm Telemetry Report")
+print(f"")
+print(f"**Bucket:** `{BUCKET}` | **Filter:** {filter_desc}")
+print(f"**Runs matched:** {len(filtered)} of {len(rows)} total")
+if excluded_window > 0:
+    print(f"**Excluded (outside window):** {excluded_window}")
+if excluded_role > 0:
+    print(f"**Excluded (other roles):** {excluded_role}")
+print(f"")
+
+if not buckets:
+    print(f"_No runs matched the current filters._")
+    sys.exit(0)
+
+# Sort buckets for stable output
+sorted_keys = sorted(buckets.keys())
+
+# Table header
+print(f"| {BUCKET} | count | success_rate | mean_wall_s | mean_cost_usd | budget_breach | cap_hit |")
+print(f"|{'-'*max(len(BUCKET)+2,10)}|------:|-------------:|------------:|--------------:|--------------:|--------:|")
+
+for key in sorted_keys:
+    b = buckets[key]
+    count      = b["count"]
+    success_rt = b["success_count"] / count if count > 0 else 0.0
+    mean_wall  = sum(b["wall_secs"]) / len(b["wall_secs"]) if b["wall_secs"] else None
+    mean_cost  = sum(b["cost"]) / len(b["cost"]) if b["cost"] else None
+    bb_count   = b["budget_breach_count"]
+    cap_count  = b["cap_hit_count"]
+
+    success_str = f"{success_rt:.0%}"
+    wall_str    = f"{mean_wall:.1f}" if mean_wall is not None else "n/a"
+    cost_str    = f"{mean_cost:.4f}" if mean_cost is not None else "n/a"
+
+    print(f"| `{key}` | {count} | {success_str} | {wall_str} | {cost_str} | {bb_count} | {cap_count} |")
+
+print(f"")
+print(f"> _Report generated by swarm-telemetry. Stratified per `{BUCKET}` — do not aggregate across buckets._")
+PYEOF
+}
+
+# ---------------------------------------------------------------------------
+# Self-test
+# ---------------------------------------------------------------------------
+
+_cmd_test() {
+  local _pass=0 _fail=0 _skip=0
+
+  _check() {
+    local desc="$1" got="$2" want="$3"
+    if [[ "$got" == "$want" ]]; then
+      echo "  PASS: $desc"
+      (( _pass++ )) || true
+    else
+      echo "  FAIL: $desc — got '${got}', want '${want}'"
+      (( _fail++ )) || true
+    fi
+  }
+
+  _check_contains() {
+    local desc="$1" haystack="$2" needle="$3"
+    if [[ "$haystack" == *"$needle"* ]]; then
+      echo "  PASS: $desc"
+      (( _pass++ )) || true
+    else
+      echo "  FAIL: $desc — output does not contain '${needle}'"
+      (( _fail++ )) || true
+    fi
+  }
+
+  _check_not_contains() {
+    local desc="$1" haystack="$2" needle="$3"
+    if [[ "$haystack" != *"$needle"* ]]; then
+      echo "  PASS: $desc"
+      (( _pass++ )) || true
+    else
+      echo "  FAIL: $desc — output must NOT contain '${needle}'"
+      (( _fail++ )) || true
+    fi
+  }
+
+  echo "=== swarm-telemetry --test ==="
+  echo ""
+
+  # Locate synthetic fixture
+  local fixture_dir="${_SCRIPT_DIR}/../tests/fixtures"
+  local syn_runs="${fixture_dir}/synthetic-runs.jsonl"
+  local syn_findings="${fixture_dir}/synthetic-findings.jsonl"
+
+  if [[ ! -f "$syn_runs" ]]; then
+    echo "  SKIP: synthetic fixtures not found at ${syn_runs}" >&2
+    (( _skip++ )) || true
+    echo ""
+    echo "=== self-test: ${_pass} passed, ${_fail} failed, ${_skip} skipped ==="
+    [[ "$_fail" -eq 0 ]] && exit 0 || exit 1
+  fi
+
+  # Use a temp dir as CLAUDE_PLUGIN_DATA for isolation
+  local tmp_tel
+  tmp_tel="$(mktemp -d /tmp/swarm-telemetry-test-XXXXXX)"
+  local tmp_data="${tmp_tel}/fake-plugin-data"
+  mkdir -p "${tmp_data}/telemetry"
+  cp "$syn_runs"    "${tmp_data}/telemetry/runs.jsonl"
+  cp "$syn_findings" "${tmp_data}/telemetry/findings.jsonl"
+  # Leave outcomes/adjudications absent to test fail-open
+
+  echo "--- dump subcommand ---"
+  local dump_out
+  dump_out="$(CLAUDE_PLUGIN_DATA="$tmp_data" bash "$0" dump runs 2>/dev/null)"
+  _check "dump runs: starts with '['" "${dump_out:0:1}" "["
+  local run_count
+  run_count="$(printf '%s' "$dump_out" | jq 'length' 2>/dev/null || echo "0")"
+  _check "dump runs: ≥60 rows" "$(( run_count >= 60 ))" "1"
+
+  local dump_findings_out
+  dump_findings_out="$(CLAUDE_PLUGIN_DATA="$tmp_data" bash "$0" dump findings 2>/dev/null)"
+  local findings_count
+  findings_count="$(printf '%s' "$dump_findings_out" | jq 'length' 2>/dev/null || echo "0")"
+  _check "dump findings: ≥30 rows" "$(( findings_count >= 30 ))" "1"
+
+  local dump_absent_out
+  dump_absent_out="$(CLAUDE_PLUGIN_DATA="$tmp_data" bash "$0" dump outcomes 2>/dev/null)"
+  _check "dump absent ledger returns []" "$dump_absent_out" "[]"
+
+  echo ""
+  echo "--- validate subcommand ---"
+  local val_rc=0
+  CLAUDE_PLUGIN_DATA="$tmp_data" bash "$0" validate 2>/dev/null || val_rc=$?
+  _check "validate: exits 0 on clean synthetic data" "$val_rc" "0"
+
+  # Corrupt a copy — truncate mid-JSON
+  local corrupt_dir="${tmp_data}/telemetry-corrupt"
+  mkdir -p "$corrupt_dir"
+  # Write 3 good rows then one truncated row
+  head -3 "${tmp_data}/telemetry/runs.jsonl" > "${corrupt_dir}/runs.jsonl"
+  printf '{"run_id":"CORRUPT","timestamp_start":"2026-01-01T' >> "${corrupt_dir}/runs.jsonl"
+  local corrupt_data="${tmp_data%/*}/corrupt-plugin-data"
+  mkdir -p "${corrupt_data}/telemetry"
+  cp "${corrupt_dir}/runs.jsonl" "${corrupt_data}/telemetry/runs.jsonl"
+
+  local val_corrupt_rc=0
+  CLAUDE_PLUGIN_DATA="$corrupt_data" bash "$0" validate runs 2>/dev/null || val_corrupt_rc=$?
+  _check "validate: exits 1 on truncated/corrupt row" "$(( val_corrupt_rc != 0 ))" "1"
+
+  echo ""
+  echo "--- report subcommand ---"
+  local report_out
+  report_out="$(CLAUDE_PLUGIN_DATA="$tmp_data" bash "$0" report 2>/dev/null)"
+  _check_contains "report: contains markdown header" "$report_out" "# Swarm Telemetry Report"
+  _check_contains "report: contains bucket header" "$report_out" "role"
+  _check_not_contains "report: no global mean aggregation" "$report_out" "global"
+
+  local report_since_out
+  report_since_out="$(CLAUDE_PLUGIN_DATA="$tmp_data" bash "$0" report --since 30d --role agent-review 2>/dev/null)"
+  _check_contains "report --since 30d --role agent-review: shows filter" "$report_since_out" "since 30d"
+  _check_contains "report --since 30d --role agent-review: shows role filter" "$report_since_out" "role=agent-review"
+  _check_not_contains "report --since 30d --role agent-review: excludes other roles in bucket col" "$report_since_out" "agent-writer"
+
+  local report_risk_out
+  report_risk_out="$(CLAUDE_PLUGIN_DATA="$tmp_data" bash "$0" report --bucket risk_tag 2>/dev/null)"
+  _check_contains "report --bucket risk_tag: has (untagged)" "$report_risk_out" "(untagged)"
+  _check_contains "report --bucket risk_tag: has markdown table" "$report_risk_out" "| risk_tag |"
+
+  local report_complexity_out
+  report_complexity_out="$(CLAUDE_PLUGIN_DATA="$tmp_data" bash "$0" report --bucket complexity 2>/dev/null)"
+  _check_contains "report --bucket complexity: has (none)" "$report_complexity_out" "(none)"
+
+  echo ""
+  echo "--- query subcommand ---"
+  if command -v python3 >/dev/null 2>&1; then
+    local query_out
+    query_out="$(CLAUDE_PLUGIN_DATA="$tmp_data" bash "$0" query 'SELECT role, count(*) as n FROM runs GROUP BY role ORDER BY n DESC' 2>/dev/null)"
+    _check_contains "query: returns role column" "$query_out" "role"
+    _check_contains "query: returns count results" "$query_out" "agent-analysis"
+  else
+    echo "  SKIP: python3 not available"
+    (( _skip++ )) || true
+  fi
+
+  # Cleanup
+  rm -rf "$tmp_tel" "${corrupt_data}" 2>/dev/null || true
+
+  echo ""
+  echo "=== self-test: ${_pass} passed, ${_fail} failed, ${_skip} skipped ==="
+  [[ "$_fail" -eq 0 ]] && exit 0 || exit 1
+}
+
+# ---------------------------------------------------------------------------
+# Argument dispatcher
+# ---------------------------------------------------------------------------
+
+[[ $# -gt 0 ]] || { usage; exit 64; }
+
+case "$1" in
+  -h|--help) usage; exit 0;;
+  --test)    _cmd_test;;
+  query)
+    shift
+    _cmd_query "${1:-}"
+    ;;
+  report)
+    shift
+    _cmd_report "$@"
+    ;;
+  dump)
+    shift
+    _cmd_dump "${1:-}"
+    ;;
+  validate)
+    shift
+    _cmd_validate "${1:-}"
+    ;;
+  *)
+    echo "${_SELF}: unknown subcommand '$1'" >&2
+    usage >&2
+    exit 64
+    ;;
+esac
