@@ -50,21 +50,28 @@ Usage:
   swarm-telemetry report [--since Nd] [--role R] [--bucket K]
   swarm-telemetry dump <ledger>
   swarm-telemetry validate [<ledger>]
+  swarm-telemetry join-outcomes [--since Nd] [--repo PATH] [--dry-run]
   swarm-telemetry --test
   swarm-telemetry -h | --help
 
 Subcommands:
-  query <sql>     Execute SQL against in-memory sqlite3 loaded from all four ledgers.
+  query <sql>     Execute SQL against in-memory sqlite3 loaded from all five ledgers.
   report          Stratified markdown report (role/complexity/phase_kind/risk_tag).
   dump <ledger>   Pretty-print ledger as JSON array.
   validate        jq parse + required-field check on every ledger row.
+  join-outcomes   Correlate findings with post-merge maintainer actions; append to finding_outcomes.jsonl.
 
 Options for report:
   --since Nd      Filter to last N days (e.g. --since 30d)
   --role R        Filter to role R
   --bucket K      Stratify by: role | complexity | phase_kind | risk_tag  (default: role)
 
-Ledger names: runs | findings | outcomes | adjudications
+Options for join-outcomes:
+  --since Nd      Scan merges within the last N days (default: 30d)
+  --repo PATH     Path to git repo (default: git rev-parse --show-toplevel)
+  --dry-run       Print rows that would be appended; do not write anything
+
+Ledger names: runs | findings | outcomes | adjudications | finding_outcomes
 EOF
 }
 
@@ -76,8 +83,8 @@ _resolve_telemetry_dir() {
 _resolve_ledger() {
   local name="$1"
   case "$name" in
-    runs|findings|outcomes|adjudications) ;;
-    *) die "unknown ledger '$name' — must be one of: runs findings outcomes adjudications";;
+    runs|findings|outcomes|adjudications|finding_outcomes) ;;
+    *) die "unknown ledger '$name' — must be one of: runs findings outcomes adjudications finding_outcomes";;
   esac
   local dir
   dir="$(_resolve_telemetry_dir)"
@@ -109,6 +116,7 @@ _RUNS_REQUIRED='["run_id","timestamp_start","timestamp_end","backend","model","e
 _FINDINGS_REQUIRED='["finding_id","run_id","timestamp","role","issue_id","severity","category","summary","schema_ok"]'
 _OUTCOMES_REQUIRED='["outcome_id","issue_id","timestamp","writer_run_id","review_run_id","verdict","schema_ok"]'
 _ADJUDICATIONS_REQUIRED='["adjudication_id","outcome_id","issue_id","timestamp","adjudicator","decision","schema_ok"]'
+_FINDING_OUTCOMES_REQUIRED='["finding_outcome_id","finding_id","observed_at","maintainer_action","schema_ok"]'
 
 _validate_ledger() {
   local name="$1" path="$2" required="$3"
@@ -173,17 +181,19 @@ _cmd_validate() {
 
   if [[ -n "$target_ledger" ]]; then
     case "$target_ledger" in
-      runs)          _run_validation runs          "$_RUNS_REQUIRED" ;;
-      findings)      _run_validation findings      "$_FINDINGS_REQUIRED" ;;
-      outcomes)      _run_validation outcomes      "$_OUTCOMES_REQUIRED" ;;
-      adjudications) _run_validation adjudications "$_ADJUDICATIONS_REQUIRED" ;;
-      *) die "unknown ledger '$target_ledger' — must be one of: runs findings outcomes adjudications";;
+      runs)             _run_validation runs             "$_RUNS_REQUIRED" ;;
+      findings)         _run_validation findings         "$_FINDINGS_REQUIRED" ;;
+      outcomes)         _run_validation outcomes         "$_OUTCOMES_REQUIRED" ;;
+      adjudications)    _run_validation adjudications    "$_ADJUDICATIONS_REQUIRED" ;;
+      finding_outcomes) _run_validation finding_outcomes "$_FINDING_OUTCOMES_REQUIRED" ;;
+      *) die "unknown ledger '$target_ledger' — must be one of: runs findings outcomes adjudications finding_outcomes";;
     esac
   else
-    _run_validation runs          "$_RUNS_REQUIRED"
-    _run_validation findings      "$_FINDINGS_REQUIRED"
-    _run_validation outcomes      "$_OUTCOMES_REQUIRED"
-    _run_validation adjudications "$_ADJUDICATIONS_REQUIRED"
+    _run_validation runs             "$_RUNS_REQUIRED"
+    _run_validation findings         "$_FINDINGS_REQUIRED"
+    _run_validation outcomes         "$_OUTCOMES_REQUIRED"
+    _run_validation adjudications    "$_ADJUDICATIONS_REQUIRED"
+    _run_validation finding_outcomes "$_FINDING_OUTCOMES_REQUIRED"
   fi
 
   if [[ "$total_fail" -eq 0 ]]; then
@@ -239,6 +249,11 @@ LEDGER_COLS = {
     "adjudications": [
         "adjudication_id", "outcome_id", "issue_id", "timestamp", "adjudicator",
         "decision", "schema_ok",
+    ],
+    "finding_outcomes": [
+        "finding_outcome_id", "finding_id", "observed_at", "maintainer_action",
+        "followup_ref", "time_to_action_hours", "time_to_fix_hours",
+        "recurrence_of", "schema_ok",
     ],
 }
 
@@ -490,6 +505,518 @@ PYEOF
 }
 
 # ---------------------------------------------------------------------------
+# Subcommand: join-outcomes
+# ---------------------------------------------------------------------------
+# Correlates findings.jsonl entries with post-merge git commits and bd/gh
+# references to determine maintainer_action and append rows to
+# finding_outcomes.jsonl.
+#
+# Anti-pattern guards (enforced):
+#   - No cron; manual invocation only.
+#   - Line range MUST participate in hotfix correlation; file-only match forbidden.
+#   - Never mutates outcomes.jsonl or outcomes.schema.json.
+#   - Append-only: never rewrites existing finding_outcomes.jsonl rows.
+# ---------------------------------------------------------------------------
+
+_cmd_join_outcomes() {
+  local since_days="30d" repo_path="" dry_run=0
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --since)   since_days="${2:-}"; shift 2;;
+      --repo)    repo_path="${2:-}";  shift 2;;
+      --dry-run) dry_run=1; shift;;
+      *) die "join-outcomes: unknown option '$1'";;
+    esac
+  done
+
+  command -v jq     >/dev/null 2>&1 || die "join-outcomes requires jq"
+  command -v git    >/dev/null 2>&1 || die "join-outcomes requires git"
+  command -v python3 >/dev/null 2>&1 || die "join-outcomes requires python3"
+
+  # Resolve repo root
+  if [[ -z "$repo_path" ]]; then
+    repo_path="$(git rev-parse --show-toplevel 2>/dev/null)" \
+      || die "join-outcomes: --repo not provided and not inside a git repo"
+  fi
+  [[ -d "$repo_path/.git" || -f "$repo_path/.git" ]] \
+    || die "join-outcomes: '$repo_path' is not a git repository root"
+
+  local tel_dir
+  tel_dir="$(_resolve_telemetry_dir)"
+
+  local findings_path="${tel_dir}/findings.jsonl"
+  local ledger_path="${tel_dir}/finding_outcomes.jsonl"
+
+  if [[ ! -f "$findings_path" || ! -s "$findings_path" ]]; then
+    echo "${_SELF}: join-outcomes: findings.jsonl absent or empty — nothing to correlate" >&2
+    return 0
+  fi
+
+  # Parse since_days to a cutoff epoch (seconds since 1970-01-01)
+  local since_n
+  since_n="${since_days%d}"
+  if ! [[ "$since_n" =~ ^[0-9]+$ ]]; then
+    die "join-outcomes: --since must be Nd (e.g. 30d), got '${since_days}'"
+  fi
+
+  # Use python3 for all heavy correlation — keeps bash handling minimal
+  python3 - \
+    "$findings_path" \
+    "$ledger_path" \
+    "$repo_path" \
+    "$since_n" \
+    "$dry_run" \
+    <<'PYEOF'
+import sys, json, os, subprocess, datetime, re, hashlib, secrets
+
+findings_path = sys.argv[1]
+ledger_path   = sys.argv[2]
+repo_path     = sys.argv[3]
+since_n       = int(sys.argv[4])
+dry_run       = sys.argv[5] == "1"
+
+SELF = "swarm-telemetry: join-outcomes"
+
+# ---------------------------------------------------------------------------
+# ULID generator (Crockford base32, 26 chars) — no external deps
+# ---------------------------------------------------------------------------
+CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+
+def _ulid() -> str:
+    now_ms = int(datetime.datetime.now(datetime.timezone.utc).timestamp() * 1000)
+    # 48-bit time (10 chars) + 80-bit random (16 chars)
+    ts_bits = now_ms
+    t_chars = []
+    for _ in range(10):
+        t_chars.append(CROCKFORD[ts_bits & 0x1F])
+        ts_bits >>= 5
+    t_part = "".join(reversed(t_chars))
+    rand_bytes = secrets.token_bytes(10)
+    rand_int = int.from_bytes(rand_bytes, "big")
+    r_chars = []
+    for _ in range(16):
+        r_chars.append(CROCKFORD[rand_int & 0x1F])
+        rand_int >>= 5
+    r_part = "".join(reversed(r_chars))
+    return t_part + r_part
+
+# ---------------------------------------------------------------------------
+# Now / cutoff
+# ---------------------------------------------------------------------------
+now = datetime.datetime.now(datetime.timezone.utc)
+cutoff = now - datetime.timedelta(days=since_n)
+observed_at = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+def parse_ts(s):
+    if not s:
+        return None
+    try:
+        return datetime.datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return None
+
+# ---------------------------------------------------------------------------
+# Load existing finding_outcomes for dedup
+# ---------------------------------------------------------------------------
+existing_keys = set()  # (finding_id, maintainer_action, followup_ref)
+if os.path.isfile(ledger_path) and os.path.getsize(ledger_path) > 0:
+    with open(ledger_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+                key = (
+                    obj.get("finding_id", ""),
+                    obj.get("maintainer_action", ""),
+                    obj.get("followup_ref") or "",  # normalize None -> ""
+                )
+                existing_keys.add(key)
+            except json.JSONDecodeError:
+                pass  # corrupt row; skip but don't block
+
+def is_dup(finding_id, maintainer_action, followup_ref):
+    key = (finding_id, maintainer_action, followup_ref or "")
+    return key in existing_keys
+
+def mark_seen(finding_id, maintainer_action, followup_ref):
+    existing_keys.add((finding_id, maintainer_action, followup_ref or ""))
+
+# ---------------------------------------------------------------------------
+# Load findings
+# ---------------------------------------------------------------------------
+findings = []
+with open(findings_path) as f:
+    for lineno, line in enumerate(f, 1):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+            findings.append(obj)
+        except json.JSONDecodeError as e:
+            print(f"{SELF}: findings.jsonl line {lineno} parse error: {e} — skipping", file=sys.stderr)
+
+if not findings:
+    print(f"{SELF}: no findings loaded — nothing to correlate", file=sys.stderr)
+    sys.exit(0)
+
+# ---------------------------------------------------------------------------
+# Git helpers
+# ---------------------------------------------------------------------------
+def git(*args, cwd=repo_path, check=False):
+    """Run a git command; return stdout string or "" on error."""
+    try:
+        result = subprocess.run(
+            ["git"] + list(args),
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if check and result.returncode != 0:
+            return ""
+        return result.stdout.strip()
+    except Exception as e:
+        print(f"{SELF}: git {' '.join(args)}: {e}", file=sys.stderr)
+        return ""
+
+def epoch_of_commit(sha):
+    out = git("log", "-1", "--format=%ct", sha)
+    try:
+        return int(out)
+    except (ValueError, TypeError):
+        return None
+
+def commit_message(sha):
+    return git("log", "-1", "--format=%s", sha)
+
+# ---------------------------------------------------------------------------
+# Discover merged commits in the since window via git log --merges
+# ---------------------------------------------------------------------------
+# We look back since_n days for merge commits; the 14d hotfix window is
+# applied per-finding relative to merge timestamp.
+since_epoch = int(cutoff.timestamp())
+
+merge_log = git(
+    "log", "--merges",
+    f"--after={since_epoch}",
+    "--format=%H %ct",
+    "--no-walk=unsorted",
+)
+# Also get regular (non-merge) commits if gh cli isn't available
+all_commit_log = git(
+    "log",
+    f"--after={since_epoch}",
+    "--format=%H %ct",
+)
+
+# Build list of (sha, commit_epoch) for all commits in window
+all_commits = []
+for line in all_commit_log.splitlines():
+    parts = line.split()
+    if len(parts) == 2:
+        sha, ct = parts
+        try:
+            all_commits.append((sha, int(ct)))
+        except ValueError:
+            pass
+
+# Attempt gh pr list for richer PR merge timestamps
+# gh pr list --state merged returns merged PRs; use merge timestamp from there
+gh_merges = {}  # sha -> merge_epoch
+gh_available = False
+try:
+    gh_result = subprocess.run(
+        ["gh", "pr", "list", "--state", "merged", "--limit", "200",
+         "--json", "mergeCommit,mergedAt,number,url"],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if gh_result.returncode == 0:
+        gh_available = True
+        prs = json.loads(gh_result.stdout or "[]")
+        for pr in prs:
+            mc = pr.get("mergeCommit") or {}
+            sha = mc.get("oid", "")
+            merged_at = pr.get("mergedAt", "")
+            if sha and merged_at:
+                ts = parse_ts(merged_at)
+                if ts:
+                    gh_merges[sha] = int(ts.timestamp())
+except Exception as e:
+    print(f"{SELF}: gh pr list failed (non-fatal): {e}", file=sys.stderr)
+
+def merge_epoch_for(sha):
+    """Best-effort merge epoch: gh pr data first, else commit timestamp."""
+    if sha in gh_merges:
+        return gh_merges[sha]
+    return epoch_of_commit(sha)
+
+# ---------------------------------------------------------------------------
+# Parse git diff --unified=0 hunk headers to extract touched line ranges
+# ---------------------------------------------------------------------------
+HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+
+def hunk_ranges_for_commit(sha, file_path):
+    """Return list of (new_start, new_end) inclusive line ranges touched by sha in file_path."""
+    diff_out = git("diff", "--unified=0", f"{sha}^..{sha}", "--", file_path)
+    ranges = []
+    for line in diff_out.splitlines():
+        m = HUNK_RE.match(line)
+        if m:
+            new_start = int(m.group(3))
+            new_count_s = m.group(4)
+            new_count = int(new_count_s) if new_count_s is not None else 1
+            if new_count == 0:
+                # deletion-only hunk; use old range (+0,0 means insertion at new_start)
+                old_start = int(m.group(1))
+                old_count_s = m.group(2)
+                old_count = int(old_count_s) if old_count_s is not None else 1
+                ranges.append((old_start, old_start + old_count - 1))
+            else:
+                ranges.append((new_start, new_start + new_count - 1))
+    return ranges
+
+def overlaps(hunk_start, hunk_end, find_start, find_end, window=10):
+    """True if [hunk_start,hunk_end] overlaps [find_start-window, find_end+window]."""
+    lo = find_start - window
+    hi = find_end + window
+    return hunk_start <= hi and hunk_end >= lo
+
+# ---------------------------------------------------------------------------
+# bd follow-up detection: bd list --notes <finding_id>
+# ---------------------------------------------------------------------------
+bd_available = False
+try:
+    bd_chk = subprocess.run(["bd", "--version"], capture_output=True, text=True, timeout=10)
+    bd_available = bd_chk.returncode == 0
+except Exception:
+    pass
+
+def bd_find_followup(finding_id):
+    """Return list of bd issue ids whose notes contain finding_id substring."""
+    if not bd_available:
+        return []
+    try:
+        result = subprocess.run(
+            ["bd", "list", "--notes", finding_id],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode != 0:
+            return []
+        refs = []
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if line and finding_id in line:
+                # Extract the issue id (first whitespace-delimited token)
+                parts = line.split()
+                if parts:
+                    refs.append(parts[0])
+        return refs
+    except Exception:
+        return []
+
+# ---------------------------------------------------------------------------
+# gh pr follow-up detection: gh pr list --search <finding_id> --state all
+# ---------------------------------------------------------------------------
+def gh_find_followup_prs(finding_id):
+    """Return list of PR number strings whose body/title contains finding_id."""
+    if not gh_available:
+        return []
+    try:
+        result = subprocess.run(
+            ["gh", "pr", "list", "--search", finding_id, "--state", "all",
+             "--limit", "50", "--json", "number,url"],
+            cwd=repo_path,
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode != 0:
+            return []
+        prs = json.loads(result.stdout or "[]")
+        return [str(pr["number"]) for pr in prs if "number" in pr]
+    except Exception:
+        return []
+
+# ---------------------------------------------------------------------------
+# Accumulate rows to write
+# ---------------------------------------------------------------------------
+new_rows = []
+
+for finding in findings:
+    finding_id  = finding.get("finding_id", "")
+    file_path   = finding.get("file_path") or ""
+    line_start  = finding.get("line_start")
+    line_end    = finding.get("line_end")
+    find_ts_str = finding.get("timestamp", "")
+    find_ts     = parse_ts(find_ts_str)
+
+    if not finding_id:
+        continue
+
+    # Skip findings outside the since window
+    if find_ts and find_ts < cutoff:
+        continue
+
+    # ------------------------------------------------------------------
+    # 1. bd follow-up detection
+    # ------------------------------------------------------------------
+    bd_refs = bd_find_followup(finding_id)
+    for bd_ref in bd_refs:
+        action = "followup_issue"
+        if not is_dup(finding_id, action, bd_ref):
+            row = {
+                "finding_outcome_id": _ulid(),
+                "finding_id": finding_id,
+                "observed_at": observed_at,
+                "maintainer_action": action,
+                "followup_ref": bd_ref,
+                "time_to_action_hours": None,
+                "time_to_fix_hours": None,
+                "recurrence_of": None,
+                "schema_ok": True,
+            }
+            new_rows.append(row)
+            mark_seen(finding_id, action, bd_ref)
+
+    # ------------------------------------------------------------------
+    # 2. gh PR follow-up detection
+    # ------------------------------------------------------------------
+    gh_pr_refs = gh_find_followup_prs(finding_id)
+    for pr_num in gh_pr_refs:
+        action = "followup_pr"
+        if not is_dup(finding_id, action, pr_num):
+            row = {
+                "finding_outcome_id": _ulid(),
+                "finding_id": finding_id,
+                "observed_at": observed_at,
+                "maintainer_action": action,
+                "followup_ref": pr_num,
+                "time_to_action_hours": None,
+                "time_to_fix_hours": None,
+                "recurrence_of": None,
+                "schema_ok": True,
+            }
+            new_rows.append(row)
+            mark_seen(finding_id, action, pr_num)
+
+    # ------------------------------------------------------------------
+    # 3. Hotfix correlation — requires file_path AND line_start
+    #    (line-only match is forbidden; must verify line range overlap)
+    # ------------------------------------------------------------------
+    if not file_path or line_start is None:
+        # Cannot do line-range correlation; skip hotfix check
+        # Only emit 'ignored' if no bd/gh refs were found AND
+        # the finding has no file_path at all (unlocatable).
+        if not bd_refs and not gh_pr_refs and not file_path:
+            action = "ignored"
+            if not is_dup(finding_id, action, ""):
+                row = {
+                    "finding_outcome_id": _ulid(),
+                    "finding_id": finding_id,
+                    "observed_at": observed_at,
+                    "maintainer_action": action,
+                    "followup_ref": None,
+                    "time_to_action_hours": None,
+                    "time_to_fix_hours": None,
+                    "recurrence_of": None,
+                    "schema_ok": True,
+                }
+                new_rows.append(row)
+                mark_seen(finding_id, action, "")
+        continue
+
+    # Normalize line_end
+    ls = int(line_start)
+    le = int(line_end) if line_end is not None else ls
+
+    # Get merge epoch anchor: use finding's run timestamp as approximate merge anchor.
+    # Since runs.jsonl has no pr_url/merge_sha, we fall back to git log --merges
+    # filtered to commits near the finding's timestamp (within 14d after finding).
+    find_epoch = int(find_ts.timestamp()) if find_ts else int(now.timestamp())
+
+    # Enumerate commits that touch file_path within 14d after find_epoch
+    hotfix_commits_raw = git(
+        "log",
+        f"--after={find_epoch}",
+        f"--before={find_epoch + 14 * 86400}",
+        "--format=%H %ct",
+        "--",
+        file_path,
+    )
+
+    for cline in hotfix_commits_raw.splitlines():
+        parts = cline.split()
+        if len(parts) < 2:
+            continue
+        sha, commit_ct_s = parts[0], parts[1]
+        try:
+            commit_ct = int(commit_ct_s)
+        except ValueError:
+            continue
+
+        # Use gh merge timestamp if available for this sha
+        m_epoch = gh_merges.get(sha, find_epoch)
+
+        # Parse diff hunk ranges — line range MUST participate
+        ranges = hunk_ranges_for_commit(sha, file_path)
+        if not ranges:
+            continue  # no changes in this file for this commit
+
+        hit = any(overlaps(h_start, h_end, ls, le) for h_start, h_end in ranges)
+        if not hit:
+            continue  # file touched but not in ±10 line window
+
+        # Record hotfix_within_14d
+        action = "hotfix_within_14d"
+        followup_ref = sha
+        if not is_dup(finding_id, action, followup_ref):
+            time_to_fix = (commit_ct - m_epoch) / 3600.0 if m_epoch else None
+            row = {
+                "finding_outcome_id": _ulid(),
+                "finding_id": finding_id,
+                "observed_at": observed_at,
+                "maintainer_action": action,
+                "followup_ref": followup_ref,
+                "time_to_action_hours": None,
+                "time_to_fix_hours": round(time_to_fix, 4) if time_to_fix is not None else None,
+                "recurrence_of": None,
+                "schema_ok": True,
+            }
+            new_rows.append(row)
+            mark_seen(finding_id, action, followup_ref)
+
+# ---------------------------------------------------------------------------
+# Output / append
+# ---------------------------------------------------------------------------
+if not new_rows:
+    print(f"{SELF}: no new outcome rows to append", file=sys.stderr)
+    sys.exit(0)
+
+if dry_run:
+    print(f"{SELF}: --dry-run: {len(new_rows)} row(s) would be appended (not written)", file=sys.stderr)
+    for row in new_rows:
+        print(json.dumps(row))
+    sys.exit(0)
+
+# Ensure telemetry directory exists
+os.makedirs(os.path.dirname(ledger_path), exist_ok=True)
+
+appended = 0
+with open(ledger_path, "a") as f:
+    for row in new_rows:
+        f.write(json.dumps(row, separators=(",", ":")) + "\n")
+        appended += 1
+
+print(f"{SELF}: appended {appended} row(s) to {ledger_path}", file=sys.stderr)
+PYEOF
+}
+
+# ---------------------------------------------------------------------------
 # Self-test
 # ---------------------------------------------------------------------------
 
@@ -659,6 +1186,10 @@ case "$1" in
   validate)
     shift
     _cmd_validate "${1:-}"
+    ;;
+  join-outcomes)
+    shift
+    _cmd_join_outcomes "$@"
     ;;
   *)
     echo "${_SELF}: unknown subcommand '$1'" >&2
