@@ -1,0 +1,165 @@
+{
+  "$schema": "https://json-schema.org/draft/07/schema#",
+  "$id": "https://mstefanko-plugins/swarm-do/telemetry/runs.schema.json#v1",
+  "title": "swarm-do telemetry run record",
+  "description": "One row appended to runs.jsonl per swarm-run invocation. v1 frozen 2026-04-23. schema_ok is writer-attested in Phase 9a; validator-confirmed in Phase 10a.",
+  "type": "object",
+  "required": [
+    "run_id",
+    "timestamp_start",
+    "timestamp_end",
+    "backend",
+    "model",
+    "effort",
+    "prompt_bundle_hash",
+    "config_hash",
+    "role",
+    "phase_kind",
+    "phase_complexity",
+    "risk_tags",
+    "issue_id",
+    "repo",
+    "base_sha",
+    "head_sha",
+    "diff_size_bytes",
+    "tokens",
+    "cost",
+    "wall_clock_seconds",
+    "tool_call_count",
+    "cap_hit",
+    "schema_ok",
+    "exit_code"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "run_id": {
+      "type": "string",
+      "description": "ULID unique run identifier",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "timestamp_start": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO-8601 UTC timestamp when swarm-run was invoked"
+    },
+    "timestamp_end": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO-8601 UTC timestamp when swarm-run EXIT trap fired"
+    },
+    "backend": {
+      "type": "string",
+      "enum": ["claude", "codex"],
+      "description": "Backend that executed the role"
+    },
+    "model": {
+      "type": "string",
+      "description": "Model identifier used for the run (e.g. opus, sonnet, gpt-5.4)"
+    },
+    "effort": {
+      "type": "string",
+      "enum": ["low", "medium", "high", "xhigh"],
+      "description": "Reasoning effort level passed to the backend"
+    },
+    "prompt_bundle_hash": {
+      "type": ["string", "null"],
+      "description": "SHA-256 hex of shared.md + <backend>.md concatenation for the role. null if bundle files missing.",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "config_hash": {
+      "type": ["string", "null"],
+      "description": "SHA-256 hex of the active swarm config (backends.toml or equivalent). null in Phase 9a.",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "role": {
+      "type": "string",
+      "enum": [
+        "agent-research",
+        "agent-clarify",
+        "agent-analysis",
+        "agent-debug",
+        "agent-writer",
+        "agent-spec-review",
+        "agent-review",
+        "agent-codex-review",
+        "agent-docs",
+        "agent-code-synthesizer",
+        "agent-code-review",
+        "agent-research-merge",
+        "agent-analysis-judge",
+        "agent-writer-judge"
+      ],
+      "description": "Swarm role executed in this run"
+    },
+    "phase_kind": {
+      "type": ["string", "null"],
+      "description": "Phase kind tag from the issue (e.g. feature, bug, refactor). null if not available."
+    },
+    "phase_complexity": {
+      "type": ["string", "null"],
+      "description": "Phase complexity tag from the issue (e.g. simple, moderate, complex). null if not available."
+    },
+    "risk_tags": {
+      "type": ["array", "null"],
+      "items": { "type": "string" },
+      "description": "Risk tags from the issue. null if not available."
+    },
+    "issue_id": {
+      "type": "string",
+      "description": "Beads issue identifier (e.g. mstefanko-plugins-itv)"
+    },
+    "repo": {
+      "type": ["string", "null"],
+      "description": "Git remote origin URL or slug of the repo being worked on. null if not determinable."
+    },
+    "base_sha": {
+      "type": ["string", "null"],
+      "description": "Git HEAD SHA at the start of the run. null if not determinable.",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "head_sha": {
+      "type": ["string", "null"],
+      "description": "Git HEAD SHA at the end of the run (after any commits). null if not determinable.",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "diff_size_bytes": {
+      "type": ["integer", "null"],
+      "description": "Byte count of git diff from base_sha to head_sha. null if not determinable.",
+      "minimum": 0
+    },
+    "tokens": {
+      "type": ["integer", "null"],
+      "description": "Total tokens consumed (input + output). null: not observable from swarm-run in Phase 9a.",
+      "minimum": 0
+    },
+    "cost": {
+      "type": ["number", "null"],
+      "description": "Estimated cost in USD. null: not observable from swarm-run in Phase 9a.",
+      "minimum": 0
+    },
+    "wall_clock_seconds": {
+      "type": ["number", "null"],
+      "description": "Wall-clock elapsed seconds from start to EXIT trap. null if timing fails.",
+      "minimum": 0
+    },
+    "tool_call_count": {
+      "type": ["integer", "null"],
+      "description": "Number of tool calls made by the backend. null: not observable from swarm-run in Phase 9a.",
+      "minimum": 0
+    },
+    "cap_hit": {
+      "type": ["boolean", "null"],
+      "description": "True if a rate-limit or cap was hit during the run. null: not observable in Phase 9a."
+    },
+    "schema_ok": {
+      "type": "boolean",
+      "description": "True = writer attests the row conforms to this schema. Phase 10a swarm-validate will overwrite with validator-confirmed value."
+    },
+    "exit_code": {
+      "type": "integer",
+      "description": "Exit code of the backend invocation (BACKEND_RC). 0 = success.",
+      "minimum": 0,
+      "maximum": 255
+    }
+  }
+}

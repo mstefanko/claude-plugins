@@ -145,6 +145,7 @@ PRIOR_RUN="none"
 [[ "$MODE" == "fallback" ]] && PRIOR_RUN="see prior Backend Run blocks above"
 
 STARTED="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+T_START_EPOCH="$(date +%s)"
 
 # Dependency / thread context from beads.
 DEP_CTX=""
@@ -169,6 +170,7 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   echo "---- dry-run: would invoke $BACKEND with model=$MODEL effort=$EFFORT"
   echo "---- dry-run: prompt bytes=$(printf '%s' "$PROMPT" | wc -c | tr -d ' ')"
   echo "---- dry-run: would append Backend Run note to $ISSUE (mode=$MODE trigger=$TRIGGER)"
+  echo "---- dry-run: would append telemetry row to \${CLAUDE_PLUGIN_DATA}/telemetry/runs.jsonl (telemetry write skipped in dry-run)"
   exit 0
 fi
 
@@ -178,7 +180,102 @@ bd update "$ISSUE" --claim >/dev/null 2>&1 || die "bd update $ISSUE --claim fail
 
 # Invoke backend, capture stdout.
 OUT_FILE="$(mktemp -t swarm-run-out.XXXXXX)"
-trap 'rm -f "$OUT_FILE"' EXIT
+
+# ---------------------------------------------------------------------------
+# Telemetry EXIT trap — appends one row to runs.jsonl on every exit path.
+# Fail-open: ledger errors never change the pipeline exit code.
+# ---------------------------------------------------------------------------
+_swarm_telemetry_write() {
+  local _final_rc="$1"
+  local _ended _wall _hash _run_id _row _tel_dir _base_sha _head_sha _diff_bytes _repo
+
+  # Guard: CLAUDE_PLUGIN_DATA must be set and non-empty.
+  if [[ -z "${CLAUDE_PLUGIN_DATA:-}" ]]; then
+    echo "swarm-run: CLAUDE_PLUGIN_DATA unset — skipping telemetry write" >&2
+    return 0
+  fi
+
+  _tel_dir="${CLAUDE_PLUGIN_DATA}/telemetry"
+
+  {
+    _ended="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    _wall=$(( $(date +%s) - T_START_EPOCH ))
+
+    # Prompt bundle hash — fail silently to null if hash-bundle.sh is missing or fails.
+    _lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_lib"
+    if [[ -x "${_lib_dir}/hash-bundle.sh" ]]; then
+      _hash="$("${_lib_dir}/hash-bundle.sh" "$ROLE" "$BACKEND" 2>/dev/null || true)"
+    else
+      _hash=""
+    fi
+    [[ -n "$_hash" ]] || _hash="null"
+
+    # Git metadata — best-effort, null on failure.
+    _base_sha="$(git -C "${PWD}" rev-parse HEAD 2>/dev/null || true)"
+    _head_sha="$_base_sha"  # same: swarm-run does not commit; writer worktree may
+    _repo="$(git -C "${PWD}" remote get-url origin 2>/dev/null || true)"
+    _diff_bytes="$(git -C "${PWD}" diff --stat HEAD 2>/dev/null | wc -c | tr -d ' ' || true)"
+
+    # ULID approximation: timestamp hex (8 chars) + random (18 chars).
+    _run_id="$(printf '%08X%018d' "$(date +%s)" "$(( RANDOM * RANDOM * RANDOM ))" 2>/dev/null || echo "FALLBACK0000000000000000000")"
+
+    mkdir -p "$_tel_dir"
+
+    # Build row via jq. Unobservable fields emitted as null.
+    _row="$(jq -n \
+      --arg run_id       "$_run_id" \
+      --arg ts_start     "$STARTED" \
+      --arg ts_end       "$_ended" \
+      --arg backend      "$BACKEND" \
+      --arg model        "$MODEL" \
+      --arg effort       "$EFFORT" \
+      --argjson hash     "$(if [[ "$_hash" == "null" ]]; then echo "null"; else printf '"%s"' "$_hash"; fi)" \
+      --argjson exit_code "$_final_rc" \
+      --argjson wall     "$_wall" \
+      --arg role         "$ROLE" \
+      --arg issue_id     "$ISSUE" \
+      --argjson repo     "$(if [[ -n "$_repo" ]]; then printf '%s' "$_repo" | jq -Rs .; else echo "null"; fi)" \
+      --argjson base_sha "$(if [[ -n "$_base_sha" ]]; then printf '"%s"' "$_base_sha"; else echo "null"; fi)" \
+      --argjson head_sha "$(if [[ -n "$_head_sha" ]]; then printf '"%s"' "$_head_sha"; else echo "null"; fi)" \
+      '{
+        run_id:             $run_id,
+        timestamp_start:    $ts_start,
+        timestamp_end:      $ts_end,
+        backend:            $backend,
+        model:              $model,
+        effort:             $effort,
+        prompt_bundle_hash: $hash,
+        config_hash:        null,
+        role:               $role,
+        phase_kind:         null,
+        phase_complexity:   null,
+        risk_tags:          null,
+        issue_id:           $issue_id,
+        repo:               $repo,
+        base_sha:           $base_sha,
+        head_sha:           $head_sha,
+        diff_size_bytes:    null,
+        tokens:             null,
+        cost:               null,
+        wall_clock_seconds: $wall,
+        tool_call_count:    null,
+        cap_hit:            null,
+        schema_ok:          true,
+        exit_code:          $exit_code
+      }')"
+    printf '%s\n' "$_row" >> "${_tel_dir}/runs.jsonl"
+  } || { echo "swarm-run: telemetry write failed (non-fatal)" >&2; true; }
+}
+
+_swarm_exit_handler() {
+  local _rc="$?"
+  rm -f "$OUT_FILE"
+  if [[ "${DRY_RUN:-0}" -ne 1 ]]; then
+    _swarm_telemetry_write "$_rc"
+  fi
+  exit "$_rc"
+}
+trap '_swarm_exit_handler' EXIT
 
 if [[ "$BACKEND" == "codex" ]]; then
   if ! printf '%s' "$PROMPT" | codex exec --json -m "$MODEL" -c model_reasoning_effort="\"$EFFORT\"" --skip-git-repo-check -C "$PWD" >"$OUT_FILE" 2>&1; then

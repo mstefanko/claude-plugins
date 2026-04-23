@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/07/schema#",
+  "$id": "https://mstefanko-plugins/swarm-do/telemetry/outcomes.schema.json#v1",
+  "title": "swarm-do telemetry outcome record",
+  "description": "One row per pipeline phase completion (writer+review pair). v1 frozen 2026-04-23. Write path implemented in a later phase.",
+  "type": "object",
+  "required": [
+    "outcome_id",
+    "issue_id",
+    "timestamp",
+    "writer_run_id",
+    "review_run_id",
+    "verdict",
+    "schema_ok"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "outcome_id": {
+      "type": "string",
+      "description": "ULID unique outcome identifier",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "issue_id": {
+      "type": "string",
+      "description": "Beads issue identifier"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO-8601 UTC timestamp when the outcome was recorded"
+    },
+    "writer_run_id": {
+      "type": ["string", "null"],
+      "description": "ULID of the agent-writer run that produced the implementation. null if not available.",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "review_run_id": {
+      "type": ["string", "null"],
+      "description": "ULID of the agent-review run that reviewed the implementation. null if not available.",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["APPROVED", "APPROVED_WITH_NOTES", "CHANGES_REQUESTED", "BLOCKED", "ESCALATED"],
+      "description": "Final review verdict for the phase"
+    },
+    "finding_count": {
+      "type": ["integer", "null"],
+      "description": "Number of findings.jsonl rows linked to this outcome. null if not computed.",
+      "minimum": 0
+    },
+    "critical_finding_count": {
+      "type": ["integer", "null"],
+      "description": "Number of critical-severity findings. null if not computed.",
+      "minimum": 0
+    },
+    "schema_ok": {
+      "type": "boolean",
+      "description": "True = writer attests the row conforms to this schema."
+    }
+  }
+}
