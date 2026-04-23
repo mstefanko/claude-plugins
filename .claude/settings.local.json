@@ -6,7 +6,19 @@
       "mcp__plugin_context-mode_context-mode__ctx_execute",
       "mcp__plugin_context-mode_context-mode__ctx_execute_file",
       "mcp__plugin_context-mode_context-mode__ctx_fetch_and_index",
-      "mcp__plugin_claude-mem_mcp-search__get_observations"
+      "mcp__plugin_claude-mem_mcp-search__get_observations",
+      "mcp__plugin_context-mode_context-mode__ctx_index",
+      "Bash(mkdir:*)",
+      "Bash(chmod:*)",
+      "Bash(shellcheck:*)",
+      "Bash(git:*)",
+      "Bash(jq:*)",
+      "Bash(bd:*)",
+      "Bash(echo:*)",
+      "Bash(cat:*)",
+      "Write",
+      "Edit"
     ]
-  }
+  },
+  "prompt": "Before starting any work, run 'bd onboard' to understand the current project state and available issues."
 }
