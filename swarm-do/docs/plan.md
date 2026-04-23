@@ -122,6 +122,7 @@ These invariants are not refactors to execute now; they are rules to enforce goi
 - **M1 manual fallback runner — SHIPPED.** Installed at `~/.swarm/bin/{swarm-run,swarm-claude,swarm-gpt,swarm-gpt-review}`. Role bundles at `~/.swarm/roles/agent-{writer,review,spec-review,codex-review}/{shared,claude,codex}.md`. Beads preflight hard-stop embedded in the runner. See `~/.swarm/README.md`.
 - **Phase 0 cross-model review harness — SHIPPED but NEEDS CLEANUP BEFORE FIRST RUN.** `~/.swarm/bin/codex-review-phase`, `~/.swarm/phase0/result-schema.json`, `~/.swarm/phase0/rubric-template.md` exist. Review (2026-04-22) confirmed six measurement-integrity issues in the harness — see **§2.0 — Phase 0 pre-flight**. Do **not** start the 12-15 phase cohort until those are fixed; current harness would contaminate blinded adjudication.
 - **Phase 9a (append-only ledgers) — SHIPPED (2026-04-23, PR #1, merged at `ff14fc8`).** Four v1-frozen JSONSchemas under `swarm-do/schemas/telemetry/`; `bin/_lib/hash-bundle.sh` (portable sha256 over `shared.md + <backend>.md`); `bin/swarm-run` EXIT-trap appends one `runs.jsonl` row per invocation with 31 required fields, fail-open. `run_id` uses a relaxed pattern (`^[0-9A-Z_-]{1,64}$`) pending real-ULID upgrade in Phase 10a (follow-up bead `mstefanko-plugins-utu`). Two additional follow-ups filed: `mstefanko-plugins-1zv` (wire the already-computed `_diff_bytes`), `mstefanko-plugins-rgb` (`timestamp_end.type` → `["string","null"]`). Ledger ready for 9b consumers.
+- **Phase 9b (findings extractor) — SHIPPED (2026-04-23, commit `6b62467`).** `bin/extract-phase.sh` reads `agent-codex-review` findings.json and appends one `findings.jsonl` row per finding. `bin/_lib/normalize-path.sh` strips worktree prefix so main-repo and worktree paths hash identically. `findings.v2.schema.json` adds `stable_finding_hash_v1`, `duplicate_cluster_id` (always null on append), and `short_summary`; relaxes `run_id` pattern to match runs.v1. v1 schema is frozen and untouched. Claude reviewer format deferred to 9b-claude. `swarm-run` wires the extractor after the codex step with `|| true` fail-open guard.
 - **Phase 1 (Codex review in swarm)** — blocked on Phase 0 decision.
 - **Phase 2 (Pattern 5 / 6)** — not started.
 - **Phase 2.5 (manual fallback)** — covered by M1; no further work here until the manual track fatigue signal fires.
@@ -1842,7 +1843,7 @@ Implements the continuous-measurement architecture from §1.9. Ships in staged o
 - Do NOT embed schema inline in the bash runner. JSONSchema lives under `schemas/telemetry/` and is validated by a separate helper — schema drift between writer and validator is how ledgers silently corrupt.
 - Do NOT capture free-form strings. Every field in `runs.jsonl` is enumerated above; adding a field requires a schema bump AND an ADR note, never just a code edit.
 
-### Phase 9b: Findings extractor (complexity: moderate, kind: feature)
+### Phase 9b: Findings extractor (complexity: moderate, kind: feature) — **SHIPPED 2026-04-23 (commit `6b62467`)**
 
 **Objective:** Extract one `findings.jsonl` row per reviewer finding, with a stable dedup hash. Depends on 9a ledgers.
 

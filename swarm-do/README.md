@@ -72,8 +72,10 @@ swarm-do/
 │   ├── _lib/
 │   │   ├── paths.sh              Plugin-root resolution (source from runners)
 │   │   ├── beads-preflight.sh    Shared bd_preflight_or_die helper
-│   │   └── hash-bundle.sh        SHA-256 of role prompt bundle (interface: hash-bundle.sh <role> <backend> → 64-char hex)
+│   │   ├── hash-bundle.sh        SHA-256 of role prompt bundle (interface: hash-bundle.sh <role> <backend> → 64-char hex)
+│   │   └── normalize-path.sh     Canonical repo-relative path for stable hash input; strips WORKTREE_ROOT then REPO_ROOT prefix
 │   ├── swarm-run                 M1 manual runner (one role, one beads issue)
+│   ├── extract-phase.sh          Findings extractor — reads codex findings.json, appends findings.jsonl rows (Phase 9b)
 │   ├── swarm-gpt                 alias → swarm-run --backend codex
 │   ├── swarm-claude              alias → swarm-run --backend claude
 │   ├── swarm-gpt-review          alias → swarm-run --backend codex --role agent-codex-review

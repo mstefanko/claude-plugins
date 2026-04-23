@@ -31,7 +31,21 @@ Reviewer agents emit structured findings (type errors, boundary violations, secu
 issues, etc.). Each finding references its parent run via `run_id` and carries a
 `stable_finding_hash_v1` for deduplication across runs.
 
-Schema: `findings.schema.json#v1`
+**Write path (Phase 9b):** `bin/extract-phase.sh` reads `agent-codex-review` findings.json
+and appends one row per finding. The extractor is fail-open (`exit 0` on any error)
+and is wired into `swarm-run` after the codex step with `|| true`. Claude reviewer
+format is undefined and deferred (9b-claude). Non-codex roles are skipped with a
+logged warning.
+
+**Stable hash algorithm (`stable_finding_hash_v1`):**
+`sha256("{file_normalized}|{category_class}|{floor(line_start/10)}|{short_summary}")`
+where `file_normalized` is produced by `bin/_lib/normalize-path.sh` (strips worktree
+prefix so main-repo and worktree paths hash identically). `duplicate_cluster_id` is
+always null on append — stamped by the Phase 9e indexer post-hoc.
+
+Schema: `findings.schema.json#v1` (frozen) — for new rows written by the Phase 9b
+extractor, see `findings.v2.schema.json#v2` which adds `stable_finding_hash_v1`,
+`duplicate_cluster_id`, and `short_summary`, and relaxes `run_id` to match runs.v1.
 
 ### `outcomes.jsonl` — append-only, one row per observed maintainer action
 
@@ -136,4 +150,6 @@ under the relaxed pattern; the indexer will tag non-ULID rows for backfill.
 - `docs/plan.md §1.9` — two-tier storage architecture (JSONL truth + SQLite derived index)
 - `docs/plan.md §1.10` — preset/pipeline registry and its telemetry integration point
 - `bin/_lib/hash-bundle.sh` — produces the `prompt_bundle_hash` field
-- `bin/swarm-run` — the only writer to `runs.jsonl` (EXIT trap, fail-open guard)
+- `bin/_lib/normalize-path.sh` — produces `file_normalized` for `stable_finding_hash_v1` input
+- `bin/swarm-run` — writer to `runs.jsonl` (EXIT trap, fail-open guard); wires `extract-phase.sh` after codex step
+- `bin/extract-phase.sh` — writer to `findings.jsonl` (codex-only; fail-open; Phase 9b)
