@@ -181,6 +181,11 @@ bd update "$ISSUE" --claim >/dev/null 2>&1 || die "bd update $ISSUE --claim fail
 # Invoke backend, capture stdout.
 OUT_FILE="$(mktemp -t swarm-run-out.XXXXXX)"
 
+# run_id: timestamp-ms hex (12 chars) + openssl entropy hex (16 chars) = 28 uppercase hex chars.
+# Generated at script scope so extract-phase.sh and _swarm_telemetry_write share the same run_id.
+# Matches relaxed schema pattern ^[0-9A-Z_-]{1,64}$. Phase 10a will upgrade to strict Crockford ULID.
+RUN_ID="$(printf '%012X%s' "$(date +%s%3N 2>/dev/null || date +%s)000" "$(openssl rand -hex 8 2>/dev/null | tr 'a-f' 'A-F' || printf '%016X' "$(( RANDOM * RANDOM ))")" 2>/dev/null || echo "FALLBACK-$(date +%s)")"
+
 # ---------------------------------------------------------------------------
 # Telemetry EXIT trap — appends one row to runs.jsonl on every exit path.
 # Fail-open: ledger errors never change the pipeline exit code.
@@ -216,9 +221,8 @@ _swarm_telemetry_write() {
     _repo="$(git -C "${PWD}" remote get-url origin 2>/dev/null || true)"
     _diff_bytes="$(git -C "${PWD}" diff --stat HEAD 2>/dev/null | wc -c | tr -d ' ' || true)"
 
-    # run_id: timestamp-ms hex (12 chars) + openssl entropy hex (16 chars) = 28 uppercase hex chars.
-    # Matches relaxed schema pattern ^[0-9A-Z_-]{1,64}$. Phase 10a will upgrade to strict Crockford ULID.
-    _run_id="$(printf '%012X%s' "$(date +%s%3N 2>/dev/null || date +%s)000" "$(openssl rand -hex 8 2>/dev/null | tr 'a-f' 'A-F' || printf '%016X' "$(( RANDOM * RANDOM ))")" 2>/dev/null || echo "FALLBACK-$(date +%s)")"
+    # run_id: use the script-scope RUN_ID so findings.jsonl and runs.jsonl share the same run_id.
+    _run_id="$RUN_ID"
 
     mkdir -p "$_tel_dir"
 
@@ -308,6 +312,12 @@ else
 fi
 
 BACKEND_OUT="$(cat "$OUT_FILE")"
+
+# Phase 9b: extract findings into findings.jsonl (fail-open, non-blocking).
+_extractor="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/extract-phase.sh"
+if [[ -x "$_extractor" && "$ROLE" == "agent-codex-review" && -f "$OUT_FILE" ]]; then
+  "$_extractor" "$OUT_FILE" "$RUN_ID" "$ROLE" "${ISSUE:-unknown}" 2>&1 | sed 's/^/extract-phase: /' >&2 || true
+fi
 
 # Build and append Backend Run note block.
 BLOCK="$(cat <<EOF
