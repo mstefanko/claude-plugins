@@ -216,8 +216,9 @@ _swarm_telemetry_write() {
     _repo="$(git -C "${PWD}" remote get-url origin 2>/dev/null || true)"
     _diff_bytes="$(git -C "${PWD}" diff --stat HEAD 2>/dev/null | wc -c | tr -d ' ' || true)"
 
-    # ULID approximation: timestamp hex (8 chars) + random (18 chars).
-    _run_id="$(printf '%08X%018d' "$(date +%s)" "$(( RANDOM * RANDOM * RANDOM ))" 2>/dev/null || echo "FALLBACK0000000000000000000")"
+    # run_id: timestamp-ms hex (12 chars) + openssl entropy hex (16 chars) = 28 uppercase hex chars.
+    # Matches relaxed schema pattern ^[0-9A-Z_-]{1,64}$. Phase 10a will upgrade to strict Crockford ULID.
+    _run_id="$(printf '%012X%s' "$(date +%s%3N 2>/dev/null || date +%s)000" "$(openssl rand -hex 8 2>/dev/null | tr 'a-f' 'A-F' || printf '%016X' "$(( RANDOM * RANDOM ))")" 2>/dev/null || echo "FALLBACK-$(date +%s)")"
 
     mkdir -p "$_tel_dir"
 
@@ -255,13 +256,20 @@ _swarm_telemetry_write() {
         base_sha:           $base_sha,
         head_sha:           $head_sha,
         diff_size_bytes:    null,
-        tokens:             null,
-        cost:               null,
+        input_tokens:       null,
+        cached_input_tokens: null,
+        output_tokens:      null,
+        estimated_cost_usd: null,
         wall_clock_seconds: $wall,
         tool_call_count:    null,
         cap_hit:            null,
+        budget_breach:      null,
         schema_ok:          true,
-        exit_code:          $exit_code
+        exit_code:          $exit_code,
+        setting_source:     null,
+        writer_status:      null,
+        review_verdict:     null,
+        last_429_at:        null
       }')"
     printf '%s\n' "$_row" >> "${_tel_dir}/runs.jsonl"
   } || { echo "swarm-run: telemetry write failed (non-fatal)" >&2; true; }
