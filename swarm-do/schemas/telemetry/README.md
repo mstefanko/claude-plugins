@@ -47,13 +47,30 @@ Schema: `findings.schema.json#v1` (frozen) — for new rows written by the Phase
 extractor, see `findings.v2.schema.json#v2` which adds `stable_finding_hash_v1`,
 `duplicate_cluster_id`, and `short_summary`, and relaxes `run_id` to match runs.v1.
 
-### `outcomes.jsonl` — append-only, one row per observed maintainer action
+### `outcomes.jsonl` — append-only, one row per **phase verdict** (Phase 9a ledger — frozen)
 
-Records what happened to a finding after the run: was it fixed, acknowledged,
-closed as won't-fix? Populated by the nightly enricher (Phase 9d), not by `swarm-run`
-directly.
+Records the phase-level verdict for a swarm run: did the phase pass, fail, or require
+re-run? Written by the Phase 9a telemetry path. **This ledger is frozen** — its schema
+and write path are stable from Phase 9a and are not extended by later phases.
 
 Schema: `outcomes.schema.json#v1`
+
+### `finding_outcomes.jsonl` — append-only, one row per **per-finding maintainer action** (Phase 9d ledger)
+
+Records what happened to an individual finding after the run: hotfix within 14 days,
+follow-up issue/PR, acknowledged, closed as won't-fix, etc. This is a **separate ledger**
+from `outcomes.jsonl` — do not confuse the two:
+
+| Ledger | Granularity | Written by | Phase |
+|---|---|---|---|
+| `outcomes.jsonl` | One row per phase verdict | Phase 9a path | 9a (frozen) |
+| `finding_outcomes.jsonl` | One row per per-finding maintainer action | `swarm-telemetry join-outcomes` | 9d |
+
+Populated by `bin/swarm-telemetry join-outcomes` (manual invocation). The joiner uses a
+±10 line window for hotfix correlation and a 14-day window measured from the finding
+timestamp (PR merge timestamp via `gh api` fallback). Supports `--dry-run`.
+
+Schema: `finding_outcomes.schema.json#v1`
 
 ### `adjudications.jsonl` — append-only, blinded verdict rows
 
@@ -153,4 +170,4 @@ under the relaxed pattern; the indexer will tag non-ULID rows for backfill.
 - `bin/_lib/normalize-path.sh` — produces `file_normalized` for `stable_finding_hash_v1` input
 - `bin/swarm-run` — writer to `runs.jsonl` (EXIT trap, fail-open guard); wires `extract-phase.sh` after codex step
 - `bin/extract-phase.sh` — writer to `findings.jsonl` (codex-only; fail-open; Phase 9b)
-- `bin/swarm-telemetry` — read-only reporter (Phase 9c); `query`, `report`, `dump`, `validate` subcommands; see `swarm-do/README.md §bin/swarm-telemetry` for full usage
+- `bin/swarm-telemetry` — reporter and write utility (Phase 9c read-only; Phase 9d adds `join-outcomes`); `query`, `report`, `dump`, `validate`, `join-outcomes` subcommands; see `swarm-do/README.md §bin/swarm-telemetry` for full usage

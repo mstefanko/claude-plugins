@@ -91,13 +91,14 @@ swarm-do/
 
 ## bin/swarm-telemetry
 
-Read-only reporter for the telemetry ledgers. Shipped in Phase 9c. No write subcommands — those come in 9d/9e/9g.
+Reporter and write utility for the telemetry ledgers. Read-only subcommands shipped in Phase 9c; `join-outcomes` write subcommand shipped in Phase 9d.
 
 ```
 swarm-telemetry query <sql>
 swarm-telemetry report [--since Nd] [--role R] [--bucket K]
 swarm-telemetry dump <ledger>
 swarm-telemetry validate [<ledger>]
+swarm-telemetry join-outcomes [--since Nd] [--dry-run]
 ```
 
 **Subcommands:**
@@ -108,6 +109,7 @@ swarm-telemetry validate [<ledger>]
 | `report` | Emits a stratified markdown report from `runs.jsonl`. Stratifies by `role`, `complexity`, `phase_kind`, or `risk_tag` (controlled by `--bucket`). **Never emits global means** — averaging `agent-docs` latency next to `agent-analysis` latency is the exact measurement bias this tool exists to prevent. Accepts `--since Nd` (last N days) and `--role R` filters. |
 | `dump <ledger>` | Pretty-prints one ledger (`runs`, `findings`, `outcomes`, `adjudications`) as a JSON array via `jq -s .`. Returns `[]` for absent or empty ledgers. |
 | `validate` | Parses every row of every ledger with `jq` and checks required fields against the per-schema list. Exits 1 if any row fails; exits 0 if all rows pass (absent/empty ledgers are skipped with a warning). |
+| `join-outcomes` | **(Phase 9d — write subcommand)** Correlates findings with post-merge maintainer behavior and appends rows to `finding_outcomes.jsonl`. Scans merged PRs via `gh api` (PR merge timestamp, falling back to `git log` finding timestamp). For each finding, checks whether any commit within 14 days touched the same file within a ±10 line window; if so, appends a `hotfix_within_14d` outcome row. Accepts `--since Nd` (default 30d) and `--dry-run` (prints what would be written without touching the ledger). Idempotent: re-running the same window produces no duplicate rows. **Manual invocation only** — no cron wiring until output proves useful. |
 
 **Environment:**
 

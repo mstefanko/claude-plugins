@@ -1881,7 +1881,7 @@ Implements the continuous-measurement architecture from §1.9. Ships in staged o
 - Do NOT emit global means. Averaging `agent-docs` time next to `agent-analysis` time is the exact bias this stratification exists to prevent.
 - Do NOT add write subcommands in 9c. Writes (rebuild-index, join-outcomes) belong in 9d/9e; keeping 9c read-only preserves the fail-open guarantee.
 
-### Phase 9d: Outcome-join job (complexity: moderate, kind: feature)
+### Phase 9d: Outcome-join job (complexity: moderate, kind: feature) — **SHIPPED 2026-04-23 (commit `1fc3f5e`)**
 
 **Objective:** Correlate reviewer findings with post-merge maintainer behavior (hotfix within 14d, follow-up issue, etc.) to produce `outcomes.jsonl`.
 
