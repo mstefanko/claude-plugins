@@ -71,7 +71,8 @@ swarm-do/
 ├── bin/
 │   ├── _lib/
 │   │   ├── paths.sh              Plugin-root resolution (source from runners)
-│   │   └── beads-preflight.sh    Shared bd_preflight_or_die helper
+│   │   ├── beads-preflight.sh    Shared bd_preflight_or_die helper
+│   │   └── hash-bundle.sh        SHA-256 of role prompt bundle (interface: hash-bundle.sh <role> <backend> → 64-char hex)
 │   ├── swarm-run                 M1 manual runner (one role, one beads issue)
 │   ├── swarm-gpt                 alias → swarm-run --backend codex
 │   ├── swarm-claude              alias → swarm-run --backend claude
@@ -79,6 +80,7 @@ swarm-do/
 │   ├── codex-review-phase        Phase 0 experiment harness (not wired into /swarm-do:do)
 │   └── load-role.sh              emit <plugin>/agents/agent-<role>.md for prompt injection
 ├── roles/agent-<role>/           Prompt bundles (shared.md + claude.md + codex.md overlays)
+├── schemas/telemetry/            JSON Schema v1 ledger definitions (runs, findings, outcomes, adjudications) — see schemas/telemetry/README.md
 ├── phase0/                       Codex cross-model review experiment artifacts
 └── docs/provenance/              Audit trail for the claude-mem unfork
 ```
