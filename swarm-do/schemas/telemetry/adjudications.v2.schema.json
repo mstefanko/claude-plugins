@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/07/schema#",
+  "$id": "https://mstefanko-plugins/swarm-do/telemetry/adjudications.schema.json#v2",
+  "title": "swarm-do telemetry adjudication record v2",
+  "description": "One row per human or judge-agent adjudication of a disagreement. v2 adds rubric_version and blind_batch_id as required fields for stratified sampling. v1 is frozen; v2 is the new default write path.",
+  "type": "object",
+  "required": [
+    "adjudication_id",
+    "outcome_id",
+    "issue_id",
+    "timestamp",
+    "adjudicator",
+    "decision",
+    "rubric_version",
+    "blind_batch_id",
+    "schema_ok"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "adjudication_id": {
+      "type": "string",
+      "description": "ULID unique adjudication identifier",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "outcome_id": {
+      "type": "string",
+      "description": "ULID of the parent outcomes.jsonl row",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "issue_id": {
+      "type": "string",
+      "description": "Beads issue identifier"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO-8601 UTC timestamp when the adjudication was recorded"
+    },
+    "adjudicator": {
+      "type": "string",
+      "enum": ["human", "agent-analysis-judge", "agent-writer-judge"],
+      "description": "Entity that performed the adjudication"
+    },
+    "decision": {
+      "type": "string",
+      "enum": ["ACCEPT_WRITER", "ACCEPT_REVIEWER", "SPLIT", "ESCALATE"],
+      "description": "Adjudication decision"
+    },
+    "rubric_version": {
+      "type": "string",
+      "description": "Version identifier of the adjudication rubric used, pinned from swarm-do/rubrics/v*.md at sample generation time. Format: e.g. '1', '2', etc."
+    },
+    "blind_batch_id": {
+      "type": "string",
+      "description": "Identifier of the stratified sampling batch. Used to group adjudications from a single run of sample-for-adjudication."
+    },
+    "rationale": {
+      "type": ["string", "null"],
+      "description": "Free-text rationale for the decision. null if not provided."
+    },
+    "overridden_finding_ids": {
+      "type": ["array", "null"],
+      "items": {
+        "type": "string",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "description": "ULIDs of findings.jsonl rows overridden by this adjudication. null if none."
+    },
+    "schema_ok": {
+      "type": "boolean",
+      "description": "True = writer attests the row conforms to this schema."
+    }
+  }
+}
