@@ -22,20 +22,27 @@
     "base_sha",
     "head_sha",
     "diff_size_bytes",
-    "tokens",
-    "cost",
+    "input_tokens",
+    "cached_input_tokens",
+    "output_tokens",
+    "estimated_cost_usd",
     "wall_clock_seconds",
     "tool_call_count",
     "cap_hit",
+    "budget_breach",
     "schema_ok",
-    "exit_code"
+    "exit_code",
+    "setting_source",
+    "writer_status",
+    "review_verdict",
+    "last_429_at"
   ],
   "additionalProperties": false,
   "properties": {
     "run_id": {
       "type": "string",
-      "description": "ULID unique run identifier",
-      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      "description": "Unique run identifier. Preferred format is a 26-character Crockford base32 ULID (^[0-9A-HJKMNP-TV-Z]{26}$). Pattern is intentionally relaxed here to accept the bash generator output (timestamp-hex + openssl entropy), which uses uppercase hex + digits but is not guaranteed to avoid ULID-excluded chars. Phase 10a will enforce strict ULID generation. See schema revision note: 2026-04-23.",
+      "pattern": "^[0-9A-Z_-]{1,64}$"
     },
     "timestamp_start": {
       "type": "string",
@@ -127,12 +134,22 @@
       "description": "Byte count of git diff from base_sha to head_sha. null if not determinable.",
       "minimum": 0
     },
-    "tokens": {
+    "input_tokens": {
       "type": ["integer", "null"],
-      "description": "Total tokens consumed (input + output). null: not observable from swarm-run in Phase 9a.",
+      "description": "Input (prompt) tokens consumed. null: not observable from swarm-run in Phase 9a.",
       "minimum": 0
     },
-    "cost": {
+    "cached_input_tokens": {
+      "type": ["integer", "null"],
+      "description": "Cached input tokens (prompt cache hits). null: not observable from swarm-run in Phase 9a.",
+      "minimum": 0
+    },
+    "output_tokens": {
+      "type": ["integer", "null"],
+      "description": "Output (completion) tokens consumed. null: not observable from swarm-run in Phase 9a.",
+      "minimum": 0
+    },
+    "estimated_cost_usd": {
       "type": ["number", "null"],
       "description": "Estimated cost in USD. null: not observable from swarm-run in Phase 9a.",
       "minimum": 0
@@ -150,6 +167,30 @@
     "cap_hit": {
       "type": ["boolean", "null"],
       "description": "True if a rate-limit or cap was hit during the run. null: not observable in Phase 9a."
+    },
+    "budget_breach": {
+      "type": ["boolean", "null"],
+      "description": "True if the run exceeded its token/cost budget. null: not observable in Phase 9a."
+    },
+    "setting_source": {
+      "type": ["string", "null"],
+      "enum": ["plugin-config", "operator-override", "quota-bias", null],
+      "description": "Origin of the active settings controlling this run. null: not determinable in Phase 9a."
+    },
+    "writer_status": {
+      "type": ["string", "null"],
+      "enum": ["DONE", "DONE_WITH_CONCERNS", "BLOCKED", "NEEDS_CONTEXT", null],
+      "description": "Self-reported terminal status emitted by the agent-writer role. null for non-writer roles or when not parsed."
+    },
+    "review_verdict": {
+      "type": ["string", "null"],
+      "enum": ["APPROVED", "SPEC_MISMATCH", "NEEDS_CHANGES", null],
+      "description": "Verdict emitted by spec-review or agent-review roles. null for non-review roles or when not parsed."
+    },
+    "last_429_at": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "ISO-8601 UTC timestamp of the most recent 429 (rate-limit) response during this run. null if no 429 was observed."
     },
     "schema_ok": {
       "type": "boolean",
