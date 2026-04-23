@@ -153,3 +153,4 @@ under the relaxed pattern; the indexer will tag non-ULID rows for backfill.
 - `bin/_lib/normalize-path.sh` — produces `file_normalized` for `stable_finding_hash_v1` input
 - `bin/swarm-run` — writer to `runs.jsonl` (EXIT trap, fail-open guard); wires `extract-phase.sh` after codex step
 - `bin/extract-phase.sh` — writer to `findings.jsonl` (codex-only; fail-open; Phase 9b)
+- `bin/swarm-telemetry` — read-only reporter (Phase 9c); `query`, `report`, `dump`, `validate` subcommands; see `swarm-do/README.md §bin/swarm-telemetry` for full usage

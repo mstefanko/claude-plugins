@@ -1863,7 +1863,7 @@ Implements the continuous-measurement architecture from §1.9. Ships in staged o
 - Do NOT stamp `duplicate_cluster_id` on append. Append is single-pass; cluster IDs require a second pass (indexer in 9e).
 - Do NOT change the hash algorithm without bumping `stable_finding_hash_v1` → `_v2`. Silent algorithm changes corrupt the ledger retroactively.
 
-### Phase 9c: `bin/swarm-telemetry` dispatcher — read-only (complexity: moderate, kind: feature)
+### Phase 9c: `bin/swarm-telemetry` dispatcher — read-only (complexity: moderate, kind: feature) — **SHIPPED 2026-04-23 (commit `66a75c3`)**
 
 **Objective:** Ship the read-only reporter so operators can query accumulated data. No write subcommands here — indexer + join-outcomes come in 9d/9e.
 

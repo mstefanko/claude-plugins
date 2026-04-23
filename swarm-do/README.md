@@ -76,6 +76,7 @@ swarm-do/
 │   │   └── normalize-path.sh     Canonical repo-relative path for stable hash input; strips WORKTREE_ROOT then REPO_ROOT prefix
 │   ├── swarm-run                 M1 manual runner (one role, one beads issue)
 │   ├── extract-phase.sh          Findings extractor — reads codex findings.json, appends findings.jsonl rows (Phase 9b)
+│   ├── swarm-telemetry           Read-only reporter for telemetry ledgers (Phase 9c) — see below
 │   ├── swarm-gpt                 alias → swarm-run --backend codex
 │   ├── swarm-claude              alias → swarm-run --backend claude
 │   ├── swarm-gpt-review          alias → swarm-run --backend codex --role agent-codex-review
@@ -83,6 +84,33 @@ swarm-do/
 │   └── load-role.sh              emit <plugin>/agents/agent-<role>.md for prompt injection
 ├── roles/agent-<role>/           Prompt bundles (shared.md + claude.md + codex.md overlays)
 ├── schemas/telemetry/            JSON Schema v1 ledger definitions (runs, findings, outcomes, adjudications) — see schemas/telemetry/README.md
+├── tests/fixtures/               Synthetic ledger data for self-test and dev (generate-synthetic-runs.sh, 66 runs, 35 findings)
 ├── phase0/                       Codex cross-model review experiment artifacts
 └── docs/provenance/              Audit trail for the claude-mem unfork
 ```
+
+## bin/swarm-telemetry
+
+Read-only reporter for the telemetry ledgers. Shipped in Phase 9c. No write subcommands — those come in 9d/9e/9g.
+
+```
+swarm-telemetry query <sql>
+swarm-telemetry report [--since Nd] [--role R] [--bucket K]
+swarm-telemetry dump <ledger>
+swarm-telemetry validate [<ledger>]
+```
+
+**Subcommands:**
+
+| Subcommand | What it does |
+|---|---|
+| `query <sql>` | Loads all four JSONL ledgers into an in-memory SQLite database via `python3` (tables: `runs`, `findings`, `outcomes`, `adjudications`) and executes the given SQL. Useful for ad-hoc exploration. |
+| `report` | Emits a stratified markdown report from `runs.jsonl`. Stratifies by `role`, `complexity`, `phase_kind`, or `risk_tag` (controlled by `--bucket`). **Never emits global means** — averaging `agent-docs` latency next to `agent-analysis` latency is the exact measurement bias this tool exists to prevent. Accepts `--since Nd` (last N days) and `--role R` filters. |
+| `dump <ledger>` | Pretty-prints one ledger (`runs`, `findings`, `outcomes`, `adjudications`) as a JSON array via `jq -s .`. Returns `[]` for absent or empty ledgers. |
+| `validate` | Parses every row of every ledger with `jq` and checks required fields against the per-schema list. Exits 1 if any row fails; exits 0 if all rows pass (absent/empty ledgers are skipped with a warning). |
+
+**Environment:**
+
+`CLAUDE_PLUGIN_DATA` sets the base data directory; telemetry lives at `$CLAUDE_PLUGIN_DATA/telemetry/`. If unset, defaults to `~/.claude/plugin-data/mstefanko-plugins/swarm-do`.
+
+**Self-test:** `swarm-telemetry --test` runs 17 assertions against the synthetic fixtures in `tests/fixtures/` (66 synthetic runs, 35 synthetic findings) using an isolated temp directory. All 17 pass on a clean checkout.
