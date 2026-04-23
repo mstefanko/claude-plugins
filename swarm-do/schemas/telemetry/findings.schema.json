@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/07/schema#",
+  "$id": "https://mstefanko-plugins/swarm-do/telemetry/findings.schema.json#v1",
+  "title": "swarm-do telemetry finding record",
+  "description": "One row per finding surfaced by a swarm review role. v1 frozen 2026-04-23. Write path implemented in a later phase.",
+  "type": "object",
+  "required": [
+    "finding_id",
+    "run_id",
+    "timestamp",
+    "role",
+    "issue_id",
+    "severity",
+    "category",
+    "summary",
+    "schema_ok"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "finding_id": {
+      "type": "string",
+      "description": "ULID unique finding identifier",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "run_id": {
+      "type": "string",
+      "description": "ULID of the parent runs.jsonl row",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO-8601 UTC timestamp when the finding was recorded"
+    },
+    "role": {
+      "type": "string",
+      "enum": [
+        "agent-research",
+        "agent-clarify",
+        "agent-analysis",
+        "agent-debug",
+        "agent-writer",
+        "agent-spec-review",
+        "agent-review",
+        "agent-codex-review",
+        "agent-docs",
+        "agent-code-synthesizer",
+        "agent-code-review",
+        "agent-research-merge",
+        "agent-analysis-judge",
+        "agent-writer-judge"
+      ],
+      "description": "Role that surfaced this finding"
+    },
+    "issue_id": {
+      "type": "string",
+      "description": "Beads issue identifier"
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["critical", "high", "medium", "low", "info"],
+      "description": "Finding severity"
+    },
+    "category": {
+      "type": "string",
+      "description": "Finding category (e.g. correctness, security, performance, style)"
+    },
+    "summary": {
+      "type": "string",
+      "description": "Short human-readable summary of the finding"
+    },
+    "file_path": {
+      "type": ["string", "null"],
+      "description": "Repo-relative file path where the finding applies. null if not file-specific."
+    },
+    "line_start": {
+      "type": ["integer", "null"],
+      "description": "First line number of the affected region. null if not applicable.",
+      "minimum": 1
+    },
+    "line_end": {
+      "type": ["integer", "null"],
+      "description": "Last line number of the affected region. null if not applicable.",
+      "minimum": 1
+    },
+    "schema_ok": {
+      "type": "boolean",
+      "description": "True = writer attests the row conforms to this schema."
+    }
+  }
+}
