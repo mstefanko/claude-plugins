@@ -1,0 +1,19 @@
+{
+  "command": "review",
+  "terminal_state": "PARTIAL_SUCCESS",
+  "provider_success_count": 1,
+  "provider_failure_count": 1,
+  "findings_count": 1,
+  "provider_results": {
+    "claude": {
+      "success": true,
+      "final_error": null,
+      "final_text": "{\"findings\":[{\"severity\":\"high\",\"category\":\"maintainability\",\"title\":\"Plan uses a second source of truth\",\"evidence\":{\"file\":\"plans/example.md\",\"line\":42,\"snippet\":\"checkpoint mirror\"},\"recommendation\":\"Keep BEADS authoritative.\",\"confidence\":0.9}]}"
+    },
+    "codex": {
+      "success": false,
+      "final_error": "normalization_error",
+      "final_text": "Invalid schema for response_format."
+    }
+  }
+}

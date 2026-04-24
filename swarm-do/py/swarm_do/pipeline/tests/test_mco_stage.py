@@ -23,7 +23,7 @@ class McoStageTests(unittest.TestCase):
         command = build_mco_review_command(
             mco_bin="mco",
             repo=Path("/repo"),
-            prompt_file=Path("/tmp/prompt.md"),
+            prompt="Review this repo.",
             providers=["claude", "codex"],
             timeout_seconds=1800,
             task_id="task-1",
@@ -32,6 +32,7 @@ class McoStageTests(unittest.TestCase):
         self.assertEqual(command[:2], ["mco", "review"])
         self.assertIn("--json", command)
         self.assertIn("--strict-contract", command)
+        self.assertEqual(command[command.index("--prompt") + 1], "Review this repo.")
         self.assertIn("--provider-permissions-json", command)
         permissions = json.loads(command[command.index("--provider-permissions-json") + 1])
         self.assertEqual(permissions["claude"]["permission_mode"], "plan")
@@ -88,6 +89,29 @@ class McoStageTests(unittest.TestCase):
         self.assertEqual(result["provider_errors"][0]["provider"], "gemini")
         self.assertEqual(result["provider_errors"][0]["provider_error_class"], "auth")
         self.assertEqual(result["findings"][0]["detected_by"], ["codex"])
+        validate_provider_findings_artifact(result)
+
+    def test_normalizes_real_mco_provider_results_shape(self) -> None:
+        payload = json.loads((FIXTURE_DIR / "mco_review_provider_results.json").read_text(encoding="utf-8"))
+        result = normalize_mco_review_payload(
+            payload,
+            run_id="RUN_MCO",
+            issue_id="issue-123",
+            stage_id="mco-review-spike",
+            selected_providers=["claude", "codex"],
+            source_artifact_path="/tmp/run/mco.stdout.json",
+            timestamp="2026-04-24T00:00:00Z",
+        )
+
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["provider_count"], 2)
+        self.assertEqual(result["provider_errors"][0]["provider"], "codex")
+        self.assertEqual(result["provider_errors"][0]["provider_error_class"], "normalization_error")
+        finding = result["findings"][0]
+        self.assertEqual(finding["detected_by"], ["claude"])
+        self.assertEqual(finding["summary"], "Plan uses a second source of truth")
+        self.assertEqual(finding["file_path"], "plans/example.md")
+        self.assertEqual(finding["line_start"], 42)
         validate_provider_findings_artifact(result)
 
     def test_missing_findings_array_fails_closed(self) -> None:

@@ -111,7 +111,7 @@ def build_mco_review_command(
     *,
     mco_bin: str,
     repo: Path,
-    prompt_file: Path,
+    prompt: str,
     providers: Sequence[str],
     timeout_seconds: int,
     task_id: str | None = None,
@@ -123,8 +123,8 @@ def build_mco_review_command(
         "review",
         "--repo",
         str(repo),
-        "--file",
-        str(prompt_file),
+        "--prompt",
+        prompt,
         "--providers",
         provider_csv,
         "--json",
@@ -162,6 +162,33 @@ def _payload_findings(payload: Mapping[str, Any]) -> list[Any]:
     for candidate in candidates:
         if isinstance(candidate, list):
             return candidate
+    provider_results = payload.get("provider_results")
+    if isinstance(provider_results, Mapping):
+        merged: list[Any] = []
+        for provider, result in provider_results.items():
+            if not isinstance(result, Mapping):
+                continue
+            for key in ("final_text", "output_text"):
+                text = result.get(key)
+                if not isinstance(text, str) or not text.strip():
+                    continue
+                try:
+                    nested = json.loads(text)
+                except json.JSONDecodeError:
+                    continue
+                nested_findings = nested.get("findings") if isinstance(nested, Mapping) else None
+                if not isinstance(nested_findings, list):
+                    continue
+                for finding in nested_findings:
+                    if isinstance(finding, Mapping):
+                        row = dict(finding)
+                        row.setdefault("provider", str(provider))
+                        merged.append(row)
+                    else:
+                        merged.append(finding)
+                break
+        if merged:
+            return merged
     raise McoStageError("MCO JSON did not include a findings array")
 
 
@@ -181,6 +208,9 @@ def _provider_count(payload: Mapping[str, Any], selected_providers: Sequence[str
         return len(providers)
     if isinstance(providers, list):
         return len(providers)
+    provider_results = payload.get("provider_results")
+    if isinstance(provider_results, Mapping):
+        return len(provider_results)
     return len(selected_providers)
 
 
@@ -202,6 +232,20 @@ def _provider_errors(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
         provider_items = [dict({"provider": key}, **value) if isinstance(value, Mapping) else value for key, value in providers.items()]
     elif isinstance(providers, list):
         provider_items = providers
+    provider_results = payload.get("provider_results")
+    if isinstance(provider_results, Mapping):
+        for provider, result in provider_results.items():
+            if not isinstance(result, Mapping):
+                continue
+            if result.get("success") is True:
+                continue
+            errors.append(
+                {
+                    "provider": str(provider),
+                    "provider_error_class": result.get("final_error") or result.get("cancel_reason") or "error",
+                    "message": result.get("final_text") or result.get("parse_reason") or result.get("response_reason"),
+                }
+            )
     for item in provider_items:
         if not isinstance(item, Mapping):
             continue
@@ -258,6 +302,12 @@ def _to_int(value: Any) -> int | None:
 
 def _finding_location(finding: Mapping[str, Any]) -> tuple[str | None, int | None, int | None]:
     file_raw, line_start, line_end = _parse_location(finding.get("location"))
+    evidence = finding.get("evidence")
+    if isinstance(evidence, Mapping):
+        ev_file, ev_start, ev_end = _parse_location(evidence)
+        file_raw = file_raw or ev_file
+        line_start = line_start or ev_start
+        line_end = line_end or ev_end
     if file_raw is None:
         file_raw = finding.get("file_path") or finding.get("file") or finding.get("path")
     if line_start is None:
@@ -425,7 +475,7 @@ def run_stage(args: argparse.Namespace) -> int:
     command = build_mco_review_command(
         mco_bin=args.mco_bin,
         repo=repo,
-        prompt_file=prompt_file,
+        prompt=prompt_file.read_text(encoding="utf-8"),
         providers=providers,
         timeout_seconds=args.timeout_seconds,
         task_id=args.task_id,
@@ -527,7 +577,7 @@ def run_stage(args: argparse.Namespace) -> int:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="swarm-stage-mco")
     parser.add_argument("--repo", required=True, help="repository root to review")
-    parser.add_argument("--prompt-file", required=True, help="prompt file passed to mco review --file")
+    parser.add_argument("--prompt-file", required=True, help="prompt file read by the adapter and passed to mco review --prompt")
     parser.add_argument("--providers", required=True, help="comma-separated MCO providers")
     parser.add_argument("--command", choices=["review"], default="review")
     parser.add_argument("--timeout-seconds", type=int, default=1800)
