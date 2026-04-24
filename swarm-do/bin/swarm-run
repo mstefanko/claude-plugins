@@ -318,7 +318,7 @@ BACKEND_OUT="$(cat "$OUT_FILE")"
 
 # Phase 9b: extract findings into findings.jsonl (fail-open, non-blocking).
 _extractor="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/extract-phase.sh"
-if [[ -x "$_extractor" && "$ROLE" == "agent-codex-review" && -f "$OUT_FILE" ]]; then
+if [[ -x "$_extractor" && ( "$ROLE" == "agent-codex-review" || "$ROLE" == "agent-review" || "$ROLE" == "agent-code-review" ) && -f "$OUT_FILE" ]]; then
   "$_extractor" "$OUT_FILE" "$RUN_ID" "$ROLE" "${ISSUE:-unknown}" 2>&1 | sed 's/^/extract-phase: /' >&2 || true
 fi
 
