@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/07/schema#",
+  "$id": "https://mstefanko-plugins/swarm-do/permissions.schema.json#v1",
+  "title": "swarm-do role permission preset",
+  "type": "object",
+  "required": ["schema_version", "role", "merge_policy", "permissions"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "integer", "enum": [1] },
+    "role": {
+      "type": "string",
+      "enum": ["writer", "spec-review", "review", "research", "clarify", "codex-review"]
+    },
+    "merge_policy": { "type": "string", "enum": ["deny-wins"] },
+    "permissions": {
+      "type": "object",
+      "required": ["allow"],
+      "additionalProperties": false,
+      "properties": {
+        "allow": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        },
+        "deny": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        }
+      }
+    }
+  }
+}

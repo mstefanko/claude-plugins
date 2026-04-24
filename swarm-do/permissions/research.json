@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "role": "research",
+  "merge_policy": "deny-wins",
+  "permissions": {
+    "allow": [
+      "Read",
+      "Bash(bd:*)",
+      "Bash(find:*)",
+      "Bash(rg:*)",
+      "Bash(sed:*)"
+    ],
+    "deny": []
+  }
+}

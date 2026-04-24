@@ -23,6 +23,9 @@ LEDGER_TIMESTAMP_FIELD = {
     "outcomes": "timestamp",
     "adjudications": "timestamp",
     "finding_outcomes": "observed_at",
+    "run_events": "timestamp",
+    "observations": "ts",
+    "knowledge": "timestamp",
 }
 
 # Default retention days per ledger.
@@ -33,6 +36,9 @@ DEFAULT_RETENTION_DAYS = {
     "outcomes": 365,
     "adjudications": 365,
     "finding_outcomes": 180,
+    "run_events": 180,
+    "observations": 90,
+    "knowledge": 365,
 }
 
 

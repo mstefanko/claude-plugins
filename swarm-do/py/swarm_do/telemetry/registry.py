@@ -84,6 +84,24 @@ LEDGERS: Dict[str, Ledger] = {
         schema_path=_TELEMETRY_SCHEMA_DIR / "finding_outcomes.schema.json",
         fallback_order=(_TELEMETRY_SCHEMA_DIR / "finding_outcomes.schema.json",),
     ),
+    "run_events": Ledger(
+        name="run_events",
+        filename="run_events.jsonl",
+        schema_path=_TELEMETRY_SCHEMA_DIR / "run_events.schema.json",
+        fallback_order=(_TELEMETRY_SCHEMA_DIR / "run_events.schema.json",),
+    ),
+    "observations": Ledger(
+        name="observations",
+        filename="observations.jsonl",
+        schema_path=_TELEMETRY_SCHEMA_DIR / "observations.schema.json",
+        fallback_order=(_TELEMETRY_SCHEMA_DIR / "observations.schema.json",),
+    ),
+    "knowledge": Ledger(
+        name="knowledge",
+        filename="knowledge.jsonl",
+        schema_path=_TELEMETRY_SCHEMA_DIR / "knowledge.schema.json",
+        fallback_order=(_TELEMETRY_SCHEMA_DIR / "knowledge.schema.json",),
+    ),
 }
 
 

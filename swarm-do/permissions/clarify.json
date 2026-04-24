@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "role": "clarify",
+  "merge_policy": "deny-wins",
+  "permissions": {
+    "allow": [
+      "Read",
+      "Bash(bd:*)",
+      "Bash(rg:*)"
+    ],
+    "deny": []
+  }
+}

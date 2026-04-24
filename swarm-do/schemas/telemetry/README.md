@@ -15,7 +15,10 @@ The ledger table below is generated — do not hand-edit inside the markers; run
 | adjudications | adjudications.jsonl | `swarm-do/schemas/telemetry/adjudications.v2.schema.json` | 2 |
 | finding_outcomes | finding_outcomes.jsonl | `swarm-do/schemas/telemetry/finding_outcomes.schema.json` | 1 |
 | findings | findings.jsonl | `swarm-do/schemas/telemetry/findings.v2.schema.json` | 2 |
+| knowledge | knowledge.jsonl | `swarm-do/schemas/telemetry/knowledge.schema.json` | 1 |
+| observations | observations.jsonl | `swarm-do/schemas/telemetry/observations.schema.json` | 1 |
 | outcomes | outcomes.jsonl | `swarm-do/schemas/telemetry/outcomes.schema.json` | 1 |
+| run_events | run_events.jsonl | `swarm-do/schemas/telemetry/run_events.schema.json` | 1 |
 | runs | runs.jsonl | `swarm-do/schemas/telemetry/runs.schema.json` | 1 |
 <!-- END: generated-by swarm_do.telemetry.gen docs -->
 
@@ -23,7 +26,7 @@ The ledger table below is generated — do not hand-edit inside the markers; run
 
 ## Ledger types
 
-Four files live under `${CLAUDE_PLUGIN_DATA}/telemetry/`:
+The registered ledger files live under `${CLAUDE_PLUGIN_DATA}/telemetry/`:
 
 ### `runs.jsonl` — one row per `swarm-run` invocation
 
@@ -95,6 +98,31 @@ findings without knowing the backend that produced them and records `TP | FP |
 Ambiguous`. Used to calibrate precision over time.
 
 Schema: `adjudications.schema.json#v1`
+
+### `run_events.jsonl` — append-only orchestration event sidecar
+
+Records checkpoint, resume, handoff, retry, drift, and merge-conflict events
+without changing frozen `runs.v1` rows. Rows are joinable by `run_id`; rows that
+carry `bd_epic_id` also provide the recovery mapping from telemetry run identity
+back to the BEADS epic/run issue.
+
+Schema: `run_events.schema.json#v1`
+
+### `observations.jsonl` — hook/subprocess observation rows
+
+Records low-level tool and stop/exit observations from hooks or subprocess traps
+without launching a second LLM observer session. The schema intentionally allows
+`null` for fields that are not available in every event source.
+
+Schema: `observations.schema.json#v1`
+
+### `knowledge.jsonl` — advisory extracted facts
+
+Records opt-in, adjudicated run-close facts for bounded future priming. This is
+an advisory ledger only; it is not a resume state store and is not required for
+orchestration decisions.
+
+Schema: `knowledge.schema.json#v1`
 
 ### `provider-findings.json` — per-run external provider artifact, not a ledger
 

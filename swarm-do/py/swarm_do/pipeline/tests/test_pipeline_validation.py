@@ -72,6 +72,25 @@ stages:
         with self.assertRaisesRegex(ValueError, "cycle detected"):
             topological_layers(pipeline)
 
+    def test_pipeline_parallelism_is_linted_and_displayed(self) -> None:
+        pipeline = loads(
+            """
+pipeline_version: 1
+name: parallel-ok
+parallelism: 2
+stages:
+  - id: a
+    agents:
+      - role: agent-research
+"""
+        )
+        self.assertEqual(schema_lint_pipeline(pipeline), [])
+
+        bad = dict(pipeline)
+        bad["parallelism"] = 0
+        errors = schema_lint_pipeline(bad)
+        self.assertTrue(any("parallelism must be an integer" in e for e in errors))
+
     def test_bare_model_id_in_models_variant_is_rejected(self) -> None:
         pipeline = loads(
             """

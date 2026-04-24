@@ -15,6 +15,9 @@ class BudgetPreview:
     estimated_tokens: int
     estimated_cost_usd: float
     estimated_wall_clock_seconds: int
+    fan_out_width: int
+    parallelism: int
+    stage_estimates: list[dict[str, Any]]
     exceeds: list[str]
 
 
@@ -47,6 +50,11 @@ def pipeline_agent_count(pipeline: Mapping[str, Any]) -> int:
     return sum(stage_agent_count(stage) for stage in pipeline.get("stages") or [])
 
 
+def pipeline_parallelism(pipeline: Mapping[str, Any]) -> int:
+    value = pipeline.get("parallelism", 1)
+    return value if isinstance(value, int) and value >= 1 else 1
+
+
 def estimate_phase_count(plan_path: str | Path | None) -> int:
     if not plan_path:
         return 1
@@ -63,9 +71,20 @@ def budget_preview(preset: Mapping[str, Any], pipeline: Mapping[str, Any], plan_
     agents_per_phase = pipeline_agent_count(pipeline)
     agents = agents_per_phase * phases
     layers = topological_layers(pipeline)
+    parallelism = pipeline_parallelism(pipeline)
+    fan_out_width = max((stage_agent_count(stage) for stage in pipeline.get("stages") or []), default=0)
+    stage_estimates = [
+        {
+            "stage_id": stage.get("id"),
+            "agents_per_phase": stage_agent_count(stage),
+            "estimated_tokens_per_phase": stage_agent_count(stage) * 18_000,
+        }
+        for stage in pipeline.get("stages") or []
+    ]
     estimated_tokens = agents * 18_000
     estimated_cost = round(agents * 0.18, 4)
-    estimated_wall = phases * max(1, len(layers)) * 240
+    effective_layers = sum(max(1, (len(layer) + parallelism - 1) // parallelism) for layer in layers)
+    estimated_wall = phases * max(1, effective_layers) * 240
 
     budget = preset.get("budget") or {}
     exceeds: list[str] = []
@@ -79,12 +98,22 @@ def budget_preview(preset: Mapping[str, Any], pipeline: Mapping[str, Any], plan_
     if isinstance(max_wall, int) and estimated_wall > max_wall:
         exceeds.append(f"estimated wall clock {estimated_wall}s exceeds max_wall_clock_seconds {max_wall}s")
 
-    return BudgetPreview(phases, agents, estimated_tokens, estimated_cost, estimated_wall, exceeds)
+    return BudgetPreview(
+        phases,
+        agents,
+        estimated_tokens,
+        estimated_cost,
+        estimated_wall,
+        fan_out_width,
+        parallelism,
+        stage_estimates,
+        exceeds,
+    )
 
 
 def graph_lines(pipeline: Mapping[str, Any]) -> list[str]:
     stage_by_id = {stage["id"]: stage for stage in pipeline.get("stages") or []}
-    lines: list[str] = []
+    lines: list[str] = [f"parallelism: {pipeline_parallelism(pipeline)}"]
     for layer_no, layer in enumerate(topological_layers(pipeline), 1):
         lines.append(f"layer {layer_no}:")
         for stage_id in layer:

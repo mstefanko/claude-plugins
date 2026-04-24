@@ -166,6 +166,14 @@ def cmd_preset_dry_run(args: argparse.Namespace) -> int:
         print(f"  estimated_tokens: {b.estimated_tokens}")
         print(f"  estimated_cost_usd: {b.estimated_cost_usd:.4f}")
         print(f"  estimated_wall_clock_seconds: {b.estimated_wall_clock_seconds}")
+        print(f"  fan_out_width: {b.fan_out_width}")
+        print(f"  parallelism: {b.parallelism}")
+        print("  stages:")
+        for stage in b.stage_estimates:
+            print(
+                f"    - {stage['stage_id']}: agents_per_phase={stage['agents_per_phase']} "
+                f"estimated_tokens_per_phase={stage['estimated_tokens_per_phase']}"
+            )
     if pipeline:
         print("Stage graph")
         print("\n".join(graph_lines(pipeline)))
@@ -175,6 +183,16 @@ def cmd_preset_dry_run(args: argparse.Namespace) -> int:
 
 def cmd_status(args: argparse.Namespace) -> int:
     print(format_status(load_state()))
+    observation_path = resolve_data_dir() / "telemetry" / "observations.jsonl"
+    if observation_path.is_file():
+        lines = observation_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        print(f"  observations: {len(lines)}")
+        if lines:
+            try:
+                latest = json.loads(lines[-1])
+                print(f"  latest_observation: {latest.get('event_type', 'unknown')} run_id={latest.get('run_id') or 'n/a'}")
+            except json.JSONDecodeError:
+                print("  latest_observation: invalid-json")
     return 0
 
 
@@ -229,6 +247,8 @@ def cmd_compete(args: argparse.Namespace) -> int:
         print(f"  estimated_tokens: {b.estimated_tokens}")
         print(f"  estimated_cost_usd: {b.estimated_cost_usd:.4f}")
         print(f"  estimated_wall_clock_seconds: {b.estimated_wall_clock_seconds}")
+        print(f"  fan_out_width: {b.fan_out_width}")
+        print(f"  parallelism: {b.parallelism}")
     if pipeline:
         print("Stage graph")
         print("\n".join(graph_lines(pipeline)))
@@ -356,6 +376,67 @@ def cmd_cancel(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_permissions_check(args: argparse.Namespace) -> int:
+    from .permissions import ROLE_NAMES, default_settings_path, diff_role, format_diff, load_fragment, load_settings
+
+    target = Path(args.path) if args.path else default_settings_path(args.scope)
+    try:
+        settings = load_settings(target)
+        roles = args.role or sorted(ROLE_NAMES)
+        diffs = [diff_role(settings, load_fragment(role)) for role in roles]
+    except ValueError as exc:
+        print(f"swarm: permissions check: {exc}", file=sys.stderr)
+        return 1
+    print(f"target: {target.resolve()}")
+    print("\n".join(format_diff(diff) for diff in diffs))
+    return 0 if all(diff.ok for diff in diffs) else 1
+
+
+def cmd_permissions_install(args: argparse.Namespace) -> int:
+    from .permissions import (
+        default_settings_path,
+        diff_role,
+        format_diff,
+        load_fragment,
+        load_settings,
+        merge_role,
+        uninstall_role,
+        write_settings_atomic,
+    )
+
+    target = Path(args.path) if args.path else default_settings_path(args.scope)
+    try:
+        settings = load_settings(target)
+        fragments = [load_fragment(role) for role in args.role]
+        before_diffs = [diff_role(settings, fragment) for fragment in fragments]
+        merged = settings
+        for fragment in fragments:
+            merged = uninstall_role(merged, fragment) if args.rollback else merge_role(merged, fragment)
+    except ValueError as exc:
+        print(f"swarm: permissions install: {exc}", file=sys.stderr)
+        return 1
+    print(f"target: {target.resolve()}")
+    print("\n".join(format_diff(diff) for diff in before_diffs))
+    print(json.dumps(merged.get("permissions", {}), indent=2, sort_keys=True))
+    if args.dry_run:
+        return 0 if not any(diff.conflicts for diff in before_diffs) else 1
+    backup = write_settings_atomic(target, merged)
+    print(f"wrote {target.resolve()}")
+    if backup.exists():
+        print(f"backup: {backup.resolve()}")
+    return 0
+
+
+def cmd_resume(args: argparse.Namespace) -> int:
+    from .resume import build_resume_report, format_resume_report, resume_exit_code
+
+    report = build_resume_report(args.bd_id)
+    print(format_resume_report(report, merge=args.merge))
+    if report.drift_keys and args.merge:
+        print("swarm: resume: refusing to merge while drift is present", file=sys.stderr)
+    return resume_exit_code(report)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="swarm")
     sub = parser.add_subparsers(dest="subcommand")
@@ -415,6 +496,26 @@ def _build_parser() -> argparse.ArgumentParser:
     cancel = sub.add_parser("cancel")
     cancel.add_argument("issue_id")
     cancel.set_defaults(func=cmd_cancel)
+
+    resume = sub.add_parser("resume")
+    resume.add_argument("bd_id")
+    resume.add_argument("--merge", action="store_true", help="allow merge only after a clean APPROVED completed-unit set")
+    resume.set_defaults(func=cmd_resume)
+
+    permissions = sub.add_parser("permissions")
+    permissions_sub = permissions.add_subparsers(dest="permissions_command")
+    p = permissions_sub.add_parser("check")
+    p.add_argument("--role", action="append", choices=["writer", "spec-review", "review", "research", "clarify", "codex-review"])
+    p.add_argument("--scope", choices=["repo", "user"], default="repo")
+    p.add_argument("--path")
+    p.set_defaults(func=cmd_permissions_check)
+    p = permissions_sub.add_parser("install")
+    p.add_argument("--role", action="append", required=True, choices=["writer", "spec-review", "review", "research", "clarify", "codex-review"])
+    p.add_argument("--scope", choices=["repo", "user"], default="repo")
+    p.add_argument("--path")
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--rollback", action="store_true")
+    p.set_defaults(func=cmd_permissions_install)
     return parser
 
 

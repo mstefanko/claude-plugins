@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/07/schema#",
+  "$id": "https://mstefanko-plugins/swarm-do/telemetry/run_events.schema.json#v1",
+  "title": "swarm-do run event record",
+  "description": "Companion ledger for orchestration events that must not mutate frozen runs.v1 rows.",
+  "type": "object",
+  "required": [
+    "run_id",
+    "timestamp",
+    "event_type",
+    "schema_ok"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "run_id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "checkpoint_written",
+        "resume_started",
+        "resume_completed",
+        "drift_detected",
+        "handoff_triggered",
+        "handoff_reason",
+        "retry_started",
+        "retry_exhausted",
+        "worktree_merge_conflict"
+      ]
+    },
+    "bd_epic_id": {
+      "type": ["string", "null"]
+    },
+    "phase_id": {
+      "type": ["string", "null"]
+    },
+    "work_unit_id": {
+      "type": ["string", "null"]
+    },
+    "child_bead_ids": {
+      "type": ["array", "null"],
+      "items": { "type": "string" }
+    },
+    "reason": {
+      "type": ["string", "null"]
+    },
+    "retry_count": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "handoff_count": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "integration_branch_head": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "details": {
+      "type": ["object", "null"]
+    },
+    "schema_ok": {
+      "type": "boolean"
+    }
+  }
+}

@@ -12,16 +12,18 @@ Shipped:
 
 - `/swarm-do:do <plan>` — main orchestrator. Full beads pipeline per phase.
 - `/swarm-do:init-beads` — explicit, idempotent `bd init --stealth` bootstrap for a repo.
+- `/swarm-do:resume <bd-id>` — conservative resume entrypoint keyed by the BEADS epic/run issue.
 - `bin/swarm preset ...` — preset load/save/diff/list/clear/dry-run.
 - `bin/swarm pipeline ...` — stock/user pipeline list/show/lint.
+- `bin/swarm permissions ...` — role-scoped permission preflight, dry-run install, and rollback support.
 - `bin/swarm providers doctor [--mco]` — local backend health checks plus optional `mco doctor --json`.
 - `bin/swarm status` / `bin/swarm rollout ...` — rollout status and decision log.
+- `bin/swarm resume <bd-id>` — checkpoint lookup, drift reporting, and conservative resume status.
 - `bin/swarm compete <plan-path>` — manual Pattern 5 setup; validates and activates the competitive preset.
 - `bin/swarm-validate <preset>` — validation gates for preset + pipeline loading.
 
 Planned (packaging Phase 3 and Integration Phases 1–2):
 
-- `/swarm-do:resume <bd-id>` — re-enter a stalled pipeline
 - `/swarm-do:debug <bd-id>` — agent-debug on an existing issue
 - `/swarm-do:review <target>` — review-only on code / PR / branch
 - `/swarm-do:research <question>` — ad-hoc research
@@ -74,6 +76,8 @@ The fork-diff patch that was active pre-rollback is preserved in `docs/provenanc
 swarm-do/
 ├── .claude-plugin/plugin.json    Plugin manifest
 ├── commands/                     Slash-command surface (/swarm-do:*)
+├── hooks/                        PreCompact hook wiring + checkpoint writer
+├── permissions/                  Role-scoped permission preset fragments
 ├── skills/swarm-do/SKILL.md      Orchestrator prompt (fires on /swarm-do:do)
 ├── agents/agent-*.md             Per-role personas (15 roles)
 ├── bin/
@@ -96,7 +100,7 @@ swarm-do/
 ├── presets/                      Stock preset TOML files
 ├── pipelines/                    Stock pipeline YAML files
 ├── schemas/{preset,pipeline}.schema.json  Preset/pipeline JSON Schema contracts
-├── schemas/telemetry/            JSON Schema v1 ledger definitions (runs, findings, outcomes, adjudications) — see schemas/telemetry/README.md
+├── schemas/telemetry/            JSON Schema ledger definitions (runs, findings, outcomes, adjudications, run_events, observations, knowledge) — see schemas/telemetry/README.md
 ├── tests/fixtures/               Synthetic ledger data for self-test and dev (generate-synthetic-runs.sh, 66 runs, 35 findings)
 ├── phase0/                       Codex cross-model review experiment artifacts
 └── docs/provenance/              Audit trail for the claude-mem unfork
@@ -116,9 +120,12 @@ swarm preset dry-run <name> <plan-path>
 swarm pipeline list
 swarm pipeline show <name>
 swarm pipeline lint <name-or-path>
+swarm permissions check [--role <role>] [--scope repo|user] [--path <settings.json>]
+swarm permissions install --role <role> [--dry-run] [--rollback] [--scope repo|user] [--path <settings.json>]
 swarm providers doctor [--mco] [--json]
 swarm mode claude-only|codex-only|balanced|custom
 swarm status
+swarm resume <bd-id> [--merge]
 swarm rollout show [--json]
 swarm rollout dogfood [--notes "..."]
 swarm rollout set <path> <value>

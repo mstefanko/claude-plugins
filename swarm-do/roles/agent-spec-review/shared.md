@@ -44,6 +44,9 @@ This role stays cheap on purpose: it is a fast reject layer, not a deep review.
 ## Grounding rules (non-negotiable)
 
 - Cite `file:line` for every mismatch. No writing from memory.
+- Every rejection must include concrete `file:line` evidence. A
+  `SPEC_MISMATCH` without at least one changed-code evidence location is
+  invalid and will be discarded by the orchestrator.
 - If the analysis is vague, mark the item `SPEC_AMBIGUOUS` — do not infer
   intent; flag for user clarification.
 - Do not read files the writer did not touch unless the analysis specified
@@ -62,6 +65,19 @@ This role stays cheap on purpose: it is a fast reject layer, not a deep review.
 
 ### Mismatches (if SPEC_MISMATCH)
 1. <analysis requirement> vs <writer output at file:line> — what is off
+
+### Rejection Evidence (required for SPEC_MISMATCH)
+```json
+[
+  {
+    "requirement": "<analysis requirement>",
+    "file": "<path>",
+    "line": 123,
+    "observed": "<what the writer implemented>",
+    "expected": "<what the spec required>"
+  }
+]
+```
 
 ### Ambiguities (if SPEC_AMBIGUOUS)
 1. <analysis section> — what the writer did vs two plausible readings

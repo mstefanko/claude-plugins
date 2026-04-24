@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/07/schema#",
+  "$id": "https://mstefanko-plugins/swarm-do/work_units.schema.json#v1",
+  "title": "swarm-do work-unit graph artifact",
+  "type": "object",
+  "required": ["schema_version", "work_units"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "integer", "enum": [1] },
+    "plan_path": { "type": ["string", "null"] },
+    "bd_epic_id": { "type": ["string", "null"] },
+    "work_units": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "depends_on", "files", "acceptance_criteria", "retry_count", "handoff_count"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "depends_on": {
+            "type": "array",
+            "items": { "type": "string" },
+            "uniqueItems": true
+          },
+          "files": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "acceptance_criteria": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "beads_id": { "type": ["string", "null"] },
+          "worktree_branch": { "type": ["string", "null"] },
+          "status": {
+            "type": "string",
+            "enum": ["pending", "running", "blocked", "approved", "merged", "failed"]
+          },
+          "retry_count": { "type": "integer", "minimum": 0 },
+          "handoff_count": { "type": "integer", "minimum": 0 }
+        }
+      }
+    }
+  }
+}

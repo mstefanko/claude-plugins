@@ -15,7 +15,7 @@ from .resolver import BACKENDS, EFFORTS, BackendResolver
 VARIANTS = {"same", "prompt_variants", "models"}
 MERGE_STRATEGIES = {"synthesize", "vote"}
 TOLERANCE_MODES = {"strict", "quorum", "best-effort"}
-PIPELINE_TOP_KEYS = {"pipeline_version", "name", "description", "stages"}
+PIPELINE_TOP_KEYS = {"pipeline_version", "name", "description", "parallelism", "stages"}
 PRESET_TOP_KEYS = {"name", "description", "pipeline", "origin", "routing", "budget", "forked_from_hash"}
 STAGE_KEYS = {"id", "depends_on", "agents", "fan_out", "merge", "failure_tolerance"}
 FAN_OUT_KEYS = {"role", "count", "variant", "variants", "routes"}
@@ -110,6 +110,10 @@ def schema_lint_pipeline(pipeline: Mapping[str, Any]) -> list[str]:
         errors.append("pipeline: pipeline_version must be an integer")
     if not isinstance(pipeline.get("name"), str) or not pipeline.get("name"):
         errors.append("pipeline: name must be a non-empty string")
+    if "parallelism" in pipeline:
+        parallelism = pipeline.get("parallelism")
+        if not isinstance(parallelism, int) or parallelism < 1 or parallelism > 32:
+            errors.append("pipeline: parallelism must be an integer from 1 to 32")
     stages = pipeline.get("stages")
     if not isinstance(stages, list) or not stages:
         errors.append("pipeline: stages must be a non-empty array")

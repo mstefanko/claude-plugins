@@ -38,6 +38,17 @@ If there is no active preset, the runtime uses the `default` pipeline and routin
 
 `DOGFOOD` means opt-in plugin wiring is allowed through the active preset, not default-on Codex review.
 
+4. Check role permission presets before dispatching mutable work:
+
+```bash
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" permissions check
+```
+
+Missing permissions are a hard preflight failure for automated runs. Surface the
+printed JSON patch-style diff to the operator and suggest
+`bin/swarm permissions install --role <role> --dry-run` for inspection before any
+write.
+
 ## Engine Boundary
 
 Deterministic helpers own parsing YAML, validating schemas, resolving backend routes, computing topological layers, estimating budget, and rendering the stage graph. This skill owns only the Claude-side actions that helpers cannot perform: calling Claude Code `Agent()`, waiting for results, and making operator-facing decisions from role outputs.
@@ -62,6 +73,15 @@ Use the helpers:
    - `best-effort`: pass all available successful outputs, including an empty set.
 7. For `merge.strategy: synthesize`, dispatch the configured merge agent with only successful fan-out outputs.
 8. Repeat until all layers complete, then close issues and summarize.
+
+If a writer returns a bead note containing the exact sentinel
+`HANDOFF_REQUESTED`, stop dispatching that work unit, copy the structured
+handoff block into the replacement writer prompt, and count the handoff against
+the unit cap recorded in BEADS/run events.
+
+If `agent-spec-review` returns `SPEC_MISMATCH`, respawn `agent-writer` with the
+review evidence and retry only the rejected spec items. Stop after two retries
+and escalate to the operator.
 
 ## Backend Dispatch
 
@@ -93,3 +113,6 @@ Spawn swarm agents with `subagent_type="general-purpose"` and paste the role fil
 - No `--force-over-budget` or invariant bypass exists.
 - Do not special-case the default pipeline. It is just YAML.
 - Do not introduce `parallel_with`; concurrency is expressed only by shared `depends_on` topology.
+- Never auto-merge during resume drift. `/swarm-do:resume <bd-id>` and
+  `bin/swarm resume <bd-id>` default to inspect/no-merge; `--merge` is explicit
+  operator opt-in and still requires clean drift status.

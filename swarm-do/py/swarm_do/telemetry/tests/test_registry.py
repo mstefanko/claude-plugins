@@ -8,10 +8,19 @@ from swarm_do.telemetry.registry import LEDGERS
 
 
 class RegistrySmokeTests(unittest.TestCase):
-    def test_five_ledgers_registered(self) -> None:
+    def test_ledgers_registered(self) -> None:
         self.assertEqual(
             set(LEDGERS.keys()),
-            {"runs", "findings", "outcomes", "adjudications", "finding_outcomes"},
+            {
+                "runs",
+                "findings",
+                "outcomes",
+                "adjudications",
+                "finding_outcomes",
+                "run_events",
+                "observations",
+                "knowledge",
+            },
         )
 
     def test_findings_fallback_v2_first(self) -> None:
@@ -41,6 +50,9 @@ class RegistrySmokeTests(unittest.TestCase):
             "outcomes": "outcomes.jsonl",
             "adjudications": "adjudications.jsonl",
             "finding_outcomes": "finding_outcomes.jsonl",
+            "run_events": "run_events.jsonl",
+            "observations": "observations.jsonl",
+            "knowledge": "knowledge.jsonl",
         }
         for name, fname in expected.items():
             self.assertEqual(LEDGERS[name].filename, fname)

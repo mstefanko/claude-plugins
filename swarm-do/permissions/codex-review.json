@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "role": "codex-review",
+  "merge_policy": "deny-wins",
+  "permissions": {
+    "allow": [
+      "Read",
+      "Bash(codex:*)",
+      "Bash(git diff:*)",
+      "Bash(git show:*)",
+      "Bash(rg:*)"
+    ],
+    "deny": []
+  }
+}

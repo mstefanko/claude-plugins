@@ -38,6 +38,36 @@ slot per issue at a time.
 5. Run the Verification Gate before reporting status (see below).
 6. Commit. Do not amend previous commits.
 
+## Respawn With Review Feedback
+
+If the orchestrator respawns you after `agent-spec-review` returns
+`SPEC_MISMATCH`, treat the review notes as the highest-priority input for this
+iteration. Re-read the cited `file:line` evidence, fix only the rejected spec
+items, and preserve any passing work from the previous writer attempt. In your
+output, add a `### Review Feedback Addressed` section listing each rejection and
+the file:line where the correction now lives.
+
+## Cooperative Handoff
+
+If you are near the context, elapsed-time, or output-size budget and cannot
+finish cleanly, stop before quality degrades. Append a bead note that contains
+the exact sentinel `HANDOFF_REQUESTED` followed by this block:
+
+```
+HANDOFF_REQUESTED
+reason: <why this handoff is needed>
+files_changed:
+  - <path>
+remaining_acceptance_criteria:
+  - <criterion still open>
+tests_run:
+  - <exact command and result, or "not run">
+```
+
+After writing that note, return `## Status: NEEDS_CONTEXT`. Do not continue
+editing after the sentinel; the orchestrator will start a fresh writer with the
+progress note and remaining acceptance criteria.
+
 ## Grounding rules (non-negotiable)
 
 - Cite `file:line` for every code claim. No writing from memory.
@@ -95,6 +125,9 @@ acceptable. If any step cannot run, the correct status is `BLOCKED` or
 
 ### Deviations from Plan
 <anything not in the work breakdown that was necessary — explain why>
+
+### Review Feedback Addressed
+<if this is a retry after SPEC_MISMATCH: each rejection and where it was fixed>
 
 ### Concerns for Follow-up
 <if DONE_WITH_CONCERNS: items for the orchestrator to file as bd issues>

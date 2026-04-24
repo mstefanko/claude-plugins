@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/07/schema#",
+  "$id": "https://mstefanko-plugins/swarm-do/telemetry/observations.schema.json#v1",
+  "title": "swarm-do observation record",
+  "description": "Hook and subprocess observations written without starting a second LLM observer session.",
+  "type": "object",
+  "required": [
+    "ts",
+    "run_id",
+    "event_type",
+    "schema_ok"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "ts": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "run_id": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "phase_id": {
+      "type": ["string", "null"]
+    },
+    "event_type": {
+      "type": "string"
+    },
+    "tool": {
+      "type": ["string", "null"]
+    },
+    "file_paths": {
+      "type": ["array", "null"],
+      "items": { "type": "string" }
+    },
+    "bead_ids": {
+      "type": ["array", "null"],
+      "items": { "type": "string" }
+    },
+    "diff_size_bytes": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "source": {
+      "type": ["string", "null"],
+      "enum": ["claude-hook", "swarm-run-exit", "manual", null]
+    },
+    "schema_ok": {
+      "type": "boolean"
+    }
+  }
+}
