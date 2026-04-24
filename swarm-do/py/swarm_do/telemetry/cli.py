@@ -36,7 +36,6 @@ def _parse_days_type(s: str) -> int:
 
 
 SUBCOMMANDS = (
-    "report",
     "sample-for-adjudication",
     "join-outcomes",
 )
@@ -120,6 +119,32 @@ def _build_parser() -> argparse.ArgumentParser:
         help="SQL statement (single argument; quote appropriately)",
     )
 
+    # Add report subcommand (Phase 3 native Python implementation).
+    report_parser = subparsers.add_parser(
+        "report",
+        add_help=True,
+        help="Stratified markdown report from runs.jsonl.",
+    )
+    report_parser.add_argument(
+        "--since",
+        dest="since",
+        default=None,
+        help="filter to last N days (format: Nd)",
+    )
+    report_parser.add_argument(
+        "--role",
+        dest="role",
+        default=None,
+        help="filter to a specific role",
+    )
+    report_parser.add_argument(
+        "--bucket",
+        dest="bucket",
+        default="role",
+        choices=["role", "complexity", "phase_kind", "risk_tag"],
+        help="stratification key (default: role)",
+    )
+
     # Add legacy subcommands (Phase 1 passthrough).
     for name in SUBCOMMANDS:
         sub = subparsers.add_parser(name, add_help=False, help=f"{name} (delegates to legacy)")
@@ -176,6 +201,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if ns.subcommand == "query":
         from .subcommands import query as _query_cmd
         return _query_cmd.run(ns)
+
+    # Dispatch report to native Python implementation (Phase 3 commit 4).
+    if ns.subcommand == "report":
+        from .subcommands import report as _report_cmd
+        return _report_cmd.run(ns)
 
     # Rebuild the argv for the legacy script: subcommand + pass-through rest.
     rest = getattr(ns, "rest", []) or []
