@@ -100,6 +100,7 @@ swarm-telemetry dump <ledger>
 swarm-telemetry validate [<ledger>]
 swarm-telemetry sample-for-adjudication --count N [--since Nd] [--output-root PATH]
 swarm-telemetry join-outcomes [--since Nd] [--dry-run]
+swarm-telemetry purge <args>
 ```
 
 **Subcommands:**
@@ -112,6 +113,7 @@ swarm-telemetry join-outcomes [--since Nd] [--dry-run]
 | `validate` | Validates every ledger row against the shipped JSON schemas, including types, enums, patterns, bounds, and `additionalProperties`. Exits 1 if any row fails; exits 0 if all rows pass (absent/empty ledgers are skipped with a warning). |
 | `sample-for-adjudication` | **(Phase 9f — write subcommand)** Picks a stratified random sample of findings that do not already appear in `adjudications.jsonl` via `overridden_finding_ids`. Writes the existing phase0-style directory layout under `~/.swarm/phase0/runs/` when writable, or falls back to plugin data when running in the plugin sandbox. Accepts `--count N` (required), `--since Nd`, and `--output-root PATH`. |
 | `join-outcomes` | **(Phase 9d — write subcommand)** Correlates findings with post-merge maintainer behavior and appends rows to `finding_outcomes.jsonl`. Scans merged PRs via `gh api` plus local git history, anchors each finding to the nearest matching merge commit, then checks whether any commit within 14 days touched the same file within a ±10 line window; if so, appends a `hotfix_within_14d` outcome row. Accepts `--since Nd` (default 30d) and `--dry-run` (prints what would be written without touching the ledger). Idempotent: re-running the same window produces no duplicate rows. **Manual invocation only** — no cron wiring until output proves useful. |
+| `purge <args>` | **(Phase 9g — operator-only)** Purge rows older than a retention window per ADR 0001. Atomically rewrites each ledger via tempfile + fsync + os.replace to ensure durability on power loss. Accepts `--older-than Nd [--ledger <name>] [--dry-run]`. Not invoked from swarm-run; operator-invoked only to avoid implicit data loss. |
 
 **Environment:**
 

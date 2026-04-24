@@ -3,7 +3,7 @@
 Status: Accepted
 Date: 2026-04-23
 Supersedes: none
-Related: phases 9a–9g, phase 10 refactor plan
+Related: ADR 0001, phases 9a–9g, phase 10 refactor plan
 
 ## Context
 
