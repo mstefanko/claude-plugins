@@ -96,6 +96,19 @@ Ambiguous`. Used to calibrate precision over time.
 
 Schema: `adjudications.schema.json#v1`
 
+### `provider-findings.json` — per-run external provider artifact, not a ledger
+
+`bin/swarm-stage-mco` writes one normalized provider-findings artifact under the
+swarm run artifact directory. This file is intentionally not appended to
+`${CLAUDE_PLUGIN_DATA}/telemetry/` yet; it is the experimental contract used to
+evaluate whether external provider stages deserve promotion into the pipeline DSL.
+
+Schema: `provider_findings.schema.json#v1-draft`
+
+Key provider fields: `provider`, `provider_count`, `selected_providers`,
+`detected_by`, `consensus_score`, `consensus_level`, `source_artifact_path`,
+and `provider_error_class`.
+
 ---
 
 ## v1 freeze convention

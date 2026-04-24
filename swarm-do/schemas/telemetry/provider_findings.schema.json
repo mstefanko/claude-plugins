@@ -1,0 +1,200 @@
+{
+  "$schema": "https://json-schema.org/draft/07/schema#",
+  "$id": "https://mstefanko-plugins/swarm-do/telemetry/provider_findings.schema.json#v1-draft",
+  "title": "swarm-do provider findings artifact v1 draft",
+  "description": "Draft artifact schema for external read-only provider review results. This is not a JSONL telemetry ledger yet; it is the contract for bin/swarm-stage-mco output while provider stages remain experimental.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "provider",
+    "command",
+    "status",
+    "run_id",
+    "issue_id",
+    "stage_id",
+    "provider_count",
+    "selected_providers",
+    "source_artifact_path",
+    "provider_errors",
+    "findings"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "enum": ["provider-findings.v1-draft"]
+    },
+    "provider": {
+      "type": "string",
+      "enum": ["mco"]
+    },
+    "command": {
+      "type": "string",
+      "enum": ["review"]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["ok", "partial", "error"]
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^[0-9A-Z_-]{1,64}$"
+    },
+    "issue_id": {
+      "type": "string"
+    },
+    "stage_id": {
+      "type": "string"
+    },
+    "provider_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "selected_providers": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "source_artifact_path": {
+      "type": "string",
+      "description": "Path to the raw MCO stdout artifact this normalized result was derived from."
+    },
+    "provider_errors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["provider", "provider_error_class", "message"],
+        "additionalProperties": false,
+        "properties": {
+          "provider": {
+            "type": ["string", "null"]
+          },
+          "provider_error_class": {
+            "type": ["string", "null"],
+            "description": "Coarse failure class such as auth, timeout, malformed_output, spawn_error, or mco_exit."
+          },
+          "message": {
+            "type": ["string", "null"]
+          }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "finding_id",
+          "run_id",
+          "timestamp",
+          "role",
+          "issue_id",
+          "provider",
+          "provider_count",
+          "detected_by",
+          "consensus_score",
+          "consensus_level",
+          "source_artifact_path",
+          "provider_error_class",
+          "severity",
+          "category",
+          "summary",
+          "short_summary",
+          "file_path",
+          "line_start",
+          "line_end",
+          "stable_finding_hash_v1",
+          "duplicate_cluster_id",
+          "schema_ok"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "finding_id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "run_id": {
+            "type": "string",
+            "pattern": "^[0-9A-Z_-]{1,64}$"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "role": {
+            "type": "string",
+            "enum": ["agent-codex-review"]
+          },
+          "issue_id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string",
+            "enum": ["mco"]
+          },
+          "provider_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "detected_by": {
+            "type": "array",
+            "description": "Provider names that reported or confirmed this normalized finding.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "consensus_score": {
+            "type": ["number", "null"],
+            "minimum": 0,
+            "maximum": 1
+          },
+          "consensus_level": {
+            "type": ["string", "null"],
+            "enum": ["confirmed", "needs-verification", "unverified", null]
+          },
+          "source_artifact_path": {
+            "type": "string"
+          },
+          "provider_error_class": {
+            "type": ["string", "null"]
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["critical", "high", "medium", "low", "info"]
+          },
+          "category": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "short_summary": {
+            "type": "string"
+          },
+          "file_path": {
+            "type": ["string", "null"]
+          },
+          "line_start": {
+            "type": ["integer", "null"],
+            "minimum": 1
+          },
+          "line_end": {
+            "type": ["integer", "null"],
+            "minimum": 1
+          },
+          "stable_finding_hash_v1": {
+            "type": ["string", "null"],
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "duplicate_cluster_id": {
+            "type": ["string", "null"]
+          },
+          "schema_ok": {
+            "type": "boolean"
+          }
+        }
+      }
+    }
+  }
+}

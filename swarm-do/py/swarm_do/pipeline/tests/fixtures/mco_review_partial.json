@@ -1,0 +1,20 @@
+{
+  "providers": [
+    {"name": "codex", "status": "ok"},
+    {"name": "gemini", "status": "error", "error_class": "auth", "message": "not authenticated"}
+  ],
+  "provider_count": 2,
+  "findings": [
+    {
+      "severity": "medium",
+      "category": "security",
+      "file_path": "pkg/auth/session.go",
+      "line_start": 87,
+      "line_end": 91,
+      "summary": "session token is logged on refresh failure",
+      "provider": "codex",
+      "consensus_score": 0.4,
+      "consensus_level": "unverified"
+    }
+  ]
+}

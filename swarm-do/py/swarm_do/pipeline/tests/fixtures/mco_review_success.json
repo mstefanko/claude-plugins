@@ -1,0 +1,18 @@
+{
+  "providers": [
+    {"name": "codex", "status": "ok"},
+    {"name": "gemini", "status": "ok"}
+  ],
+  "total_providers_ran": 2,
+  "findings": [
+    {
+      "severity": "high",
+      "category": "correctness",
+      "location": "internal/api/foo.go:42",
+      "summary": "exclusive upper bound skips the final item",
+      "detected_by": ["codex", "gemini"],
+      "consensus_score": 0.92,
+      "consensus_level": "confirmed"
+    }
+  ]
+}
