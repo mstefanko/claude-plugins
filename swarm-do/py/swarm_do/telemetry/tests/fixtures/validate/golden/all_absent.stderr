@@ -1,0 +1,7 @@
+swarm-telemetry: validate — checking ledgers in {tempdir}/telemetry
+swarm-telemetry: validate: runs — ledger absent (skipped)
+swarm-telemetry: validate: findings — ledger absent (skipped)
+swarm-telemetry: validate: outcomes — ledger absent (skipped)
+swarm-telemetry: validate: adjudications — ledger absent (skipped)
+swarm-telemetry: validate: finding_outcomes — ledger absent (skipped)
+swarm-telemetry: validate — all ledgers OK

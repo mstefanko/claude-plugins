@@ -14,6 +14,7 @@ from swarm_do.telemetry.tests._parity import FIXTURES_DIR, run_parity
 
 
 FIXTURE = FIXTURES_DIR / "sample_for_adjudication" / "populated"
+_GOLDEN = FIXTURES_DIR / "sample_for_adjudication" / "golden"
 ENV = {
     "SWARM_TELEMETRY_NOW": "2026-04-24T00:00:00Z",
     "SWARM_PHASE0_ROOT": "{tempdir}/_sfa_out",
@@ -29,6 +30,8 @@ class SampleForAdjudicationParityTests(unittest.TestCase):
             FIXTURE,
             env_overrides=ENV,
             test_case=self,
+            golden_stdout_path=_GOLDEN / "count_3_all_strata.stdout",
+            normalize_tempdir=True,
         )
 
     def test_count_3_with_since_excludes_old(self) -> None:
@@ -39,6 +42,8 @@ class SampleForAdjudicationParityTests(unittest.TestCase):
             FIXTURE,
             env_overrides=ENV,
             test_case=self,
+            golden_stdout_path=_GOLDEN / "count_3_since_2d.stdout",
+            normalize_tempdir=True,
         )
 
 

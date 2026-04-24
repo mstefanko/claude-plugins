@@ -13,6 +13,7 @@ from swarm_do.telemetry.tests._parity import FIXTURES_DIR, run_parity
 
 
 FIXTURE = FIXTURES_DIR / "query" / "populated"
+_GOLDEN = FIXTURES_DIR / "query" / "golden"
 
 
 class QueryParityTests(unittest.TestCase):
@@ -22,6 +23,8 @@ class QueryParityTests(unittest.TestCase):
             ["SELECT COUNT(*) AS n FROM runs"],
             FIXTURE,
             test_case=self,
+            golden_stdout_path=_GOLDEN / "count_runs.stdout",
+            golden_exit_path=_GOLDEN / "count_runs.exit",
         )
 
     def test_order_by_findings(self) -> None:
@@ -30,6 +33,8 @@ class QueryParityTests(unittest.TestCase):
             ["SELECT finding_id, severity FROM findings ORDER BY finding_id"],
             FIXTURE,
             test_case=self,
+            golden_stdout_path=_GOLDEN / "order_by_findings.stdout",
+            golden_exit_path=_GOLDEN / "order_by_findings.exit",
         )
 
     def test_join_runs_findings(self) -> None:
@@ -42,6 +47,8 @@ class QueryParityTests(unittest.TestCase):
             ],
             FIXTURE,
             test_case=self,
+            golden_stdout_path=_GOLDEN / "join_runs_findings.stdout",
+            golden_exit_path=_GOLDEN / "join_runs_findings.exit",
         )
 
     def test_query_error(self) -> None:
@@ -50,6 +57,8 @@ class QueryParityTests(unittest.TestCase):
             ["SELECT * FROM no_such_table"],
             FIXTURE,
             test_case=self,
+            golden_stdout_path=_GOLDEN / "query_error.stdout",
+            golden_exit_path=_GOLDEN / "query_error.exit",
         )
 
 

@@ -95,6 +95,138 @@ def _diff(label_a: str, a: bytes, label_b: str, b: bytes) -> str:
     )
 
 
+def _run_python_cli(
+    subcommand: str,
+    args_list: List[str],
+    tmp: Path,
+    env_overrides: Optional[Dict[str, str]] = None,
+) -> Tuple[bytes, bytes, int, Dict[str, str]]:
+    """Run the Python CLI on a tempdir-materialized fixture.
+
+    Returns (stdout, stderr, exit_code, env) — env is returned so callers can
+    reuse it for the legacy run.
+    """
+    base_env = dict(os.environ)
+    for key in ("CLAUDE_PLUGIN_DATA", "SWARM_PHASE0_ROOT", "SWARM_TELEMETRY_NOW"):
+        base_env.pop(key, None)
+    base_env["CLAUDE_PLUGIN_DATA"] = str(tmp)
+    if env_overrides:
+        for k, v in env_overrides.items():
+            base_env[k] = v.replace("{tempdir}", str(tmp))
+
+    py_env = dict(base_env)
+    py_env["PYTHONPATH"] = str(PY_PACKAGE_ROOT) + (
+        os.pathsep + py_env["PYTHONPATH"] if "PYTHONPATH" in py_env else ""
+    )
+    py_cmd = [sys.executable, "-m", "swarm_do.telemetry.cli", subcommand, *args_list]
+    stdout, stderr, rc = _run(py_cmd, py_env)
+    return stdout, stderr, rc, base_env
+
+
+def run_golden(
+    subcommand: str,
+    args: Iterable[str],
+    fixture_path: Path,
+    golden_stdout_path: Path,
+    env_overrides: Optional[Dict[str, str]] = None,
+    test_case: Optional[unittest.TestCase] = None,
+    golden_exit_path: Optional[Path] = None,
+    golden_stderr_path: Optional[Path] = None,
+    normalize_tempdir: bool = False,
+) -> Tuple[bytes, int]:
+    """Run the Python CLI on a copied fixture and assert stdout matches a
+    checked-in golden file. Also asserts exit code matches `golden_exit_path`
+    (a text file containing the integer) when provided; defaults to 0.
+
+    Bootstrap mode: when env var `SWARM_TEST_WRITE_GOLDEN=1` is set, the
+    current Python output is written to `golden_stdout_path` (creating parent
+    dirs) instead of asserting. Use this once to capture the Phase-3-frozen
+    output, then commit the golden files.
+
+    Use this test mode after `swarm-telemetry.legacy` has been deleted —
+    golden files preserve regression coverage without needing the legacy
+    script.
+    """
+    args_list = list(args)
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        _copy_fixture(fixture_path, tmp)
+        args_list = [a.replace("{tempdir}", str(tmp)) for a in args_list]
+        py_stdout, py_stderr, py_rc, _env = _run_python_cli(
+            subcommand, args_list, tmp, env_overrides
+        )
+
+        if normalize_tempdir:
+            tmp_bytes = str(tmp).encode("utf-8")
+            py_stdout = py_stdout.replace(tmp_bytes, b"{tempdir}")
+            py_stderr = py_stderr.replace(tmp_bytes, b"{tempdir}")
+
+    if os.environ.get("SWARM_TEST_WRITE_GOLDEN") == "1":
+        golden_stdout_path.parent.mkdir(parents=True, exist_ok=True)
+        golden_stdout_path.write_bytes(py_stdout)
+        if golden_exit_path is not None:
+            golden_exit_path.parent.mkdir(parents=True, exist_ok=True)
+            golden_exit_path.write_text(f"{py_rc}\n")
+        if golden_stderr_path is not None:
+            golden_stderr_path.parent.mkdir(parents=True, exist_ok=True)
+            golden_stderr_path.write_bytes(py_stderr)
+        return py_stdout, py_rc
+
+    if not golden_stdout_path.exists():
+        msg = (
+            f"golden file missing: {golden_stdout_path}\n"
+            f"Re-run with SWARM_TEST_WRITE_GOLDEN=1 to capture the current "
+            f"output, then commit the golden file."
+        )
+        if test_case is not None:
+            test_case.fail(msg)
+        raise AssertionError(msg)
+
+    expected_stdout = golden_stdout_path.read_bytes()
+    failures: List[str] = []
+    if expected_stdout != py_stdout:
+        failures.append(
+            "stdout drifted from golden:\n"
+            + _diff(
+                f"golden:{golden_stdout_path.name}",
+                expected_stdout,
+                "python.stdout",
+                py_stdout,
+            )
+            + f"\npython stderr:\n{py_stderr.decode('utf-8', 'replace')}"
+        )
+
+    expected_exit = 0
+    if golden_exit_path is not None and golden_exit_path.exists():
+        expected_exit = int(golden_exit_path.read_text().strip())
+    if expected_exit != py_rc:
+        failures.append(
+            f"exit code drifted from golden: expected={expected_exit} actual={py_rc}\n"
+            f"python stderr:\n{py_stderr.decode('utf-8', 'replace')}"
+        )
+
+    if golden_stderr_path is not None and golden_stderr_path.exists():
+        expected_stderr = golden_stderr_path.read_bytes()
+        if expected_stderr != py_stderr:
+            failures.append(
+                "stderr drifted from golden:\n"
+                + _diff(
+                    f"golden:{golden_stderr_path.name}",
+                    expected_stderr,
+                    "python.stderr",
+                    py_stderr,
+                )
+            )
+
+    if failures:
+        message = "\n\n".join(failures)
+        if test_case is not None:
+            test_case.fail(message)
+        raise AssertionError(message)
+
+    return py_stdout, py_rc
+
+
 def run_parity(
     subcommand: str,
     args: Iterable[str],
@@ -102,21 +234,36 @@ def run_parity(
     env_overrides: Optional[Dict[str, str]] = None,
     compare_stderr: bool = False,
     test_case: Optional[unittest.TestCase] = None,
+    golden_stdout_path: Optional[Path] = None,
+    golden_exit_path: Optional[Path] = None,
+    golden_stderr_path: Optional[Path] = None,
+    normalize_tempdir: bool = False,
 ) -> Tuple[bytes, int]:
     """Run legacy + Python CLI on a copied fixture, assert byte-equal stdout
     and equal exit code. Returns (stdout, exit_code) for further inspection.
 
-    When `test_case` is provided, uses its assert helpers so failures surface
-    with the test-method name. Otherwise raises AssertionError directly.
-
-    If swarm-telemetry.legacy has been deleted (post-Phase-3/7), the test is
-    skipped rather than failing — the port has already been frozen via byte
-    parity and historical proof lives in the git log.
+    When `golden_stdout_path` is provided and `swarm-telemetry.legacy` is
+    absent, the test falls through to `run_golden` — stdout is asserted
+    against the committed golden file so regressions are still caught after
+    Phase 3 legacy deletion.
     """
     if not LEGACY_SCRIPT.exists():
+        if golden_stdout_path is not None:
+            return run_golden(
+                subcommand=subcommand,
+                args=args,
+                fixture_path=fixture_path,
+                golden_stdout_path=golden_stdout_path,
+                env_overrides=env_overrides,
+                test_case=test_case,
+                golden_exit_path=golden_exit_path,
+                golden_stderr_path=golden_stderr_path,
+                normalize_tempdir=normalize_tempdir,
+            )
         reason = (
-            f"swarm-telemetry.legacy deleted; parity was proven in Phase 3 "
-            f"commits 1-6. Restore {LEGACY_SCRIPT} to re-verify."
+            f"swarm-telemetry.legacy deleted and no golden provided; parity "
+            f"was proven in Phase 3 commits 1-6. Restore {LEGACY_SCRIPT} or "
+            f"pass golden_stdout_path to re-verify."
         )
         if test_case is not None:
             test_case.skipTest(reason)

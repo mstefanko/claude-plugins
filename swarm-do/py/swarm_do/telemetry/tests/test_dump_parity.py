@@ -7,6 +7,9 @@ import unittest
 from swarm_do.telemetry.tests._parity import FIXTURES_DIR, run_parity
 
 
+_GOLDEN = FIXTURES_DIR / "dump" / "golden"
+
+
 class DumpParityTests(unittest.TestCase):
     def test_dump_runs_populated(self) -> None:
         run_parity(
@@ -14,6 +17,7 @@ class DumpParityTests(unittest.TestCase):
             ["runs"],
             FIXTURES_DIR / "dump" / "populated",
             test_case=self,
+            golden_stdout_path=_GOLDEN / "runs_populated.stdout",
         )
 
     def test_dump_runs_empty(self) -> None:
@@ -22,6 +26,7 @@ class DumpParityTests(unittest.TestCase):
             ["runs"],
             FIXTURES_DIR / "dump" / "empty",
             test_case=self,
+            golden_stdout_path=_GOLDEN / "runs_empty.stdout",
         )
 
 

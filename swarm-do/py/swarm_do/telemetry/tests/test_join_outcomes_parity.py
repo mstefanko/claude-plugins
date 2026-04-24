@@ -19,6 +19,9 @@ import unittest
 from swarm_do.telemetry.tests._parity import FIXTURES_DIR, run_parity
 
 
+_GOLDEN = FIXTURES_DIR / "join_outcomes" / "golden"
+
+
 class JoinOutcomesParityTests(unittest.TestCase):
     def test_absent_findings_fast_path(self) -> None:
         # fixture has .git/HEAD and an empty telemetry dir -> the legacy
@@ -32,6 +35,10 @@ class JoinOutcomesParityTests(unittest.TestCase):
             env_overrides={"_PLACEHOLDER": "{tempdir}"},
             compare_stderr=True,
             test_case=self,
+            golden_stdout_path=_GOLDEN / "absent_findings.stdout",
+            golden_stderr_path=_GOLDEN / "absent_findings.stderr",
+            golden_exit_path=_GOLDEN / "absent_findings.exit",
+            normalize_tempdir=True,
         )
 
 

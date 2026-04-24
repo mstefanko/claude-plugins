@@ -1,0 +1,7 @@
+swarm-telemetry: validate — checking ledgers in {tempdir}/telemetry
+  FAIL row 2 in finding_outcomes.jsonl: schema mismatch against finding_outcomes.schema.json: $: missing required property 'maintainer_action'
+  FAIL row 3 in finding_outcomes.jsonl: schema mismatch against finding_outcomes.schema.json: $.finding_id: value 'TOO_SHORT' does not match /^[0-9A-HJKMNP-TV-Z]{26}$/
+  FAIL row 4: JSON parse error in finding_outcomes.jsonl: Expecting property name enclosed in double quotes: line 1 column 3 (char 2)
+  FAIL row 5 in finding_outcomes.jsonl: schema mismatch against finding_outcomes.schema.json: $.maintainer_action: expected one of ['ignored', 'commented', 'fixed_in_same_pr', 'followup_issue', 'followup_pr', 'hotfix_within_14d'], got 'bogus_action'
+  FAIL finding_outcomes.jsonl — 4 of 5 row(s) failed (1 JSON parse error(s))
+swarm-telemetry: validate — FAILED (4 validation error(s))
