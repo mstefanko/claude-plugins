@@ -91,7 +91,7 @@ swarm-do/
 
 ## bin/swarm-telemetry
 
-Reporter and write utility for the telemetry ledgers. Read-only subcommands shipped in Phase 9c; `join-outcomes` write subcommand shipped in Phase 9d.
+Reporter and write utility for the telemetry ledgers. Read-only subcommands shipped in Phase 9c; `join-outcomes` write subcommand shipped in Phase 9d. As of Phase 1, `bin/swarm-telemetry` is a thin bash shim that sources `bin/_lib/python-bootstrap.sh` and execs `python3 -m swarm_do.telemetry.cli`; the original bash implementation is preserved at `bin/swarm-telemetry.legacy` and remains the active backend until Phase 3 parity tests pass.
 
 ```
 swarm-telemetry query <sql>

@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
-# python-bootstrap.sh — resolve swarm-do py/ root, export PYTHONPATH, verify python3>=3.10.
-# Sourced by swarm-do bin/* thin shims.
+# python-bootstrap.sh — shared setup for swarm-do Python thin shims.
+#
+# Purpose: resolves the swarm_do package root (_lib/../../py), exports
+# PYTHONPATH so `python3 -m swarm_do.*` works without an install step,
+# and enforces a python3 >= 3.10 version gate (match-expression syntax
+# and structural pattern matching are assumed by later phases).
+#
+# Usage: source this file from any bin/* shim before execing python3.
+# Version gate: exits 1 with a clear message if python3 is absent or < 3.10.
+# Sourced by swarm-do bin/* thin shims — do not exec directly.
 
 # Resolve the python package root relative to THIS file: _lib/../../py
 _PY_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/py"
