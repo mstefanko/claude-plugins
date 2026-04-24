@@ -75,7 +75,7 @@ swarm-do/
 │   │   ├── hash-bundle.sh        SHA-256 of role prompt bundle (interface: hash-bundle.sh <role> <backend> → 64-char hex)
 │   │   └── normalize-path.sh     Canonical repo-relative path for stable hash input; strips WORKTREE_ROOT then REPO_ROOT prefix
 │   ├── swarm-run                 M1 manual runner (one role, one beads issue)
-│   ├── extract-phase.sh          Findings extractor — reads codex findings.json, appends findings.jsonl rows (Phase 9b)
+│   ├── extract-phase.sh          Findings extractor — thin shim; dispatches to python3 -m swarm_do.telemetry.extractors (Phase 4)
 │   ├── swarm-telemetry           Read-only reporter for telemetry ledgers (Phase 9c) — see below
 │   ├── swarm-gpt                 alias → swarm-run --backend codex
 │   ├── swarm-claude              alias → swarm-run --backend claude
@@ -120,3 +120,28 @@ swarm-telemetry purge <args>
 `CLAUDE_PLUGIN_DATA` sets the base data directory; telemetry lives at `$CLAUDE_PLUGIN_DATA/telemetry/`. If unset, defaults to `~/.claude/plugin-data/mstefanko-plugins/swarm-do`.
 
 **Self-test:** `swarm-telemetry --test` runs `python3 -m unittest discover` against the full test suite. As of Phase 3, 52 tests run (OK) with 19 skipped: 18 parity tests gate on `LEGACY_SCRIPT.exists()` and auto-skip after deletion, plus 1 pre-existing skip.
+
+## bin/extract-phase.sh
+
+Findings extractor for reviewer roles. The CLI surface is unchanged:
+
+```
+extract-phase.sh <findings-json-or-notes-md> <run-id> <role> <issue-id>
+extract-phase.sh --test
+```
+
+As of Phase 4, `extract-phase.sh` is a thin 9-line shim that execs `python3 -m swarm_do.telemetry.extractors "$@"`. All extraction logic lives in `swarm-do/py/swarm_do/telemetry/extractors/`.
+
+**Role dispatch** (in `extractors/__init__.py`):
+
+| Role(s) | Extractor |
+|---|---|
+| `agent-codex-review` | `codex_review.extract` — parses `findings.json` (JSON list under `"findings"`) |
+| `agent-review`, `agent-code-review` | `claude_review.extract` — parses reviewer markdown notes |
+| any other role | skipped with a stderr warning (fail-open, exits 0) |
+
+**Hashing:** `stable_finding_hash_v1` algorithm is unchanged from the Phase 9b bash implementation — same 4-field SHA-256 payload (`file_normalized|category_class|line_bucket|short_summary`), same hex encoding. Cross-backend dedup in the findings ledger is preserved.
+
+**Self-test:** `extract-phase.sh --test` passes `--test` through to the Python entrypoint, which runs `python3 -m unittest discover`.
+
+**Environment:** Same `CLAUDE_PLUGIN_DATA` variable as `swarm-telemetry`.

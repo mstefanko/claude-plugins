@@ -3,7 +3,7 @@
 Status: Accepted
 Date: 2026-04-23
 Supersedes: none
-Related: ADR 0001, phases 9a–9g, phase 10 refactor plan
+Related: ADR 0001, phases 9a–9g, phase 10 refactor plan, phase 4 extractors
 
 ## Context
 
@@ -53,3 +53,9 @@ Negative / follow-on work:
 - Phase 5 generation pipeline is a new CI build step.
 - Phase 3 completed the full port; `bin/swarm-telemetry.legacy` has been
   deleted and all six subcommands are now native Python.
+- Phase 4 ported findings extraction: `bin/extract-phase.sh` is now a thin
+  shim over `python3 -m swarm_do.telemetry.extractors`. The dispatcher
+  recognises `agent-codex-review` (codex extractor) and `agent-review` /
+  `agent-code-review` (claude extractor); unknown roles fail-open with a
+  stderr warning. `stable_finding_hash_v1` is byte-identical to the legacy
+  bash implementation, preserving cross-backend dedup.
