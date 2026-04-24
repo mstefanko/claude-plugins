@@ -221,7 +221,14 @@ _swarm_telemetry_write() {
     _base_sha="$START_HEAD_SHA"
     _head_sha="$(git -C "${PWD}" rev-parse HEAD 2>/dev/null || true)"
     _repo="$(git -C "${PWD}" remote get-url origin 2>/dev/null || true)"
-    _diff_bytes="$(git -C "${PWD}" diff --stat HEAD 2>/dev/null | wc -c | tr -d ' ' || true)"
+    # diff_size_bytes measures the run's actual delta:
+    #   - if backend committed (base != head), measure the committed range base..head
+    #   - else fall back to the dirty working tree vs HEAD (uncommitted edits)
+    if [[ -n "$_base_sha" && -n "$_head_sha" && "$_base_sha" != "$_head_sha" ]]; then
+      _diff_bytes="$(git -C "${PWD}" diff --stat "${_base_sha}..${_head_sha}" 2>/dev/null | wc -c | tr -d ' ' || true)"
+    else
+      _diff_bytes="$(git -C "${PWD}" diff --stat HEAD 2>/dev/null | wc -c | tr -d ' ' || true)"
+    fi
 
     # run_id: use the script-scope RUN_ID so findings.jsonl and runs.jsonl share the same run_id.
     _run_id="$RUN_ID"
