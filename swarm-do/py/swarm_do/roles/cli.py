@@ -62,6 +62,94 @@ def _target_paths(repo_root: Path, spec_path: Path) -> list[tuple[Path, str]]:
     return results
 
 
+def _render_roles_table() -> str:
+    """Render Markdown table of roles: Name | Description | Consumers."""
+    role_specs_dir = _find_role_specs_dir()
+    spec_files = sorted(role_specs_dir.glob("agent-*.md"))
+
+    lines = [
+        "| Name | Description | Consumers |",
+        "|------|-------------|-----------|",
+    ]
+
+    for spec_path in spec_files:
+        spec = load(spec_path)
+        # Escape pipes in description
+        description = (spec.description or "").replace("|", "\\|")
+        consumers_str = ", ".join(spec.consumers) if spec.consumers else "(none)"
+        lines.append(
+            f"| `{spec.name}` | {description} | {consumers_str} |"
+        )
+
+    return "\n".join(lines)
+
+
+def _cmd_readme_section_gen(args: argparse.Namespace) -> int:
+    """Generate roles inventory table in swarm-do/README.md."""
+    repo_root = _find_repo_root()
+    readme_path = repo_root / "swarm-do" / "README.md"
+
+    if not readme_path.exists():
+        print(f"Error: {readme_path} does not exist", file=sys.stderr)
+        return 1
+
+    content = readme_path.read_text(encoding="utf-8")
+
+    # Marker strings for roles readme-section
+    MARKER_BEGIN = "<!-- BEGIN: generated-by swarm_do.roles gen readme-section -->"
+    MARKER_END = "<!-- END: generated-by swarm_do.roles gen readme-section -->"
+
+    write_mode = getattr(args, "write", False)
+    check_mode = getattr(args, "check", False)
+
+    roles_table = _render_roles_table()
+
+    # Check/find markers in file
+    lines = content.split("\n")
+    begin_idx = None
+    end_idx = None
+
+    for i, line in enumerate(lines):
+        if line.strip() == MARKER_BEGIN:
+            begin_idx = i
+        elif line.strip() == MARKER_END:
+            end_idx = i
+
+    if begin_idx is None or end_idx is None:
+        print(
+            f"Error: markers not found in {readme_path}. "
+            f"Expected BEGIN and END markers for swarm_do.roles gen readme-section.",
+            file=sys.stderr
+        )
+        return 1
+
+    current_body = "\n".join(lines[begin_idx + 1 : end_idx]).strip()
+
+    if write_mode:
+        # Replace content between markers
+        new_lines = (
+            lines[:begin_idx]
+            + [MARKER_BEGIN, roles_table, MARKER_END]
+            + lines[end_idx + 1:]
+        )
+        new_content = "\n".join(new_lines)
+        readme_path.write_text(new_content, encoding="utf-8")
+        print(f"  wrote {readme_path.relative_to(repo_root)}")
+        return 0
+    else:
+        # check mode (default)
+        if current_body != roles_table:
+            print(f"Drift detected in {readme_path}:")
+            print("\nExpected:")
+            print(roles_table)
+            print("\nActual:")
+            print(current_body)
+            return 1
+        else:
+            print("OK — roles readme-section matches role-specs.")
+            return 0
+
+
 def _cmd_list(args: argparse.Namespace) -> int:
     role_specs_dir = _find_role_specs_dir()
     specs = sorted(role_specs_dir.glob("agent-*.md"))
@@ -73,7 +161,7 @@ def _cmd_list(args: argparse.Namespace) -> int:
 def _cmd_gen(args: argparse.Namespace) -> int:
     readme_section = getattr(args, "readme_section", None)
     if readme_section == "readme-section":
-        raise NotImplementedError("gen readme-section — Phase 6")
+        return _cmd_readme_section_gen(args)
 
     role_specs_dir = _find_role_specs_dir()
     repo_root = _find_repo_root()
