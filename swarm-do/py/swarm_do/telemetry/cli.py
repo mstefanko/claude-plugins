@@ -36,7 +36,6 @@ def _parse_days_type(s: str) -> int:
 
 
 SUBCOMMANDS = (
-    "dump",
     "validate",
     "query",
     "report",
@@ -87,6 +86,18 @@ def _build_parser() -> argparse.ArgumentParser:
         help="report what would be purged without modifying files",
     )
 
+    # Add dump subcommand (Phase 3 native Python implementation).
+    dump_parser = subparsers.add_parser(
+        "dump",
+        add_help=True,
+        help="Pretty-print a JSONL ledger as a JSON array.",
+    )
+    dump_parser.add_argument(
+        "ledger",
+        choices=sorted(LEDGERS.keys()),
+        help="ledger name (runs | findings | outcomes | adjudications | finding_outcomes)",
+    )
+
     # Add legacy subcommands (Phase 1 passthrough).
     for name in SUBCOMMANDS:
         sub = subparsers.add_parser(name, add_help=False, help=f"{name} (delegates to legacy)")
@@ -128,6 +139,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if ns.subcommand == "purge":
         from .subcommands import purge as _purge_cmd
         return _purge_cmd.run(ns)
+
+    # Dispatch dump to native Python implementation (Phase 3 commit 1).
+    if ns.subcommand == "dump":
+        from .subcommands import dump as _dump_cmd
+        return _dump_cmd.run(ns)
 
     # Rebuild the argv for the legacy script: subcommand + pass-through rest.
     rest = getattr(ns, "rest", []) or []

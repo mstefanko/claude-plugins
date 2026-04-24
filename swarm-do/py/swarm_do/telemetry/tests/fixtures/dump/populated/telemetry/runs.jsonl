@@ -1,0 +1,3 @@
+{"run_id":"01H0000000000000000000RUNA","role":"agent-writer","exit_code":0}
+{"run_id":"01H0000000000000000000RUNB","role":"agent-review","exit_code":0}
+{"run_id":"01H0000000000000000000RUNC","role":"agent-research","exit_code":1}
