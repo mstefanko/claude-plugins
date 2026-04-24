@@ -37,11 +37,22 @@ FIXTURES_DIR = _TESTS_DIR / "fixtures"
 
 
 def _copy_fixture(source: Path, dest: Path) -> None:
-    """Copy `source` tree contents into `dest` (dest must exist)."""
+    """Copy `source` tree contents into `dest` (dest must exist).
+
+    `dot-git/` under a fixture is rewritten as `.git/` at the destination,
+    because git refuses to track a nested `.git/HEAD` in the source tree.
+    This lets join-outcomes tests ship a fake git repo sentinel inside
+    the fixture while keeping the repo-level .gitignore clean.
+    """
     if not source.exists():
         raise FileNotFoundError(f"fixture does not exist: {source}")
     for child in source.iterdir():
-        target = dest / child.name
+        # Skip a stray `.git/` that git auto-hides from tracking — only
+        # `dot-git/` is canonical in fixtures (renamed to `.git/` on copy).
+        if child.name == ".git":
+            continue
+        target_name = ".git" if child.name == "dot-git" else child.name
+        target = dest / target_name
         if child.is_dir():
             shutil.copytree(child, target)
         else:
