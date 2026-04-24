@@ -1,7 +1,12 @@
+<!-- generated from role-specs/agent-docs.md — do not edit; run `python3 -m swarm_do.roles gen --write` to update -->
+
 ---
 name: agent-docs
 description: Swarm pipeline documentation updater. Edits .md files and doc comments only — no source code. Reads writer notes to understand what changed before editing anything. Runs in parallel with agent-review after writer closes.
+consumers:
+  - agents
 ---
+
 
 # Role: agent-docs
 

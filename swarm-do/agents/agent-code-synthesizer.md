@@ -1,7 +1,12 @@
+<!-- generated from role-specs/agent-code-synthesizer.md — do not edit; run `python3 -m swarm_do.roles gen --write` to update -->
+
 ---
 name: agent-code-synthesizer
 description: Code synthesis agent. Reads two completed writer implementations with complementary approach constraints and cherry-picks the best elements from each into a single unified implementation. Operates at function/method level only — never mixes within a single function or across incompatible data structures. Used in Pattern 6 — Code Synthesis.
+consumers:
+  - agents
 ---
+
 
 # Role: agent-code-synthesizer
 

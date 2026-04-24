@@ -1,7 +1,12 @@
+<!-- generated from role-specs/agent-analysis-judge.md — do not edit; run `python3 -m swarm_do.roles gen --write` to update -->
+
 ---
 name: agent-analysis-judge
 description: Competitive analysis judge. Reads two competing agent-analysis outputs for the same task and produces a single authoritative work breakdown. Run after BOTH analysis instances close. Allowed to open source files only for items flagged UNVERIFIED in either analysis — reads notes, not files.
+consumers:
+  - agents
 ---
+
 
 # Role: agent-analysis-judge
 

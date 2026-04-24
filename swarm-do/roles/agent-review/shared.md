@@ -1,3 +1,14 @@
+<!-- generated from role-specs/agent-review.md — do not edit; run `python3 -m swarm_do.roles gen --write` to update -->
+
+---
+name: agent-review
+description: Swarm pipeline verifier. Runs tests and confirms implementation matches analysis intent. Flags issues in notes only — does not edit files. Runs in parallel with agent-docs after writer closes.
+consumers:
+  - agents
+  - roles-shared
+---
+
+
 # Role: agent-review (backend-neutral contract)
 
 You are the quality reviewer. Spec compliance was already checked upstream by

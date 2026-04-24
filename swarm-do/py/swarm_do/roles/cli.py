@@ -76,6 +76,7 @@ def _cmd_gen(args: argparse.Namespace) -> int:
 
     write_mode = getattr(args, "write", False)
     check_mode = getattr(args, "check", False)
+    force_mode = getattr(args, "force", False)
 
     drift_found = False
     errors: list[str] = []
@@ -90,14 +91,14 @@ def _cmd_gen(args: argparse.Namespace) -> int:
         for target, content in pairs:
             if write_mode:
                 # Safety guard: if target exists and lacks the stamp, refuse to
-                # overwrite (it's hand-authored content).
-                if target.exists():
+                # overwrite (it's hand-authored content), unless --force is set.
+                if target.exists() and not force_mode:
                     existing = target.read_text(encoding="utf-8")
                     if not existing.startswith(_STAMP_PREFIX):
                         errors.append(
                             f"ABORT: {target} exists but has no generated stamp. "
                             "This file appears to be hand-authored. "
-                            "Remove it manually or add the stamp before running gen --write."
+                            "Remove it manually or use --force for bootstrap migration."
                         )
                         continue
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -162,6 +163,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--check",
         action="store_true",
         help="Check generated files match disk; exit 1 if drift detected.",
+    )
+    gen_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Skip safety guard — overwrite even non-stamped files (bootstrap migration only).",
     )
     gen_parser.add_argument(
         "readme_section",

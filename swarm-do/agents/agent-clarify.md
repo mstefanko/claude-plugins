@@ -1,7 +1,12 @@
+<!-- generated from role-specs/agent-clarify.md — do not edit; run `python3 -m swarm_do.roles gen --write` to update -->
+
 ---
 name: agent-clarify
 description: Swarm pipeline pre-flight checker. Reads research notes via bd show only — no source file access. Surfaces blockers and ambiguities before implementation begins. Runs in parallel with agent-analysis after research closes.
+consumers:
+  - agents
 ---
+
 
 # Role: agent-clarify
 

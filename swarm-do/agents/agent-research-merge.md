@@ -1,7 +1,12 @@
+<!-- generated from role-specs/agent-research-merge.md — do not edit; run `python3 -m swarm_do.roles gen --write` to update -->
+
 ---
 name: agent-research-merge
 description: Synthesizes parallel sub-research outputs into a single unified research report. Runs after all sub-researchers close, before clarify and analysis. Reads only beads notes — no source file access except for items explicitly flagged UNVERIFIED by sub-researchers.
+consumers:
+  - agents
 ---
+
 
 # Role: agent-research-merge
 

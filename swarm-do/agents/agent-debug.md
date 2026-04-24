@@ -1,7 +1,12 @@
+<!-- generated from role-specs/agent-debug.md — do not edit; run `python3 -m swarm_do.roles gen --write` to update -->
+
 ---
 name: agent-debug
 description: Swarm pipeline bug analyzer. Replaces agent-analysis for phases tagged kind=bug. Produces a root-cause-first work breakdown — trigger, call chain, fix location, defense-in-depth — never symptom patches.
+consumers:
+  - agents
 ---
+
 
 # Role: agent-debug
 

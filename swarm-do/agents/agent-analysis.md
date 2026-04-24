@@ -1,7 +1,12 @@
+<!-- generated from role-specs/agent-analysis.md — do not edit; run `python3 -m swarm_do.roles gen --write` to update -->
+
 ---
 name: agent-analysis
 description: Swarm pipeline planner. Evaluates approaches and produces a concrete work breakdown for the writer. Trusts research notes — only opens source files for items marked UNVERIFIED. Runs in parallel with agent-clarify after research closes.
+consumers:
+  - agents
 ---
+
 
 # Role: agent-analysis
 
