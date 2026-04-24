@@ -1,0 +1,22 @@
+{
+  "findings": [
+    {
+      "severity": "warning",
+      "category": "correctness",
+      "location": "internal/api/foo.go:42-55",
+      "rationale": "Window uses exclusive upper bound causing off-by-one under load"
+    },
+    {
+      "severity": "error",
+      "category": "types",
+      "location": "pkg/parse/token.go:100",
+      "rationale": "Returns nil without checking error path"
+    },
+    {
+      "severity": "info",
+      "category": "style",
+      "location": "cmd/cli/main.go",
+      "rationale": "Consider extracting helper for clarity"
+    }
+  ]
+}
