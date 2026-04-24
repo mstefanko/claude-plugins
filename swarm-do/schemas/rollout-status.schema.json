@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mstefanko.local/swarm-do/rollout-status.schema.json",
+  "title": "swarm-do rollout status",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "phase_0", "phase_1", "pattern_5_trial", "b1_dispatcher", "role_promotions"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "phase_0": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decision", "selected_mode", "decided_on", "cohort_run_date", "notes"],
+      "properties": {
+        "decision": { "enum": ["GO-EVERY-DO", "GO-TARGETED", "NO-GO", "DOGFOOD", "pending"] },
+        "selected_mode": { "enum": ["A", "B", "plugin", "none"] },
+        "decided_on": { "type": ["string", "null"] },
+        "cohort_run_date": { "type": ["string", "null"] },
+        "notes": { "type": "string" }
+      }
+    },
+    "phase_1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "activated_on", "rolled_back_on", "rollback_reason"],
+      "properties": {
+        "status": { "enum": ["pending", "live", "rolled-back"] },
+        "activated_on": { "type": ["string", "null"] },
+        "rolled_back_on": { "type": ["string", "null"] },
+        "rollback_reason": { "type": ["string", "null"] }
+      }
+    },
+    "pattern_5_trial": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "completed_on", "decision", "phases_sampled", "notes"],
+      "properties": {
+        "status": { "enum": ["pending", "complete", "abandoned"] },
+        "completed_on": { "type": ["string", "null"] },
+        "decision": { "enum": ["AUTO-DISPATCH", "MANUAL-ONLY", "NO-GO", "pending"] },
+        "phases_sampled": { "type": "integer", "minimum": 0 },
+        "notes": { "type": "string" }
+      }
+    },
+    "b1_dispatcher": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "shadow_started_on", "live_cutover_on", "rolled_back_on", "notes"],
+      "properties": {
+        "status": { "enum": ["pending", "shadow", "live", "rolled-back"] },
+        "shadow_started_on": { "type": ["string", "null"] },
+        "live_cutover_on": { "type": ["string", "null"] },
+        "rolled_back_on": { "type": ["string", "null"] },
+        "notes": { "type": "string" }
+      }
+    },
+    "role_promotions": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["primary", "promoted_on", "measurement_ref"],
+        "properties": {
+          "primary": { "enum": ["claude", "codex"] },
+          "promoted_on": { "type": ["string", "null"] },
+          "measurement_ref": { "type": ["string", "null"] }
+        }
+      }
+    }
+  }
+}

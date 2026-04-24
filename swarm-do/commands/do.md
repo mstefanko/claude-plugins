@@ -1,6 +1,6 @@
 ---
 description: "Execute a phased implementation plan via the beads swarm pipeline"
-argument-hint: "<plan-path>"
+argument-hint: "<plan-path> [--codex-review auto|on|off] [--risk low|moderate|high]"
 ---
 
 # /swarm-do:do
@@ -9,13 +9,13 @@ Orchestrate a multi-agent swarm pipeline against a plan file. Routes each phase 
 
 ## Argument
 
-`$ARGUMENTS` — absolute or repo-relative path to a plan file with numbered phases.
+`$ARGUMENTS` — absolute or repo-relative path to a plan file with numbered phases, plus optional orchestration flags. `--codex-review` controls the opt-in Codex review lane when supported by the active preset; `--risk` is an operator override for high-risk routing decisions.
 
 ## What happens
 
 1. **Preflight:** verify `bd where` succeeds in the current repo. If not, halt with setup instructions — do **not** auto-init.
 2. **Load orchestration prompt:** the skill at `skills/swarm-do/SKILL.md` contains the full per-phase protocol. Follow it exactly.
-3. **Per phase:** create 7 beads issues (research, analysis/debug, clarify, writer, spec-review, review, docs), spawn subagents in the prescribed order, poll background writers, merge worktrees, and close on APPROVED review.
+3. **Per phase:** load the active preset/pipeline, create beads issues for that graph, spawn subagents in topological order, poll background writers, merge worktrees, and close on APPROVED review.
 4. **After all phases:** open exactly one consolidated PR into `main`.
 
 ## Execute

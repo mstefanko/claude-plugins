@@ -22,6 +22,17 @@ class PipelineValidationTests(unittest.TestCase):
             [["research"], ["analysis", "clarify"], ["writer"], ["spec-review"], ["docs", "review"]],
         )
 
+    def test_hybrid_review_adds_codex_review_after_spec_review(self) -> None:
+        item = find_pipeline("hybrid-review")
+        self.assertIsNotNone(item)
+        pipeline = load_pipeline(item.path)
+        self.assertEqual(
+            topological_layers(pipeline),
+            [["research"], ["analysis", "clarify"], ["writer"], ["spec-review"], ["codex-review", "docs", "review"]],
+        )
+        result, *_ = validate_preset_and_pipeline("hybrid-review")
+        self.assertTrue(result.ok, result.errors)
+
     def test_failure_tolerance_string_is_rejected(self) -> None:
         pipeline = loads(
             """
@@ -80,6 +91,103 @@ stages:
         )
         errors = schema_lint_pipeline(pipeline)
         self.assertTrue(any("bare model IDs are invalid" in e for e in errors))
+
+    def test_unresolved_named_model_routes_are_rejected_during_preset_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            data = Path(td)
+            (data / "presets").mkdir()
+            (data / "pipelines").mkdir()
+            (data / "pipelines" / "unresolved.yaml").write_text(
+                """
+pipeline_version: 1
+name: unresolved
+stages:
+  - id: writers
+    fan_out:
+      role: agent-writer
+      count: 2
+      variant: models
+      routes: [fast, slow]
+    merge:
+      strategy: synthesize
+      agent: agent-writer-judge
+""",
+                encoding="utf-8",
+            )
+            (data / "presets" / "unresolved.toml").write_text(
+                """
+name = "unresolved"
+pipeline = "unresolved"
+origin = "user"
+
+[budget]
+max_agents_per_run = 20
+max_estimated_cost_usd = 5.0
+max_wall_clock_seconds = 1800
+""",
+                encoding="utf-8",
+            )
+            old = os.environ.get("CLAUDE_PLUGIN_DATA")
+            os.environ["CLAUDE_PLUGIN_DATA"] = td
+            try:
+                result, *_ = validate_preset_and_pipeline("unresolved")
+                self.assertFalse(result.ok)
+                self.assertTrue(any("named route not found" in e for e in result.errors))
+            finally:
+                if old is None:
+                    os.environ.pop("CLAUDE_PLUGIN_DATA", None)
+                else:
+                    os.environ["CLAUDE_PLUGIN_DATA"] = old
+
+    def test_named_model_routes_resolve_from_preset_routing(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            data = Path(td)
+            (data / "presets").mkdir()
+            (data / "pipelines").mkdir()
+            (data / "pipelines" / "named-routes.yaml").write_text(
+                """
+pipeline_version: 1
+name: named-routes
+stages:
+  - id: writers
+    fan_out:
+      role: agent-writer
+      count: 2
+      variant: models
+      routes: [fast, slow]
+    merge:
+      strategy: synthesize
+      agent: agent-writer-judge
+""",
+                encoding="utf-8",
+            )
+            (data / "presets" / "named-routes.toml").write_text(
+                """
+name = "named-routes"
+pipeline = "named-routes"
+origin = "user"
+
+[routing]
+fast = { backend = "claude", model = "claude-opus-4-7", effort = "high" }
+slow = { backend = "codex", model = "gpt-5.4", effort = "xhigh" }
+
+[budget]
+max_agents_per_run = 20
+max_estimated_cost_usd = 5.0
+max_wall_clock_seconds = 1800
+""",
+                encoding="utf-8",
+            )
+            old = os.environ.get("CLAUDE_PLUGIN_DATA")
+            os.environ["CLAUDE_PLUGIN_DATA"] = td
+            try:
+                result, *_ = validate_preset_and_pipeline("named-routes")
+                self.assertTrue(result.ok, result.errors)
+            finally:
+                if old is None:
+                    os.environ.pop("CLAUDE_PLUGIN_DATA", None)
+                else:
+                    os.environ["CLAUDE_PLUGIN_DATA"] = old
 
     def test_variant_lint_catches_dangling_variant(self) -> None:
         with tempfile.TemporaryDirectory() as td:

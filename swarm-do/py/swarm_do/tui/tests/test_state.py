@@ -8,7 +8,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from swarm_do.pipeline.config_hash import active_config_hash
-from swarm_do.tui.actions import set_base_route
+from swarm_do.pipeline.registry import load_preset
+from swarm_do.tui.actions import set_base_route, set_user_preset_pipeline, set_user_preset_route
 from swarm_do.tui.state import load_in_flight, status_summary, token_burn_last_24h
 
 
@@ -97,6 +98,48 @@ class TuiActionTests(EnvTestCase):
     def test_invariant_rejects_orchestrator_to_codex(self) -> None:
         with self.assertRaisesRegex(ValueError, "orchestrator"):
             set_base_route("orchestrator", None, "codex", "gpt-5.4", "high")
+
+    def test_invalid_pipeline_change_does_not_mutate_user_preset(self) -> None:
+        presets = self.root / "presets"
+        presets.mkdir()
+        preset_path = presets / "user.toml"
+        preset_path.write_text(
+            """
+name = "user"
+pipeline = "default"
+origin = "user"
+
+[budget]
+max_agents_per_run = 20
+max_estimated_cost_usd = 5.0
+max_wall_clock_seconds = 1800
+""",
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(ValueError, "pipeline not found"):
+            set_user_preset_pipeline("user", "missing")
+        self.assertEqual(load_preset(preset_path)["pipeline"], "default")
+
+    def test_user_preset_route_edit_validates_before_write(self) -> None:
+        presets = self.root / "presets"
+        presets.mkdir()
+        preset_path = presets / "user.toml"
+        preset_path.write_text(
+            """
+name = "user"
+pipeline = "default"
+origin = "user"
+
+[budget]
+max_agents_per_run = 20
+max_estimated_cost_usd = 5.0
+max_wall_clock_seconds = 1800
+""",
+            encoding="utf-8",
+        )
+        set_user_preset_route("user", "agent-docs", "simple", "codex", "gpt-5.4-mini", "medium")
+        routing = load_preset(preset_path)["routing"]
+        self.assertEqual(routing["roles.agent-docs.simple"]["backend"], "codex")
 
 
 if __name__ == "__main__":

@@ -240,21 +240,33 @@ def validate_preset_and_pipeline(
     except Exception as exc:
         result.add(f"preset parse failed: {exc}")
         return result, {}, {}, preset_item.path
+    result, pipeline = validate_preset_mapping(preset, preset_name, plan_path, include_budget)
+    return result, preset, pipeline, preset_item.path
+
+
+def validate_preset_mapping(
+    preset: Mapping[str, Any],
+    preset_name: str | None = None,
+    plan_path: str | None = None,
+    include_budget: bool = False,
+) -> tuple[ValidationResult, dict[str, Any]]:
+    result = ValidationResult()
     result.errors.extend(schema_lint_preset(preset))
 
     pipeline_item = find_pipeline(str(preset.get("pipeline", "")))
     if pipeline_item is None:
         result.add(f"pipeline not found: {preset.get('pipeline')}")
-        return result, preset, {}, preset_item.path
+        return result, {}
     try:
         pipeline = load_pipeline(pipeline_item.path)
     except Exception as exc:
         result.add(f"pipeline parse failed: {exc}")
-        return result, preset, {}, preset_item.path
+        return result, {}
     result.errors.extend(schema_lint_pipeline(pipeline))
     result.errors.extend(role_existence_errors(pipeline))
     result.errors.extend(variant_existence_errors(pipeline))
-    result.errors.extend(invariant_errors(pipeline, preset_name))
+    result.errors.extend(route_resolution_errors(pipeline, preset_name, preset))
+    result.errors.extend(invariant_errors(pipeline, preset_name, preset))
     try:
         topological_layers(pipeline)
     except ValueError as exc:
@@ -266,7 +278,7 @@ def validate_preset_and_pipeline(
             result.errors.extend(result.budget.exceeds)
         except Exception as exc:
             result.add(f"budget preview failed: {exc}")
-    return result, preset, pipeline, preset_item.path
+    return result, pipeline
 
 
 def role_existence_errors(pipeline: Mapping[str, Any]) -> list[str]:
@@ -289,9 +301,55 @@ def variant_existence_errors(pipeline: Mapping[str, Any]) -> list[str]:
     return errors
 
 
-def invariant_errors(pipeline: Mapping[str, Any], preset_name: str | None) -> list[str]:
+def route_resolution_errors(
+    pipeline: Mapping[str, Any],
+    preset_name: str | None,
+    preset: Mapping[str, Any] | None = None,
+) -> list[str]:
     errors: list[str] = []
-    resolver = BackendResolver(preset_name=preset_name)
+    resolver = BackendResolver(preset_name=preset_name, preset_data=preset)
+    for stage in pipeline.get("stages") or []:
+        stage_id = stage.get("id", "<unknown>")
+        for agent in stage.get("agents") or []:
+            if not isinstance(agent, Mapping):
+                continue
+            role = agent.get("role")
+            if not isinstance(role, str):
+                continue
+            override = agent.get("route")
+            if override is None and {"backend", "model", "effort"} <= set(agent.keys()):
+                override = agent
+            if override is None:
+                continue
+            try:
+                resolver.resolve(role, override=override)
+            except Exception as exc:
+                errors.append(f"route resolution failed for stage {stage_id} role {role}: {exc}")
+
+        fan = stage.get("fan_out")
+        if not isinstance(fan, Mapping) or fan.get("variant") != "models":
+            continue
+        role = fan.get("role")
+        if not isinstance(role, str):
+            continue
+        routes = fan.get("routes")
+        if not isinstance(routes, list):
+            continue
+        for idx, route in enumerate(routes):
+            try:
+                resolver.resolve(role, override=route)
+            except Exception as exc:
+                errors.append(f"route resolution failed for stage {stage_id} fan_out.routes[{idx}]: {exc}")
+    return errors
+
+
+def invariant_errors(
+    pipeline: Mapping[str, Any],
+    preset_name: str | None,
+    preset: Mapping[str, Any] | None = None,
+) -> list[str]:
+    errors: list[str] = []
+    resolver = BackendResolver(preset_name=preset_name, preset_data=preset)
     try:
         if not resolver.is_claude_backed("orchestrator", "hard"):
             errors.append("invariant: orchestrator must resolve to a Claude backend")

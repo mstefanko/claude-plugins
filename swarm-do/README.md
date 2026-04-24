@@ -14,6 +14,8 @@ Shipped:
 - `/swarm-do:init-beads` — explicit, idempotent `bd init --stealth` bootstrap for a repo.
 - `bin/swarm preset ...` — preset load/save/diff/list/clear/dry-run.
 - `bin/swarm pipeline ...` — stock/user pipeline list/show/lint.
+- `bin/swarm status` / `bin/swarm rollout ...` — rollout status and decision log.
+- `bin/swarm compete <plan-path>` — manual Pattern 5 setup; validates and activates the competitive preset.
 - `bin/swarm-validate <preset>` — validation gates for preset + pipeline loading.
 
 Planned (packaging Phase 3 and Integration Phases 1–2):
@@ -114,9 +116,17 @@ swarm pipeline list
 swarm pipeline show <name>
 swarm pipeline lint <name-or-path>
 swarm mode claude-only|codex-only|balanced|custom
+swarm status
+swarm rollout show [--json]
+swarm rollout dogfood [--notes "..."]
+swarm rollout set <path> <value>
+swarm rollout history
+swarm compete <plan-path> [--dry-run]
 ```
 
 Active preset state lives at `${CLAUDE_PLUGIN_DATA}/current-preset.txt`. Fresh installs have no active preset; routing falls back to `backends.toml`, while the runtime uses the `default` pipeline.
+
+Stock presets include `hybrid-review` for Phase 1 dogfooding. It keeps the default pipeline shape and adds a fail-open `agent-codex-review` lane after spec-review. `competitive` remains the manual Pattern 5 preset for two-writer trials.
 
 ## Roles
 

@@ -12,7 +12,7 @@ from typing import Any, Mapping
 from swarm_do.pipeline.paths import current_preset_path, resolve_data_dir, user_presets_dir
 from swarm_do.pipeline.registry import find_preset, load_preset
 from swarm_do.pipeline.resolver import BACKENDS, EFFORTS, ROLE_DEFAULTS
-from swarm_do.pipeline.validation import validate_preset_and_pipeline
+from swarm_do.pipeline.validation import validate_preset_mapping
 from swarm_do.tui.state import InFlightRun, in_flight_dir, load_in_flight
 
 
@@ -121,6 +121,31 @@ def set_base_route(role: str, complexity: str | None, backend: str, model: str, 
     atomic_write_text(backends_path(), render_toml(data))
 
 
+def _route_key(role: str, complexity: str | None) -> str:
+    return f"roles.{role}.{complexity}" if complexity else f"roles.{role}"
+
+
+def set_user_preset_route(preset_name: str, role: str, complexity: str | None, backend: str, model: str, effort: str) -> None:
+    if backend not in BACKENDS:
+        raise ValueError(f"backend must be one of {sorted(BACKENDS)}")
+    if effort not in EFFORTS:
+        raise ValueError(f"effort must be one of {sorted(EFFORTS)}")
+    item = find_preset(preset_name)
+    if item is None:
+        raise ValueError(f"preset not found: {preset_name}")
+    if item.origin != "user":
+        raise ValueError("stock presets are read-only; fork before editing routes")
+    data = load_preset(item.path)
+    routing = data.setdefault("routing", {})
+    if not isinstance(routing, dict):
+        raise ValueError("preset routing must be a table")
+    routing[_route_key(role, complexity)] = {"backend": backend, "model": model, "effort": effort}
+    result, _ = validate_preset_mapping(data, preset_name)
+    if not result.ok:
+        raise ValueError("; ".join(result.errors))
+    atomic_write_text(item.path, render_toml(data))
+
+
 def rename_user_preset(old: str, new: str) -> Path:
     item = find_preset(old)
     if item is None:
@@ -160,10 +185,10 @@ def set_user_preset_pipeline(preset_name: str, pipeline_name: str) -> None:
         raise ValueError("stock presets are read-only; fork before changing pipeline")
     data = load_preset(item.path)
     data["pipeline"] = pipeline_name
-    atomic_write_text(item.path, render_toml(data))
-    result, *_ = validate_preset_and_pipeline(preset_name)
+    result, _ = validate_preset_mapping(data, preset_name)
     if not result.ok:
         raise ValueError("; ".join(result.errors))
+    atomic_write_text(item.path, render_toml(data))
 
 
 def cancel_run(run: InFlightRun) -> None:

@@ -31,6 +31,8 @@ Flags:
 
 Env:
   SWARM_EFFORT_OVERRIDE=xhigh   escalate codex effort (codex backend only)
+  SWARM_CODEX_REVIEW_TIMEOUT_SECONDS=60
+                                discard agent-codex-review after this many seconds
 
 Examples:
   swarm-run --backend codex --issue bd-42
@@ -361,12 +363,35 @@ fi
 trap '_swarm_exit_handler' EXIT
 
 if [[ "$BACKEND" == "codex" ]]; then
-  if ! printf '%s' "$PROMPT" | codex exec --json -m "$MODEL" -c model_reasoning_effort="\"$EFFORT\"" --skip-git-repo-check -C "$PWD" >"$OUT_FILE" 2>&1; then
-    echo "swarm-run: codex invocation failed (see output below)" >&2
-    cat "$OUT_FILE" >&2
-    BACKEND_RC=1
+  if [[ "$ROLE" == "agent-codex-review" ]]; then
+    REVIEW_TIMEOUT="${SWARM_CODEX_REVIEW_TIMEOUT_SECONDS:-60}"
+    set +e
+    printf '%s' "$PROMPT" | PYTHONPATH="${_PY_ROOT}:${PYTHONPATH:-}" python3 -m swarm_do.pipeline.timeout_exec \
+      --timeout "$REVIEW_TIMEOUT" \
+      --output "$OUT_FILE" \
+      -- codex exec --json -m "$MODEL" -c model_reasoning_effort="\"$EFFORT\"" --skip-git-repo-check -C "$PWD"
+    CODEX_REVIEW_RC=$?
+    set -e
+    if [[ "$CODEX_REVIEW_RC" -eq 124 ]]; then
+      printf '{"status":"discarded","reason":"timeout","timeout_seconds":%s}\n' "$REVIEW_TIMEOUT" >"$OUT_FILE"
+      echo "swarm-run: codex review timed out after ${REVIEW_TIMEOUT}s; discarding review and continuing" >&2
+      BACKEND_RC=0
+    elif [[ "$CODEX_REVIEW_RC" -ne 0 ]]; then
+      echo "swarm-run: codex review failed rc=$CODEX_REVIEW_RC; discarding review and continuing" >&2
+      cat "$OUT_FILE" >&2 || true
+      printf '{"status":"discarded","reason":"backend_error","exit_code":%s}\n' "$CODEX_REVIEW_RC" >"$OUT_FILE"
+      BACKEND_RC=0
+    else
+      BACKEND_RC=0
+    fi
   else
-    BACKEND_RC=0
+    if ! printf '%s' "$PROMPT" | codex exec --json -m "$MODEL" -c model_reasoning_effort="\"$EFFORT\"" --skip-git-repo-check -C "$PWD" >"$OUT_FILE" 2>&1; then
+      echo "swarm-run: codex invocation failed (see output below)" >&2
+      cat "$OUT_FILE" >&2
+      BACKEND_RC=1
+    else
+      BACKEND_RC=0
+    fi
   fi
 else
   # Claude backend MVP stub.

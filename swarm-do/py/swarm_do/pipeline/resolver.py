@@ -134,9 +134,18 @@ def _role_default(role: str, complexity: str | None) -> Route:
 
 
 class BackendResolver:
-    def __init__(self, preset_name: str | None = None, base_backends_path: Path | None = None):
+    def __init__(
+        self,
+        preset_name: str | None = None,
+        base_backends_path: Path | None = None,
+        preset_data: Mapping[str, Any] | None = None,
+    ):
         self.preset_name = active_preset_name() if preset_name == "current" else preset_name
-        self.preset, self.preset_file = load_preset_by_name(self.preset_name)
+        if preset_data is None:
+            self.preset, self.preset_file = load_preset_by_name(self.preset_name)
+        else:
+            self.preset = dict(preset_data)
+            self.preset_file = None
         self.base_backends_path = base_backends_path or (resolve_data_dir() / "backends.toml")
         self.base = load_toml(self.base_backends_path)
 

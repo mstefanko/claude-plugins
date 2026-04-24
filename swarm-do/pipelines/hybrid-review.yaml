@@ -1,0 +1,40 @@
+pipeline_version: 1
+name: hybrid-review
+description: Default pipeline with opt-in Codex blocking-issues review after spec-review.
+stages:
+  - id: research
+    agents:
+      - role: agent-research
+  - id: analysis
+    depends_on: [research]
+    agents:
+      - role: agent-analysis
+  - id: clarify
+    depends_on: [research]
+    agents:
+      - role: agent-clarify
+  - id: writer
+    depends_on: [analysis, clarify]
+    agents:
+      - role: agent-writer
+  - id: spec-review
+    depends_on: [writer]
+    agents:
+      - role: agent-spec-review
+  - id: codex-review
+    depends_on: [spec-review]
+    agents:
+      - role: agent-codex-review
+        backend: codex
+        model: gpt-5.4
+        effort: high
+    failure_tolerance:
+      mode: best-effort
+  - id: review
+    depends_on: [spec-review]
+    agents:
+      - role: agent-review
+  - id: docs
+    depends_on: [spec-review]
+    agents:
+      - role: agent-docs

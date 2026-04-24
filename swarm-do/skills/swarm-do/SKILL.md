@@ -5,7 +5,7 @@ description: Orchestrator prompt for the /swarm-do:do slash command. Not invoked
 
 # Do Plan
 
-You are the Claude dispatcher for the swarm-do pipeline engine. `/swarm-do:do <plan-path>` is for real plan files only.
+You are the Claude dispatcher for the swarm-do pipeline engine. `/swarm-do:do <plan-path>` is for real plan files only. `$ARGUMENTS` may also include operator flags such as `--codex-review auto|on|off` and `--risk low|moderate|high`; parse those flags before treating the remaining token as the plan path.
 
 ## Preflight
 
@@ -29,6 +29,14 @@ fi
 ```
 
 If there is no active preset, the runtime uses the `default` pipeline and routing falls back to `backends.toml`. Budget and invariant failures are hard rejects when a preset declares ceilings; do not bypass them.
+
+3. Check rollout status when deciding whether Codex lanes are allowed:
+
+```bash
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" status
+```
+
+`DOGFOOD` means opt-in plugin wiring is allowed through the active preset, not default-on Codex review.
 
 ## Engine Boundary
 
@@ -54,6 +62,18 @@ Use the helpers:
    - `best-effort`: pass all available successful outputs, including an empty set.
 7. For `merge.strategy: synthesize`, dispatch the configured merge agent with only successful fan-out outputs.
 8. Repeat until all layers complete, then close issues and summarize.
+
+## Backend Dispatch
+
+Claude-backed stages use Claude Code `Agent()` with the loaded role persona. Codex-backed stages use the runner so telemetry, prompt bundles, and fail-open review behavior stay consistent:
+
+```bash
+"$CLAUDE_PLUGIN_ROOT/bin/swarm-run" --backend codex --issue <bd-id> --role <role-name>
+```
+
+For `agent-codex-review`, the runner enforces `SWARM_CODEX_REVIEW_TIMEOUT_SECONDS` (default 60). Timeout or backend failure emits a discarded sentinel in beads notes and returns success so the pipeline can continue. Treat those sentinels as "no usable Codex review", not as approval. Other Codex roles keep normal non-zero failure behavior.
+
+The stock `hybrid-review` preset is the Phase 1 dogfood lane: it adds `agent-codex-review` after `spec-review` while keeping the normal Claude review and docs lanes. The stock `competitive` preset is the manual Pattern 5 lane; `bin/swarm compete <plan-path>` validates and activates it.
 
 ## Role Loading
 

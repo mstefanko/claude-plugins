@@ -19,6 +19,7 @@ from .registry import (
     load_preset,
     sha256_file,
 )
+from .rollout import format_status, history_lines, load_state, mark_dogfood, set_field
 from .validation import schema_lint_pipeline, validate_preset_and_pipeline
 
 
@@ -37,13 +38,17 @@ def _print_validation(result) -> None:
         print(f"error: {error}", file=sys.stderr)
 
 
+def _activate_preset(name: str) -> None:
+    path = _ensure_current_file()
+    path.write_text(name + "\n", encoding="utf-8")
+
+
 def cmd_preset_load(args: argparse.Namespace) -> int:
     result, preset, pipeline, _ = validate_preset_and_pipeline(args.name, include_budget=False)
     _print_validation(result)
     if not result.ok:
         return 1
-    path = _ensure_current_file()
-    path.write_text(args.name + "\n", encoding="utf-8")
+    _activate_preset(args.name)
     print(f"loaded preset {args.name}; budget gate will run during dry-run and run start")
     return 0
 
@@ -167,6 +172,76 @@ def cmd_preset_dry_run(args: argparse.Namespace) -> int:
     return 0 if result.ok else 1
 
 
+def cmd_status(args: argparse.Namespace) -> int:
+    print(format_status(load_state()))
+    return 0
+
+
+def cmd_rollout_show(args: argparse.Namespace) -> int:
+    state = load_state()
+    if args.json:
+        import json
+
+        print(json.dumps(state, indent=2, sort_keys=True))
+    else:
+        print(format_status(state))
+    return 0
+
+
+def cmd_rollout_set(args: argparse.Namespace) -> int:
+    try:
+        state = set_field(args.path, args.value)
+    except ValueError as exc:
+        print(f"swarm: rollout set: {exc}", file=sys.stderr)
+        return 1
+    print(format_status(state))
+    return 0
+
+
+def cmd_rollout_dogfood(args: argparse.Namespace) -> int:
+    try:
+        state = mark_dogfood(args.notes)
+    except ValueError as exc:
+        print(f"swarm: rollout dogfood: {exc}", file=sys.stderr)
+        return 1
+    print(format_status(state))
+    return 0
+
+
+def cmd_rollout_history(args: argparse.Namespace) -> int:
+    lines = history_lines()
+    if not lines:
+        print("no rollout history")
+        return 0
+    print("\n".join(lines))
+    return 0
+
+
+def cmd_compete(args: argparse.Namespace) -> int:
+    preset_name = args.preset
+    result, preset, pipeline, _ = validate_preset_and_pipeline(preset_name, args.plan_path, include_budget=True)
+    if result.budget:
+        b = result.budget
+        print("Budget preview")
+        print(f"  phases: {b.phase_count}")
+        print(f"  agents: {b.agent_count}")
+        print(f"  estimated_tokens: {b.estimated_tokens}")
+        print(f"  estimated_cost_usd: {b.estimated_cost_usd:.4f}")
+        print(f"  estimated_wall_clock_seconds: {b.estimated_wall_clock_seconds}")
+    if pipeline:
+        print("Stage graph")
+        print("\n".join(graph_lines(pipeline)))
+    _print_validation(result)
+    if not result.ok:
+        return 1
+    if args.dry_run:
+        print(f"competitive preset {preset_name} is valid for {args.plan_path}")
+        return 0
+    _activate_preset(preset_name)
+    print(f"loaded preset {preset_name}; run /swarm-do:do {args.plan_path} to start Pattern 5")
+    return 0
+
+
 def cmd_pipeline_list(args: argparse.Namespace) -> int:
     for item in list_pipelines():
         print(f"{item.name}\t{item.origin}")
@@ -287,6 +362,22 @@ def _build_parser() -> argparse.ArgumentParser:
     mode = sub.add_parser("mode")
     mode.add_argument("name", choices=["claude-only", "codex-only", "balanced", "custom"])
     mode.set_defaults(func=cmd_mode)
+
+    status = sub.add_parser("status")
+    status.set_defaults(func=cmd_status)
+
+    rollout = sub.add_parser("rollout")
+    rollout_sub = rollout.add_subparsers(dest="rollout_command")
+    p = rollout_sub.add_parser("show"); p.add_argument("--json", action="store_true"); p.set_defaults(func=cmd_rollout_show)
+    p = rollout_sub.add_parser("set"); p.add_argument("path"); p.add_argument("value"); p.set_defaults(func=cmd_rollout_set)
+    p = rollout_sub.add_parser("dogfood"); p.add_argument("--notes"); p.set_defaults(func=cmd_rollout_dogfood)
+    p = rollout_sub.add_parser("history"); p.set_defaults(func=cmd_rollout_history)
+
+    compete = sub.add_parser("compete")
+    compete.add_argument("plan_path")
+    compete.add_argument("--preset", default="competitive")
+    compete.add_argument("--dry-run", action="store_true")
+    compete.set_defaults(func=cmd_compete)
 
     handoff = sub.add_parser("handoff")
     handoff.add_argument("issue_id")

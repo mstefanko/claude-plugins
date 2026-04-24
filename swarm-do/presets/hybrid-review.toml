@@ -1,0 +1,12 @@
+name = "hybrid-review"
+description = "Opt-in dogfood pipeline that adds fail-open Codex review after spec-review."
+pipeline = "hybrid-review"
+origin = "stock"
+
+[routing]
+"roles.agent-codex-review" = { backend = "codex", model = "gpt-5.4", effort = "high" }
+
+[budget]
+max_agents_per_run = 100
+max_estimated_cost_usd = 25.0
+max_wall_clock_seconds = 14400

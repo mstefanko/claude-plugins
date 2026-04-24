@@ -19,8 +19,8 @@ else:  # pragma: no cover - UI smoke-tested through the wrapper in operator use.
 
 from swarm_do.pipeline.config_hash import active_config_hash
 from swarm_do.pipeline.engine import graph_lines
-from swarm_do.pipeline.registry import list_pipelines, list_presets, load_pipeline, load_preset
-from swarm_do.pipeline.resolver import BACKENDS, EFFORTS, BackendResolver, ROLE_DEFAULTS
+from swarm_do.pipeline.registry import find_preset, list_pipelines, list_presets, load_pipeline, load_preset
+from swarm_do.pipeline.resolver import BACKENDS, EFFORTS, BackendResolver, ROLE_DEFAULTS, active_preset_name
 from swarm_do.pipeline.validation import schema_lint_pipeline, validate_preset_and_pipeline
 from swarm_do.tui import actions
 from swarm_do.tui.state import load_in_flight, load_runs, status_summary, token_burn_last_24h
@@ -172,6 +172,15 @@ if TEXTUAL_IMPORT_ERROR is None:
             table.clear(columns=True)
             table.cursor_type = "cell"
             table.add_columns("role", "simple", "moderate", "hard")
+            active = active_preset_name()
+            item = find_preset(active) if active else None
+            if item is None:
+                target = "Editing: backends.toml (base)"
+            elif item.origin == "stock":
+                target = f"Stock preset active: {item.name} - fork before editing routes"
+            else:
+                target = f"Editing: {item.name}.toml (routing)"
+            self.query_one("#target", Static).update(target)
             resolver = BackendResolver(preset_name="current")
             for role in sorted(ROLE_DEFAULTS):
                 cells = [role]
@@ -192,6 +201,11 @@ if TEXTUAL_IMPORT_ERROR is None:
             self.app.push_screen(MessageModal("Saved as edited", "Route edits are saved immediately from the edit dialog."))
 
         def action_edit_route(self) -> None:
+            active = active_preset_name()
+            item = find_preset(active) if active else None
+            if item is not None and item.origin == "stock":
+                self.app.push_screen(MessageModal("Stock preset active", "Fork the preset before editing routes."))
+                return
             table = self.query_one("#settings", DataTable)
             row_index = getattr(table, "cursor_row", 0)
             col_index = getattr(table, "cursor_column", 1)
@@ -204,7 +218,10 @@ if TEXTUAL_IMPORT_ERROR is None:
                     return
                 backend, model, effort = value
                 try:
-                    actions.set_base_route(role, complexity, backend, model, effort)
+                    if item is not None and item.origin == "user":
+                        actions.set_user_preset_route(item.name, role, complexity, backend, model, effort)
+                    else:
+                        actions.set_base_route(role, complexity, backend, model, effort)
                 except Exception as exc:
                     self.app.push_screen(MessageModal("Route refused", str(exc)))
                     return

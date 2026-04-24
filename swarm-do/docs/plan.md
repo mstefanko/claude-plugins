@@ -70,8 +70,8 @@ Week 1-2:
       ├─ Depends on: matrix refresh, Phase 1.5 spike
       └─ Ships: /swarm-do plugin + bin/swarm CLI + JSONL run log + config contract
                                                 ▼
-Week 2-3 (if Phase 0 decision is GO-EVERY-DO or GO-TARGETED):
-  Integration Phase 1 — auto-wire codex-review into /swarm-do
+Week 2-3 (Phase 0 decision recorded as DOGFOOD):
+  Integration Phase 1 — opt-in codex-review dogfood lane in /swarm-do
       └─ Depends on: packaging cutover + Phase 0 decision recorded
                                                 ▼
 Weeks 3-5 — V1 operator experience (§1.8 / §1.9 / §1.10):
@@ -89,7 +89,7 @@ Weeks 3-5 — V1 operator experience (§1.8 / §1.9 / §1.10):
       ├─ Phase 10a (schemas + validation gates) — BLOCKING before any user pipeline loads
       ├─ Phase 10b (pipeline engine refactor) — orchestrator becomes data-driven
       ├─ Phase 10c (preset loader + bin/swarm subcommands)
-      ├─ Phase 10d (stock presets: balanced / claude-only / codex-only / ultra-plan / competitive / lightweight)
+      ├─ Phase 10d (stock presets: balanced / claude-only / codex-only / ultra-plan / competitive / lightweight / hybrid-review)
       ├─ Phase 10e (telemetry integration — preset_name / pipeline_name / pipeline_hash in runs.jsonl)
       └─ Phase 10f (invariant-enforcement ADR)
                                                 ▼
@@ -113,20 +113,22 @@ Only if Phase 1 stays clean 2+ weeks:
 
 These invariants are not refactors to execute now; they are rules to enforce going forward.
 
-**Safe to start today:** matrix refresh, Phase 1.5 spike, Phase 0 experiment, packaging Phase 0 backup. All four are cheap, independent, and unblock everything downstream.
+**Safe to start today:** plugin dogfood rollout: `hybrid-review`, `swarm compete`, and rollout-status state/CLI. The standalone Phase 0 harness is no longer the critical path.
 
 ---
 
-## Status (as of 2026-04-23)
+## Status (as of 2026-04-24)
 
 - **M1 manual fallback runner — SHIPPED.** Installed at `~/.swarm/bin/{swarm-run,swarm-claude,swarm-gpt,swarm-gpt-review}`. Role bundles at `~/.swarm/roles/agent-{writer,review,spec-review,codex-review}/{shared,claude,codex}.md`. Beads preflight hard-stop embedded in the runner. See `~/.swarm/README.md`.
-- **Phase 0 cross-model review harness — SHIPPED but NEEDS CLEANUP BEFORE FIRST RUN.** `~/.swarm/bin/codex-review-phase`, `~/.swarm/phase0/result-schema.json`, `~/.swarm/phase0/rubric-template.md` exist. Review (2026-04-22) confirmed six measurement-integrity issues in the harness — see **§2.0 — Phase 0 pre-flight**. Do **not** start the 12-15 phase cohort until those are fixed; current harness would contaminate blinded adjudication.
+- **Phase 0 initial experiments — COMPLETE; decision: DOGFOOD IN PLUGIN.** The first harness round produced enough signal to stop isolated experimentation for now. We will learn faster by shipping opt-in Codex lanes inside `/swarm-do` and using normal plugin runs as the measurement surface. The blinded 12-15 phase cohort remains useful if later data is noisy, but it no longer blocks Phase 1.
 - **Phase 9a (append-only ledgers) — SHIPPED (2026-04-23, PR #1, merged at `ff14fc8`).** Four v1-frozen JSONSchemas under `swarm-do/schemas/telemetry/`; `bin/_lib/hash-bundle.sh` (portable sha256 over `shared.md + <backend>.md`); `bin/swarm-run` EXIT-trap appends one `runs.jsonl` row per invocation with 31 required fields, fail-open. `run_id` uses a relaxed pattern (`^[0-9A-Z_-]{1,64}$`) pending real-ULID upgrade in Phase 10a (follow-up bead `mstefanko-plugins-utu`). Two additional follow-ups filed: `mstefanko-plugins-1zv` (wire the already-computed `_diff_bytes`), `mstefanko-plugins-rgb` (`timestamp_end.type` → `["string","null"]`). Ledger ready for 9b consumers.
 - **Phase 9b (findings extractor) — SHIPPED (2026-04-23, commit `6b62467`).** `bin/extract-phase.sh` reads `agent-codex-review` findings.json and appends one `findings.jsonl` row per finding. `bin/_lib/normalize-path.sh` strips worktree prefix so main-repo and worktree paths hash identically. `findings.v2.schema.json` adds `stable_finding_hash_v1`, `duplicate_cluster_id` (always null on append), and `short_summary`; relaxes `run_id` pattern to match runs.v1. v1 schema is frozen and untouched. Claude reviewer format deferred to 9b-claude. `swarm-run` wires the extractor after the codex step with `|| true` fail-open guard.
-- **Phase 1 (Codex review in swarm)** — blocked on Phase 0 decision.
-- **Phase 2 (Pattern 5 / 6)** — not started.
+- **Phase 1 (Codex review in swarm)** — proceed as opt-in dogfood: ship a `hybrid-review` preset/pipeline with fail-open `agent-codex-review` after spec-review. Do not make it default yet.
+- **Phase 2 (Pattern 5 / 6)** — build only the manual Pattern 5 entrypoint now (`swarm compete` + competitive preset). Pattern 6 and auto-triggering remain deferred.
 - **Phase 2.5 (manual fallback)** — covered by M1; no further work here until the manual track fatigue signal fires.
-- **Phase 3 (B1 dispatcher)** — not started; remains gated on Phases 1+2 payoff.
+- **Phase 3 (B1 dispatcher)** — do not implement live dispatch yet. Build only the shared rollout-status state/CLI that future dispatcher shadow mode will read.
+- **Phase 10 (preset + pipeline registry) and Phase 11 (TUI) — SHIPPED on main-compatible local commit `0c8bc0f` (2026-04-24).** Keep follow-up work focused on dogfood rollout, not more TUI surface.
+- **Phase 9e (SQLite indexer) — DEFERRED.** Keep JSONL as the source of truth until real plugin usage shows query/performance pain.
 
 ## Dependency note — future Claude-side orchestration
 
@@ -1212,37 +1214,114 @@ User presets live alongside in `${CLAUDE_PLUGIN_DATA}/presets/`. Stock presets a
 
 ## Section 1.11 — Post-Phase-10 patterns to borrow without expanding the maintenance surface
 
-Phase 10 should stay focused on the local preset/pipeline registry. After it lands, outside projects are useful inputs, but only where they fill real swarm-do gaps and preserve the existing ownership model: beads is the source of truth, `/swarm-do` owns pipeline state, telemetry measures outcomes, and structural invariants stay hard rejects.
+Phase 10 shipped the local preset/pipeline registry. Section 1.11 is the next
+planning layer: borrow only patterns that fill measured swarm-do gaps while
+preserving the current ownership model. Beads remains the task state. `/swarm-do`
+owns pipeline state. Telemetry is the measurement surface. Structural invariants
+remain hard rejects.
+
+Validated 2026-04-24 against:
+- Local implementation: current pipeline schema and validators allow `agents`
+  or `fan_out` stages only; there is no provider-stage contract yet.
+- Superpowers: current workflow emphasizes bite-sized plans, exact file/test
+  steps, fresh subagents, and two-stage spec-then-quality review
+  (https://github.com/obra/superpowers).
+- metaswarm: current workflow emphasizes plan/design gates, work-unit
+  decomposition, BEADS-backed state recovery, cross-model review, PR shepherding,
+  and knowledge extraction (https://github.com/dsifry/metaswarm).
+- MCO: current README advertises multi-provider fan-out across Claude, Codex,
+  Gemini, OpenCode, and Qwen; `mco doctor`; JSON/SARIF/Markdown output;
+  consensus fields; debate/divide modes; timeouts; and extensible provider
+  adapters (https://github.com/mco-org/mco).
+
+### Decision
+
+Use MCO as the first post-10 integration candidate, but only as an optional
+read-only stage provider. Do not make it a second orchestrator. Do not let it
+own beads issues, pipeline state, routing state, memory, merges, or quality gate
+decisions.
+
+Superpowers and metaswarm are worth mining, but the winning patterns are
+discipline and lifecycle contracts, not their whole workflow engines. The
+highest-value steals are:
+
+- From Superpowers: decomposition into exact, bounded work units; spec review
+  before quality review; fresh subagent context hygiene; verification-before-
+  completion as an explicit task contract.
+- From metaswarm: hard-plan review gates, external dependency preflight, work
+  unit dependency graphs, recovery/status views over persisted beads state, and
+  small post-run knowledge capture.
+- From MCO: external provider health checks, parallel provider execution,
+  output normalization, consensus/dedupe, debate/divide modes, and
+  machine-readable artifacts.
+
+Rejected for now: importing Superpowers wholesale, replacing swarm-do with
+metaswarm, full PR shepherd automation, recursive orchestration by default,
+letting MCO own beads/pipeline state, community preset marketplaces, global hard
+TDD, and mandatory 100% coverage. Each expands the maintenance surface before
+measured swarm-do value is proven.
 
 ### Adoption filter
 
-Borrow a pattern only if it passes all four checks:
+Borrow a pattern only if it passes all checks:
 
-1. It fills a recurring swarm-do workflow gap already visible in operator use.
-2. It can be expressed as a pipeline stage, role contract, or CLI helper without rewriting the orchestrator.
-3. It has an obvious telemetry hook so the value can be measured.
-4. It does not add a second source of truth for task state, routing state, or quality gates.
+1. It addresses a recurring swarm-do workflow gap already visible during
+   operator use.
+2. It can be expressed as a pipeline stage, role contract, or CLI helper without
+   rewriting the orchestrator.
+3. It has an obvious telemetry hook so value can be measured.
+4. It does not add a second source of truth for task state, routing state,
+   pipeline state, memory, or quality gates.
+5. It can ship behind a stock opt-in preset or experimental command before it
+   changes the default pipeline.
 
-Patterns that fail those checks stay as references, not implementation work.
+Patterns that fail these checks stay as references, not implementation work.
 
-### Superpowers — discipline layer, not orchestration layer
+### MCO validation plan
 
-What fits:
-- **Bite-sized implementation plans with exact files, commands, expected test outcomes, and no placeholders.** This fills a real swarm-do gap: large phases are sometimes too broad for fast, reliable workers. Add as an optional `agent-analysis` output mode or a future decomposition stage, not as a replacement for Phase 10 pipelines.
-- **Spec review before quality review.** Already aligned with `agent-spec-review -> agent-review`; keep this as an invariant and use Superpowers as supporting evidence for the ordering.
-- **Fresh subagent per bounded task with curated context.** Already aligned with beads issue boundaries. The concrete steal is stricter prompt hygiene: subagents should receive the exact task slice, dependency notes, and verification contract instead of rereading the whole plan.
+The open question is not "can swarm-do shell out to MCO?" It can. The question is
+whether a third stage kind, `provider`, earns its schema, validation, telemetry,
+and operator UX cost.
 
-What does not fit:
-- Importing Superpowers' full workflow engine. It duplicates swarm-do's orchestration and would create two competing process layers.
-- Hard TDD as a global invariant. Useful for many code changes, but too broad for docs, config, generated assets, and cleanup phases. Treat TDD as a per-pipeline/preset policy, not a universal hard gate.
+Run a two-part spike before committing to the provider-stage DSL:
 
-Post-10 candidate: `decompose-plan` stage that turns a hard phase into bounded work units with file scopes and verification steps. Start read-only/planning-only; do not add parallel implementation until conflict handling is proven.
+1. **CLI contract spike, outside the pipeline engine.**
+   - Confirm `mco doctor --json` reports installed/authenticated providers with
+     stable machine-readable status.
+   - Confirm `mco review` can run read-only against this repo with an explicit
+     prompt file, selected providers, hard timeout, no memory by default, and
+     JSON output suitable for downstream parsing.
+   - Confirm MCO does not write repo files in review mode unless explicitly
+     configured to do so.
+   - Capture exit-code behavior for all-provider success, partial provider
+     failure, provider auth failure, timeout, malformed output, and no findings.
 
-### MCO — stage provider for multi-provider fan-out
+2. **Adapter contract spike, still not in stock pipelines.**
+   - Prototype `bin/swarm-stage-mco` as a private helper that accepts a prompt
+     file, repo path, provider list, command mode, timeout, output directory, and
+     run metadata.
+   - Store raw MCO output under the swarm run directory, never in beads as the
+     only copy.
+   - Normalize read-only review findings into a draft `findings.v3` shape with
+     `provider`, `provider_count`, `detected_by`, `consensus_score`,
+     `consensus_level`, `source_artifact_path`, and `provider_error_class`.
+   - Verify duplicate hashes remain stable across MCO and native
+     `agent-codex-review` findings for the same file/line/summary.
 
-MCO is the best post-10 integration candidate because it already owns provider fan-out, health checks, subprocess timeout/retry behavior, output normalization, consensus/dedupe, debate, and machine-readable JSON/SARIF/Markdown. Swarm-do should not rebuild that surface unless MCO cannot meet the contract.
+Go/no-go gate for adopting `provider` stages:
 
-Fit as a stage provider:
+- **Go** if MCO produces parseable JSON in at least 95% of read-only review runs,
+  fails closed on malformed output, classifies provider failures clearly, keeps
+  repo writes disabled in review mode, and surfaces at least one useful
+  consensus/dedupe field swarm-do would otherwise have to build.
+- **No-go / defer** if MCO output is unstable, health checks are not reliable
+  enough for `swarm providers doctor`, review mode writes files unexpectedly, or
+  consensus fields cannot be mapped cleanly into telemetry without lossy
+  special cases.
+
+### Provider-stage design, if the spike passes
+
+Extend the pipeline DSL with a third mutually exclusive stage kind:
 
 ```yaml
 - id: cross-model-review
@@ -1254,43 +1333,115 @@ Fit as a stage provider:
     mode: debate
     strict_contract: true
     output: findings
+    memory: false
+    timeout_seconds: 1800
+  failure_tolerance:
+    mode: quorum
+    min_success: 1
 ```
 
-Ownership boundary:
-- Swarm-do creates the beads issue, assembles the prompt from upstream notes/diff/tests, invokes `bin/swarm-stage-mco`, imports normalized findings, and records telemetry.
-- MCO runs external providers, handles provider availability, dedupes/consensus-ranks findings, and returns structured output.
-- Claude remains the final orchestrator/synthesizer for pipeline decisions. MCO findings are evidence, not an automatic merge decision.
+Validation changes:
+- `agents`, `fan_out`, and `provider` are mutually exclusive.
+- `provider.type` is an enum; v1 only allows `mco`.
+- `provider.command` is `review` or `run`; v1 stock pipelines use `review` only.
+- `provider.providers` is a non-empty list with a small max, default max 5.
+- `provider.memory` defaults to false and must be explicit to enable.
+- Provider stages cannot use `merge.strategy=synthesize`; Claude remains the
+  downstream synthesizer through an ordinary Claude-backed stage.
+- Budget preview counts provider branches separately from Claude/Codex agents.
+- Dry-run prints provider count, selected providers, timeout, estimated
+  wall-clock, and artifact destination.
 
-Start with read-only review and architecture-analysis stages. Defer MCO-backed implementation until every provider gets an isolated worktree and the output is judged as a diff artifact. This avoids file collisions, branch ownership ambiguity, and hidden changes outside beads.
+Runtime boundary:
+- Swarm-do creates the beads issue and assembles the prompt from upstream notes,
+  diffs, relevant tests, and the verification contract.
+- `bin/swarm-stage-mco` invokes MCO, writes raw artifacts, normalizes findings,
+  and emits one machine-readable stage result.
+- The Claude orchestrator decides what to do with the evidence. MCO results are
+  inputs, not automatic accept/reject decisions.
 
-Telemetry additions if adopted: `provider`, `provider_count`, `detected_by`, `consensus_level`, `consensus_score`, `mco_artifact_path`, and timeout/error classification.
+### Implementation order
 
-Maintenance risk: low-to-medium if isolated behind `bin/swarm-stage-mco`; high if MCO becomes a second orchestrator. Keep it a provider adapter, not a pipeline engine.
+1. **ADR: external provider stage contract.** Document the provider boundary,
+   why MCO is an adapter rather than an orchestrator, read-only-first scope, and
+   telemetry/versioning implications.
+2. **Provider doctor.** Add `swarm providers doctor` with local backend checks
+   plus optional `mco doctor --json` passthrough. This is useful even if the
+   provider-stage spike later fails.
+3. **MCO adapter spike.** Build `bin/swarm-stage-mco` and a Python parser behind
+   tests using captured fixture outputs. Keep it unreachable from stock
+   pipelines until the go/no-go gate passes.
+4. **Telemetry draft.** Add `findings.v3` or a provider-findings schema rather
+   than mutating frozen v1/v2 schemas. Include consensus and provenance fields.
+5. **Experimental provider DSL.** Add schema/validation/graph rendering support
+   for `provider` stages, guarded by tests and an experimental stock pipeline
+   such as `mco-review-lab`.
+6. **One opt-in pipeline.** Ship a read-only `mco-review-lab` preset that runs
+   after `writer` and before Claude `agent-review`. No default activation.
+7. **Compare against hybrid-review.** Run at least 20 real dogfood phases with
+   both `hybrid-review` and `mco-review-lab`, then compare useful-findings rate,
+   false-positive rate, timeout/failure rate, cost, and operator intervention.
+8. **Promote or retire.** Promote only if MCO improves useful findings or
+   provider resilience enough to justify the new stage kind. Otherwise keep
+   `swarm providers doctor` and retire the provider DSL before it hardens.
 
-### metaswarm — lifecycle patterns to mine carefully
+### Superpowers pattern plan
 
-What fits:
-- **Plan/design review gates with specialist perspectives.** This fills the gap between `agent-analysis` and implementation for hard/high-risk phases. A future `hard-plan-review` pipeline can run feasibility, completeness, scope/alignment, security, and UX/API perspectives in parallel before writer work starts.
-- **Work-unit decomposition with DoD items, file scopes, and dependency graph.** This directly addresses slow complex plans. It fits swarm-do if represented as beads child issues and validated by the Phase 10 pipeline engine.
-- **External dependency check before execution.** Low-maintenance, high-value: detect missing API keys, CLIs, services, or credentials before writers burn time.
-- **Context recovery from persisted task state.** Swarm-do already has beads; add a `swarm recover` / `swarm status` view before inventing new storage.
-- **Knowledge capture after PR close.** Useful if it writes small structured entries tied to files/risk tags and uses selective retrieval. It should complement telemetry, not replace it.
+Implement as role and pipeline contracts, not as a second workflow engine:
 
-What does not fit yet:
-- Full PR shepherd automation. Valuable, but it expands swarm-do from implementation orchestration into long-running GitHub lifecycle management. Defer until the core run pipeline and telemetry are stable.
-- Recursive "swarm of swarms" orchestration. Tempting for epics, but it can explode cost and coordination complexity. Require budget previews and operator approval before any recursive pipeline ships.
-- Mandatory 100% coverage. Too repo-specific. Support coverage thresholds as a configurable gate, not a global rule.
+1. Add an `agent-analysis` output mode for `bounded_work_units`:
+   `id`, `goal`, `file_scope`, `allowed_files`, `blocked_files`,
+   `dependencies`, `commands`, `expected_results`, `done_when`,
+   `risk_tags`, and `handoff_notes`.
+2. Add a `decompose-plan` pipeline stage for hard phases that emits those work
+   units read-only. The first version creates a decomposition artifact, not
+   parallel implementation branches.
+3. Tighten writer/reviewer prompts so each subagent receives only its task
+   slice, upstream dependency notes, and verification contract.
+4. Keep `agent-spec-review -> agent-review` as an invariant and cite
+   Superpowers as supporting prior art.
+5. Treat TDD as a configurable pipeline policy. Do not make it global because
+   swarm-do also handles docs, config, generated artifacts, and cleanup work.
 
-### Recommended post-10 order
+Validation:
+- Measure worker reopen rate, review failure rate, time-to-first-useful-output,
+  and number of "task too broad" clarifications before/after decomposition.
+- Promote decomposition only if it reduces review churn without increasing
+  merge conflicts or operator bookkeeping.
 
-1. **MCO read-only review provider spike** — one optional pipeline stage, JSON output imported into `findings.jsonl`.
-2. **Provider health surface** — `swarm providers doctor`, wrapping local backend checks and MCO doctor if installed.
-3. **Consensus telemetry** — store cross-provider agreement fields before using them for decisions.
-4. **Hard-plan review pipeline** — specialist reviewers before writer on hard/high-risk phases.
-5. **Decomposed execution pipeline** — analysis produces bounded work units; swarm-do schedules them as beads child issues. Implementation fan-out comes only after conflict/merge rules are explicit.
-6. **Knowledge capture** — small JSONL learnings from merged PRs, retrieved selectively by file/risk tag.
+### metaswarm pattern plan
 
-Rejected for now: replacing swarm-do with metaswarm, importing Superpowers wholesale, letting MCO own beads/pipeline state, community preset marketplace, fully automated PR shepherding, and recursive orchestration by default. Each would add a large maintenance burden before the measured value is proven.
+Mine lifecycle gates, not the whole lifecycle:
+
+1. Add a `hard-plan-review` pipeline that runs feasibility, completeness,
+   scope/alignment, security, and UX/API perspectives in parallel before writer
+   work on hard/high-risk phases.
+2. Add an `external-deps-check` stage before execution for API keys, CLIs,
+   service credentials, local servers, package managers, and CI assumptions.
+3. Represent decomposed work as beads child issues with explicit dependency
+   edges only after the read-only decomposition artifact proves useful.
+4. Improve `swarm status` / future `swarm recover` around existing beads and run
+   artifacts before adding any new state store.
+5. Add small structured knowledge capture after successful runs, tied to files,
+   risk tags, and decisions. Retrieval must be selective and telemetry-friendly.
+
+Deferred:
+- PR shepherding waits until core run telemetry is stable.
+- Recursive orchestration requires budget preview, depth limits, and explicit
+  operator approval.
+- Coverage thresholds are repo/preset config, not a swarm-do universal.
+
+### Promotion scorecard
+
+Each post-10 pattern needs a scorecard before becoming default:
+
+- Useful finding rate or prevented-rework rate improves over the current
+  pipeline.
+- False positives and operator interventions do not rise materially.
+- Timeout/provider failure behavior is observable and recoverable.
+- Added schema/CLI/docs surface is small enough to test locally.
+- The pattern can be disabled by switching presets, with no migration of beads
+  state or telemetry history.
 
 ---
 
@@ -1493,10 +1644,12 @@ That means Phase 0 should compare a cheap scoped review against a richer repo-aw
   - Duplicate wording of the same root issue does **not** count as incremental value.
   - If the reviewer cannot confidently label a finding true/false, mark it ambiguous and exclude it from the go/no-go numerator.
 
-**Decision criteria for continuing:**
+**Decision criteria for continuing (original harness plan):**
 - **GO-EVERY-DO:** Mode A catches ≥1 non-overlapping real issue in ≥30% of phases, noise rate stays <2 false flags per phase, **and** Mode A meets the §2.0 budgets (median ≤ 60s, p90 ≤ 120s, cost ≤ $0.15/phase). Miss any of those budgets → not eligible for GO-EVERY-DO.
 - **GO-TARGETED:** Mode A fails (signal or budget), but Mode B hits the signal threshold with acceptable noise **and** meets the §2.0 Mode B budgets (median ≤ 180s, p90 ≤ 300s, cost ≤ $0.50/phase). Continue to Phase 1 only for tagged high-risk phases first — not every `/do`.
 - **NO-GO:** both modes show heavy overlap, noise > signal, or neither mode meets its budget.
+
+**2026-04-24 update:** the initial experiment round ended with a fourth operational decision: **DOGFOOD**. That means the standalone harness has done enough for now, and Phase 1 should move into the actual plugin as an opt-in lane so real `/swarm-do` usage generates better data than more isolated runs. This does **not** mean `GO-EVERY-DO`; it explicitly avoids default-on review until normal plugin telemetry shows the lane is worth promoting.
 
 **Optional effort sensitivity check (keep small):**
 - If Phase 0 is borderline on the high-risk subset, rerun at most 3 high-risk phases with `gpt-5.4` at `xhigh`.
@@ -1511,11 +1664,11 @@ Write the decision to `${CLAUDE_PLUGIN_DATA}/state/rollout-status.json` as a sin
 ```json
 {
   "phase_0": {
-    "decision": "GO-EVERY-DO | GO-TARGETED | NO-GO",
-    "selected_mode": "A | B | none",
-    "decided_on": "2026-04-23",
-    "cohort_run_date": "2026-04-22",
-    "notes": "one-sentence rationale; full rationale in the phase0/ artifact tree"
+    "decision": "GO-EVERY-DO | GO-TARGETED | NO-GO | DOGFOOD",
+    "selected_mode": "A | B | plugin | none",
+    "decided_on": "2026-04-24",
+    "cohort_run_date": null,
+    "notes": "initial experiments complete; learn from opt-in plugin dogfooding before default-on automation"
   }
 }
 ```
@@ -1524,19 +1677,21 @@ Enum semantics (these are the authoritative names used everywhere in this plan):
 
 - **`GO-EVERY-DO`** + `selected_mode: "A"` — Phase 1 wires Codex Mode A (scoped review) into every `/swarm-do:do` after spec-review. Triggered on all phases unless labeled `kind:bug` or `review:skip-codex`.
 - **`GO-TARGETED`** + `selected_mode: "B"` — Phase 1 wires Codex Mode B (repo-aware review) into `/swarm-do:do` for phases labeled `risk:high` only. Unlabeled phases do NOT get Codex review. Mode A is NOT concurrently active in this lane — Phase 0 produces one selected mode, not a matrix.
+- **`DOGFOOD`** + `selected_mode: "plugin"` — Phase 1 ships as an opt-in plugin preset/pipeline. Operators enable it with `swarm preset load hybrid-review` or an explicit `/swarm-do:do --codex-review on`-style override once that flag is parsed by the orchestrator. Default runs stay on the normal pipeline.
 - **`NO-GO`** + `selected_mode: "none"` — Phase 1 does not ship. Codex review stays in the manual fallback track only.
 
 The prior prose outcomes (`scoped-review is good enough` / `repo-aware review is required` / `stop here`) are retired — they mapped 1:1 to the enum above but left the persistence contract ambiguous.
 
-**Phase 1 reads `phase_0.decision` + `phase_0.selected_mode` to decide what to wire.** Do not enter Phase 1 without these values written.
+**Phase 1 reads `phase_0.decision` + `phase_0.selected_mode` to decide what to wire.** `DOGFOOD` authorizes opt-in plugin wiring only; it does not authorize default-on Codex review.
 
 **Triggers:** Manual only. Do NOT wire into /do yet.
 **Runs on every /do:** No.
 
-## Section 3 — Phase 1: Codex review in swarm (if Phase 0 passes)
+## Section 3 — Phase 1: Codex review in swarm (dogfood lane first)
 
 **What to build:**
 - Promote `agent-codex-review` into the post-spec-review quality lane as a **specialized** reviewer, not a second generic reviewer.
+- Add a stock `hybrid-review` preset/pipeline that keeps the default Claude review/docs lanes and adds a parallel Codex review after spec-review.
 - Narrow its scope to failure modes Claude is most likely to miss or underweight: types, null / nil edges, off-by-one / boundary conditions, parser / serializer mismatches, and security boundaries.
 - Cap output to blocking or clearly actionable findings only.
 - Use beads **labels**, not metadata, for review routing:
@@ -1556,6 +1711,7 @@ The prior prose outcomes (`scoped-review is good enough` / `repo-aware review is
 - **AUTO on `risk:high`-labeled phases only** — if `phase_0.decision == "GO-TARGETED"`.
 - In both cases, run after spec-review passes, parallel to the existing quality review lane, unless phase is labeled `kind:bug` or `review:skip-codex`.
 - **Manual override:** `/swarm-do:do <plan> --codex-review <auto|on|off>` (ships with Phase 1 wiring). `auto` honors rollout status; `on` forces Codex review regardless of labels; `off` skips. No `/do-no-codex` sibling command — the flag is cheaper.
+- **DOGFOOD opt-in:** `swarm preset load hybrid-review` activates the Codex review lane for the next `/swarm-do:do` run without changing the default preset.
 
 **Runs on every /do:** YES only if scoped review proved cheap enough in Phase 0. Otherwise: NO, tagged high-risk phases only.
 
@@ -1582,6 +1738,7 @@ The prior prose outcomes (`scoped-review is good enough` / `repo-aware review is
   - winning backend
   - post-merge follow-up rework / hotfix commits attributable to the phase
 - Keep Pattern 6 **manual-only** during this calibration window.
+- Ship `swarm compete <plan-path>` as the manual Pattern 5 entrypoint. It validates the `competitive` preset/pipeline against the plan and activates that preset unless `--dry-run` is supplied.
 - Extend the writer-judge output schema before any Pattern 6 automation:
   - `synthesis_recommended: true|false`
   - `synthesis_reason`
@@ -1856,7 +2013,7 @@ Before Phase 3, separate commands are cleaner than flags because the current `/d
 | Phase | Auto/Manual | On every /do? | Depends on |
 |-------|------------|---------------|------------|
 | 0 — Validation experiment | Manual | No | Backup + review-chain freeze + Codex CLI contract snapshot + §2.0 harness cleanup |
-| 1 — Codex review in swarm | Auto (with tagged exclusions) | **Yes** only after `GO-EVERY-DO`; otherwise tagged high-risk phases only | Phase 0 decision recorded |
+| 1 — Codex review in swarm | Opt-in dogfood first; Auto later only with data | No while `DOGFOOD`; **Yes** only after a later `GO-EVERY-DO`; tagged high-risk only after `GO-TARGETED` | Phase 0 decision recorded |
 | 2 — Pattern 5 manual trial, then optional auto-trigger | Manual first, Auto later | No (~20% of phases after tuning) | Phase 1 stable |
 | 2.5 — Manual fallback track | Manual | No — only when explicitly invoked | Phase 1 stable |
 | 3 — B1 rate-limit dispatcher | Auto (on 429) | Driver: yes. Fallback: on rate-limit only | Phase 2 + manual fallback track both paid off |
@@ -1865,7 +2022,7 @@ Before Phase 3, separate commands are cleaner than flags because the current `/d
 
 ## Success signal to keep going after each phase
 
-- **Phase 0:** one explicit outcome is chosen and written down: `GO-EVERY-DO`, `GO-TARGETED`, or `NO-GO`, and the result came from blinded adjudication against the pre-registered rubric.
+- **Phase 0:** one explicit outcome is chosen and written down: `DOGFOOD`, `GO-EVERY-DO`, `GO-TARGETED`, or `NO-GO`. `DOGFOOD` means the isolated harness pauses and the plugin becomes the measurement surface.
 - **Phase 1:** Two weeks of swarm use with Codex review adds <10% pipeline latency and findings are actionable.
 - **Phase 2:** Manual Pattern 5 beats single-writer quality on a sample of 10-15 phases, clears the economics gate, and Pattern 6 stays manual until at least 3 clean synthesis wins.
 - **Phase 2.5:** an operator can switch an active issue from Claude to GPT quickly, the same issue remains the source of truth, and the appended backend-run notes stay understandable to later humans and Claude sessions.
@@ -2456,8 +2613,8 @@ The file at `${CLAUDE_PLUGIN_DATA}/state/rollout-status.json` is the authoritati
 {
   "schema_version": 1,
   "phase_0": {
-    "decision": "GO-EVERY-DO | GO-TARGETED | NO-GO | pending",
-    "selected_mode": "A | B | none",
+    "decision": "GO-EVERY-DO | GO-TARGETED | NO-GO | DOGFOOD | pending",
+    "selected_mode": "A | B | plugin | none",
     "decided_on": "YYYY-MM-DD | null",
     "cohort_run_date": "YYYY-MM-DD | null",
     "notes": "short rationale; full detail in ~/.swarm/phase0/runs/<cohort_run_date>/"
@@ -2491,7 +2648,7 @@ The file at `${CLAUDE_PLUGIN_DATA}/state/rollout-status.json` is the authoritati
 }
 ```
 
-**Initial state on install:** every `decision` / `status` field is `"pending"`; every `primary` defaults to `"claude"`; every date field is `null`. This preserves the measurement gate (§1.7) — no codex promotion is recorded until an explicit measurement lands.
+**Initial state on install:** every `decision` / `status` field is `"pending"`; every `primary` defaults to `"claude"`; every date field is `null`. After the first Phase 0 dogfood decision, `swarm rollout dogfood` records `phase_0.decision = "DOGFOOD"` and `selected_mode = "plugin"` without promoting Codex review to default-on.
 
 **Writers:**
 - Phase 0 rollout (Part 2 §2) writes `phase_0`.
