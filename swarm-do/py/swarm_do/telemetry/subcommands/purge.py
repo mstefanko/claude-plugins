@@ -98,8 +98,10 @@ def run(args: argparse.Namespace) -> int:
                         row_ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
                         if row_ts > cutoff:
                             kept_rows.append(row)
-                    except (ValueError, AttributeError):
+                    except (ValueError, AttributeError, TypeError):
                         # Malformed timestamp; keep the row to be safe.
+                        # TypeError guards against non-string ts_str values
+                        # (closes mstefanko-plugins-lka).
                         kept_rows.append(row)
                 else:
                     # Missing timestamp; keep the row.
