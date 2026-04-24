@@ -1,0 +1,23 @@
+pipeline_version: 1
+name: lightweight
+description: Small-change pipeline without spec-review and docs stages.
+stages:
+  - id: research
+    agents:
+      - role: agent-research
+  - id: analysis
+    depends_on: [research]
+    agents:
+      - role: agent-analysis
+  - id: clarify
+    depends_on: [research]
+    agents:
+      - role: agent-clarify
+  - id: writer
+    depends_on: [analysis, clarify]
+    agents:
+      - role: agent-writer
+  - id: review
+    depends_on: [writer]
+    agents:
+      - role: agent-review

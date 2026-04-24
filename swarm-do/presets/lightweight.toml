@@ -1,0 +1,13 @@
+name = "lightweight"
+description = "Small-change pipeline that drops spec-review and docs."
+pipeline = "lightweight"
+origin = "stock"
+
+[routing]
+"roles.agent-clarify" = { backend = "codex", model = "gpt-5.4-mini", effort = "medium" }
+"roles.agent-writer.simple" = { backend = "codex", model = "gpt-5.4-mini", effort = "medium" }
+
+[budget]
+max_agents_per_run = 40
+max_estimated_cost_usd = 10.0
+max_wall_clock_seconds = 7200

@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# shellcheck source=_lib/python-bootstrap.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_lib/python-bootstrap.sh"
+
+exec python3 -m swarm_do.pipeline.validate_cli "$@"

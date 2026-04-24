@@ -36,8 +36,9 @@ missing keys.
 Schema: `runs.schema.json#v1`
 
 Key fields: `run_id`, `timestamp_start`, `timestamp_end`, `backend`, `model`,
-`effort`, `role`, `prompt_bundle_hash`, `config_hash`, `exit_code`, `schema_ok`,
-`wall_clock_seconds`, `writer_status`, `review_verdict`.
+`effort`, `role`, `prompt_bundle_hash`, `config_hash`, `preset_name`,
+`pipeline_name`, `pipeline_hash`, `exit_code`, `schema_ok`, `wall_clock_seconds`,
+`writer_status`, `review_verdict`.
 
 ### `findings.jsonl` — one row per finding emitted by a review role
 
@@ -59,7 +60,8 @@ always null on append — stamped by the Phase 9e indexer post-hoc.
 
 Schema: `findings.schema.json#v1` (frozen) — for new rows written by the Phase 9b
 extractor, see `findings.v2.schema.json#v2` which adds `stable_finding_hash_v1`,
-`duplicate_cluster_id`, and `short_summary`, and relaxes `run_id` to match runs.v1.
+`duplicate_cluster_id`, and `short_summary`. Phase 10a run IDs are strict ULIDs; older
+findings may still reference legacy Phase 9a run IDs.
 
 ### `outcomes.jsonl` — append-only, one row per **phase verdict** (Phase 9a ledger — frozen)
 
@@ -153,25 +155,22 @@ emitted to stderr. No data is lost from the actual swarm work.
 
 ## `schema_ok` field — writer-attested in Phase 9a
 
-`schema_ok: true` in a Phase 9a row means **writer-attested structural conformance**,
-not validator-confirmed. `swarm-run` sets `schema_ok=true` unconditionally when the
-telemetry row is successfully constructed and appended. Real schema validation (via
-`swarm-validate` against these JSON Schema files) lands in **Phase 10a**. At that point
-the indexer may retroactively mark older rows or the validator may gate new rows.
-Until Phase 10a ships, treat `schema_ok` as "the writer believed this row was well-formed".
+`schema_ok: true` in a Phase 9a row meant **writer-attested structural conformance**,
+not validator-confirmed. Phase 10a adds `swarm-validate` for preset/pipeline gates and
+tightens new `runs.jsonl` rows to strict ULIDs plus pipeline identity fields. Older
+rows can still be treated as legacy writer-attested data during index rebuilds.
 
 ---
 
-## `run_id` pattern — relaxed in Phase 9a, strict ULID in Phase 10a
+## `run_id` pattern — strict ULID as of Phase 10a
 
-The v1 `runs.schema.json` accepts `run_id` values matching `^[0-9A-Z_-]{1,64}$` — a
-relaxed pattern that covers the current timestamp-hex generator in `swarm-run`. This
-was a deliberate Phase 9a choice: generating valid Crockford-base32 ULIDs in portable
-shell requires `openssl rand`, which was not verified available in all environments.
+The v1 `runs.schema.json` now accepts only `run_id` values matching
+`^[0-9A-HJKMNP-TV-Z]{26}$`. `bin/swarm-run` generates these through the shared
+`swarm_do.telemetry.ids.new_ulid()` helper so `runs.jsonl` and `findings.jsonl`
+share the same identifier shape.
 
-Phase 10a (`mstefanko-plugins-utu`) will migrate to strict ULIDs and tighten the
-pattern to `^[0-9A-HJKMNP-TV-Z]{26}$`. Existing `runs.jsonl` rows will remain valid
-under the relaxed pattern; the indexer will tag non-ULID rows for backfill.
+Rows written before Phase 10a may still carry the relaxed Phase 9a timestamp-hex
+shape. Treat those as legacy rows when rebuilding derived indexes.
 
 ---
 

@@ -1,0 +1,195 @@
+"""Shared state readers for the swarm-do TUI.
+
+This module intentionally has no Textual dependency so it can be unit-tested
+without installing the optional TUI stack.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import json
+import os
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any
+
+from swarm_do.pipeline.context import current_context
+from swarm_do.pipeline.paths import resolve_data_dir
+from swarm_do.pipeline.resolver import active_preset_name
+
+
+@dataclasses.dataclass(frozen=True)
+class InFlightRun:
+    issue_id: str
+    role: str
+    backend: str
+    model: str
+    effort: str
+    pid: int | None
+    started_at: str | None
+    status: str
+    path: Path
+
+    @property
+    def display_pid(self) -> str:
+        return str(self.pid) if self.pid is not None else "n/a"
+
+
+@dataclasses.dataclass(frozen=True)
+class StatusSummary:
+    preset: str
+    pipeline: str
+    runs_today: int
+    cost_today: float | None
+    last_429_claude: str | None
+    last_429_codex: str | None
+
+    def render(self) -> str:
+        cost = f"${self.cost_today:.4f}" if self.cost_today is not None else "n/a"
+        claude = self.last_429_claude or "n/a"
+        codex = self.last_429_codex or "n/a"
+        return (
+            f"preset={self.preset} pipeline={self.pipeline} runs_today={self.runs_today} "
+            f"cost_today={cost} last_429_claude={claude} last_429_codex={codex}"
+        )
+
+
+def telemetry_dir(data_dir: Path | None = None) -> Path:
+    return (data_dir or resolve_data_dir()) / "telemetry"
+
+
+def in_flight_dir(data_dir: Path | None = None) -> Path:
+    return (data_dir or resolve_data_dir()) / "in-flight"
+
+
+def runs_path(data_dir: Path | None = None) -> Path:
+    return telemetry_dir(data_dir) / "runs.jsonl"
+
+
+def read_jsonl(path: Path) -> list[dict[str, Any]]:
+    if not path.is_file():
+        return []
+    rows: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, dict):
+                rows.append(value)
+    return rows
+
+
+def _parse_ts(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        if value.endswith("Z"):
+            value = value[:-1] + "+00:00"
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def load_runs(data_dir: Path | None = None) -> list[dict[str, Any]]:
+    return read_jsonl(runs_path(data_dir))
+
+
+def load_in_flight(data_dir: Path | None = None) -> list[InFlightRun]:
+    base = in_flight_dir(data_dir)
+    if not base.is_dir():
+        return []
+    runs: list[InFlightRun] = []
+    for path in sorted(base.glob("*.lock")):
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        pid = value.get("pid")
+        runs.append(
+            InFlightRun(
+                issue_id=str(value.get("issue_id") or path.stem.removeprefix("bd-")),
+                role=str(value.get("role") or "unknown"),
+                backend=str(value.get("backend") or "unknown"),
+                model=str(value.get("model") or "unknown"),
+                effort=str(value.get("effort") or "unknown"),
+                pid=pid if isinstance(pid, int) else None,
+                started_at=value.get("started_at") if isinstance(value.get("started_at"), str) else None,
+                status=str(value.get("status") or "running"),
+                path=path,
+            )
+        )
+    return runs
+
+
+def token_burn_last_24h(rows: list[dict[str, Any]], now: datetime | None = None) -> dict[str, int | None]:
+    now = now or datetime.now(UTC)
+    cutoff = now - timedelta(hours=24)
+    totals: dict[str, int] = {}
+    observed: set[str] = set()
+    for row in rows:
+        ts = _parse_ts(row.get("timestamp_start"))
+        if ts is None or ts < cutoff:
+            continue
+        backend = str(row.get("backend") or "unknown")
+        total = 0
+        for key in ("input_tokens", "cached_input_tokens", "output_tokens"):
+            value = row.get(key)
+            if isinstance(value, int):
+                total += value
+                observed.add(backend)
+        totals[backend] = totals.get(backend, 0) + total
+    result: dict[str, int | None] = {}
+    for backend in sorted({str(r.get("backend") or "unknown") for r in rows} | set(totals)):
+        result[backend] = totals.get(backend, 0) if backend in observed else None
+    return result
+
+
+def status_summary(data_dir: Path | None = None, now: datetime | None = None) -> StatusSummary:
+    rows = load_runs(data_dir)
+    now = now or datetime.now(UTC)
+    today = now.date()
+    runs_today = 0
+    cost_values: list[float] = []
+    last_429: dict[str, datetime] = {}
+    for row in rows:
+        ts = _parse_ts(row.get("timestamp_start"))
+        if ts is not None and ts.date() == today:
+            runs_today += 1
+            cost = row.get("estimated_cost_usd")
+            if isinstance(cost, (int, float)):
+                cost_values.append(float(cost))
+        rate_ts = _parse_ts(row.get("last_429_at"))
+        if rate_ts is not None:
+            backend = str(row.get("backend") or "unknown")
+            if backend not in last_429 or rate_ts > last_429[backend]:
+                last_429[backend] = rate_ts
+
+    context = current_context()
+    preset = active_preset_name() or "custom"
+    pipeline = str(context.get("pipeline_name") or "default")
+    return StatusSummary(
+        preset=preset,
+        pipeline=pipeline,
+        runs_today=runs_today,
+        cost_today=sum(cost_values) if cost_values else None,
+        last_429_claude=last_429.get("claude").isoformat().replace("+00:00", "Z") if "claude" in last_429 else None,
+        last_429_codex=last_429.get("codex").isoformat().replace("+00:00", "Z") if "codex" in last_429 else None,
+    )
+
+
+def pid_is_alive(pid: int | None) -> bool:
+    if pid is None:
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True

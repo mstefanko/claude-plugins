@@ -11,7 +11,7 @@ Both former files are now stubs pointing here. This file is the single source of
 
 ## Structure
 
-- **Part 1 — Architecture & Policy** — what the swarm is and how it routes work (§1.1–§1.10)
+- **Part 1 — Architecture & Policy** — what the swarm is and how it routes work (§1.1–§1.11)
 - **Part 2 — Rollout strategy** — Phase 0 → Phase 1 → Phase 2 → B1 dispatcher (§2.1–§2.7)
 - **Part 3 — Packaging history (archived)** — stub only; full content lives at `docs/history/packaging.md`. Not part of the runnable scope.
 - **Part 4 — Implementation phases — pending** — Phases 9/10/11 with sub-phases 9a–11g (telemetry, presets, TUI). This is what `/swarm-do:do` runs.
@@ -615,7 +615,7 @@ Four screens. Keyboard-first. Status bar persistent across all screens.
 - Cells: `{backend}/{model}/{effort}` as compact string
 - Arrow keys navigate; Enter opens a detail panel for the selected cell with three dropdowns (backend, model, effort) + show/hide derived fields (matrix origin: stock / overridden / inherited)
 - Ctrl-S writes to backends.toml atomically (temp file + rename; config_hash updates for telemetry)
-- Invariant guard: changing `orchestrator` / `agent-code-synthesizer` to non-Claude backend displays a blocking warning and requires Ctrl-Shift-S to force (matches §1.10 invariant enforcement)
+- Invariant guard: changing `orchestrator` / `agent-code-synthesizer` to non-Claude backend displays a blocking error and cannot be saved. Structural invariants have no force path; only advisory warnings can be dismissed.
 
 **[p] Presets — preset browser + diff viewer**
 - Left pane: list of available presets (stock + user), grouped by origin
@@ -963,7 +963,7 @@ origin = "stock"                      # stock | user | experiment
 [routing]                             # overrides on top of the default backends.toml matrix
 "roles.agent-analysis.hard" = { backend = "claude", model = "claude-opus-4-7", effort = "xhigh" }
 
-[budget]                              # ceilings enforced at preset load
+[budget]                              # ceilings enforced by dry-run and /swarm-do:do run start
 max_agents_per_run = 20
 max_estimated_cost_usd = 5.0
 max_wall_clock_seconds = 1800
@@ -1041,9 +1041,21 @@ fan_out = {
   count    : integer (1..10)
   variant  : enum("same" | "prompt_variants" | "models")
   variants : array of strings (required iff variant=="prompt_variants"; length must == count)
-  models   : array of strings (required iff variant=="models"; length must == count)
+  routes   : array of route objects or named preset routes (required iff variant=="models"; length must == count)
 }
 ```
+
+For `variant: models`, each route is a full backend route, not just a model ID:
+
+```
+route = {
+  backend : enum("claude" | "codex")
+  model   : string
+  effort  : enum("none" | "low" | "medium" | "high" | "xhigh")
+}
+```
+
+This keeps `compete.yaml` expressible as "Claude writer + Codex writer" without inferring provider from model-name strings.
 
 **Merge object:**
 ```
@@ -1069,6 +1081,7 @@ failure_tolerance = {
 ```
 agent_ref = {
   role   : agent-role-name
+  backend: enum("claude" | "codex"), optional
   model  : string, optional     # overrides active routing for this stage only
   effort : enum, optional
 }
@@ -1080,6 +1093,8 @@ agent_ref = {
 3. Fan-out stages spawn `fan_out.count` sibling issues all depending on upstream + all blocking the same merge issue.
 4. Merge stage starts when its fan-out predecessor satisfies `failure_tolerance`.
 5. Cycle detection (validation gate 4) rejects any pipeline whose DAG has cycles.
+
+**Engine boundary:** deterministic helpers own parsing YAML, validating schema, resolving routes, computing topological layers, estimating budget, and creating/edging beads issues. The Claude `/swarm-do` skill remains the dispatcher for Claude Code `Agent()` calls; shell/Python helpers do not try to invoke Claude subagents directly. External CLI-backed providers (Codex today, MCO or Gemini later) are invoked through provider helpers and write results back to beads for the Claude dispatcher to merge into the pipeline state.
 
 **Resolution order** (in `bin/swarm-run`, extending §1.7):
 1. Operator flags: `--backend`, `--model`, `--effort`, `--preset`, `--pipeline`
@@ -1095,7 +1110,7 @@ The existing `swarm mode claude-only | codex-only | balanced | custom` is a shor
 
 ### Validation gates — pipelines are code
 
-User-authored pipelines can spawn 20 agents, burn a day's quota in one run, or route the orchestrator to Codex. **"Find one online and drop it in" is supply-chain risk.** The preset loader validates hard, not loosely. **All five gates are mandatory. Failing any gate = loader refuses to activate the preset.** There is no `--force` bypass for any of them; overriding requires editing the preset file itself, which makes the decision owner-attributable in the YAML rather than a per-invocation flag. Gates, in order:
+User-authored pipelines can spawn 20 agents, burn a day's quota in one run, or route the orchestrator to Codex. **"Find one online and drop it in" is supply-chain risk.** Validation is hard, not loose. Structural gates run at preset load; plan-dependent budget gates run at dry-run and `/swarm-do:do` run start because they need the plan's phase count and complexity. There is no `--force` bypass for structural invariants or budget ceilings; overriding budget requires editing the preset file itself, which makes the decision owner-attributable in the YAML rather than a per-invocation flag. Gates, in order:
 
 1. **Schema lint** — JSONSchema at `swarm-do/schemas/pipeline.schema.json` (pipelines) and `preset.schema.json` (presets). Required fields, typed enums per §1.10 "Pipeline DSL schema freeze" below. Fail on unknown top-level keys (no forward-compat silent ignore).
 2. **Role existence check** — every referenced `agent-X` resolves to a role file in `swarm-do/agents/`. No phantom roles.
@@ -1105,9 +1120,11 @@ User-authored pipelines can spawn 20 agents, burn a day's quota in one run, or r
    - Fan-out merge strategy `synthesize` requires `agent` to be Claude-backed
    - Violation = loader refuses to activate the preset, with a clear error. TUI also refuses to save an invariant-violating config (no force-save). The loader never sees invariant-violating state because the save path prevents it.
 4. **Cycle detection** — beads dependency graph is a DAG check. Stages with `depends_on` edges form an explicit DAG; any cycle = reject.
-5. **Budget ceiling — hard reject, unoverrideable at activation:** `swarm preset dry-run <name> <plan-path>` estimates agent count + token cost + critical-path latency, compares against the preset's declared `[budget]` block. If estimated cost > `max_estimated_cost_usd` or agent count > `max_agents_per_run` or estimated latency > `max_wall_clock_seconds`, **loader refuses to activate**. No `--force-over-budget` flag exists. To exceed a ceiling the operator must edit the preset's `[budget]` block to declare the higher limit explicitly — the preset file itself becomes the authorization record.
+5. **Budget ceiling — hard reject at dry-run and run start:** `swarm preset dry-run <name> <plan-path>` and `/swarm-do:do <plan-path>` estimate agent count + token cost + critical-path latency, compare against the preset's declared `[budget]` block, and refuse to start if any ceiling is exceeded. `swarm preset load <name>` cannot enforce this gate because it has no plan path. No `--force-over-budget` flag exists. To exceed a ceiling the operator must edit the preset's `[budget]` block to declare the higher limit explicitly — the preset file itself becomes the authorization record.
 
 **Cost preview is emitted on every `swarm preset dry-run` invocation** regardless of pass/fail, so the operator always sees the numbers. Gate 5 is the budget-enforcement side of that same output.
+
+**Backend resolver:** validation and runtime use the same resolver for `(role, complexity)` and per-stage route overrides: operator flags → active preset routing → `backends.toml` → role default → hardcoded default. The invariant guard asks the resolver whether a role is Claude-backed; it must not match literal model-name strings. Phase 10a ships the minimal resolver needed by validation, and later runtime work wires `bin/swarm-run` to the same contract.
 
 **Distinction — advisory warnings vs. hard rejects.** The five gates above are structural/correctness/supply-chain concerns and are never bypassable. Advisory warnings (e.g., "this preset routes a role to an untested model lane", "pipeline version is 2 steps behind stock") are printed on load but don't block. Only advisory warnings can be suppressed via `--quiet` or "dismissed" in the TUI. Structural invariants have no dismiss path.
 
@@ -1127,7 +1144,7 @@ Pinned enum values (prevents ambiguity):
 
 - **`same`** — same agent, same prompt, different seeds. Lowest-variance exploration.
 - **`prompt_variants`** — same role, different prompt overlay files. Requires `variants: [name, name, ...]` listing files in `swarm-do/roles/<role>/variants/`.
-- **`models`** — same prompt, different models. Requires `models: [model-id, model-id, ...]`.
+- **`models`** — same prompt, different resolved backend routes. Requires `routes: [{backend, model, effort}, ...]` or named preset routes. Bare model IDs are invalid because they cannot distinguish Claude vs Codex execution.
 
 Combining variants (e.g. different prompts AND different models) is out of v1 — declare two stages instead.
 
@@ -1173,14 +1190,14 @@ User presets live alongside in `${CLAUDE_PLUGIN_DATA}/presets/`. Stock presets a
 ### Prerequisites before §1.10 lands
 
 1. `/swarm-do` plugin shipped (packaging Phase 7 verified).
-2. `bin/swarm-run` already resolves `{backend, model, effort}` per-role (§1.7 config contract).
+2. A shared backend resolver exists for `{backend, model, effort}` per-role (§1.7 config contract); Phase 10 wires validation first, then runtime.
 3. Telemetry ledgers writing `runs.jsonl` / `findings.jsonl` (§1.8, packaging Phase 9a/9b) — so pipeline comparison queries work.
 4. At least one non-default pipeline authored + validated (ultra-plan is the obvious first target).
 5. Invariant-guard unit tests in place before any operator loads a user preset.
 
 ### Sequencing within §1.10
 
-1. **Preset + pipeline schemas frozen** (JSONSchema + sample YAML). ~0.5 day.
+1. **Preset + pipeline schemas frozen** (JSONSchema + sample YAML) plus the minimal backend resolver contract validation needs. ~0.5-1 day.
 2. **Pipeline engine refactor** — orchestrator skill becomes data-driven dispatch reading pipeline YAML. Fan-out + merge + failure-tolerance runtime. ~2–3 days. Biggest chunk.
 3. **Validation gates** — schema lint, role existence, invariant guard, cycle detection, budget preview. ~2–3 days. Not optional.
 4. **Preset loader + `bin/swarm` subcommands** (`swarm preset load/save/diff/list`, `swarm pipeline show/lint/list`). ~1 day.
@@ -1192,6 +1209,88 @@ User presets live alongside in `${CLAUDE_PLUGIN_DATA}/presets/`. Stock presets a
 **Total effort: ~1.5–2 weeks** of careful work. Validation gates (step 3) are the most skip-tempting and the most important.
 
 ---
+
+## Section 1.11 — Post-Phase-10 patterns to borrow without expanding the maintenance surface
+
+Phase 10 should stay focused on the local preset/pipeline registry. After it lands, outside projects are useful inputs, but only where they fill real swarm-do gaps and preserve the existing ownership model: beads is the source of truth, `/swarm-do` owns pipeline state, telemetry measures outcomes, and structural invariants stay hard rejects.
+
+### Adoption filter
+
+Borrow a pattern only if it passes all four checks:
+
+1. It fills a recurring swarm-do workflow gap already visible in operator use.
+2. It can be expressed as a pipeline stage, role contract, or CLI helper without rewriting the orchestrator.
+3. It has an obvious telemetry hook so the value can be measured.
+4. It does not add a second source of truth for task state, routing state, or quality gates.
+
+Patterns that fail those checks stay as references, not implementation work.
+
+### Superpowers — discipline layer, not orchestration layer
+
+What fits:
+- **Bite-sized implementation plans with exact files, commands, expected test outcomes, and no placeholders.** This fills a real swarm-do gap: large phases are sometimes too broad for fast, reliable workers. Add as an optional `agent-analysis` output mode or a future decomposition stage, not as a replacement for Phase 10 pipelines.
+- **Spec review before quality review.** Already aligned with `agent-spec-review -> agent-review`; keep this as an invariant and use Superpowers as supporting evidence for the ordering.
+- **Fresh subagent per bounded task with curated context.** Already aligned with beads issue boundaries. The concrete steal is stricter prompt hygiene: subagents should receive the exact task slice, dependency notes, and verification contract instead of rereading the whole plan.
+
+What does not fit:
+- Importing Superpowers' full workflow engine. It duplicates swarm-do's orchestration and would create two competing process layers.
+- Hard TDD as a global invariant. Useful for many code changes, but too broad for docs, config, generated assets, and cleanup phases. Treat TDD as a per-pipeline/preset policy, not a universal hard gate.
+
+Post-10 candidate: `decompose-plan` stage that turns a hard phase into bounded work units with file scopes and verification steps. Start read-only/planning-only; do not add parallel implementation until conflict handling is proven.
+
+### MCO — stage provider for multi-provider fan-out
+
+MCO is the best post-10 integration candidate because it already owns provider fan-out, health checks, subprocess timeout/retry behavior, output normalization, consensus/dedupe, debate, and machine-readable JSON/SARIF/Markdown. Swarm-do should not rebuild that surface unless MCO cannot meet the contract.
+
+Fit as a stage provider:
+
+```yaml
+- id: cross-model-review
+  depends_on: [writer]
+  provider:
+    type: mco
+    command: review
+    providers: [codex, gemini]
+    mode: debate
+    strict_contract: true
+    output: findings
+```
+
+Ownership boundary:
+- Swarm-do creates the beads issue, assembles the prompt from upstream notes/diff/tests, invokes `bin/swarm-stage-mco`, imports normalized findings, and records telemetry.
+- MCO runs external providers, handles provider availability, dedupes/consensus-ranks findings, and returns structured output.
+- Claude remains the final orchestrator/synthesizer for pipeline decisions. MCO findings are evidence, not an automatic merge decision.
+
+Start with read-only review and architecture-analysis stages. Defer MCO-backed implementation until every provider gets an isolated worktree and the output is judged as a diff artifact. This avoids file collisions, branch ownership ambiguity, and hidden changes outside beads.
+
+Telemetry additions if adopted: `provider`, `provider_count`, `detected_by`, `consensus_level`, `consensus_score`, `mco_artifact_path`, and timeout/error classification.
+
+Maintenance risk: low-to-medium if isolated behind `bin/swarm-stage-mco`; high if MCO becomes a second orchestrator. Keep it a provider adapter, not a pipeline engine.
+
+### metaswarm — lifecycle patterns to mine carefully
+
+What fits:
+- **Plan/design review gates with specialist perspectives.** This fills the gap between `agent-analysis` and implementation for hard/high-risk phases. A future `hard-plan-review` pipeline can run feasibility, completeness, scope/alignment, security, and UX/API perspectives in parallel before writer work starts.
+- **Work-unit decomposition with DoD items, file scopes, and dependency graph.** This directly addresses slow complex plans. It fits swarm-do if represented as beads child issues and validated by the Phase 10 pipeline engine.
+- **External dependency check before execution.** Low-maintenance, high-value: detect missing API keys, CLIs, services, or credentials before writers burn time.
+- **Context recovery from persisted task state.** Swarm-do already has beads; add a `swarm recover` / `swarm status` view before inventing new storage.
+- **Knowledge capture after PR close.** Useful if it writes small structured entries tied to files/risk tags and uses selective retrieval. It should complement telemetry, not replace it.
+
+What does not fit yet:
+- Full PR shepherd automation. Valuable, but it expands swarm-do from implementation orchestration into long-running GitHub lifecycle management. Defer until the core run pipeline and telemetry are stable.
+- Recursive "swarm of swarms" orchestration. Tempting for epics, but it can explode cost and coordination complexity. Require budget previews and operator approval before any recursive pipeline ships.
+- Mandatory 100% coverage. Too repo-specific. Support coverage thresholds as a configurable gate, not a global rule.
+
+### Recommended post-10 order
+
+1. **MCO read-only review provider spike** — one optional pipeline stage, JSON output imported into `findings.jsonl`.
+2. **Provider health surface** — `swarm providers doctor`, wrapping local backend checks and MCO doctor if installed.
+3. **Consensus telemetry** — store cross-provider agreement fields before using them for decisions.
+4. **Hard-plan review pipeline** — specialist reviewers before writer on hard/high-risk phases.
+5. **Decomposed execution pipeline** — analysis produces bounded work units; swarm-do schedules them as beads child issues. Implementation fan-out comes only after conflict/merge rules are explicit.
+6. **Knowledge capture** — small JSONL learnings from merged PRs, retrieved selectively by file/risk tag.
+
+Rejected for now: replacing swarm-do with metaswarm, importing Superpowers wholesale, letting MCO own beads/pipeline state, community preset marketplace, fully automated PR shepherding, and recursive orchestration by default. Each would add a large maintenance burden before the measured value is proven.
 
 ---
 
@@ -1970,23 +2069,30 @@ Implements integration plan §1.10 — the "swap pipelines on the fly" architect
 - Write JSONSchema files: `swarm-do/schemas/preset.schema.json`, `pipeline.schema.json` — matching the DSL schema freeze in integration §1.10:
   - `variant` enum: `same | prompt_variants | models`
   - `strategy` enum: `synthesize | vote` (no `all-parallel`)
+  - `variant: models` uses explicit route objects (`backend`, `model`, `effort`) or named preset routes — not bare model IDs. A model ID alone cannot express Claude vs Codex execution.
   - `failure_tolerance` is a **structured object** with `mode` enum (`strict | quorum | best-effort`) + required `min_success` integer iff `mode=quorum`. Not a patterned string.
   - Concurrency is expressed **only** via `stages[].depends_on` — no `parallel_with` field. Stages with the same `depends_on` run in parallel; `depends_on: []` (or absent) means the stage runs at DAG root.
   - A stage must have exactly one of `agents` or `fan_out` (mutually exclusive); fan-out stages require a `merge` block.
   - Unknown top-level keys = lint failure (no silent forward-compat).
+- Ship the minimal backend registry / resolver contract that validation depends on:
+  - Reads the active preset routing, base `backends.toml`, role defaults, and hardcoded default.
+  - Returns a resolved `{backend, model, effort, setting_source}` for `(role, complexity)` and for any stage route override.
+  - Exposes a stable helper/API used by both `bin/swarm-validate` and later `bin/swarm-run` updates. Do not let the invariant guard depend on the current M1 hardcoded role matrix in `bin/swarm-run`.
 - `bin/swarm-validate` — loads a preset/pipeline and runs all gates in order:
   1. Schema lint
   2. Role existence check (every `agent-X` resolves to `swarm-do/agents/agent-X.md`)
-  3. Invariant guard (hard reject, no force-override: orchestrator must be Claude, agent-code-synthesizer must be Claude, any stage with `merge.strategy=synthesize` must use a Claude-backed merge agent)
+  3. Invariant guard via the backend resolver (hard reject, no force-override: orchestrator must resolve to a Claude backend, agent-code-synthesizer must resolve to a Claude backend, any stage with `merge.strategy=synthesize` must use a Claude-backed merge agent)
   4. Cycle detection on the `depends_on` DAG
-  5. Budget preview — estimates agent count + token cost + wall-clock, compares against preset's `[budget]` ceilings. Budget is a **hard reject at activation** (no `--force-over-budget` flag); raising ceilings requires editing the preset's `[budget]` block so the authorization is owner-attributable in the file.
-- `swarm preset dry-run <name> <plan-path>` — invokes all gates + prints the stage graph, agent count, and cost estimate.
+  5. Budget preview — when a plan path is supplied, estimates agent count + token cost + wall-clock, compares against preset's `[budget]` ceilings. Budget is a **hard reject for dry-run and `/swarm-do:do` run start**, not bare `preset load`, because budget depends on the plan's phase count and complexity. Raising ceilings requires editing the preset's `[budget]` block so the authorization is owner-attributable in the file.
+- `swarm preset load <name>` — runs plan-independent gates only (schema, role existence, invariants, cycle detection), activates the preset if those pass, and records that budget will be enforced at dry-run/run start.
+- `swarm preset dry-run <name> <plan-path>` — invokes all gates including budget + prints the stage graph, agent count, and cost estimate.
 
 **Verify:**
 - Unit tests for each gate — at minimum one known-bad fixture per gate, one known-good control.
 - Invariant-guard tests MUST include a "try to route orchestrator to codex" case that fails.
+- Resolver tests MUST include a preset route override and a base `backends.toml` fallback so the invariant guard is not testing a hardcoded `"claude"` string.
 - Schema-lint tests MUST include the `2-of-3` string form for `failure_tolerance` and confirm it fails in favor of the structured object.
-- Dry-run always emits the cost preview (pass or fail) so operators see the numbers before activation.
+- Dry-run always emits the cost preview (pass or fail) so operators see the numbers before starting a run.
 
 **Anti-pattern guards:**
 - Do NOT add a `--force-over-budget` or `--skip-invariant` flag. Invariant/budget gates are structural; "force" destroys the supply-chain safety this phase exists to provide.
@@ -1999,12 +2105,13 @@ Implements integration plan §1.10 — the "swap pipelines on the fly" architect
 
 **What to implement:**
 - Runtime responsibilities:
+  - **Two-layer engine boundary** — code helpers parse/validate YAML, resolve routing, compute topological layers, create a deterministic execution plan, and create/edge beads issues. The Claude SKILL remains the dispatcher that calls Claude Code `Agent()` for Claude-backed stages. Shell/Python helpers must not pretend they can invoke Claude subagents directly.
   - **DAG scheduling** — compute topological layers from `depends_on`, execute each layer's stages in parallel. Stages sharing `depends_on` run concurrently.
   - Fan-out execution (spawn `fan_out.count` agents in parallel within a fan-out stage; wait per failure_tolerance).
   - Merge (invoke `merge.agent` with successful fan-out outputs as input).
   - Beads dependency-edge creation (fan-out spawns N sibling issues all blocking the same merge issue; stage-level `depends_on` becomes bd edges).
   - Failure tolerance enforcement per structured config — `strict` | `quorum` (with `min_success`) | `best-effort`.
-- SKILL.md body shrinks to: "load active pipeline YAML via bash helper, execute stages per engine."
+- SKILL.md body shrinks to: "load active pipeline YAML via helper, ask helper for the next executable stage set, dispatch the resolved roles/providers, record results, repeat." The prompt owns orchestration decisions that require Claude Code Agent calls; helpers own deterministic graph/routing math.
 
 **Verify:**
 - Characterization test: the existing `/swarm-do:do` default pipeline (from Phase 2) must produce identical beads issue graphs before and after the refactor. Same issue titles, same assignees, same dependency edges.
@@ -2038,23 +2145,24 @@ Implements integration plan §1.10 — the "swap pipelines on the fly" architect
 
 ### Phase 10d: Stock presets + pipelines (complexity: moderate, kind: feature)
 
-**Objective:** Write the 6 stock presets and 4 stock pipelines. Dogfood each against one real cartledger phase before marking complete.
+**Objective:** Write the 6 stock presets and 4 stock pipelines. Validate each locally with synthetic fixtures; create a post-merge operator verification bead for real cartledger dogfooding.
 
 **What to implement:**
 - `default.yaml` — translation of today's `/swarm-do:do` pipeline into the YAML schema. No behavior change.
 - `ultra-plan.yaml` — mindstudio.ai-referenced architecture: 3 explorer fan-out + 1 critique merge before writer stage.
-- `compete.yaml` — Pattern 5: existing analysis stage, then 2× writer fan-out (claude + codex via `variant: models`), then writer-judge merge.
+- `compete.yaml` — Pattern 5: existing analysis stage, then 2× writer fan-out (Claude + Codex via `variant: models` route objects or named preset routes), then writer-judge merge.
 - `lightweight.yaml` — drops spec-review + docs stages.
 - 6 stock presets, each referencing exactly one pipeline + a routing override block matching its name's intent.
 
 **Verify:**
 - `swarm preset dry-run <each-preset>` prints a valid stage graph.
-- Dogfood each preset against one real cartledger phase; beads graph matches expectations.
+- Local synthetic dogfood: each preset runs against a repo-local fixture plan; beads graph matches expectations.
+- Create one follow-up bead for operator-driven cartledger dogfooding after merge. Do not claim cartledger dogfooding complete from inside this repo.
 - Characterization: default preset produces identical beads graph to pre-10b behavior.
 
 **Anti-pattern guards:**
 - Do NOT invent fan-out counts. ultra-plan = 3 explorers per the referenced architecture; compete = 2 writers per Pattern 5. Changing these without an ADR is cargo-culting.
-- Do NOT ship a preset without dogfooding it. An unvalidated stock preset is a footgun.
+- Do NOT ship a preset without local fixture dogfooding. Do NOT claim external cartledger dogfooding until the operator-run follow-up bead is closed.
 
 ### Phase 10e: Telemetry integration (complexity: simple, kind: feature)
 
@@ -2120,12 +2228,19 @@ Implements integration plan §1.8's V1 TUI. Framework: **Textual** (same stack a
 
 **Overall ordering:** 11a first (bootstrap). Then 11b/11c/11d/11e can ship in parallel once scaffolding is in place — they share the status bar (11f) and dev-loop docs (11g). 11b depends on Phase 9a/9b (ledgers). 11d/11e depend on Phase 10 (preset/pipeline system).
 
+**Phase 10 contract fixes discovered during review (must land inside Phase 11 before screens rely on them):**
+- TUI module path is `py/swarm_do/tui/`; wrapper invokes `python -m swarm_do.tui.app`. Do not create a top-level `tui` package that bypasses the existing Python layout.
+- `bin/swarm-run` must create `${CLAUDE_PLUGIN_DATA}/in-flight/bd-<id>.lock` after a successful claim and remove it on EXIT. Dashboard/cancel/handoff features read this lockfile contract.
+- `bin/swarm-run` must emit a real `config_hash` in `runs.jsonl` from the active config surface (`backends.toml` plus active preset/pipeline identity where present). The Settings screen cannot claim telemetry hash updates while runtime still writes null.
+- Phase 11 owns the missing action surface it calls: handoff/cancel helpers, preset rename/delete, and current-preset pipeline update either ship as shared Python helpers or `bin/swarm` subcommands. The TUI must not shell out to nonexistent commands.
+- Token/cost/429 telemetry fields may still be null in Phase 11. Dashboard and status bar render `n/a` for unavailable burn/cost/rate-limit data instead of fabricating zeroes.
+
 **Phase-wide verification:**
 - Fresh install: `/plugin install swarm-do@mstefanko-plugins`, then `bin/swarm-tui` — prompts for venv creation, installs, launches.
 - Dashboard updates live while a real `/swarm-do:do` runs in a second terminal.
-- Settings editor: change `agent-docs` backend from codex to claude, Ctrl-S, verify `backends.toml` updated + `config_hash` changed in next telemetry row.
+- Settings editor: change `agent-docs` backend, Ctrl-S, verify `backends.toml` updated + `config_hash` is non-null and changes in the next telemetry row.
 - Presets: `swarm preset load ultra-plan` via TUI, verify active preset updates everywhere (status bar, dashboard banner, pipeline inspector preview).
-- Invariant guard: attempt to set `orchestrator = codex` in settings → blocking warning, unable to save without `--force` equivalent.
+- Invariant guard: attempt to set `orchestrator = codex` in settings → blocking error, save disabled until the route is changed back to a Claude-backed backend.
 - Fault: delete `runs.jsonl` mid-session — dashboard displays "no telemetry yet" gracefully, does not crash.
 
 **What's NOT in Phase 11 (deferred):**
@@ -2143,7 +2258,7 @@ Implements integration plan §1.8's V1 TUI. Framework: **Textual** (same stack a
 - `swarm-do/tui/requirements.txt` pinned: `textual>=0.80`, `tomli`, `pydantic`, optionally `textual-serve` (deferred).
 - **Venv location: `${CLAUDE_PLUGIN_DATA}/tui/.venv`** — NOT under the plugin install tree. Plugin upgrades replace the install tree (`swarm-do/<sha>/...`), so a venv living there would be wiped on every `/plugin update` and re-require a ~40MB reinstall.
 - Versioned via `requirements.lock`; `bin/swarm-tui` re-runs `pip install` only when the lock hash differs from `${CLAUDE_PLUGIN_DATA}/tui/requirements.lock.hash`.
-- `bin/swarm-tui` wrapper: resolves venv path → checks venv missing or lock-hash mismatch (prompts operator) → creates venv + installs + stamps lock hash → execs `"$VENV/bin/python" -m tui.app` with `CLAUDE_PLUGIN_ROOT` / `CLAUDE_PLUGIN_DATA` forwarded.
+- `bin/swarm-tui` wrapper: resolves venv path → checks venv missing or lock-hash mismatch (prompts operator) → creates venv + installs + stamps lock hash → execs `"$VENV/bin/python" -m swarm_do.tui.app` with `CLAUDE_PLUGIN_ROOT` / `CLAUDE_PLUGIN_DATA` forwarded.
 
 **Verify:**
 - First invocation: prompts for venv creation; creates under `${CLAUDE_PLUGIN_DATA}/tui/.venv`.
@@ -2163,10 +2278,10 @@ Implements integration plan §1.8's V1 TUI. Framework: **Textual** (same stack a
 **What to implement:**
 - Tails `${CLAUDE_PLUGIN_DATA}/telemetry/runs.jsonl` via `watchfiles` or polling every 2s.
 - Lists in-flight runs from `${CLAUDE_PLUGIN_DATA}/in-flight/*.lock` (lockfiles created by `bin/swarm-run`).
-- Consumption burn chart over last 24h, aggregated from runs.jsonl (tokens/hr per backend).
-- Recent 429 events per backend (timestamp + count in last hour), read from runs.jsonl's `last_429_at` column.
+- Consumption burn chart over last 24h, aggregated from runs.jsonl (tokens/hr per backend; render `n/a` while token fields are null).
+- Recent 429 events per backend (timestamp + count in last hour), read from runs.jsonl's `last_429_at` column; render `n/a` when no observable 429 data exists.
 - Active preset + pipeline banner (top). Status bar (bottom).
-- Hotkeys: `f` handoff selected in-flight issue to other backend (calls `bin/swarm handoff`), `o` open issue in browser via `bd show` + URL construction, `c` cancel (signal the lockfile's PID).
+- Hotkeys: `f` handoff selected in-flight issue to other backend (shared Python helper or `bin/swarm handoff`), `o` open issue in browser via `bd show` + URL construction, `c` cancel (signal the lockfile's PID).
 
 **Verify:**
 - Mock a `runs.jsonl` with 10 rows + 2 in-flight lockfiles; TUI renders in-flight table + burn chart correctly.
@@ -2186,7 +2301,7 @@ Implements integration plan §1.8's V1 TUI. Framework: **Textual** (same stack a
 - Cell content: `{backend}/{model}/{effort}` compact string.
 - **Edit target is singular and explicit.** Top of screen shows `Editing: <target>` — either `backends.toml (base)`, `<user-preset-name>.toml (routing)`, or a "Stock preset active — press F to fork" banner (editing disabled).
 - Arrow keys navigate; Enter opens a detail modal with three dropdowns (backend / model / effort).
-- Ctrl-S writes the active target atomically (tempfile + rename). On write, emits a telemetry event — `config_hash` updates for §1.9.
+- Ctrl-S writes the active target atomically (tempfile + rename). Runtime `config_hash` is computed by `bin/swarm-run`; the Settings screen validates that the hash would change after save.
 - Ctrl-Z undo (in-session only).
 - **Invariant guard: unoverrideable hard reject.** Attempting to set `orchestrator` or `agent-code-synthesizer` to non-Claude, or a `synthesize`-merge agent to non-Claude, displays a modal with invariant text and refuses the change. Save button stays disabled until the operator picks a conforming backend. **No Ctrl-Shift-S force-save.**
 
@@ -2208,7 +2323,7 @@ Implements integration plan §1.8's V1 TUI. Framework: **Textual** (same stack a
 **What to implement:**
 - Split pane: left = preset list grouped by origin (stock / user), right = preview.
 - Preview panel shows routing matrix (read-only) + referenced pipeline name.
-- Hotkeys: `l` load preset (confirm dialog), `s` save current config as new preset (prompts for name), `d` diff against stock or against current, `r` rename user preset, `x` delete user preset (confirm).
+- Hotkeys: `l` load preset (confirm dialog), `s` save current config as new preset (prompts for name), `d` diff against stock or against current, `r` rename user preset, `x` delete user preset (confirm). Rename/delete ship through shared registry helpers or CLI subcommands in this phase.
 - Stock presets are read-only — `r`/`x` attempts display a message.
 
 **Verify:**
@@ -2226,7 +2341,7 @@ Implements integration plan §1.8's V1 TUI. Framework: **Textual** (same stack a
 **What to implement:**
 - List pane + preview pane.
 - Preview renders stage graph as indented ASCII (generator from pipeline YAML — fan-out nodes show fan-out count + merge strategy + failure tolerance).
-- Hotkeys: `s` set as active pipeline in current preset (updates preset TOML), `l` lint pipeline file (invokes `bin/swarm-validate`), `v` full validate including beads-graph dry-run.
+- Hotkeys: `s` set as active pipeline in current preset (updates user preset TOML; stock preset requires fork first), `l` lint pipeline file (invokes `bin/swarm-validate` or shared validator), `v` full validate including budget/dry-run preview.
 - Editing pipelines = external editor. TUI re-reads on focus return.
 
 **Verify:**
@@ -2243,7 +2358,7 @@ Implements integration plan §1.8's V1 TUI. Framework: **Textual** (same stack a
 **Objective:** Persistent bottom bar + top-level navigation hotkeys. Shared across all screens.
 
 **What to implement:**
-- Persistent bottom bar: `preset=<name> pipeline=<name> runs_today=N cost_today=$X last_429_claude=<time> last_429_codex=<time>`.
+- Persistent bottom bar: `preset=<name> pipeline=<name> runs_today=N cost_today=$X|n/a last_429_claude=<time|n/a> last_429_codex=<time|n/a>`.
 - Top-level hotkeys: `d` dashboard, `s` settings, `p` presets, `i` pipelines, `?` help, `q` quit.
 - tcss styling inherits from `tech-radar` theme where feasible.
 

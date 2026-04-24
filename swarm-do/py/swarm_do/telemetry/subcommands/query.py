@@ -23,7 +23,8 @@ _LEDGER_COLS: Dict[str, List[str]] = {
     "runs": [
         "run_id", "timestamp_start", "timestamp_end", "backend", "model", "effort",
         "prompt_bundle_hash", "config_hash", "role", "phase_kind", "phase_complexity",
-        "issue_id", "repo", "base_sha", "head_sha", "diff_size_bytes", "input_tokens",
+        "issue_id", "preset_name", "pipeline_name", "pipeline_hash",
+        "repo", "base_sha", "head_sha", "diff_size_bytes", "input_tokens",
         "cached_input_tokens", "output_tokens", "estimated_cost_usd", "wall_clock_seconds",
         "tool_call_count", "cap_hit", "budget_breach", "schema_ok", "exit_code",
         "setting_source", "writer_status", "review_verdict", "last_429_at",
@@ -101,6 +102,7 @@ def run(args: argparse.Namespace) -> int:
                 f'INSERT INTO "{tbl}" ({col_names}) VALUES ({placeholders})',
                 [[r.get(c) for c in cols] for r in rows],
             )
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_runs_preset_pipeline ON runs ("preset_name", "pipeline_name")')
     conn.commit()
 
     try:

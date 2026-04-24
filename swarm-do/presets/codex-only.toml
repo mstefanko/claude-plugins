@@ -1,0 +1,25 @@
+name = "codex-only"
+description = "Route delegatable roles through Codex while preserving Claude structural invariants."
+pipeline = "default"
+origin = "stock"
+
+[routing]
+"roles.agent-research" = { backend = "codex", model = "gpt-5.4", effort = "high" }
+"roles.agent-analysis" = { backend = "codex", model = "gpt-5.4", effort = "xhigh" }
+"roles.agent-debug" = { backend = "codex", model = "gpt-5.4", effort = "xhigh" }
+"roles.agent-clarify" = { backend = "codex", model = "gpt-5.4-mini", effort = "medium" }
+"roles.agent-writer.simple" = { backend = "codex", model = "gpt-5.4-mini", effort = "medium" }
+"roles.agent-writer.moderate" = { backend = "codex", model = "gpt-5.4", effort = "high" }
+"roles.agent-writer.hard" = { backend = "codex", model = "gpt-5.4", effort = "xhigh" }
+"roles.agent-spec-review" = { backend = "codex", model = "gpt-5.4-mini", effort = "medium" }
+"roles.agent-review" = { backend = "codex", model = "gpt-5.4", effort = "high" }
+"roles.agent-docs" = { backend = "codex", model = "gpt-5.4-mini", effort = "medium" }
+"roles.agent-codex-review" = { backend = "codex", model = "gpt-5.4", effort = "high" }
+"roles.agent-analysis-judge" = { backend = "claude", model = "claude-opus-4-7", effort = "high" }
+"roles.agent-writer-judge" = { backend = "claude", model = "claude-opus-4-7", effort = "high" }
+"roles.agent-code-synthesizer" = { backend = "claude", model = "claude-opus-4-7", effort = "xhigh" }
+
+[budget]
+max_agents_per_run = 80
+max_estimated_cost_usd = 20.0
+max_wall_clock_seconds = 14400

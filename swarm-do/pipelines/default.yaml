@@ -1,0 +1,31 @@
+pipeline_version: 1
+name: default
+description: Default research-analysis-clarify-writer-review-docs swarm pipeline.
+stages:
+  - id: research
+    agents:
+      - role: agent-research
+  - id: analysis
+    depends_on: [research]
+    agents:
+      - role: agent-analysis
+  - id: clarify
+    depends_on: [research]
+    agents:
+      - role: agent-clarify
+  - id: writer
+    depends_on: [analysis, clarify]
+    agents:
+      - role: agent-writer
+  - id: spec-review
+    depends_on: [writer]
+    agents:
+      - role: agent-spec-review
+  - id: review
+    depends_on: [spec-review]
+    agents:
+      - role: agent-review
+  - id: docs
+    depends_on: [spec-review]
+    agents:
+      - role: agent-docs

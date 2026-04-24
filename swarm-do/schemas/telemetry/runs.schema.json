@@ -18,6 +18,9 @@
     "phase_complexity",
     "risk_tags",
     "issue_id",
+    "preset_name",
+    "pipeline_name",
+    "pipeline_hash",
     "repo",
     "base_sha",
     "head_sha",
@@ -41,8 +44,8 @@
   "properties": {
     "run_id": {
       "type": "string",
-      "description": "Unique run identifier. Preferred format is a 26-character Crockford base32 ULID (^[0-9A-HJKMNP-TV-Z]{26}$). Pattern kept relaxed pending swarm-run ULID migration (mstefanko-plugins-utu) — Phase 10a will enforce strict ULID once swarm-run's append path adopts ids.new_ulid.",
-      "pattern": "^[0-9A-Z_-]{1,64}$"
+      "description": "Unique run identifier. Strict 26-character Crockford base32 ULID.",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
     },
     "timestamp_start": {
       "type": "string",
@@ -114,6 +117,19 @@
     "issue_id": {
       "type": "string",
       "description": "Beads issue identifier (e.g. mstefanko-plugins-itv)"
+    },
+    "preset_name": {
+      "type": ["string", "null"],
+      "description": "Active preset at run time. null when no preset is active and routing falls back to backends.toml."
+    },
+    "pipeline_name": {
+      "type": "string",
+      "description": "Pipeline selected by the active preset, or default when no preset is active."
+    },
+    "pipeline_hash": {
+      "type": ["string", "null"],
+      "description": "SHA-256 hex of the pipeline YAML used for this run. null if the pipeline file cannot be resolved.",
+      "pattern": "^[0-9a-f]{64}$"
     },
     "repo": {
       "type": ["string", "null"],

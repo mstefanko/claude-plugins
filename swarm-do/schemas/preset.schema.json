@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/07/schema#",
+  "$id": "https://mstefanko-plugins/swarm-do/preset.schema.json#v1",
+  "title": "swarm-do preset",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "pipeline", "budget"],
+  "properties": {
+    "name": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "pipeline": { "type": "string", "minLength": 1 },
+    "origin": { "type": "string", "enum": ["stock", "user", "experiment"] },
+    "forked_from_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "routing": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["backend", "model", "effort"],
+        "properties": {
+          "backend": { "type": "string", "enum": ["claude", "codex"] },
+          "model": { "type": "string", "minLength": 1 },
+          "effort": { "type": "string", "enum": ["none", "low", "medium", "high", "xhigh"] }
+        }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_agents_per_run", "max_estimated_cost_usd", "max_wall_clock_seconds"],
+      "properties": {
+        "max_agents_per_run": { "type": "integer", "minimum": 1 },
+        "max_estimated_cost_usd": { "type": "number", "minimum": 0 },
+        "max_wall_clock_seconds": { "type": "integer", "minimum": 1 }
+      }
+    }
+  }
+}

@@ -1,0 +1,40 @@
+pipeline_version: 1
+name: ultra-plan
+description: Three prompt-variant planning explorers merged before writer.
+stages:
+  - id: research
+    agents:
+      - role: agent-research
+  - id: exploration
+    depends_on: [research]
+    fan_out:
+      role: agent-analysis
+      count: 3
+      variant: prompt_variants
+      variants: [explorer-a, explorer-b, explorer-c]
+    merge:
+      strategy: synthesize
+      agent: agent-analysis-judge
+    failure_tolerance:
+      mode: quorum
+      min_success: 2
+  - id: clarify
+    depends_on: [research]
+    agents:
+      - role: agent-clarify
+  - id: writer
+    depends_on: [exploration, clarify]
+    agents:
+      - role: agent-writer
+  - id: spec-review
+    depends_on: [writer]
+    agents:
+      - role: agent-spec-review
+  - id: review
+    depends_on: [spec-review]
+    agents:
+      - role: agent-review
+  - id: docs
+    depends_on: [spec-review]
+    agents:
+      - role: agent-docs

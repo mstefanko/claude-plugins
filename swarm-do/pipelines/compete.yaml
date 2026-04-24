@@ -1,0 +1,45 @@
+pipeline_version: 1
+name: compete
+description: Pattern 5 competitive writer fan-out with a judge merge.
+stages:
+  - id: research
+    agents:
+      - role: agent-research
+  - id: analysis
+    depends_on: [research]
+    agents:
+      - role: agent-analysis
+  - id: clarify
+    depends_on: [research]
+    agents:
+      - role: agent-clarify
+  - id: writers
+    depends_on: [analysis, clarify]
+    fan_out:
+      role: agent-writer
+      count: 2
+      variant: models
+      routes:
+        - backend: claude
+          model: claude-opus-4-7
+          effort: xhigh
+        - backend: codex
+          model: gpt-5.4
+          effort: xhigh
+    merge:
+      strategy: synthesize
+      agent: agent-writer-judge
+    failure_tolerance:
+      mode: strict
+  - id: spec-review
+    depends_on: [writers]
+    agents:
+      - role: agent-spec-review
+  - id: review
+    depends_on: [spec-review]
+    agents:
+      - role: agent-review
+  - id: docs
+    depends_on: [spec-review]
+    agents:
+      - role: agent-docs

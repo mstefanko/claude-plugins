@@ -181,11 +181,19 @@ bd update "$ISSUE" --claim >/dev/null 2>&1 || die "bd update $ISSUE --claim fail
 
 # Invoke backend, capture stdout.
 OUT_FILE="$(mktemp -t swarm-run-out.XXXXXX)"
+LOCK_FILE=""
 
-# run_id: timestamp-ms hex (12 chars) + openssl entropy hex (16 chars) = 28 uppercase hex chars.
-# Generated at script scope so extract-phase.sh and _swarm_telemetry_write share the same run_id.
-# Matches relaxed schema pattern ^[0-9A-Z_-]{1,64}$. Phase 10a will upgrade to strict Crockford ULID.
-RUN_ID="$(printf '%012X%s' "$(date +%s%3N 2>/dev/null || date +%s)000" "$(openssl rand -hex 8 2>/dev/null | tr 'a-f' 'A-F' || printf '%016X' "$(( RANDOM * RANDOM ))")" 2>/dev/null || echo "FALLBACK-$(date +%s)")"
+# run_id: strict Crockford-base32 ULID shared by findings.jsonl and runs.jsonl.
+_swarm_random_crockford26() {
+  local alphabet="0123456789ABCDEFGHJKMNPQRSTVWXYZ" out="" i idx
+  for ((i = 0; i < 26; i++)); do
+    idx=$((RANDOM % 32))
+    out+="${alphabet:idx:1}"
+  done
+  printf '%s' "$out"
+}
+_PY_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/py"
+RUN_ID="$(PYTHONPATH="${_PY_ROOT}:${PYTHONPATH:-}" python3 -c 'from swarm_do.telemetry.ids import new_ulid; print(new_ulid())' 2>/dev/null || _swarm_random_crockford26)"
 
 # ---------------------------------------------------------------------------
 # Telemetry EXIT trap — appends one row to runs.jsonl on every exit path.
@@ -194,6 +202,7 @@ RUN_ID="$(printf '%012X%s' "$(date +%s%3N 2>/dev/null || date +%s)000" "$(openss
 _swarm_telemetry_write() {
   local _final_rc="$1"
   local _ended _wall _hash _run_id _row _tel_dir _base_sha _head_sha _diff_bytes _repo
+  local _preset_name _pipeline_name _pipeline_hash _config_hash _context_py_root
 
   # Guard: CLAUDE_PLUGIN_DATA must be set and non-empty.
   if [[ -z "${CLAUDE_PLUGIN_DATA:-}" ]]; then
@@ -233,6 +242,12 @@ _swarm_telemetry_write() {
     # run_id: use the script-scope RUN_ID so findings.jsonl and runs.jsonl share the same run_id.
     _run_id="$RUN_ID"
 
+    _context_py_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/py"
+    _preset_name="$(PYTHONPATH="${_context_py_root}:${PYTHONPATH:-}" python3 -m swarm_do.pipeline.context preset_name 2>/dev/null || true)"
+    _pipeline_name="$(PYTHONPATH="${_context_py_root}:${PYTHONPATH:-}" python3 -m swarm_do.pipeline.context pipeline_name 2>/dev/null || true)"
+    _pipeline_hash="$(PYTHONPATH="${_context_py_root}:${PYTHONPATH:-}" python3 -m swarm_do.pipeline.context pipeline_hash 2>/dev/null || true)"
+    _config_hash="$(PYTHONPATH="${_context_py_root}:${PYTHONPATH:-}" python3 -m swarm_do.pipeline.config_hash 2>/dev/null || true)"
+
     mkdir -p "$_tel_dir"
 
     # Build row via jq. Unobservable fields emitted as null.
@@ -244,10 +259,14 @@ _swarm_telemetry_write() {
       --arg model        "$MODEL" \
       --arg effort       "$EFFORT" \
       --argjson hash     "$(if [[ "$_hash" == "null" ]]; then echo "null"; else printf '"%s"' "$_hash"; fi)" \
+      --argjson config_hash "$(if [[ -n "$_config_hash" ]]; then printf '"%s"' "$_config_hash"; else echo "null"; fi)" \
       --argjson exit_code "$_final_rc" \
       --argjson wall     "$_wall" \
       --arg role         "$ROLE" \
       --arg issue_id     "$ISSUE" \
+      --argjson preset_name "$(if [[ -n "$_preset_name" ]]; then printf '%s' "$_preset_name" | jq -Rs .; else echo "null"; fi)" \
+      --arg pipeline_name "${_pipeline_name:-default}" \
+      --argjson pipeline_hash "$(if [[ -n "$_pipeline_hash" ]]; then printf '"%s"' "$_pipeline_hash"; else echo "null"; fi)" \
       --argjson repo     "$(if [[ -n "$_repo" ]]; then printf '%s' "$_repo" | jq -Rs .; else echo "null"; fi)" \
       --argjson base_sha "$(if [[ -n "$_base_sha" ]]; then printf '"%s"' "$_base_sha"; else echo "null"; fi)" \
       --argjson head_sha "$(if [[ -n "$_head_sha" ]]; then printf '"%s"' "$_head_sha"; else echo "null"; fi)" \
@@ -260,12 +279,15 @@ _swarm_telemetry_write() {
         model:              $model,
         effort:             $effort,
         prompt_bundle_hash: $hash,
-        config_hash:        null,
+        config_hash:        $config_hash,
         role:               $role,
         phase_kind:         null,
         phase_complexity:   null,
         risk_tags:          null,
         issue_id:           $issue_id,
+        preset_name:        $preset_name,
+        pipeline_name:      $pipeline_name,
+        pipeline_hash:      $pipeline_hash,
         repo:               $repo,
         base_sha:           $base_sha,
         head_sha:           $head_sha,
@@ -291,12 +313,51 @@ _swarm_telemetry_write() {
 
 _swarm_exit_handler() {
   local _rc="$?"
+  if [[ -n "${LOCK_FILE:-}" ]]; then
+    rm -f "$LOCK_FILE"
+  fi
   rm -f "$OUT_FILE"
   if [[ "${DRY_RUN:-0}" -ne 1 ]]; then
     _swarm_telemetry_write "$_rc"
   fi
   exit "$_rc"
 }
+
+if [[ -n "${CLAUDE_PLUGIN_DATA:-}" ]]; then
+  LOCK_DIR="${CLAUDE_PLUGIN_DATA}/in-flight"
+  LOCK_FILE="${LOCK_DIR}/bd-${ISSUE}.lock"
+  {
+    mkdir -p "$LOCK_DIR"
+    LOCK_TMP="${LOCK_FILE}.tmp.$$"
+    jq -n \
+      --arg issue_id "$ISSUE" \
+      --arg role "$ROLE" \
+      --arg backend "$BACKEND" \
+      --arg model "$MODEL" \
+      --arg effort "$EFFORT" \
+      --arg mode "$MODE" \
+      --arg started_at "$STARTED" \
+      --arg repo "$(git -C "${PWD}" remote get-url origin 2>/dev/null || true)" \
+      --arg worktree "$PWD" \
+      --argjson pid "$$" \
+      '{
+        schema_version: 1,
+        issue_id: $issue_id,
+        role: $role,
+        backend: $backend,
+        model: $model,
+        effort: $effort,
+        mode: $mode,
+        pid: $pid,
+        started_at: $started_at,
+        repo: ($repo | if . == "" then null else . end),
+        worktree: $worktree,
+        status: "running"
+      }' >"$LOCK_TMP"
+    mv "$LOCK_TMP" "$LOCK_FILE"
+  } || { echo "swarm-run: in-flight lock write failed (non-fatal)" >&2; LOCK_FILE=""; true; }
+fi
+
 trap '_swarm_exit_handler' EXIT
 
 if [[ "$BACKEND" == "codex" ]]; then

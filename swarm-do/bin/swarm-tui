@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export CLAUDE_PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$ROOT}"
+export CLAUDE_PLUGIN_DATA="${CLAUDE_PLUGIN_DATA:-$ROOT/data}"
+
+REQ_LOCK="$ROOT/tui/requirements.lock"
+VENV_DIR="$CLAUDE_PLUGIN_DATA/tui/.venv"
+HASH_FILE="$CLAUDE_PLUGIN_DATA/tui/requirements.lock.hash"
+
+hash_file() {
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  else
+    sha256sum "$1" | awk '{print $1}'
+  fi
+}
+
+want_hash="$(hash_file "$REQ_LOCK")"
+have_hash=""
+[[ -f "$HASH_FILE" ]] && have_hash="$(cat "$HASH_FILE")"
+
+if [[ ! -x "$VENV_DIR/bin/python" || "$want_hash" != "$have_hash" ]]; then
+  if [[ "${SWARM_TUI_AUTO_INSTALL:-0}" != "1" ]]; then
+    printf 'swarm-tui: create/update managed venv at %s? [y/N] ' "$VENV_DIR" >&2
+    read -r reply
+    case "$reply" in
+      y|Y|yes|YES) ;;
+      *) echo "swarm-tui: cancelled" >&2; exit 1 ;;
+    esac
+  fi
+  mkdir -p "$(dirname "$VENV_DIR")"
+  python3 -m venv "$VENV_DIR"
+  "$VENV_DIR/bin/python" -m pip install --upgrade pip
+  "$VENV_DIR/bin/python" -m pip install -r "$REQ_LOCK"
+  mkdir -p "$(dirname "$HASH_FILE")"
+  printf '%s\n' "$want_hash" >"$HASH_FILE"
+fi
+
+export PYTHONPATH="$ROOT/py:${PYTHONPATH:-}"
+exec "$VENV_DIR/bin/python" -m swarm_do.tui.app "$@"

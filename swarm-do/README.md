@@ -12,6 +12,9 @@ Shipped:
 
 - `/swarm-do:do <plan>` — main orchestrator. Full beads pipeline per phase.
 - `/swarm-do:init-beads` — explicit, idempotent `bd init --stealth` bootstrap for a repo.
+- `bin/swarm preset ...` — preset load/save/diff/list/clear/dry-run.
+- `bin/swarm pipeline ...` — stock/user pipeline list/show/lint.
+- `bin/swarm-validate <preset>` — validation gates for preset + pipeline loading.
 
 Planned (packaging Phase 3 and Integration Phases 1–2):
 
@@ -77,6 +80,8 @@ swarm-do/
 │   │   ├── hash-bundle.sh        SHA-256 of role prompt bundle (interface: hash-bundle.sh <role> <backend> → 64-char hex)
 │   │   └── normalize-path.sh     Canonical repo-relative path for stable hash input; strips WORKTREE_ROOT then REPO_ROOT prefix
 │   ├── swarm-run                 M1 manual runner (one role, one beads issue)
+│   ├── swarm                     Preset/pipeline CLI
+│   ├── swarm-validate            Preset/pipeline validation shim
 │   ├── extract-phase.sh          Findings extractor — thin shim; dispatches to python3 -m swarm_do.telemetry.extractors (Phase 4)
 │   ├── swarm-telemetry           Read-only reporter for telemetry ledgers (Phase 9c) — see below
 │   ├── swarm-gpt                 alias → swarm-run --backend codex
@@ -85,11 +90,33 @@ swarm-do/
 │   ├── codex-review-phase        Phase 0 experiment harness (not wired into /swarm-do:do)
 │   └── load-role.sh              emit <plugin>/agents/agent-<role>.md for prompt injection
 ├── roles/agent-<role>/           Prompt bundles (shared.md + claude.md + codex.md overlays)
+├── presets/                      Stock preset TOML files
+├── pipelines/                    Stock pipeline YAML files
+├── schemas/{preset,pipeline}.schema.json  Preset/pipeline JSON Schema contracts
 ├── schemas/telemetry/            JSON Schema v1 ledger definitions (runs, findings, outcomes, adjudications) — see schemas/telemetry/README.md
 ├── tests/fixtures/               Synthetic ledger data for self-test and dev (generate-synthetic-runs.sh, 66 runs, 35 findings)
 ├── phase0/                       Codex cross-model review experiment artifacts
 └── docs/provenance/              Audit trail for the claude-mem unfork
 ```
+
+## bin/swarm
+
+Preset and pipeline registry CLI:
+
+```sh
+swarm preset list
+swarm preset load <name>
+swarm preset clear
+swarm preset save <new-name> --from <current|preset-name>
+swarm preset diff <name>
+swarm preset dry-run <name> <plan-path>
+swarm pipeline list
+swarm pipeline show <name>
+swarm pipeline lint <name-or-path>
+swarm mode claude-only|codex-only|balanced|custom
+```
+
+Active preset state lives at `${CLAUDE_PLUGIN_DATA}/current-preset.txt`. Fresh installs have no active preset; routing falls back to `backends.toml`, while the runtime uses the `default` pipeline.
 
 ## Roles
 

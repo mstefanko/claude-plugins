@@ -1,0 +1,52 @@
+Screen {
+    layout: vertical;
+}
+
+Vertical {
+    height: 1fr;
+}
+
+#banner, #target, #hash, #burn {
+    padding: 0 1;
+    height: 1;
+}
+
+DataTable {
+    height: 1fr;
+}
+
+ListView {
+    width: 34;
+    border: solid $primary;
+}
+
+#preview {
+    width: 1fr;
+    border: solid $primary;
+    padding: 1;
+}
+
+StatusBar {
+    height: 1;
+    background: $panel;
+    color: $text;
+    padding: 0 1;
+}
+
+#modal {
+    width: 70;
+    height: auto;
+    border: thick $primary;
+    background: $surface;
+    padding: 1 2;
+}
+
+.modal-title {
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+.buttons {
+    height: auto;
+    margin-top: 1;
+}

@@ -1,0 +1,22 @@
+name = "claude-only"
+description = "Route every role through Claude."
+pipeline = "default"
+origin = "stock"
+
+[routing]
+"roles.agent-research" = { backend = "claude", model = "claude-sonnet-4-6", effort = "high" }
+"roles.agent-analysis" = { backend = "claude", model = "claude-opus-4-7", effort = "xhigh" }
+"roles.agent-debug" = { backend = "claude", model = "claude-opus-4-7", effort = "xhigh" }
+"roles.agent-clarify" = { backend = "claude", model = "claude-sonnet-4-6", effort = "medium" }
+"roles.agent-writer.simple" = { backend = "claude", model = "claude-haiku-4-5", effort = "medium" }
+"roles.agent-writer.moderate" = { backend = "claude", model = "claude-sonnet-4-6", effort = "high" }
+"roles.agent-writer.hard" = { backend = "claude", model = "claude-opus-4-7", effort = "high" }
+"roles.agent-spec-review" = { backend = "claude", model = "claude-sonnet-4-6", effort = "medium" }
+"roles.agent-review" = { backend = "claude", model = "claude-opus-4-7", effort = "high" }
+"roles.agent-docs" = { backend = "claude", model = "claude-sonnet-4-6", effort = "medium" }
+"roles.agent-codex-review" = { backend = "claude", model = "claude-opus-4-7", effort = "high" }
+
+[budget]
+max_agents_per_run = 80
+max_estimated_cost_usd = 30.0
+max_wall_clock_seconds = 14400

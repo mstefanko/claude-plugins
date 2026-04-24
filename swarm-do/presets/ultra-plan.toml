@@ -1,0 +1,14 @@
+name = "ultra-plan"
+description = "Three planning explorers plus critique merge before implementation."
+pipeline = "ultra-plan"
+origin = "stock"
+
+[routing]
+"roles.agent-analysis.hard" = { backend = "claude", model = "claude-opus-4-7", effort = "xhigh" }
+"roles.agent-analysis-judge" = { backend = "claude", model = "claude-opus-4-7", effort = "high" }
+"roles.agent-writer.hard" = { backend = "claude", model = "claude-opus-4-7", effort = "high" }
+
+[budget]
+max_agents_per_run = 120
+max_estimated_cost_usd = 35.0
+max_wall_clock_seconds = 21600
