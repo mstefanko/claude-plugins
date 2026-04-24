@@ -59,3 +59,9 @@ Negative / follow-on work:
   `agent-code-review` (claude extractor); unknown roles fail-open with a
   stderr warning. `stable_finding_hash_v1` is byte-identical to the legacy
   bash implementation, preserving cross-backend dedup.
+- Phase 5 has executed the generation pipeline: `role-specs/agent-*.md` are
+  now the canonical source for all 15 roles; `agents/agent-*.md` and
+  `roles/*/shared.md` are fully generated outputs stamped with
+  `<!-- generated from role-specs/... -->`. Hand-editing those files is no
+  longer correct — edit `role-specs/` and run
+  `python3 -m swarm_do.roles gen --write`.

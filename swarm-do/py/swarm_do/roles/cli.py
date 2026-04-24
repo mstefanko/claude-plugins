@@ -1,4 +1,13 @@
-"""CLI entrypoint for swarm_do.roles."""
+"""CLI entrypoint for swarm_do.roles.
+
+Subcommands (python3 -m swarm_do.roles <subcommand>):
+  gen           Generate role files from role-specs/.
+                  --write   write generated content to agents/ and roles/*/shared.md.
+                  --check   diff-check only; exit 1 if any file has drifted.
+                  --force   overwrite even non-stamped files (bootstrap migration only).
+  gen readme-section  (Phase 6 — not yet implemented; raises NotImplementedError)
+  list          Print all role-spec names (one per line).
+"""
 from __future__ import annotations
 
 import argparse

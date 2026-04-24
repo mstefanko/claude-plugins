@@ -67,7 +67,7 @@ swarm-do/
 ├── .claude-plugin/plugin.json    Plugin manifest
 ├── commands/                     Slash-command surface (/swarm-do:*)
 ├── skills/swarm-do/SKILL.md      Orchestrator prompt (fires on /swarm-do:do)
-├── agents/agent-*.md             Per-role personas (14 roles)
+├── agents/agent-*.md             Per-role personas (15 roles)
 ├── bin/
 │   ├── _lib/
 │   │   ├── paths.sh              Plugin-root resolution (source from runners)

@@ -1,4 +1,11 @@
-"""Role-spec parser and validator."""
+"""Role-spec parser and validator.
+
+Public API:
+  RoleSpec        — frozen dataclass holding name, description, consumers, body_text.
+  load(path)      — read a role-spec .md file from disk; raises ValueError on bad input.
+  validate(spec)  — assert name pattern, non-empty consumers, and known consumer values.
+  parse_markdown  — parse a stamped generated file back into a RoleSpec (roundtrip / tests).
+"""
 from __future__ import annotations
 
 import re

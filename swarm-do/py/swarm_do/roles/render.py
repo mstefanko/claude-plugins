@@ -1,4 +1,14 @@
-"""Role-spec renderers."""
+"""Role-spec renderers.
+
+Converts a RoleSpec into the two generated file formats:
+  to_agents_md(spec)  — renders agents/agent-<name>.md (stamp + frontmatter + body).
+  to_shared_md(spec)  — renders roles/<name>/shared.md (same format, same stamp).
+
+Stamp format: HTML comment on line 1 —
+  <!-- generated from role-specs/agent-<name>.md — do not edit; run
+       `python3 -m swarm_do.roles gen --write` to update -->
+Both renderers embed the YAML frontmatter so parse_markdown() can roundtrip.
+"""
 from __future__ import annotations
 
 from .spec import RoleSpec
