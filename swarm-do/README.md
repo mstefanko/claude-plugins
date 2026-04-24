@@ -14,6 +14,7 @@ Shipped:
 - `/swarm-do:init-beads` — explicit, idempotent `bd init --stealth` bootstrap for a repo.
 - `bin/swarm preset ...` — preset load/save/diff/list/clear/dry-run.
 - `bin/swarm pipeline ...` — stock/user pipeline list/show/lint.
+- `bin/swarm providers doctor [--mco]` — local backend health checks plus optional `mco doctor --json`.
 - `bin/swarm status` / `bin/swarm rollout ...` — rollout status and decision log.
 - `bin/swarm compete <plan-path>` — manual Pattern 5 setup; validates and activates the competitive preset.
 - `bin/swarm-validate <preset>` — validation gates for preset + pipeline loading.
@@ -115,6 +116,7 @@ swarm preset dry-run <name> <plan-path>
 swarm pipeline list
 swarm pipeline show <name>
 swarm pipeline lint <name-or-path>
+swarm providers doctor [--mco] [--json]
 swarm mode claude-only|codex-only|balanced|custom
 swarm status
 swarm rollout show [--json]
@@ -127,6 +129,8 @@ swarm compete <plan-path> [--dry-run]
 Active preset state lives at `${CLAUDE_PLUGIN_DATA}/current-preset.txt`. Fresh installs have no active preset; routing falls back to `backends.toml`, while the runtime uses the `default` pipeline.
 
 Stock presets include `hybrid-review` for Phase 1 dogfooding. It keeps the default pipeline shape and adds a fail-open `agent-codex-review` lane after spec-review. `competitive` remains the manual Pattern 5 preset for two-writer trials.
+
+`swarm providers doctor` checks the local backend commands required by the active preset's pipeline, or the `default` pipeline when no preset is active. `--mco` additionally runs `mco doctor --json` and fails closed on missing, failing, or malformed MCO output; without `--mco`, MCO is reported as skipped.
 
 ## Roles
 

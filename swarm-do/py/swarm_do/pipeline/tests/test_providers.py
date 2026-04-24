@@ -1,0 +1,97 @@
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+from swarm_do.pipeline.providers import format_provider_report, provider_doctor
+
+
+def _restore_env(name: str, old: str | None) -> None:
+    if old is None:
+        os.environ.pop(name, None)
+    else:
+        os.environ[name] = old
+
+
+class ProviderDoctorTests(unittest.TestCase):
+    def test_default_pipeline_checks_only_required_local_backend(self) -> None:
+        old = os.environ.get("CLAUDE_PLUGIN_DATA")
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["CLAUDE_PLUGIN_DATA"] = td
+            try:
+                report = provider_doctor(which=lambda cmd: f"/bin/{cmd}" if cmd == "claude" else None)
+            finally:
+                _restore_env("CLAUDE_PLUGIN_DATA", old)
+
+        self.assertTrue(report.ok)
+        self.assertEqual(report.pipeline_name, "default")
+        self.assertEqual(report.required_backends, ("claude",))
+        rendered = format_provider_report(report)
+        self.assertIn("OK      backend:claude", rendered)
+        self.assertIn("SKIPPED provider:mco", rendered)
+
+    def test_active_hybrid_preset_requires_codex_cli(self) -> None:
+        old = os.environ.get("CLAUDE_PLUGIN_DATA")
+        with tempfile.TemporaryDirectory() as td:
+            data = Path(td)
+            (data / "current-preset.txt").write_text("hybrid-review\n", encoding="utf-8")
+            os.environ["CLAUDE_PLUGIN_DATA"] = td
+            try:
+                report = provider_doctor(which=lambda cmd: "/bin/claude" if cmd == "claude" else None)
+            finally:
+                _restore_env("CLAUDE_PLUGIN_DATA", old)
+
+        self.assertFalse(report.ok)
+        self.assertEqual(report.required_backends, ("claude", "codex"))
+        self.assertTrue(any(check.name == "backend:codex" and check.status == "error" for check in report.checks))
+
+    def test_mco_doctor_json_passthrough(self) -> None:
+        def which(cmd: str) -> str | None:
+            return f"/bin/{cmd}" if cmd in {"claude", "mco"} else None
+
+        def runner(*args, **kwargs):
+            return subprocess.CompletedProcess(
+                args=args[0],
+                returncode=0,
+                stdout=json.dumps({"providers": [{"name": "codex", "status": "ok"}]}),
+                stderr="",
+            )
+
+        old = os.environ.get("CLAUDE_PLUGIN_DATA")
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["CLAUDE_PLUGIN_DATA"] = td
+            try:
+                report = provider_doctor(run_mco=True, which=which, runner=runner)
+            finally:
+                _restore_env("CLAUDE_PLUGIN_DATA", old)
+
+        self.assertTrue(report.ok)
+        mco = next(check for check in report.checks if check.name == "provider:mco")
+        self.assertEqual(mco.status, "ok")
+        self.assertEqual(mco.data["payload"]["providers"][0]["name"], "codex")
+
+    def test_mco_malformed_json_fails_closed(self) -> None:
+        def which(cmd: str) -> str | None:
+            return f"/bin/{cmd}" if cmd in {"claude", "mco"} else None
+
+        def runner(*args, **kwargs):
+            return subprocess.CompletedProcess(args=args[0], returncode=0, stdout="{not-json", stderr="")
+
+        old = os.environ.get("CLAUDE_PLUGIN_DATA")
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["CLAUDE_PLUGIN_DATA"] = td
+            try:
+                report = provider_doctor(run_mco=True, which=which, runner=runner)
+            finally:
+                _restore_env("CLAUDE_PLUGIN_DATA", old)
+
+        self.assertFalse(report.ok)
+        self.assertTrue(any(check.name == "provider:mco" and check.status == "error" for check in report.checks))
+
+
+if __name__ == "__main__":
+    unittest.main()

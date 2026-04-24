@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import json
 import shutil
 import sys
 from pathlib import Path
@@ -298,6 +299,24 @@ def cmd_pipeline_set(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_providers_doctor(args: argparse.Namespace) -> int:
+    from .providers import format_provider_report, provider_doctor
+
+    if args.mco_timeout_seconds < 1:
+        print("swarm: providers doctor: --mco-timeout-seconds must be >= 1", file=sys.stderr)
+        return 1
+    report = provider_doctor(
+        preset_name=args.preset,
+        run_mco=args.mco,
+        mco_timeout_seconds=args.mco_timeout_seconds,
+    )
+    if args.json:
+        print(json.dumps(report.as_dict(), indent=2, sort_keys=True))
+    else:
+        print(format_provider_report(report))
+    return 0 if report.ok else 1
+
+
 def cmd_mode(args: argparse.Namespace) -> int:
     if args.name == "custom":
         return cmd_preset_clear(args)
@@ -358,6 +377,15 @@ def _build_parser() -> argparse.ArgumentParser:
     p = pipeline_sub.add_parser("show"); p.add_argument("name"); p.set_defaults(func=cmd_pipeline_show)
     p = pipeline_sub.add_parser("lint"); p.add_argument("path"); p.set_defaults(func=cmd_pipeline_lint)
     p = pipeline_sub.add_parser("set"); p.add_argument("name"); p.set_defaults(func=cmd_pipeline_set)
+
+    providers = sub.add_parser("providers")
+    providers_sub = providers.add_subparsers(dest="providers_command")
+    p = providers_sub.add_parser("doctor")
+    p.add_argument("--preset", default="current", help="preset to inspect; default is the active preset, falling back to default pipeline")
+    p.add_argument("--mco", action="store_true", help="also run mco doctor --json")
+    p.add_argument("--mco-timeout-seconds", type=int, default=30)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_providers_doctor)
 
     mode = sub.add_parser("mode")
     mode.add_argument("name", choices=["claude-only", "codex-only", "balanced", "custom"])
