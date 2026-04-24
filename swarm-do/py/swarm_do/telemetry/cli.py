@@ -36,7 +36,6 @@ def _parse_days_type(s: str) -> int:
 
 
 SUBCOMMANDS = (
-    "validate",
     "query",
     "report",
     "sample-for-adjudication",
@@ -98,6 +97,19 @@ def _build_parser() -> argparse.ArgumentParser:
         help="ledger name (runs | findings | outcomes | adjudications | finding_outcomes)",
     )
 
+    # Add validate subcommand (Phase 3 native Python implementation).
+    validate_parser = subparsers.add_parser(
+        "validate",
+        add_help=True,
+        help="Validate every ledger row against its JSON schema.",
+    )
+    validate_parser.add_argument(
+        "ledger",
+        nargs="?",
+        default=None,
+        help="optional ledger name; omit to validate all ledgers",
+    )
+
     # Add legacy subcommands (Phase 1 passthrough).
     for name in SUBCOMMANDS:
         sub = subparsers.add_parser(name, add_help=False, help=f"{name} (delegates to legacy)")
@@ -144,6 +156,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if ns.subcommand == "dump":
         from .subcommands import dump as _dump_cmd
         return _dump_cmd.run(ns)
+
+    # Dispatch validate to native Python implementation (Phase 3 commit 2).
+    if ns.subcommand == "validate":
+        from .subcommands import validate as _validate_cmd
+        return _validate_cmd.run(ns)
 
     # Rebuild the argv for the legacy script: subcommand + pass-through rest.
     rest = getattr(ns, "rest", []) or []
