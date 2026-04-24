@@ -1,0 +1,194 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PY_ROOT="$ROOT/py"
+
+usage() {
+  cat <<'EOF'
+swarm-spike — run swarm-do observability spike harnesses.
+
+Usage:
+  swarm-spike [--run-id <ulid>] [precompact|hook-context|writer-observability|all]
+
+Artifacts are written under:
+  ${CLAUDE_PLUGIN_DATA:-<repo>/data}/runs/<run-id>/spikes/<spike-name>/
+EOF
+}
+
+TARGET="all"
+RUN_ID=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --run-id) RUN_ID="${2:-}"; shift 2;;
+    -h|--help) usage; exit 0;;
+    precompact|hook-context|writer-observability|all) TARGET="$1"; shift;;
+    *) echo "swarm-spike: unknown arg: $1" >&2; usage >&2; exit 64;;
+  esac
+done
+
+DATA_DIR="${CLAUDE_PLUGIN_DATA:-$ROOT/data}"
+export CLAUDE_PLUGIN_DATA="$DATA_DIR"
+if [[ -z "$RUN_ID" ]]; then
+  RUN_ID="$(PYTHONPATH="$PY_ROOT:${PYTHONPATH:-}" python3 -c 'from swarm_do.telemetry.ids import new_ulid; print(new_ulid())')"
+fi
+
+artifact_dir() {
+  local name="$1"
+  printf '%s/runs/%s/spikes/%s' "$DATA_DIR" "$RUN_ID" "$name"
+}
+
+write_result() {
+  local dir="$1" status="$2" reason="$3"
+  PYTHONPATH="$PY_ROOT:${PYTHONPATH:-}" python3 - "$dir" "$status" "$reason" <<'PY'
+import json
+import pathlib
+import sys
+from swarm_do.pipeline.run_state import utc_now
+
+path = pathlib.Path(sys.argv[1]) / "result.json"
+path.write_text(
+    json.dumps(
+        {"schema_version": 1, "status": sys.argv[2], "reason": sys.argv[3], "written_at": utc_now()},
+        indent=2,
+        sort_keys=True,
+    )
+    + "\n",
+    encoding="utf-8",
+)
+PY
+}
+
+write_metadata() {
+  local dir="$1" name="$2"
+  PYTHONPATH="$PY_ROOT:${PYTHONPATH:-}" python3 - "$dir" "$name" "$RUN_ID" "$DATA_DIR" <<'PY'
+import json
+import os
+import pathlib
+import sys
+from swarm_do.pipeline.run_state import utc_now
+
+path = pathlib.Path(sys.argv[1]) / "metadata.json"
+path.write_text(
+    json.dumps(
+        {
+            "schema_version": 1,
+            "spike": sys.argv[2],
+            "run_id": sys.argv[3],
+            "data_dir": sys.argv[4],
+            "started_at": utc_now(),
+            "pid": os.getpid(),
+        },
+        indent=2,
+        sort_keys=True,
+    )
+    + "\n",
+    encoding="utf-8",
+)
+PY
+}
+
+spike_precompact() {
+  local name="precompact" dir active_json rc
+  dir="$(artifact_dir "$name")"
+  mkdir -p "$dir"
+  write_metadata "$dir" "$name"
+  printf '{}\n' >"$dir/stdin.json"
+  active_json="$dir/active-run.json"
+  PYTHONPATH="$PY_ROOT:${PYTHONPATH:-}" python3 - "$RUN_ID" "$active_json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[2])
+path.write_text(
+    json.dumps(
+        {
+            "run_id": sys.argv[1],
+            "bd_epic_id": "spike-precompact",
+            "phase_id": "spike",
+            "child_bead_ids": ["spike-child"],
+            "work_units": [{"id": "spike-unit", "status": "incomplete"}],
+            "retry_counts": {},
+            "handoff_counts": {},
+            "integration_branch_head": None,
+            "status": "incomplete",
+        },
+        indent=2,
+        sort_keys=True,
+    )
+    + "\n",
+    encoding="utf-8",
+)
+PY
+  PYTHONPATH="$PY_ROOT:${PYTHONPATH:-}" "$ROOT/bin/swarm" run-state write --json-file "$active_json" >"$dir/stdout.txt" 2>"$dir/stderr.txt"
+  set +e
+  "$ROOT/hooks/precompact.sh" >>"$dir/stdout.txt" 2>>"$dir/stderr.txt"
+  rc=$?
+  set -e
+  if [[ "$rc" -eq 0 && -f "$DATA_DIR/runs/$RUN_ID/checkpoint.v1.json" ]]; then
+    write_result "$dir" "pass" "precompact hook entrypoint wrote checkpoint and run_event artifacts"
+  else
+    write_result "$dir" "fail" "precompact hook entrypoint did not write the expected checkpoint"
+  fi
+}
+
+spike_hook_context() {
+  local name="hook-context" dir
+  dir="$(artifact_dir "$name")"
+  mkdir -p "$dir"
+  write_metadata "$dir" "$name"
+  printf '{}\n' >"$dir/stdin.json"
+  PYTHONPATH="$PY_ROOT:${PYTHONPATH:-}" python3 - >"$dir/stdout.txt" <<'PY'
+import json
+import os
+
+keys = sorted(key for key in os.environ if key.startswith(("CLAUDE_", "CODEX_")))
+print(json.dumps({"environment_keys": keys, "redacted_values_present": {key: bool(os.environ.get(key)) for key in keys}}, indent=2, sort_keys=True))
+PY
+  : >"$dir/stderr.txt"
+  if PYTHONPATH="$PY_ROOT:${PYTHONPATH:-}" python3 - <<'PY'
+import os
+raise SystemExit(0 if any(key.startswith(("CLAUDE_", "CODEX_")) for key in os.environ) else 1)
+PY
+  then
+    write_result "$dir" "pass" "Claude/Codex-related environment keys are visible to the harness"
+  else
+    write_result "$dir" "inconclusive" "no live Claude hook context was present; run inside the hook to prove context shape"
+  fi
+}
+
+spike_writer_observability() {
+  local name="writer-observability" dir
+  dir="$(artifact_dir "$name")"
+  mkdir -p "$dir"
+  write_metadata "$dir" "$name"
+  printf '{}\n' >"$dir/stdin.json"
+  {
+    printf 'runs_jsonl=%s\n' "$DATA_DIR/telemetry/runs.jsonl"
+    printf 'run_events_jsonl=%s\n' "$DATA_DIR/telemetry/run_events.jsonl"
+    printf 'observations_jsonl=%s\n' "$DATA_DIR/telemetry/observations.jsonl"
+    printf 'in_flight_dir=%s\n' "$DATA_DIR/in-flight"
+    [[ -f "$DATA_DIR/telemetry/runs.jsonl" ]] && printf 'runs_rows=%s\n' "$(wc -l <"$DATA_DIR/telemetry/runs.jsonl" | tr -d ' ')"
+    [[ -f "$DATA_DIR/telemetry/run_events.jsonl" ]] && printf 'run_events_rows=%s\n' "$(wc -l <"$DATA_DIR/telemetry/run_events.jsonl" | tr -d ' ')"
+    [[ -f "$DATA_DIR/telemetry/observations.jsonl" ]] && printf 'observations_rows=%s\n' "$(wc -l <"$DATA_DIR/telemetry/observations.jsonl" | tr -d ' ')"
+  } >"$dir/stdout.txt" 2>"$dir/stderr.txt"
+  if [[ -f "$DATA_DIR/telemetry/runs.jsonl" || -f "$DATA_DIR/telemetry/run_events.jsonl" || -d "$DATA_DIR/in-flight" ]]; then
+    write_result "$dir" "pass" "writer-visible ledgers or in-flight locks are available"
+  else
+    write_result "$dir" "inconclusive" "no writer run artifacts exist yet; run during or after a writer to prove live signals"
+  fi
+}
+
+case "$TARGET" in
+  precompact) spike_precompact;;
+  hook-context) spike_hook_context;;
+  writer-observability) spike_writer_observability;;
+  all)
+    spike_precompact
+    spike_hook_context
+    spike_writer_observability
+    ;;
+esac
+
+printf 'swarm-spike: artifacts: %s/runs/%s/spikes\n' "$DATA_DIR" "$RUN_ID"

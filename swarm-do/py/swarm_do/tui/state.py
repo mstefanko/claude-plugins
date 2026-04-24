@@ -43,15 +43,30 @@ class StatusSummary:
     cost_today: float | None
     last_429_claude: str | None
     last_429_codex: str | None
+    latest_checkpoint: dict[str, Any] | None = None
+    latest_observation: dict[str, Any] | None = None
 
     def render(self) -> str:
         cost = f"${self.cost_today:.4f}" if self.cost_today is not None else "n/a"
         claude = self.last_429_claude or "n/a"
         codex = self.last_429_codex or "n/a"
-        return (
+        rendered = (
             f"preset={self.preset} pipeline={self.pipeline} runs_today={self.runs_today} "
             f"cost_today={cost} last_429_claude={claude} last_429_codex={codex}"
         )
+        if self.latest_checkpoint:
+            rendered += (
+                " latest_checkpoint="
+                f"{self.latest_checkpoint.get('run_id', 'n/a')}:"
+                f"{self.latest_checkpoint.get('phase_id') or 'n/a'}"
+            )
+        if self.latest_observation:
+            rendered += (
+                " latest_observation="
+                f"{self.latest_observation.get('event_type', 'unknown')}:"
+                f"{self.latest_observation.get('source') or 'n/a'}"
+            )
+        return rendered
 
 
 def telemetry_dir(data_dir: Path | None = None) -> Path:
@@ -64,6 +79,14 @@ def in_flight_dir(data_dir: Path | None = None) -> Path:
 
 def runs_path(data_dir: Path | None = None) -> Path:
     return telemetry_dir(data_dir) / "runs.jsonl"
+
+
+def run_events_path(data_dir: Path | None = None) -> Path:
+    return telemetry_dir(data_dir) / "run_events.jsonl"
+
+
+def observations_path(data_dir: Path | None = None) -> Path:
+    return telemetry_dir(data_dir) / "observations.jsonl"
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -100,6 +123,26 @@ def _parse_ts(value: Any) -> datetime | None:
 
 def load_runs(data_dir: Path | None = None) -> list[dict[str, Any]]:
     return read_jsonl(runs_path(data_dir))
+
+
+def load_run_events(data_dir: Path | None = None) -> list[dict[str, Any]]:
+    return read_jsonl(run_events_path(data_dir))
+
+
+def load_observations(data_dir: Path | None = None) -> list[dict[str, Any]]:
+    return read_jsonl(observations_path(data_dir))
+
+
+def latest_checkpoint_event(data_dir: Path | None = None) -> dict[str, Any] | None:
+    for row in reversed(load_run_events(data_dir)):
+        if row.get("event_type") == "checkpoint_written":
+            return row
+    return None
+
+
+def latest_observation(data_dir: Path | None = None) -> dict[str, Any] | None:
+    rows = load_observations(data_dir)
+    return rows[-1] if rows else None
 
 
 def load_in_flight(data_dir: Path | None = None) -> list[InFlightRun]:
@@ -182,6 +225,8 @@ def status_summary(data_dir: Path | None = None, now: datetime | None = None) ->
         cost_today=sum(cost_values) if cost_values else None,
         last_429_claude=last_429.get("claude").isoformat().replace("+00:00", "Z") if "claude" in last_429 else None,
         last_429_codex=last_429.get("codex").isoformat().replace("+00:00", "Z") if "codex" in last_429 else None,
+        latest_checkpoint=latest_checkpoint_event(data_dir),
+        latest_observation=latest_observation(data_dir),
     )
 
 

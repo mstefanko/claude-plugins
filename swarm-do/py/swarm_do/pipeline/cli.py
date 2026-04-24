@@ -183,17 +183,47 @@ def cmd_preset_dry_run(args: argparse.Namespace) -> int:
 
 def cmd_status(args: argparse.Namespace) -> int:
     print(format_status(load_state()))
-    observation_path = resolve_data_dir() / "telemetry" / "observations.jsonl"
-    if observation_path.is_file():
-        lines = observation_path.read_text(encoding="utf-8", errors="replace").splitlines()
-        print(f"  observations: {len(lines)}")
-        if lines:
-            try:
-                latest = json.loads(lines[-1])
-                print(f"  latest_observation: {latest.get('event_type', 'unknown')} run_id={latest.get('run_id') or 'n/a'}")
-            except json.JSONDecodeError:
-                print("  latest_observation: invalid-json")
+    data_dir = resolve_data_dir()
+    event_path = data_dir / "telemetry" / "run_events.jsonl"
+    event_rows = _jsonl_rows(event_path)
+    print(f"  run_events: {len(event_rows)}")
+    latest_checkpoint = next((row for row in reversed(event_rows) if row.get("event_type") == "checkpoint_written"), None)
+    if latest_checkpoint:
+        details = latest_checkpoint.get("details") if isinstance(latest_checkpoint.get("details"), dict) else {}
+        print(
+            "  latest_checkpoint: "
+            f"run_id={latest_checkpoint.get('run_id') or 'n/a'} "
+            f"phase={latest_checkpoint.get('phase_id') or 'n/a'} "
+            f"source={details.get('source') or latest_checkpoint.get('reason') or 'n/a'} "
+            f"path={details.get('checkpoint_path') or 'n/a'}"
+        )
+    observation_path = data_dir / "telemetry" / "observations.jsonl"
+    observation_rows = _jsonl_rows(observation_path)
+    print(f"  observations: {len(observation_rows)}")
+    if observation_rows:
+        latest = observation_rows[-1]
+        print(
+            "  latest_observation: "
+            f"{latest.get('event_type', 'unknown')} "
+            f"run_id={latest.get('run_id') or 'n/a'} "
+            f"source={latest.get('source') or 'n/a'}"
+        )
     return 0
+
+
+def _jsonl_rows(path: Path) -> list[dict]:
+    if not path.is_file():
+        return []
+    rows: list[dict] = []
+    with path.open("r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, dict):
+                rows.append(value)
+    return rows
 
 
 def cmd_rollout_show(args: argparse.Namespace) -> int:
@@ -431,10 +461,45 @@ def cmd_resume(args: argparse.Namespace) -> int:
     from .resume import build_resume_report, format_resume_report, resume_exit_code
 
     report = build_resume_report(args.bd_id)
-    print(format_resume_report(report, merge=args.merge))
+    if args.json:
+        print(json.dumps(report.to_manifest(), indent=2, sort_keys=True))
+    else:
+        print(format_resume_report(report, merge=args.merge))
     if report.drift_keys and args.merge:
         print("swarm: resume: refusing to merge while drift is present", file=sys.stderr)
     return resume_exit_code(report)
+
+
+def cmd_run_state(args: argparse.Namespace) -> int:
+    from .run_state import active_run_path, clear_active_run, load_active_run, write_active_run, write_checkpoint_from_active
+
+    data_dir = resolve_data_dir()
+    path = active_run_path(data_dir)
+    if args.run_state_command == "write":
+        if args.json_file == "-":
+            payload = json.loads(sys.stdin.read())
+        else:
+            payload = json.loads(Path(args.json_file).read_text(encoding="utf-8"))
+        write_active_run(path, payload)
+        print(path)
+        return 0
+    if args.run_state_command == "clear":
+        clear_active_run(path)
+        print(path)
+        return 0
+    if args.run_state_command == "checkpoint":
+        state = load_active_run(path)
+        if state is None:
+            print("swarm: run-state checkpoint: no active run", file=sys.stderr)
+            return 1
+        checkpoint = write_checkpoint_from_active(data_dir, state, source=args.source, reason=args.reason)
+        if checkpoint is None:
+            print("swarm: run-state checkpoint: active run is missing run_id", file=sys.stderr)
+            return 1
+        print(checkpoint)
+        return 0
+    print("swarm: run-state: missing command", file=sys.stderr)
+    return 1
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -500,7 +565,20 @@ def _build_parser() -> argparse.ArgumentParser:
     resume = sub.add_parser("resume")
     resume.add_argument("bd_id")
     resume.add_argument("--merge", action="store_true", help="allow merge only after a clean APPROVED completed-unit set")
+    resume.add_argument("--json", action="store_true", help="emit the machine-readable resume manifest")
     resume.set_defaults(func=cmd_resume)
+
+    run_state = sub.add_parser("run-state")
+    run_state_sub = run_state.add_subparsers(dest="run_state_command")
+    p = run_state_sub.add_parser("write")
+    p.add_argument("--json-file", required=True, help="active-run JSON payload file, or - for stdin")
+    p.set_defaults(func=cmd_run_state)
+    p = run_state_sub.add_parser("clear")
+    p.set_defaults(func=cmd_run_state)
+    p = run_state_sub.add_parser("checkpoint")
+    p.add_argument("--source", default="dispatcher-fallback")
+    p.add_argument("--reason", default="end-of-unit")
+    p.set_defaults(func=cmd_run_state)
 
     permissions = sub.add_parser("permissions")
     permissions_sub = permissions.add_subparsers(dest="permissions_command")

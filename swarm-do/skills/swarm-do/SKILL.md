@@ -62,6 +62,29 @@ Use the helpers:
 
 ## Dispatch Loop
 
+Before starting a fresh run, create a run id and write the dispatcher-owned
+active state. Refresh it at every phase and work-unit boundary:
+
+```bash
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" run-state write --json-file <active-run-payload.json>
+```
+
+The payload must include `run_id`, `bd_epic_id`, `phase_id`,
+`child_bead_ids`, `work_units`, `retry_counts`, `handoff_counts`,
+`integration_branch_head`, and `status`. Clear active state only after clean
+completion:
+
+```bash
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" run-state clear
+```
+
+At the end of every completed work unit, write a fallback checkpoint so resume
+does not depend solely on PreCompact firing:
+
+```bash
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" run-state checkpoint --source dispatcher-fallback --reason end-of-unit
+```
+
 1. Load the active pipeline via `bin/swarm pipeline show <name>` and follow its topological layers.
 2. For each layer, dispatch every stage in the layer in parallel.
 3. For normal `agents` stages, create one beads issue per agent with the stage ID, role, upstream stage issues, full phase text, and verification checklist.
@@ -82,6 +105,23 @@ the unit cap recorded in BEADS/run events.
 If `agent-spec-review` returns `SPEC_MISMATCH`, respawn `agent-writer` with the
 review evidence and retry only the rejected spec items. Stop after two retries
 and escalate to the operator.
+
+## Resume Re-entry
+
+`/swarm-do:resume <bd-id>` first runs:
+
+```bash
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" resume <bd-id> --json
+```
+
+If the manifest is `ready`, reload the BEADS epic/thread context, inject the
+manifest into the normal dispatch loop, skip `completed_units`, and start at
+`resume_from`. If the manifest is `drift`, `not-found`, or `complete`, do not
+dispatch new work; surface the state to the operator.
+
+Never auto-merge during resume drift. `/swarm-do:resume <bd-id>` and
+`bin/swarm resume <bd-id>` default to inspect/no-merge; `--merge` is explicit
+operator opt-in and still requires clean drift status.
 
 ## Backend Dispatch
 
@@ -113,6 +153,5 @@ Spawn swarm agents with `subagent_type="general-purpose"` and paste the role fil
 - No `--force-over-budget` or invariant bypass exists.
 - Do not special-case the default pipeline. It is just YAML.
 - Do not introduce `parallel_with`; concurrency is expressed only by shared `depends_on` topology.
-- Never auto-merge during resume drift. `/swarm-do:resume <bd-id>` and
-  `bin/swarm resume <bd-id>` default to inspect/no-merge; `--merge` is explicit
-  operator opt-in and still requires clean drift status.
+- Do not duplicate the resume orchestration protocol; resume injects a manifest
+  into this dispatcher.

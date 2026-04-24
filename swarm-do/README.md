@@ -12,13 +12,14 @@ Shipped:
 
 - `/swarm-do:do <plan>` — main orchestrator. Full beads pipeline per phase.
 - `/swarm-do:init-beads` — explicit, idempotent `bd init --stealth` bootstrap for a repo.
-- `/swarm-do:resume <bd-id>` — conservative resume entrypoint keyed by the BEADS epic/run issue.
+- `/swarm-do:resume <bd-id>` — resume entrypoint keyed by the BEADS epic/run issue.
 - `bin/swarm preset ...` — preset load/save/diff/list/clear/dry-run.
 - `bin/swarm pipeline ...` — stock/user pipeline list/show/lint.
 - `bin/swarm permissions ...` — role-scoped permission preflight, dry-run install, and rollback support.
 - `bin/swarm providers doctor [--mco]` — local backend health checks plus optional `mco doctor --json`.
 - `bin/swarm status` / `bin/swarm rollout ...` — rollout status and decision log.
-- `bin/swarm resume <bd-id>` — checkpoint lookup, drift reporting, and conservative resume status.
+- `bin/swarm resume <bd-id> [--json]` — resume manifest, checkpoint lookup, and drift reporting.
+- `bin/swarm-spike [precompact|hook-context|writer-observability|all]` — operator harness for hook and live-signal proof artifacts.
 - `bin/swarm compete <plan-path>` — manual Pattern 5 setup; validates and activates the competitive preset.
 - `bin/swarm-validate <preset>` — validation gates for preset + pipeline loading.
 
@@ -87,6 +88,7 @@ swarm-do/
 │   │   ├── hash-bundle.sh        SHA-256 of role prompt bundle (interface: hash-bundle.sh <role> <backend> → 64-char hex)
 │   │   └── normalize-path.sh     Canonical repo-relative path for stable hash input; strips WORKTREE_ROOT then REPO_ROOT prefix
 │   ├── swarm-run                 M1 manual runner (one role, one beads issue)
+│   ├── swarm-spike               Operator spike harness for hook/context/writer observability
 │   ├── swarm                     Preset/pipeline CLI
 │   ├── swarm-validate            Preset/pipeline validation shim
 │   ├── extract-phase.sh          Findings extractor — thin shim; dispatches to python3 -m swarm_do.telemetry.extractors (Phase 4)
@@ -125,7 +127,10 @@ swarm permissions install --role <role> [--dry-run] [--rollback] [--scope repo|u
 swarm providers doctor [--mco] [--json]
 swarm mode claude-only|codex-only|balanced|custom
 swarm status
-swarm resume <bd-id> [--merge]
+swarm resume <bd-id> [--merge] [--json]
+swarm run-state write --json-file <path|->
+swarm run-state checkpoint [--source <name>] [--reason <name>]
+swarm run-state clear
 swarm rollout show [--json]
 swarm rollout dogfood [--notes "..."]
 swarm rollout set <path> <value>
@@ -134,6 +139,15 @@ swarm compete <plan-path> [--dry-run]
 ```
 
 Active preset state lives at `${CLAUDE_PLUGIN_DATA}/current-preset.txt`. Fresh installs have no active preset; routing falls back to `backends.toml`, while the runtime uses the `default` pipeline.
+
+Dispatcher state lives at `${CLAUDE_PLUGIN_DATA}/active-run.json`. The
+dispatcher owns that file via `swarm run-state`; PreCompact and the
+end-of-unit fallback both write `${CLAUDE_PLUGIN_DATA}/runs/<run_id>/checkpoint.v1.json`
+and append `checkpoint_written` rows to `telemetry/run_events.jsonl`.
+
+Spike proof artifacts live under
+`${CLAUDE_PLUGIN_DATA}/runs/<run_id>/spikes/<spike-name>/` and include
+`metadata.json`, `stdout.txt`, `stderr.txt`, `stdin.json`, and `result.json`.
 
 Stock presets include `hybrid-review` for Phase 1 dogfooding. It keeps the default pipeline shape and adds a fail-open `agent-codex-review` lane after spec-review. `competitive` remains the manual Pattern 5 preset for two-writer trials.
 

@@ -10,7 +10,15 @@ from pathlib import Path
 from swarm_do.pipeline.config_hash import active_config_hash
 from swarm_do.pipeline.registry import load_preset
 from swarm_do.tui.actions import set_base_route, set_user_preset_pipeline, set_user_preset_route
-from swarm_do.tui.state import load_in_flight, status_summary, token_burn_last_24h
+from swarm_do.tui.state import (
+    latest_checkpoint_event,
+    latest_observation,
+    load_in_flight,
+    load_observations,
+    load_run_events,
+    status_summary,
+    token_burn_last_24h,
+)
 
 
 class EnvTestCase(unittest.TestCase):
@@ -86,6 +94,44 @@ class TuiStateTests(EnvTestCase):
         self.assertEqual(len(runs), 1)
         self.assertEqual(runs[0].issue_id, "abc")
         self.assertEqual(runs[0].display_pid, "123")
+
+    def test_run_events_and_observations_are_structured(self) -> None:
+        tel = self.root / "telemetry"
+        tel.mkdir()
+        (tel / "run_events.jsonl").write_text(
+            json.dumps(
+                {
+                    "run_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                    "timestamp": "2026-04-24T12:00:00Z",
+                    "event_type": "checkpoint_written",
+                    "phase_id": "writer",
+                    "schema_ok": True,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (tel / "observations.jsonl").write_text(
+            json.dumps(
+                {
+                    "ts": "2026-04-24T12:00:00Z",
+                    "run_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                    "event_type": "writer_exit",
+                    "source": "swarm-run-exit",
+                    "schema_ok": True,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(load_run_events()[0]["event_type"], "checkpoint_written")
+        self.assertEqual(load_observations()[0]["event_type"], "writer_exit")
+        self.assertEqual(latest_checkpoint_event()["phase_id"], "writer")
+        self.assertEqual(latest_observation()["source"], "swarm-run-exit")
+
+        rendered = status_summary(now=datetime(2026, 4, 24, 13, tzinfo=UTC)).render()
+        self.assertIn("latest_checkpoint=01ARZ3NDEKTSV4RRFFQ69G5FAV:writer", rendered)
+        self.assertIn("latest_observation=writer_exit:swarm-run-exit", rendered)
 
 
 class TuiActionTests(EnvTestCase):

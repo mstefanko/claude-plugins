@@ -6,61 +6,144 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from swarm_do.pipeline.resume import DRIFT_DETECTED, NOTHING_TO_RESUME, build_resume_report, resume_exit_code
+from swarm_do.pipeline.resume import (
+    COMPLETE,
+    DRIFT_DETECTED,
+    NOT_FOUND,
+    READY_TO_RESUME,
+    build_resume_report,
+    resume_exit_code,
+)
+from swarm_do.pipeline.run_state import active_run_path, load_active_run, write_active_run, write_checkpoint_from_active
+
+
+RUN_ID = "01ARZ3NDEKTSV4RRFFQ69G5FAV"
 
 
 class ResumeTests(unittest.TestCase):
-    def test_missing_run_event_is_nothing_to_resume(self) -> None:
+    def test_missing_run_event_is_not_found(self) -> None:
         with isolated_data_dir():
             report = build_resume_report("swarm-123")
             self.assertIsNone(report.run_id)
-            self.assertEqual(resume_exit_code(report), NOTHING_TO_RESUME)
+            self.assertEqual(report.status, "not-found")
+            self.assertEqual(resume_exit_code(report), NOT_FOUND)
 
-    def test_run_event_maps_epic_to_checkpoint(self) -> None:
+    def test_context_overflow_interrupted_run_resumes_first_incomplete_unit(self) -> None:
         with isolated_data_dir() as root:
-            run_id = "01ARZ3NDEKTSV4RRFFQ69G5FAV"
-            telemetry = root / "telemetry"
-            telemetry.mkdir()
-            (telemetry / "run_events.jsonl").write_text(
-                json.dumps(
-                    {
-                        "run_id": run_id,
-                        "timestamp": "2026-04-24T00:00:00Z",
-                        "event_type": "checkpoint_written",
-                        "bd_epic_id": "swarm-123",
-                        "schema_ok": True,
-                    }
-                )
-                + "\n",
-                encoding="utf-8",
-            )
-            checkpoint_dir = root / "runs" / run_id
-            checkpoint_dir.mkdir(parents=True)
-            (checkpoint_dir / "checkpoint.v1.json").write_text(
-                json.dumps({"bd_epic_id": "swarm-123", "work_units": []}),
-                encoding="utf-8",
+            write_event(root, {"run_id": RUN_ID, "bd_epic_id": "swarm-123", "event_type": "checkpoint_written"})
+            write_checkpoint(
+                root,
+                {
+                    "bd_epic_id": "swarm-123",
+                    "phase_id": "writer",
+                    "work_units": [
+                        {"id": "unit-1", "status": "complete"},
+                        {"id": "unit-2", "status": "incomplete"},
+                    ],
+                    "child_bead_ids": ["bd-a", "bd-b"],
+                    "status": "incomplete",
+                },
             )
             report = build_resume_report("swarm-123")
-            self.assertEqual(report.run_id, run_id)
+            self.assertEqual(report.status, "ready")
+            self.assertEqual(report.resume_from, {"phase_id": "writer", "work_unit_id": "unit-2"})
+            self.assertEqual(report.completed_units, ["unit-1"])
+            self.assertEqual(resume_exit_code(report), READY_TO_RESUME)
+
+    def test_usage_limit_interruption_can_resume_from_valid_run_event_without_checkpoint(self) -> None:
+        with isolated_data_dir() as root:
+            write_event(
+                root,
+                {
+                    "run_id": RUN_ID,
+                    "bd_epic_id": "swarm-123",
+                    "event_type": "retry_started",
+                    "phase_id": "writer",
+                    "work_unit_id": "unit-3",
+                },
+            )
+            report = build_resume_report("swarm-123")
+            self.assertEqual(report.status, "ready")
+            self.assertEqual(report.checkpoint_path, None)
+            self.assertEqual(report.resume_from, {"phase_id": "writer", "work_unit_id": "unit-3"})
+
+    def test_operator_ctrl_c_with_partial_run_events_is_ready_not_drift(self) -> None:
+        with isolated_data_dir() as root:
+            write_event(root, {"run_id": RUN_ID, "bd_epic_id": "swarm-123", "event_type": "retry_started"})
+            report = build_resume_report("swarm-123")
+            self.assertEqual(report.status, "ready")
             self.assertEqual(report.drift_keys, [])
 
     def test_checkpoint_epic_mismatch_is_drift(self) -> None:
         with isolated_data_dir() as root:
-            run_id = "01ARZ3NDEKTSV4RRFFQ69G5FAV"
-            (root / "telemetry").mkdir()
-            (root / "telemetry" / "run_events.jsonl").write_text(
-                json.dumps({"run_id": run_id, "bd_epic_id": "swarm-123"}) + "\n",
-                encoding="utf-8",
-            )
-            checkpoint_dir = root / "runs" / run_id
-            checkpoint_dir.mkdir(parents=True)
-            (checkpoint_dir / "checkpoint.v1.json").write_text(
-                json.dumps({"bd_epic_id": "other"}),
-                encoding="utf-8",
-            )
+            write_event(root, {"run_id": RUN_ID, "bd_epic_id": "swarm-123"})
+            write_checkpoint(root, {"bd_epic_id": "other"})
             report = build_resume_report("swarm-123")
             self.assertEqual(report.drift_keys, ["bd_epic_id"])
             self.assertEqual(resume_exit_code(report), DRIFT_DETECTED)
+
+    def test_checkpoint_child_bead_mismatch_is_drift(self) -> None:
+        with isolated_data_dir() as root:
+            write_event(root, {"run_id": RUN_ID, "bd_epic_id": "swarm-123", "child_bead_ids": ["bd-a"]})
+            write_checkpoint(root, {"bd_epic_id": "swarm-123", "child_bead_ids": ["bd-b"]})
+            report = build_resume_report("swarm-123")
+            self.assertEqual(report.drift_keys, ["child_bead_ids"])
+            self.assertEqual(report.status, "drift")
+
+    def test_already_complete_run_is_distinct_noop(self) -> None:
+        with isolated_data_dir() as root:
+            write_event(root, {"run_id": RUN_ID, "bd_epic_id": "swarm-123", "event_type": "checkpoint_written"})
+            write_checkpoint(
+                root,
+                {
+                    "bd_epic_id": "swarm-123",
+                    "phase_id": "review",
+                    "work_units": [{"id": "unit-1", "status": "approved"}],
+                    "status": "complete",
+                },
+            )
+            report = build_resume_report("swarm-123")
+            self.assertEqual(report.status, "complete")
+            self.assertIsNone(report.resume_from)
+            self.assertEqual(resume_exit_code(report), COMPLETE)
+
+
+class RunStateTests(unittest.TestCase):
+    def test_active_run_write_and_checkpoint_round_trip(self) -> None:
+        with isolated_data_dir() as root:
+            state = {
+                "run_id": RUN_ID,
+                "bd_epic_id": "swarm-123",
+                "phase_id": "writer",
+                "work_units": [{"id": "unit-1", "status": "incomplete"}],
+            }
+            path = write_active_run(active_run_path(root), state)
+            loaded = load_active_run(path)
+            self.assertIsNotNone(loaded)
+            checkpoint = write_checkpoint_from_active(root, loaded or {}, source="test", reason="unit")
+            self.assertTrue(checkpoint and checkpoint.is_file())
+            events = (root / "telemetry" / "run_events.jsonl").read_text(encoding="utf-8")
+            self.assertIn("checkpoint_written", events)
+
+
+def write_event(root: Path, row: dict) -> None:
+    telemetry = root / "telemetry"
+    telemetry.mkdir(exist_ok=True)
+    payload = {
+        "run_id": RUN_ID,
+        "timestamp": "2026-04-24T00:00:00Z",
+        "event_type": "checkpoint_written",
+        "schema_ok": True,
+    }
+    payload.update(row)
+    with (telemetry / "run_events.jsonl").open("a", encoding="utf-8") as f:
+        f.write(json.dumps(payload) + "\n")
+
+
+def write_checkpoint(root: Path, payload: dict) -> None:
+    checkpoint_dir = root / "runs" / RUN_ID
+    checkpoint_dir.mkdir(parents=True)
+    (checkpoint_dir / "checkpoint.v1.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
 class isolated_data_dir:

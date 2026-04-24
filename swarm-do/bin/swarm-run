@@ -203,7 +203,7 @@ RUN_ID="$(PYTHONPATH="${_PY_ROOT}:${PYTHONPATH:-}" python3 -c 'from swarm_do.tel
 # ---------------------------------------------------------------------------
 _swarm_telemetry_write() {
   local _final_rc="$1"
-  local _ended _wall _hash _run_id _row _tel_dir _base_sha _head_sha _diff_bytes _repo
+  local _ended _wall _hash _run_id _row _obs _tel_dir _base_sha _head_sha _diff_bytes _repo
   local _preset_name _pipeline_name _pipeline_hash _config_hash _context_py_root
 
   # Guard: CLAUDE_PLUGIN_DATA must be set and non-empty.
@@ -310,6 +310,28 @@ _swarm_telemetry_write() {
         last_429_at:        null
       }')"
     printf '%s\n' "$_row" >> "${_tel_dir}/runs.jsonl"
+
+    _obs="$(jq -n \
+      --arg ts "$_ended" \
+      --arg run_id "$_run_id" \
+      --arg role "$ROLE" \
+      --arg issue_id "$ISSUE" \
+      --argjson exit_code "$_final_rc" \
+      --argjson diff_size_bytes "$(if [[ "$_diff_bytes" =~ ^[0-9]+$ ]]; then printf '%s' "$_diff_bytes"; else echo "null"; fi)" \
+      '{
+        ts: $ts,
+        run_id: $run_id,
+        phase_id: $role,
+        event_type: "writer_exit",
+        tool: "swarm-run",
+        file_paths: null,
+        bead_ids: [$issue_id],
+        diff_size_bytes: $diff_size_bytes,
+        source: "swarm-run-exit",
+        details: {exit_code: $exit_code},
+        schema_ok: true
+      } | del(.details)')"
+    printf '%s\n' "$_obs" >> "${_tel_dir}/observations.jsonl"
   } || { echo "swarm-run: telemetry write failed (non-fatal)" >&2; true; }
 }
 
