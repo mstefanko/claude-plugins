@@ -7,6 +7,18 @@ these ledgers, see `docs/plan.md` §1.8 (what to track) and §1.9 (storage archi
 
 ---
 
+<!-- BEGIN: generated-by swarm_do.telemetry.gen docs -->
+| Ledger | Filename | Schema | Fallback count |
+|--------|----------|--------|----------------|
+| adjudications | adjudications.jsonl | `swarm-do/schemas/telemetry/adjudications.v2.schema.json` | 2 |
+| finding_outcomes | finding_outcomes.jsonl | `swarm-do/schemas/telemetry/finding_outcomes.schema.json` | 1 |
+| findings | findings.jsonl | `swarm-do/schemas/telemetry/findings.v2.schema.json` | 2 |
+| outcomes | outcomes.jsonl | `swarm-do/schemas/telemetry/outcomes.schema.json` | 1 |
+| runs | runs.jsonl | `swarm-do/schemas/telemetry/runs.schema.json` | 1 |
+<!-- END: generated-by swarm_do.telemetry.gen docs -->
+
+---
+
 ## Ledger types
 
 Four files live under `${CLAUDE_PLUGIN_DATA}/telemetry/`:

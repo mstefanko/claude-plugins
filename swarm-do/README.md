@@ -89,6 +89,30 @@ swarm-do/
 └── docs/provenance/              Audit trail for the claude-mem unfork
 ```
 
+## Roles
+
+Roles are the personas the swarm pipeline dispatches to; this inventory is generated from `role-specs/` — edit specs, then run `python3 -m swarm_do.roles gen readme-section --write`.
+
+<!-- BEGIN: generated-by swarm_do.roles gen readme-section -->
+| Name | Description | Consumers |
+|------|-------------|-----------|
+| `agent-analysis-judge` | Competitive analysis judge. Reads two competing agent-analysis outputs for the same task and produces a single authoritative work breakdown. Run after BOTH analysis instances close. Allowed to open source files only for items flagged UNVERIFIED in either analysis — reads notes, not files. | agents |
+| `agent-analysis` | Swarm pipeline planner. Evaluates approaches and produces a concrete work breakdown for the writer. Trusts research notes — only opens source files for items marked UNVERIFIED. Runs in parallel with agent-clarify after research closes. | agents |
+| `agent-clarify` | Swarm pipeline pre-flight checker. Reads research notes via bd show only — no source file access. Surfaces blockers and ambiguities before implementation begins. Runs in parallel with agent-analysis after research closes. | agents |
+| `agent-code-review` | Thorough code reviewer combining Chain-of-Verification discipline with multi-domain analysis (quality, security, performance, design). Use for post-writer pipeline verification or standalone PR/branch/module reviews. | agents |
+| `agent-code-synthesizer` | Code synthesis agent. Reads two completed writer implementations with complementary approach constraints and cherry-picks the best elements from each into a single unified implementation. Operates at function/method level only — never mixes within a single function or across incompatible data structures. Used in Pattern 6 — Code Synthesis. | agents |
+| `agent-codex-review-phase0` | Cross-model reviewer (GPT-5.4 via Codex CLI). Specialized for blocking-issues only — types, null/nil edges, off-by-one, boundary conditions, parser/serializer mismatches, security boundaries. Invoked manually during Phase 0 validation. | agents |
+| `agent-codex-review` | Blocking-issues-only pipeline reviewer (backend-neutral contract). Runs in the post-spec-review quality lane focused on types, null/edge cases, off-by-one, boundary conditions, and security-relevant bugs. | agents, roles-shared |
+| `agent-debug` | Swarm pipeline bug analyzer. Replaces agent-analysis for phases tagged kind=bug. Produces a root-cause-first work breakdown — trigger, call chain, fix location, defense-in-depth — never symptom patches. | agents |
+| `agent-docs` | Swarm pipeline documentation updater. Edits .md files and doc comments only — no source code. Reads writer notes to understand what changed before editing anything. Runs in parallel with agent-review after writer closes. | agents |
+| `agent-research-merge` | Synthesizes parallel sub-research outputs into a single unified research report. Runs after all sub-researchers close, before clarify and analysis. Reads only beads notes — no source file access except for items explicitly flagged UNVERIFIED by sub-researchers. | agents |
+| `agent-research` | Swarm pipeline fact-finder. Reads codebase, searches memory, gathers raw findings. No opinions or recommendations — pure discovery. Use at the start of a swarm pipeline before analysis or clarify. | agents |
+| `agent-review` | Swarm pipeline verifier. Runs tests and confirms implementation matches analysis intent. Flags issues in notes only — does not edit files. Runs in parallel with agent-docs after writer closes. | agents, roles-shared |
+| `agent-spec-review` | Swarm pipeline spec-compliance checker. Confirms the writer's code matches the work breakdown from analysis. Does NOT evaluate code quality — that is agent-review's job. Fast reject on acceptance-criteria mismatch. | agents, roles-shared |
+| `agent-writer-judge` | Competitive implementation judge. Reads two completed writer implementations, evaluates using execution signals and code quality criteria, and selects the winning implementation. Primary decision criterion is test results (objective). Secondary criteria are edge case coverage, code quality, and pattern adherence. Used in Pattern 5 — Competitive Implementation. | agents |
+| `agent-writer` | Swarm pipeline executor. Implements exactly what agent-analysis specified. Holds the merge slot for the duration of work. Reads analysis and clarify notes before writing any code. | agents, roles-shared |
+<!-- END: generated-by swarm_do.roles gen readme-section -->
+
 ## bin/swarm-telemetry
 
 Reporter and write utility for the telemetry ledgers. Read-only subcommands shipped in Phase 9c; `join-outcomes` write subcommand shipped in Phase 9d. As of Phase 3, all six subcommands (`dump`, `validate`, `query`, `report`, `sample-for-adjudication`, `join-outcomes`) are native Python — ported from legacy bash in phases 3/1–3/6. The legacy bash implementation (`bin/swarm-telemetry.legacy`) has been deleted. `bin/swarm-telemetry` is a 9-line shim that sources `bin/_lib/python-bootstrap.sh` and execs `python3 -m swarm_do.telemetry.cli "$@"`. The `--test` flag runs `python3 -m unittest discover` (not a bespoke assertion harness).
@@ -105,15 +129,17 @@ swarm-telemetry purge <args>
 
 **Subcommands:**
 
+<!-- BEGIN: generated-by swarm_do.telemetry.gen readme-section -->
 | Subcommand | What it does |
-|---|---|
-| `query <sql>` | Loads all four JSONL ledgers into an in-memory SQLite database via `python3` (tables: `runs`, `findings`, `outcomes`, `adjudications`) and executes the given SQL. Useful for ad-hoc exploration. |
-| `report` | Emits a stratified markdown report from `runs.jsonl`. Stratifies by `role`, `complexity`, `phase_kind`, or `risk_tag` (controlled by `--bucket`). **Never emits global means** — averaging `agent-docs` latency next to `agent-analysis` latency is the exact measurement bias this tool exists to prevent. Accepts `--since Nd` (last N days) and `--role R` filters. |
-| `dump <ledger>` | Pretty-prints one ledger (`runs`, `findings`, `outcomes`, `adjudications`) as a JSON array via `jq -s .`. Returns `[]` for absent or empty ledgers. |
-| `validate` | Validates every ledger row against the shipped JSON schemas, including types, enums, patterns, bounds, and `additionalProperties`. Exits 1 if any row fails; exits 0 if all rows pass (absent/empty ledgers are skipped with a warning). |
-| `sample-for-adjudication` | **(Phase 9f — write subcommand)** Picks a stratified random sample of findings that do not already appear in `adjudications.jsonl` via `overridden_finding_ids`. Writes the existing phase0-style directory layout under `~/.swarm/phase0/runs/` when writable, or falls back to plugin data when running in the plugin sandbox. Accepts `--count N` (required), `--since Nd`, and `--output-root PATH`. |
-| `join-outcomes` | **(Phase 9d — write subcommand)** Correlates findings with post-merge maintainer behavior and appends rows to `finding_outcomes.jsonl`. Scans merged PRs via `gh api` plus local git history, anchors each finding to the nearest matching merge commit, then checks whether any commit within 14 days touched the same file within a ±10 line window; if so, appends a `hotfix_within_14d` outcome row. Accepts `--since Nd` (default 30d) and `--dry-run` (prints what would be written without touching the ledger). Idempotent: re-running the same window produces no duplicate rows. **Manual invocation only** — no cron wiring until output proves useful. |
-| `purge <args>` | **(Phase 9g — operator-only)** Purge rows older than a retention window per ADR 0001. Atomically rewrites each ledger via tempfile + fsync + os.replace to ensure durability on power loss. Accepts `--older-than Nd [--ledger <name>] [--dry-run]`. Not invoked from swarm-run; operator-invoked only to avoid implicit data loss. |
+|------------|--------------|
+| `dump` | Pretty-print a JSONL ledger as a JSON array. |
+| `join-outcomes` | Correlate findings with post-merge maintainer actions. |
+| `purge` | Purge rows older than retention window |
+| `query` | Execute SQL against all ledgers loaded into sqlite3 :memory:. |
+| `report` | Stratified markdown report from runs.jsonl. |
+| `sample-for-adjudication` |  Stratified random sample of non-adjudicated findings. |
+| `validate` | Validate every ledger row against its JSON schema. |
+<!-- END: generated-by swarm_do.telemetry.gen readme-section -->
 
 **Environment:**
 
