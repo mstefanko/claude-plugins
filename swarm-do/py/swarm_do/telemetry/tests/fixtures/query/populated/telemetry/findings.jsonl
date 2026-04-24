@@ -1,0 +1,3 @@
+{"finding_id":"F_1","run_id":"RUN_A","severity":"low","category":"style"}
+{"finding_id":"F_2","run_id":"RUN_A","severity":"high","category":"bug"}
+{"finding_id":"F_3","run_id":"RUN_B","severity":"medium","category":"bug"}

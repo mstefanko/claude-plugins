@@ -36,7 +36,6 @@ def _parse_days_type(s: str) -> int:
 
 
 SUBCOMMANDS = (
-    "query",
     "report",
     "sample-for-adjudication",
     "join-outcomes",
@@ -110,6 +109,17 @@ def _build_parser() -> argparse.ArgumentParser:
         help="optional ledger name; omit to validate all ledgers",
     )
 
+    # Add query subcommand (Phase 3 native Python implementation).
+    query_parser = subparsers.add_parser(
+        "query",
+        add_help=True,
+        help="Execute SQL against all ledgers loaded into sqlite3 :memory:.",
+    )
+    query_parser.add_argument(
+        "sql",
+        help="SQL statement (single argument; quote appropriately)",
+    )
+
     # Add legacy subcommands (Phase 1 passthrough).
     for name in SUBCOMMANDS:
         sub = subparsers.add_parser(name, add_help=False, help=f"{name} (delegates to legacy)")
@@ -161,6 +171,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if ns.subcommand == "validate":
         from .subcommands import validate as _validate_cmd
         return _validate_cmd.run(ns)
+
+    # Dispatch query to native Python implementation (Phase 3 commit 3).
+    if ns.subcommand == "query":
+        from .subcommands import query as _query_cmd
+        return _query_cmd.run(ns)
 
     # Rebuild the argv for the legacy script: subcommand + pass-through rest.
     rest = getattr(ns, "rest", []) or []
