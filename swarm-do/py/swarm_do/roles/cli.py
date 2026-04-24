@@ -5,7 +5,9 @@ Subcommands (python3 -m swarm_do.roles <subcommand>):
                   --write   write generated content to agents/ and roles/*/shared.md.
                   --check   diff-check only; exit 1 if any file has drifted.
                   --force   overwrite even non-stamped files (bootstrap migration only).
-  gen readme-section  (Phase 6 — not yet implemented; raises NotImplementedError)
+  gen readme-section  Regenerate the Roles table in swarm-do/README.md.
+                        --write   overwrite marker-bounded block.
+                        --check   diff-check only; exit 1 on drift.
   list          Print all role-spec names (one per line).
 """
 from __future__ import annotations

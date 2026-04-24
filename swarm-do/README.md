@@ -62,6 +62,8 @@ The fork-diff patch that was active pre-rollback is preserved in `docs/provenanc
 
 ## Directory layout
 
+> Several contract-level sections in this file and in `schemas/telemetry/README.md` are generator-backed — bounded by `<!-- BEGIN/END: generated-by ... -->` markers. Do not hand-edit inside those markers; run the relevant generator instead (see `## Roles` and `## bin/swarm-telemetry` sections below for the exact commands).
+
 ```
 swarm-do/
 ├── .claude-plugin/plugin.json    Plugin manifest

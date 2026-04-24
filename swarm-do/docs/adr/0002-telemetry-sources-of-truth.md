@@ -65,3 +65,6 @@ Negative / follow-on work:
   `<!-- generated from role-specs/... -->`. Hand-editing those files is no
   longer correct — edit `role-specs/` and run
   `python3 -m swarm_do.roles gen --write`.
+- Phase 6: contract-level docs now regenerate from LEDGERS + role-specs via
+  `python3 -m swarm_do.{telemetry.gen,roles} ...`. Drift enforced by
+  `bin/swarm-telemetry --test --check-docs`.

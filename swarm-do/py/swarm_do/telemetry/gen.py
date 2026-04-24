@@ -1,4 +1,13 @@
-"""Contract-doc generator — marker-bounded blocks in README files regenerated from LEDGERS registry and CLI subcommand list."""
+"""Contract-doc generator for swarm-do telemetry and role documentation.
+
+Regenerates marker-bounded blocks in README files from authoritative sources:
+  - ``swarm_do.telemetry.gen docs``          → ledger table in schemas/telemetry/README.md
+  - ``swarm_do.telemetry.gen readme-section`` → telemetry commands table in swarm-do/README.md
+
+Markers follow the convention ``<!-- BEGIN/END: generated-by <module> <subcommand> -->``.
+Content between markers is fully replaced on each write; do not hand-edit inside them.
+Run with ``--check`` (or via ``bin/swarm-telemetry --test --check-docs``) to detect drift without writing.
+"""
 
 from __future__ import annotations
 

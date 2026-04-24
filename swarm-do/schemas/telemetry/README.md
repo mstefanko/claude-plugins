@@ -5,6 +5,8 @@ observations. This is the authoritative reference for the ledger contract as shi
 in Phase 9a. For design rationale, sequencing, and the operator-console view over
 these ledgers, see `docs/plan.md` §1.8 (what to track) and §1.9 (storage architecture).
 
+The ledger table below is generated — do not hand-edit inside the markers; run `python3 -m swarm_do.telemetry.gen docs --write` to regenerate it from the LEDGERS registry.
+
 ---
 
 <!-- BEGIN: generated-by swarm_do.telemetry.gen docs -->
