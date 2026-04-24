@@ -37,6 +37,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="run the Python test suite via unittest discover.",
     )
+    parser.add_argument(
+        "--check-docs",
+        action="store_true",
+        help="also run contract-doc --check gates (use with --test).",
+    )
 
     subparsers = parser.add_subparsers(dest="subcommand", metavar="SUBCOMMAND")
 
@@ -111,22 +116,52 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _run_self_test() -> int:
-    """Run the Python test suite via unittest discover."""
+def _run_self_test(check_docs: bool = False) -> int:
+    """Run the Python test suite via unittest discover.
+
+    If check_docs is True, also run contract-doc generators' --check gates.
+    """
     import unittest
     tests_dir = PLUGIN_ROOT / "swarm-do" / "py" / "swarm_do" / "telemetry" / "tests"
     loader = unittest.TestLoader()
     suite = loader.discover(start_dir=str(tests_dir), top_level_dir=str(PLUGIN_ROOT / "swarm-do" / "py"))
     runner = unittest.TextTestRunner(verbosity=1)
     result = runner.run(suite)
-    return 0 if result.wasSuccessful() else 1
+    test_pass = result.wasSuccessful()
+
+    if check_docs:
+        # Run all four contract-doc --check gates
+        import subprocess
+        check_commands = [
+            [sys.executable, "-m", "swarm_do.telemetry.gen", "docs", "--check"],
+            [sys.executable, "-m", "swarm_do.telemetry.gen", "readme-section", "--check"],
+            [sys.executable, "-m", "swarm_do.roles", "gen", "readme-section", "--check"],
+            [sys.executable, "-m", "swarm_do.roles", "gen", "--check"],
+        ]
+
+        docs_pass = True
+        for cmd in check_commands:
+            result = subprocess.run(cmd, cwd=PLUGIN_ROOT / "swarm-do" / "py", capture_output=True)
+            if result.returncode != 0:
+                docs_pass = False
+                print(f"Contract-doc check failed: {' '.join(cmd)}", file=sys.stderr)
+                if result.stdout:
+                    print(result.stdout.decode("utf-8"), file=sys.stderr)
+                if result.stderr:
+                    print(result.stderr.decode("utf-8"), file=sys.stderr)
+
+        return 0 if (test_pass and docs_pass) else 1
+
+    return 0 if test_pass else 1
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
 
     if args and args[0] == "--test":
-        return _run_self_test()
+        # Check for --check-docs flag after --test
+        check_docs = "--check-docs" in args
+        return _run_self_test(check_docs=check_docs)
 
     parser = _build_parser()
     if not args or args[0] in ("-h", "--help"):
@@ -136,7 +171,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     ns = parser.parse_args(args)
 
     if getattr(ns, "test", False):
-        return _run_self_test()
+        check_docs = getattr(ns, "check_docs", False)
+        return _run_self_test(check_docs=check_docs)
 
     if not ns.subcommand:
         parser.print_help()
