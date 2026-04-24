@@ -17,10 +17,23 @@ import subprocess
 import sys
 from typing import List, Sequence
 
-from .registry import PLUGIN_ROOT
+from .registry import LEDGERS, PLUGIN_ROOT
 
 
 LEGACY_SCRIPT = PLUGIN_ROOT / "swarm-do" / "bin" / "swarm-telemetry.legacy"
+
+
+def _parse_days_type(s: str) -> int:
+    """Parse a days argument of format 'Nd' (e.g., '90d').
+
+    Raises argparse.ArgumentTypeError if format is invalid.
+    """
+    import re
+    match = re.match(r"^(\d+)d$", s)
+    if not match:
+        raise argparse.ArgumentTypeError(f"invalid format: {s!r}; expected format: Nd (e.g., 90d)")
+    return int(match.group(1))
+
 
 SUBCOMMANDS = (
     "dump",
@@ -49,6 +62,32 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     subparsers = parser.add_subparsers(dest="subcommand", metavar="SUBCOMMAND")
+
+    # Add purge subcommand (Phase 2 native Python implementation).
+    purge_parser = subparsers.add_parser("purge", add_help=True, help="Purge rows older than retention window")
+    purge_parser.add_argument(
+        "--older-than",
+        dest="older_than",
+        type=_parse_days_type,
+        required=True,
+        metavar="Nd",
+        help="purge rows older than N days (format: Nd, e.g., 90d)",
+    )
+    purge_parser.add_argument(
+        "--ledger",
+        dest="ledger",
+        choices=sorted(LEDGERS.keys()),
+        default=None,
+        help="purge a specific ledger; if omitted, purges all ledgers",
+    )
+    purge_parser.add_argument(
+        "--dry-run",
+        dest="dry_run",
+        action="store_true",
+        help="report what would be purged without modifying files",
+    )
+
+    # Add legacy subcommands (Phase 1 passthrough).
     for name in SUBCOMMANDS:
         sub = subparsers.add_parser(name, add_help=False, help=f"{name} (delegates to legacy)")
         sub.add_argument("rest", nargs=argparse.REMAINDER)
@@ -84,6 +123,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not ns.subcommand:
         parser.print_help()
         return 0
+
+    # Dispatch purge to native Python implementation.
+    if ns.subcommand == "purge":
+        from .subcommands import purge as _purge_cmd
+        return _purge_cmd.run(ns)
 
     # Rebuild the argv for the legacy script: subcommand + pass-through rest.
     rest = getattr(ns, "rest", []) or []
