@@ -146,6 +146,7 @@ PRIOR_RUN="none"
 
 STARTED="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 T_START_EPOCH="$(date +%s)"
+START_HEAD_SHA="$(git -C "${PWD}" rev-parse HEAD 2>/dev/null || true)"
 
 # Dependency / thread context from beads.
 DEP_CTX=""
@@ -216,8 +217,9 @@ _swarm_telemetry_write() {
     [[ -n "$_hash" ]] || _hash="null"
 
     # Git metadata — best-effort, null on failure.
-    _base_sha="$(git -C "${PWD}" rev-parse HEAD 2>/dev/null || true)"
-    _head_sha="$_base_sha"  # same: swarm-run does not commit; writer worktree may
+    # base_sha is captured at process start so writer runs preserve before/after SHAs.
+    _base_sha="$START_HEAD_SHA"
+    _head_sha="$(git -C "${PWD}" rev-parse HEAD 2>/dev/null || true)"
     _repo="$(git -C "${PWD}" remote get-url origin 2>/dev/null || true)"
     _diff_bytes="$(git -C "${PWD}" diff --stat HEAD 2>/dev/null | wc -c | tr -d ' ' || true)"
 

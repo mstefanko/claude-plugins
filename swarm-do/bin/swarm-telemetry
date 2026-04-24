@@ -6,7 +6,7 @@
 #   swarm-telemetry report [--since Nd] [--role R] [--bucket K]
 #   swarm-telemetry dump <ledger>
 #   swarm-telemetry validate [<ledger>]
-#   swarm-telemetry sample-for-adjudication --count N [--since Nd]
+#   swarm-telemetry sample-for-adjudication --count N [--since Nd] [--output-root PATH]
 #   swarm-telemetry --test
 #   swarm-telemetry -h | --help
 #
@@ -20,17 +20,21 @@
 #                                 (default: role)
 #   dump <ledger>     Pretty-print a ledger as a JSON array (jq -s .).
 #                     ledger: runs | findings | outcomes | adjudications
-#   validate          Parse + required-field check every row in every ledger.
+#   validate          Validate every row in every ledger against the shipped JSON schemas.
 #                     Exits 1 if any row fails; 0 if all rows pass (or ledger absent/empty).
 #   sample-for-adjudication
 #                     Pick stratified random sample of findings without adjudication rows.
 #                     --count N   number of findings to sample (required)
 #                     --since Nd  filter findings within last N days (default: all time)
+#                     --output-root PATH  preferred phase0 output root (default: ~/.swarm/phase0/runs)
 #
 # Environment:
 #   CLAUDE_PLUGIN_DATA   base data directory; telemetry lives at $CLAUDE_PLUGIN_DATA/telemetry/
 #                        If unset, swarm-telemetry uses the default:
 #                        ~/.claude/plugin-data/mstefanko-plugins/swarm-do
+#   SWARM_PHASE0_ROOT    preferred root for sample-for-adjudication output. If unset,
+#                        sampler prefers ~/.swarm/phase0/runs and falls back to plugin data.
+#   SWARM_TELEMETRY_NOW  optional ISO-8601 UTC timestamp override for deterministic tests.
 #
 # Fail-open: validate and dump print warnings for absent/empty ledgers and continue.
 # query and report die on missing CLAUDE_PLUGIN_DATA or missing runs.jsonl.
@@ -55,7 +59,7 @@ Usage:
   swarm-telemetry report [--since Nd] [--role R] [--bucket K]
   swarm-telemetry dump <ledger>
   swarm-telemetry validate [<ledger>]
-  swarm-telemetry sample-for-adjudication --count N [--since Nd]
+  swarm-telemetry sample-for-adjudication --count N [--since Nd] [--output-root PATH]
   swarm-telemetry join-outcomes [--since Nd] [--repo PATH] [--dry-run]
   swarm-telemetry --test
   swarm-telemetry -h | --help
@@ -64,7 +68,7 @@ Subcommands:
   query <sql>       Execute SQL against in-memory sqlite3 loaded from all five ledgers.
   report            Stratified markdown report (role/complexity/phase_kind/risk_tag).
   dump <ledger>     Pretty-print ledger as JSON array.
-  validate          jq parse + required-field check on every ledger row.
+  validate          Validate every ledger row against the shipped JSON schemas.
   sample-for-adjudication
                     Pick stratified random sample of findings without adjudication rows.
   join-outcomes     Correlate findings with post-merge maintainer actions; append to finding_outcomes.jsonl.
@@ -77,6 +81,7 @@ Options for report:
 Options for sample-for-adjudication:
   --count N       Number of findings to sample (required)
   --since Nd      Filter findings within last N days (default: all time)
+  --output-root P Preferred output root (default: ~/.swarm/phase0/runs, with plugin-data fallback)
 
 Options for join-outcomes:
   --since Nd      Scan merges within the last N days (default: 30d)
@@ -103,6 +108,48 @@ _resolve_ledger() {
   echo "${dir}/${name}.jsonl"
 }
 
+_resolve_phase0_root() {
+  if [[ -n "${SWARM_PHASE0_ROOT:-}" ]]; then
+    echo "${SWARM_PHASE0_ROOT}"
+  else
+    echo "${HOME}/.swarm/phase0/runs"
+  fi
+}
+
+_resolve_phase0_fallback_root() {
+  local base="${CLAUDE_PLUGIN_DATA:-${HOME}/.claude/plugin-data/mstefanko-plugins/swarm-do}"
+  echo "${base}/phase0/runs"
+}
+
+_schema_candidates_for_ledger() {
+  local name="$1"
+  local schema_dir="${_SCRIPT_DIR}/../schemas/telemetry"
+  case "$name" in
+    runs)
+      printf '%s\n' "${schema_dir}/runs.schema.json"
+      ;;
+    findings)
+      printf '%s\n%s\n' \
+        "${schema_dir}/findings.v2.schema.json" \
+        "${schema_dir}/findings.schema.json"
+      ;;
+    outcomes)
+      printf '%s\n' "${schema_dir}/outcomes.schema.json"
+      ;;
+    adjudications)
+      printf '%s\n%s\n' \
+        "${schema_dir}/adjudications.v2.schema.json" \
+        "${schema_dir}/adjudications.schema.json"
+      ;;
+    finding_outcomes)
+      printf '%s\n' "${schema_dir}/finding_outcomes.schema.json"
+      ;;
+    *)
+      die "unknown ledger '$name' — must be one of: runs findings outcomes adjudications finding_outcomes"
+      ;;
+  esac
+}
+
 # ---------------------------------------------------------------------------
 # Subcommand: dump
 # ---------------------------------------------------------------------------
@@ -123,16 +170,11 @@ _cmd_dump() {
 # Subcommand: validate
 # ---------------------------------------------------------------------------
 
-# Required fields per ledger (jq-parseable arrays as strings)
-_RUNS_REQUIRED='["run_id","timestamp_start","timestamp_end","backend","model","effort","role","phase_kind","phase_complexity","risk_tags","issue_id","repo","base_sha","head_sha","diff_size_bytes","input_tokens","cached_input_tokens","output_tokens","estimated_cost_usd","wall_clock_seconds","tool_call_count","cap_hit","budget_breach","schema_ok","exit_code","setting_source","writer_status","review_verdict","last_429_at","prompt_bundle_hash","config_hash"]'
-_FINDINGS_REQUIRED='["finding_id","run_id","timestamp","role","issue_id","severity","category","summary","schema_ok"]'
-_OUTCOMES_REQUIRED='["outcome_id","issue_id","timestamp","writer_run_id","review_run_id","verdict","schema_ok"]'
-_ADJUDICATIONS_REQUIRED='["adjudication_id","outcome_id","issue_id","timestamp","adjudicator","decision","rubric_version","blind_batch_id","schema_ok"]'
-_FINDING_OUTCOMES_REQUIRED='["finding_outcome_id","finding_id","observed_at","maintainer_action","schema_ok"]'
-
 _validate_ledger() {
-  local name="$1" path="$2" required="$3"
+  local name="$1" path="$2"
   local row_num=0 fail_count=0 bad_json=0
+  local schema_path
+  local schema_paths=()
 
   if [[ ! -f "$path" ]]; then
     echo "${_SELF}: validate: $name — ledger absent (skipped)" >&2
@@ -143,38 +185,169 @@ _validate_ledger() {
     return 0
   fi
 
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    (( row_num++ )) || true
-    # jq parse check
-    if ! printf '%s' "$line" | jq -e . >/dev/null 2>&1; then
-      echo "  FAIL row ${row_num}: JSON parse error in ${name}.jsonl" >&2
-      (( bad_json++ )) || true
-      (( fail_count++ )) || true
-      continue
-    fi
-    # Required-field check
-    local missing
-    missing="$(printf '%s' "$line" | jq -r \
-      --argjson req "${required}" \
-      '$req[] | select(. as $f | input | has($f) | not)' \
-      2>/dev/null || true)"
-    # The above approach is tricky with input; use a simpler inline method:
-    missing="$(printf '%s' "$line" | jq -r \
-      --argjson req "${required}" \
-      '($req - keys) | .[]' \
-      2>/dev/null || true)"
-    if [[ -n "$missing" ]]; then
-      echo "  FAIL row ${row_num} in ${name}.jsonl: missing required fields: $(echo "$missing" | tr '\n' ' ')" >&2
-      (( fail_count++ )) || true
-    fi
-  done < "$path"
+  while IFS= read -r schema_path; do
+    [[ -n "$schema_path" ]] || continue
+    [[ -f "$schema_path" ]] || die "validate: schema file missing for ${name}: ${schema_path}"
+    schema_paths+=("$schema_path")
+  done < <(_schema_candidates_for_ledger "$name")
 
-  if [[ "$fail_count" -eq 0 ]]; then
-    echo "  OK  ${name}.jsonl — ${row_num} row(s) valid" >&2
-  else
-    echo "  FAIL ${name}.jsonl — ${fail_count} of ${row_num} row(s) failed (${bad_json} JSON parse error(s))" >&2
-  fi
-  return "$fail_count"
+  python3 - "$name" "$path" "${schema_paths[@]}" <<'PYEOF'
+import datetime
+import json
+import os
+import re
+import sys
+
+name = sys.argv[1]
+path = sys.argv[2]
+schema_paths = sys.argv[3:]
+
+schemas = []
+for schema_path in schema_paths:
+    with open(schema_path, "r", encoding="utf-8") as f:
+        schemas.append((schema_path, json.load(f)))
+
+row_num = 0
+fail_count = 0
+bad_json = 0
+
+def py_type_name(value):
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, int):
+        return "integer"
+    if isinstance(value, float):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, dict):
+        return "object"
+    return type(value).__name__
+
+def matches_type(value, schema_type):
+    if schema_type == "null":
+        return value is None
+    if schema_type == "string":
+        return isinstance(value, str)
+    if schema_type == "boolean":
+        return isinstance(value, bool)
+    if schema_type == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if schema_type == "number":
+        return (isinstance(value, int) and not isinstance(value, bool)) or isinstance(value, float)
+    if schema_type == "array":
+        return isinstance(value, list)
+    if schema_type == "object":
+        return isinstance(value, dict)
+    return False
+
+def is_number(value):
+    return (isinstance(value, int) and not isinstance(value, bool)) or isinstance(value, float)
+
+def parse_datetime(value):
+    try:
+        return datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return None
+
+def validate_value(value, schema, json_path="$"):
+    errors = []
+
+    schema_type = schema.get("type")
+    if schema_type is not None:
+        allowed_types = schema_type if isinstance(schema_type, list) else [schema_type]
+        if not any(matches_type(value, candidate) for candidate in allowed_types):
+            allowed = "|".join(str(candidate) for candidate in allowed_types)
+            return [f"{json_path}: expected type {allowed}, got {py_type_name(value)}"]
+
+    if value is None:
+        return errors
+
+    if "enum" in schema and value not in schema["enum"]:
+        errors.append(f"{json_path}: expected one of {schema['enum']}, got {value!r}")
+
+    if "pattern" in schema and isinstance(value, str):
+        if re.fullmatch(schema["pattern"], value) is None:
+            errors.append(f"{json_path}: value {value!r} does not match /{schema['pattern']}/")
+
+    if schema.get("format") == "date-time" and isinstance(value, str):
+        if parse_datetime(value) is None:
+            errors.append(f"{json_path}: value {value!r} is not a valid date-time")
+
+    if "minimum" in schema and is_number(value) and value < schema["minimum"]:
+        errors.append(f"{json_path}: value {value!r} is less than minimum {schema['minimum']}")
+
+    if "maximum" in schema and is_number(value) and value > schema["maximum"]:
+        errors.append(f"{json_path}: value {value!r} is greater than maximum {schema['maximum']}")
+
+    if isinstance(value, dict):
+        properties = schema.get("properties", {})
+        for required in schema.get("required", []):
+            if required not in value:
+                errors.append(f"{json_path}: missing required property {required!r}")
+
+        if schema.get("additionalProperties") is False:
+            for key in value.keys():
+                if key not in properties:
+                    errors.append(f"{json_path}: unexpected property {key!r}")
+
+        for key, child_schema in properties.items():
+            if key in value:
+                errors.extend(validate_value(value[key], child_schema, f"{json_path}.{key}"))
+
+    if isinstance(value, list) and "items" in schema:
+        for idx, item in enumerate(value):
+            errors.extend(validate_value(item, schema["items"], f"{json_path}[{idx}]"))
+
+    return errors
+
+with open(path, "r", encoding="utf-8") as f:
+    for line in f:
+        row_num += 1
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError as exc:
+            print(f"  FAIL row {row_num}: JSON parse error in {name}.jsonl: {exc}", file=sys.stderr)
+            bad_json += 1
+            fail_count += 1
+            continue
+
+        validation_errors = []
+        for schema_path, schema in schemas:
+            errors = validate_value(obj, schema)
+            if not errors:
+                validation_errors = []
+                break
+            validation_errors.append((schema_path, errors))
+
+        if validation_errors:
+            fail_count += 1
+            best_schema_path, best_errors = min(validation_errors, key=lambda item: len(item[1]))
+            print(
+                f"  FAIL row {row_num} in {name}.jsonl: schema mismatch against {os.path.basename(best_schema_path)}: {best_errors[0]}",
+                file=sys.stderr,
+            )
+            for extra in best_errors[1:3]:
+                print(f"    {extra}", file=sys.stderr)
+
+if fail_count == 0:
+    print(f"  OK  {name}.jsonl — {row_num} row(s) valid", file=sys.stderr)
+else:
+    print(
+        f"  FAIL {name}.jsonl — {fail_count} of {row_num} row(s) failed ({bad_json} JSON parse error(s))",
+        file=sys.stderr,
+    )
+
+sys.exit(min(fail_count, 255))
+PYEOF
+  return "$?"
 }
 
 _cmd_validate() {
@@ -183,29 +356,31 @@ _cmd_validate() {
   tel_dir="$(_resolve_telemetry_dir)"
   local total_fail=0
 
+  command -v python3 >/dev/null 2>&1 || die "validate requires python3"
+
   echo "${_SELF}: validate — checking ledgers in ${tel_dir}" >&2
 
   _run_validation() {
-    local name="$1" required="$2"
+    local name="$1"
     local path="${tel_dir}/${name}.jsonl"
-    _validate_ledger "$name" "$path" "$required" || (( total_fail += $? )) || true
+    _validate_ledger "$name" "$path" || (( total_fail += $? )) || true
   }
 
   if [[ -n "$target_ledger" ]]; then
     case "$target_ledger" in
-      runs)             _run_validation runs             "$_RUNS_REQUIRED" ;;
-      findings)         _run_validation findings         "$_FINDINGS_REQUIRED" ;;
-      outcomes)         _run_validation outcomes         "$_OUTCOMES_REQUIRED" ;;
-      adjudications)    _run_validation adjudications    "$_ADJUDICATIONS_REQUIRED" ;;
-      finding_outcomes) _run_validation finding_outcomes "$_FINDING_OUTCOMES_REQUIRED" ;;
+      runs)             _run_validation runs             ;;
+      findings)         _run_validation findings         ;;
+      outcomes)         _run_validation outcomes         ;;
+      adjudications)    _run_validation adjudications    ;;
+      finding_outcomes) _run_validation finding_outcomes ;;
       *) die "unknown ledger '$target_ledger' — must be one of: runs findings outcomes adjudications finding_outcomes";;
     esac
   else
-    _run_validation runs             "$_RUNS_REQUIRED"
-    _run_validation findings         "$_FINDINGS_REQUIRED"
-    _run_validation outcomes         "$_OUTCOMES_REQUIRED"
-    _run_validation adjudications    "$_ADJUDICATIONS_REQUIRED"
-    _run_validation finding_outcomes "$_FINDING_OUTCOMES_REQUIRED"
+    _run_validation runs
+    _run_validation findings
+    _run_validation outcomes
+    _run_validation adjudications
+    _run_validation finding_outcomes
   fi
 
   if [[ "$total_fail" -eq 0 ]]; then
@@ -354,6 +529,7 @@ _cmd_report() {
   command -v jq >/dev/null 2>&1 || die "report requires jq"
 
   python3 - "$runs_path" "$since_days" "$filter_role" "$bucket" <<'PYEOF'
+import os
 import sys, json, datetime, collections, math
 
 RUNS_PATH   = sys.argv[1]
@@ -361,10 +537,28 @@ SINCE_DAYS  = sys.argv[2]   # "" means all time
 FILTER_ROLE = sys.argv[3]   # "" means all roles
 BUCKET      = sys.argv[4]   # role | complexity | phase_kind | risk_tag
 
+def parse_ts(s):
+    if not s:
+        return None
+    try:
+        return datetime.datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return None
+
+def resolve_now():
+    override = os.environ.get("SWARM_TELEMETRY_NOW", "").strip()
+    if not override:
+        return datetime.datetime.now(datetime.timezone.utc)
+    parsed = parse_ts(override)
+    if parsed is None:
+        print(f"swarm-telemetry: report: invalid SWARM_TELEMETRY_NOW '{override}'", file=sys.stderr)
+        sys.exit(1)
+    return parsed
+
 # ---------------------------------------------------------------------------
 # Parse cutoff timestamp
 # ---------------------------------------------------------------------------
-now = datetime.datetime(2026, 4, 23, 12, 0, 0, tzinfo=datetime.timezone.utc)
+now = resolve_now()
 
 cutoff = None
 if SINCE_DAYS:
@@ -375,14 +569,6 @@ if SINCE_DAYS:
     except ValueError:
         print(f"swarm-telemetry: report: invalid --since value '{SINCE_DAYS}' — expected Nd (e.g. 30d)", file=sys.stderr)
         sys.exit(1)
-
-def parse_ts(s):
-    if not s:
-        return None
-    try:
-        return datetime.datetime.fromisoformat(s.replace("Z", "+00:00"))
-    except (ValueError, AttributeError):
-        return None
 
 # ---------------------------------------------------------------------------
 # Load runs
@@ -532,12 +718,13 @@ PYEOF
 # ---------------------------------------------------------------------------
 
 _cmd_sample_for_adjudication() {
-  local count_target="" since_days=""
+  local count_target="" since_days="" output_root=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --count) count_target="${2:-}"; shift 2;;
-      --since) since_days="${2:-}"; shift 2;;
+      --count)       count_target="${2:-}"; shift 2;;
+      --since)       since_days="${2:-}"; shift 2;;
+      --output-root) output_root="${2:-}"; shift 2;;
       *) die "sample-for-adjudication: unknown option '$1'";;
     esac
   done
@@ -552,6 +739,9 @@ _cmd_sample_for_adjudication() {
 
   local tel_dir
   tel_dir="$(_resolve_telemetry_dir)"
+  local preferred_output_root fallback_output_root
+  preferred_output_root="${output_root:-$(_resolve_phase0_root)}"
+  fallback_output_root="$(_resolve_phase0_fallback_root)"
 
   local findings_path="${tel_dir}/findings.jsonl"
   local runs_path="${tel_dir}/runs.jsonl"
@@ -601,6 +791,8 @@ _cmd_sample_for_adjudication() {
     "$count_target" \
     "$since_n" \
     "$rubric_version" \
+    "$preferred_output_root" \
+    "$fallback_output_root" \
     <<'PYEOF'
 import sys, json, os, random, datetime, re
 from collections import defaultdict
@@ -611,6 +803,8 @@ adjudications_path = sys.argv[3]
 count_target      = int(sys.argv[4])
 since_n           = int(sys.argv[5]) if sys.argv[5] else 0
 rubric_version    = sys.argv[6]
+preferred_output_root = sys.argv[7]
+fallback_output_root  = sys.argv[8]
 
 SELF = "swarm-telemetry: sample-for-adjudication"
 
@@ -646,26 +840,18 @@ if os.path.isfile(adjudications_path) and os.path.getsize(adjudications_path) > 
                     continue
                 try:
                     obj = json.loads(line)
-                    # Adjudications don't directly reference finding_ids in v1/v2,
-                    # but we assume they correlate via outcome_id → issue findings.
-                    # For now, we read any fields that might indicate coverage.
-                    # A full implementation would join via outcomes.jsonl.
+                    overridden = obj.get("overridden_finding_ids")
+                    if isinstance(overridden, list):
+                        for finding_id in overridden:
+                            if isinstance(finding_id, str):
+                                adjudicated_finding_ids.add(finding_id)
+                    direct_finding_id = obj.get("finding_id")
+                    if isinstance(direct_finding_id, str):
+                        adjudicated_finding_ids.add(direct_finding_id)
                 except json.JSONDecodeError:
                     pass
     except Exception as e:
         print(f"{SELF}: error reading adjudications.jsonl: {e}", file=sys.stderr)
-
-# For this sampler, we use a simpler heuristic: findings without a
-# corresponding outcome_id in outcomes.jsonl are unadjudicated.
-# Since outcomes.jsonl is not passed, we assume all findings are candidates.
-
-# ---------------------------------------------------------------------------
-# Parse cutoff timestamp
-# ---------------------------------------------------------------------------
-now = datetime.datetime.now(datetime.timezone.utc)
-cutoff = None
-if since_n > 0:
-    cutoff = now - datetime.timedelta(days=since_n)
 
 def parse_ts(s):
     if not s:
@@ -674,6 +860,24 @@ def parse_ts(s):
         return datetime.datetime.fromisoformat(s.replace("Z", "+00:00"))
     except (ValueError, AttributeError):
         return None
+
+# ---------------------------------------------------------------------------
+# Parse cutoff timestamp
+# ---------------------------------------------------------------------------
+def resolve_now():
+    override = os.environ.get("SWARM_TELEMETRY_NOW", "").strip()
+    if not override:
+        return datetime.datetime.now(datetime.timezone.utc)
+    parsed = parse_ts(override)
+    if parsed is None:
+        print(f"{SELF}: invalid SWARM_TELEMETRY_NOW '{override}'", file=sys.stderr)
+        sys.exit(1)
+    return parsed
+
+now = resolve_now()
+cutoff = None
+if since_n > 0:
+    cutoff = now - datetime.timedelta(days=since_n)
 
 # ---------------------------------------------------------------------------
 # Load findings and stratify
@@ -694,6 +898,10 @@ try:
                     ts = parse_ts(obj.get("timestamp"))
                     if ts and ts < cutoff:
                         continue
+
+                finding_id = obj.get("finding_id")
+                if isinstance(finding_id, str) and finding_id in adjudicated_finding_ids:
+                    continue
 
                 # Enrich with run metadata
                 run_id = obj.get("run_id")
@@ -748,11 +956,23 @@ if allocated_total > count_target:
 # Sample findings from each stratum and output
 # ---------------------------------------------------------------------------
 batch_id = now.strftime("%Y%m%d%H%M%S")
-base_output_dir = os.path.expanduser("~/.swarm/phase0/runs")
 date_dir = now.strftime("%Y-%m-%d")
-output_root = os.path.join(base_output_dir, date_dir)
+preferred_base_output_dir = os.path.abspath(os.path.expanduser(preferred_output_root))
+fallback_base_output_dir = os.path.abspath(os.path.expanduser(fallback_output_root))
+output_root = os.path.join(preferred_base_output_dir, date_dir)
 
-os.makedirs(output_root, exist_ok=True)
+try:
+    os.makedirs(output_root, exist_ok=True)
+except PermissionError:
+    fallback_output = os.path.join(fallback_base_output_dir, date_dir)
+    if os.path.abspath(fallback_output) == os.path.abspath(output_root):
+        raise
+    print(
+        f"{SELF}: preferred output root '{preferred_base_output_dir}' is not writable; falling back to '{fallback_base_output_dir}'",
+        file=sys.stderr,
+    )
+    os.makedirs(fallback_output, exist_ok=True)
+    output_root = fallback_output
 
 sampled = []
 for stratum_key, target_count in allocation.items():
@@ -1053,11 +1273,21 @@ try:
 except Exception as e:
     print(f"{SELF}: gh pr list failed (non-fatal): {e}", file=sys.stderr)
 
-def merge_epoch_for(sha):
-    """Best-effort merge epoch: gh pr data first, else commit timestamp."""
-    if sha in gh_merges:
-        return gh_merges[sha]
-    return epoch_of_commit(sha)
+merge_candidates = {}
+for line in merge_log.splitlines():
+    parts = line.split()
+    if len(parts) != 2:
+        continue
+    sha, ct = parts
+    try:
+        merge_candidates[sha] = int(ct)
+    except ValueError:
+        continue
+
+for sha, merge_epoch in gh_merges.items():
+    merge_candidates[sha] = merge_epoch
+
+sorted_merge_candidates = sorted(merge_candidates.items(), key=lambda item: item[1])
 
 # ---------------------------------------------------------------------------
 # Parse git diff --unified=0 hunk headers to extract touched line ranges
@@ -1089,6 +1319,33 @@ def overlaps(hunk_start, hunk_end, find_start, find_end, window=10):
     lo = find_start - window
     hi = find_end + window
     return hunk_start <= hi and hunk_end >= lo
+
+def merge_anchor_for_finding(file_path, find_start, find_end, find_epoch):
+    """Pick the nearest merge commit touching the finding's file+line window."""
+    candidates = []
+    max_anchor_delta = 14 * 86400
+
+    for sha, merge_epoch in sorted_merge_candidates:
+        if merge_epoch is None:
+            continue
+        if abs(merge_epoch - find_epoch) > max_anchor_delta:
+            continue
+        ranges = hunk_ranges_for_commit(sha, file_path)
+        if any(overlaps(h_start, h_end, find_start, find_end) for h_start, h_end in ranges):
+            candidates.append((sha, merge_epoch))
+
+    if not candidates:
+        return None
+
+    after = [candidate for candidate in candidates if candidate[1] >= find_epoch]
+    if after:
+        return min(after, key=lambda candidate: (candidate[1] - find_epoch, candidate[1]))
+
+    before = [candidate for candidate in candidates if candidate[1] < find_epoch]
+    if before:
+        return min(before, key=lambda candidate: (find_epoch - candidate[1], -candidate[1]))
+
+    return None
 
 # ---------------------------------------------------------------------------
 # bd follow-up detection: bd list --notes <finding_id>
@@ -1236,16 +1493,19 @@ for finding in findings:
     ls = int(line_start)
     le = int(line_end) if line_end is not None else ls
 
-    # Get merge epoch anchor: use finding's run timestamp as approximate merge anchor.
-    # Since runs.jsonl has no pr_url/merge_sha, we fall back to git log --merges
-    # filtered to commits near the finding's timestamp (within 14d after finding).
+    # Anchor hotfix detection to the nearest actual merge commit touching the
+    # same file + line window. Do not use the finding timestamp as the 14d anchor.
     find_epoch = int(find_ts.timestamp()) if find_ts else int(now.timestamp())
+    merge_anchor = merge_anchor_for_finding(file_path, ls, le, find_epoch)
+    if merge_anchor is None:
+        continue
+    merge_sha, merge_epoch = merge_anchor
 
-    # Enumerate commits that touch file_path within 14d after find_epoch
+    # Enumerate commits that touch file_path within 14d after merge_epoch
     hotfix_commits_raw = git(
         "log",
-        f"--after={find_epoch}",
-        f"--before={find_epoch + 14 * 86400}",
+        f"--after={merge_epoch}",
+        f"--before={merge_epoch + 14 * 86400}",
         "--format=%H %ct",
         "--",
         file_path,
@@ -1261,8 +1521,8 @@ for finding in findings:
         except ValueError:
             continue
 
-        # Use gh merge timestamp if available for this sha
-        m_epoch = gh_merges.get(sha, find_epoch)
+        if sha == merge_sha or commit_ct <= merge_epoch:
+            continue
 
         # Parse diff hunk ranges — line range MUST participate
         ranges = hunk_ranges_for_commit(sha, file_path)
@@ -1277,7 +1537,7 @@ for finding in findings:
         action = "hotfix_within_14d"
         followup_ref = sha
         if not is_dup(finding_id, action, followup_ref):
-            time_to_fix = (commit_ct - m_epoch) / 3600.0 if m_epoch else None
+            time_to_fix = (commit_ct - merge_epoch) / 3600.0
             row = {
                 "finding_outcome_id": _ulid(),
                 "finding_id": finding_id,
@@ -1378,6 +1638,7 @@ _cmd_test() {
   local tmp_tel
   tmp_tel="$(mktemp -d /tmp/swarm-telemetry-test-XXXXXX)"
   local tmp_data="${tmp_tel}/fake-plugin-data"
+  local test_now="2026-04-23T12:00:00Z"
   mkdir -p "${tmp_data}/telemetry"
   cp "$syn_runs"    "${tmp_data}/telemetry/runs.jsonl"
   cp "$syn_findings" "${tmp_data}/telemetry/findings.jsonl"
@@ -1421,27 +1682,36 @@ _cmd_test() {
   CLAUDE_PLUGIN_DATA="$corrupt_data" bash "$0" validate runs 2>/dev/null || val_corrupt_rc=$?
   _check "validate: exits 1 on truncated/corrupt row" "$(( val_corrupt_rc != 0 ))" "1"
 
+  local type_bad_data="${tmp_data%/*}/type-bad-plugin-data"
+  mkdir -p "${type_bad_data}/telemetry"
+  cat > "${type_bad_data}/telemetry/runs.jsonl" <<'EOF'
+{"run_id":"R1","timestamp_start":"2026-01-01T00:00:00Z","timestamp_end":"2026-01-01T00:01:00Z","backend":"codex","model":"gpt-5.4","effort":"medium","prompt_bundle_hash":null,"config_hash":null,"role":"agent-review","phase_kind":null,"phase_complexity":null,"risk_tags":null,"issue_id":"mstefanko-plugins-001","repo":null,"base_sha":null,"head_sha":null,"diff_size_bytes":null,"input_tokens":null,"cached_input_tokens":null,"output_tokens":null,"estimated_cost_usd":null,"wall_clock_seconds":"not-a-number","tool_call_count":null,"cap_hit":null,"budget_breach":null,"schema_ok":true,"exit_code":0,"setting_source":null,"writer_status":null,"review_verdict":null,"last_429_at":null}
+EOF
+  local val_type_rc=0
+  CLAUDE_PLUGIN_DATA="$type_bad_data" bash "$0" validate runs 2>/dev/null || val_type_rc=$?
+  _check "validate: exits 1 on wrong field type" "$(( val_type_rc != 0 ))" "1"
+
   echo ""
   echo "--- report subcommand ---"
   local report_out
-  report_out="$(CLAUDE_PLUGIN_DATA="$tmp_data" bash "$0" report 2>/dev/null)"
+  report_out="$(SWARM_TELEMETRY_NOW="$test_now" CLAUDE_PLUGIN_DATA="$tmp_data" bash "$0" report 2>/dev/null)"
   _check_contains "report: contains markdown header" "$report_out" "# Swarm Telemetry Report"
   _check_contains "report: contains bucket header" "$report_out" "role"
   _check_not_contains "report: no global mean aggregation" "$report_out" "global"
 
   local report_since_out
-  report_since_out="$(CLAUDE_PLUGIN_DATA="$tmp_data" bash "$0" report --since 30d --role agent-review 2>/dev/null)"
+  report_since_out="$(SWARM_TELEMETRY_NOW="$test_now" CLAUDE_PLUGIN_DATA="$tmp_data" bash "$0" report --since 30d --role agent-review 2>/dev/null)"
   _check_contains "report --since 30d --role agent-review: shows filter" "$report_since_out" "since 30d"
   _check_contains "report --since 30d --role agent-review: shows role filter" "$report_since_out" "role=agent-review"
   _check_not_contains "report --since 30d --role agent-review: excludes other roles in bucket col" "$report_since_out" "agent-writer"
 
   local report_risk_out
-  report_risk_out="$(CLAUDE_PLUGIN_DATA="$tmp_data" bash "$0" report --bucket risk_tag 2>/dev/null)"
+  report_risk_out="$(SWARM_TELEMETRY_NOW="$test_now" CLAUDE_PLUGIN_DATA="$tmp_data" bash "$0" report --bucket risk_tag 2>/dev/null)"
   _check_contains "report --bucket risk_tag: has (untagged)" "$report_risk_out" "(untagged)"
   _check_contains "report --bucket risk_tag: has markdown table" "$report_risk_out" "| risk_tag |"
 
   local report_complexity_out
-  report_complexity_out="$(CLAUDE_PLUGIN_DATA="$tmp_data" bash "$0" report --bucket complexity 2>/dev/null)"
+  report_complexity_out="$(SWARM_TELEMETRY_NOW="$test_now" CLAUDE_PLUGIN_DATA="$tmp_data" bash "$0" report --bucket complexity 2>/dev/null)"
   _check_contains "report --bucket complexity: has (none)" "$report_complexity_out" "(none)"
 
   echo ""
@@ -1459,9 +1729,57 @@ _cmd_test() {
   echo ""
   echo "--- sample-for-adjudication subcommand ---"
   if command -v python3 >/dev/null 2>&1; then
+    local read_only_phase0="${tmp_tel}/read-only-phase0"
+    mkdir -p "$read_only_phase0"
+    chmod 500 "$read_only_phase0"
+
     local sample_rc=0
-    CLAUDE_PLUGIN_DATA="$tmp_data" bash "$0" sample-for-adjudication --count 5 2>/dev/null || sample_rc=$?
+    SWARM_PHASE0_ROOT="${read_only_phase0}/runs" SWARM_TELEMETRY_NOW="$test_now" CLAUDE_PLUGIN_DATA="$tmp_data" bash "$0" sample-for-adjudication --count 5 2>/dev/null || sample_rc=$?
     _check "sample-for-adjudication: exits 0 with valid input" "$sample_rc" "0"
+    _check "sample-for-adjudication: falls back to plugin-data output root" "$([ -d "${tmp_data}/phase0/runs/2026-04-23" ] && echo 1 || echo 0)" "1"
+
+    rm -rf "${tmp_data}/phase0"
+
+    local remaining_finding_id
+    remaining_finding_id="$(head -n 1 "$syn_findings" | jq -r '.finding_id' 2>/dev/null || true)"
+    python3 - "$syn_findings" "$remaining_finding_id" "${tmp_data}/telemetry/adjudications.jsonl" <<'PYEOF'
+import json
+import sys
+
+findings_path = sys.argv[1]
+remaining_id = sys.argv[2]
+out_path = sys.argv[3]
+
+with open(findings_path, "r", encoding="utf-8") as f:
+    finding_ids = [json.loads(line)["finding_id"] for line in f if line.strip()]
+
+excluded_ids = [finding_id for finding_id in finding_ids if finding_id != remaining_id]
+row = {
+    "adjudication_id": "01ARZ3NDEKTSV4RRFFQ69G5FAA",
+    "outcome_id": "01ARZ3NDEKTSV4RRFFQ69G5FAB",
+    "issue_id": "mstefanko-plugins-001",
+    "timestamp": "2026-04-23T12:00:00Z",
+    "adjudicator": "human",
+    "decision": "SPLIT",
+    "schema_ok": True,
+    "overridden_finding_ids": excluded_ids,
+}
+
+with open(out_path, "w", encoding="utf-8") as f:
+    f.write(json.dumps(row) + "\n")
+PYEOF
+
+    local sample_exclusion_rc=0
+    SWARM_PHASE0_ROOT="${read_only_phase0}/runs" SWARM_TELEMETRY_NOW="$test_now" CLAUDE_PLUGIN_DATA="$tmp_data" bash "$0" sample-for-adjudication --count 1 2>/dev/null || sample_exclusion_rc=$?
+    _check "sample-for-adjudication: exits 0 with adjudicated findings excluded" "$sample_exclusion_rc" "0"
+
+    local sampled_findings_json
+    sampled_findings_json="$(find "${tmp_data}/phase0/runs/2026-04-23" -name findings.json | head -1)"
+    local sampled_finding_id=""
+    if [[ -n "$sampled_findings_json" ]]; then
+      sampled_finding_id="$(jq -r '.[0].finding_id' "$sampled_findings_json" 2>/dev/null || true)"
+    fi
+    _check "sample-for-adjudication: skips already adjudicated findings" "$sampled_finding_id" "$remaining_finding_id"
 
     local sample_missing_count_rc=1
     CLAUDE_PLUGIN_DATA="$tmp_data" bash "$0" sample-for-adjudication 2>/dev/null || sample_missing_count_rc=$?

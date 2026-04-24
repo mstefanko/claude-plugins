@@ -98,6 +98,7 @@ swarm-telemetry query <sql>
 swarm-telemetry report [--since Nd] [--role R] [--bucket K]
 swarm-telemetry dump <ledger>
 swarm-telemetry validate [<ledger>]
+swarm-telemetry sample-for-adjudication --count N [--since Nd] [--output-root PATH]
 swarm-telemetry join-outcomes [--since Nd] [--dry-run]
 ```
 
@@ -108,11 +109,12 @@ swarm-telemetry join-outcomes [--since Nd] [--dry-run]
 | `query <sql>` | Loads all four JSONL ledgers into an in-memory SQLite database via `python3` (tables: `runs`, `findings`, `outcomes`, `adjudications`) and executes the given SQL. Useful for ad-hoc exploration. |
 | `report` | Emits a stratified markdown report from `runs.jsonl`. Stratifies by `role`, `complexity`, `phase_kind`, or `risk_tag` (controlled by `--bucket`). **Never emits global means** — averaging `agent-docs` latency next to `agent-analysis` latency is the exact measurement bias this tool exists to prevent. Accepts `--since Nd` (last N days) and `--role R` filters. |
 | `dump <ledger>` | Pretty-prints one ledger (`runs`, `findings`, `outcomes`, `adjudications`) as a JSON array via `jq -s .`. Returns `[]` for absent or empty ledgers. |
-| `validate` | Parses every row of every ledger with `jq` and checks required fields against the per-schema list. Exits 1 if any row fails; exits 0 if all rows pass (absent/empty ledgers are skipped with a warning). |
-| `join-outcomes` | **(Phase 9d — write subcommand)** Correlates findings with post-merge maintainer behavior and appends rows to `finding_outcomes.jsonl`. Scans merged PRs via `gh api` (PR merge timestamp, falling back to `git log` finding timestamp). For each finding, checks whether any commit within 14 days touched the same file within a ±10 line window; if so, appends a `hotfix_within_14d` outcome row. Accepts `--since Nd` (default 30d) and `--dry-run` (prints what would be written without touching the ledger). Idempotent: re-running the same window produces no duplicate rows. **Manual invocation only** — no cron wiring until output proves useful. |
+| `validate` | Validates every ledger row against the shipped JSON schemas, including types, enums, patterns, bounds, and `additionalProperties`. Exits 1 if any row fails; exits 0 if all rows pass (absent/empty ledgers are skipped with a warning). |
+| `sample-for-adjudication` | **(Phase 9f — write subcommand)** Picks a stratified random sample of findings that do not already appear in `adjudications.jsonl` via `overridden_finding_ids`. Writes the existing phase0-style directory layout under `~/.swarm/phase0/runs/` when writable, or falls back to plugin data when running in the plugin sandbox. Accepts `--count N` (required), `--since Nd`, and `--output-root PATH`. |
+| `join-outcomes` | **(Phase 9d — write subcommand)** Correlates findings with post-merge maintainer behavior and appends rows to `finding_outcomes.jsonl`. Scans merged PRs via `gh api` plus local git history, anchors each finding to the nearest matching merge commit, then checks whether any commit within 14 days touched the same file within a ±10 line window; if so, appends a `hotfix_within_14d` outcome row. Accepts `--since Nd` (default 30d) and `--dry-run` (prints what would be written without touching the ledger). Idempotent: re-running the same window produces no duplicate rows. **Manual invocation only** — no cron wiring until output proves useful. |
 
 **Environment:**
 
 `CLAUDE_PLUGIN_DATA` sets the base data directory; telemetry lives at `$CLAUDE_PLUGIN_DATA/telemetry/`. If unset, defaults to `~/.claude/plugin-data/mstefanko-plugins/swarm-do`.
 
-**Self-test:** `swarm-telemetry --test` runs 17 assertions against the synthetic fixtures in `tests/fixtures/` (66 synthetic runs, 35 synthetic findings) using an isolated temp directory. All 17 pass on a clean checkout.
+**Self-test:** `swarm-telemetry --test` runs 23 assertions against the synthetic fixtures in `tests/fixtures/` (66 synthetic runs, 35 synthetic findings) using an isolated temp directory. All 23 pass on a clean checkout.
