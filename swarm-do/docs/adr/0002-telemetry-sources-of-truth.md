@@ -51,5 +51,5 @@ Negative / follow-on work:
 - Phase 2 must migrate `validate` and `dump` to Python without changing
   user-visible output; phase 3 replaces the bash validator entirely.
 - Phase 5 generation pipeline is a new CI build step.
-- Legacy bash remains at `bin/swarm-telemetry.legacy` until all subcommands
-  are ported and phase 3 reaches message parity.
+- Phase 3 completed the full port; `bin/swarm-telemetry.legacy` has been
+  deleted and all six subcommands are now native Python.

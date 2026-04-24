@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# swarm-telemetry — thin shim that delegates to swarm_do.telemetry.cli.
-# The legacy bash implementation remains at ./swarm-telemetry.legacy and is invoked by cli.py.
+# swarm-telemetry — Python-dispatch entrypoint. Sources python-bootstrap.sh,
+# then execs python3 -m swarm_do.telemetry.cli. All subcommands are native
+# Python as of Phase 3; the legacy bash implementation has been deleted.
 set -euo pipefail
 
 # shellcheck source=_lib/python-bootstrap.sh

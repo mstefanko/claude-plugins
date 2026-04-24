@@ -91,7 +91,7 @@ swarm-do/
 
 ## bin/swarm-telemetry
 
-Reporter and write utility for the telemetry ledgers. Read-only subcommands shipped in Phase 9c; `join-outcomes` write subcommand shipped in Phase 9d. As of Phase 1, `bin/swarm-telemetry` is a thin bash shim that sources `bin/_lib/python-bootstrap.sh` and execs `python3 -m swarm_do.telemetry.cli`; the original bash implementation is preserved at `bin/swarm-telemetry.legacy` and remains the active backend until Phase 3 parity tests pass.
+Reporter and write utility for the telemetry ledgers. Read-only subcommands shipped in Phase 9c; `join-outcomes` write subcommand shipped in Phase 9d. As of Phase 3, all six subcommands (`dump`, `validate`, `query`, `report`, `sample-for-adjudication`, `join-outcomes`) are native Python — ported from legacy bash in phases 3/1–3/6. The legacy bash implementation (`bin/swarm-telemetry.legacy`) has been deleted. `bin/swarm-telemetry` is a 9-line shim that sources `bin/_lib/python-bootstrap.sh` and execs `python3 -m swarm_do.telemetry.cli "$@"`. The `--test` flag runs `python3 -m unittest discover` (not a bespoke assertion harness).
 
 ```
 swarm-telemetry query <sql>
@@ -119,4 +119,4 @@ swarm-telemetry purge <args>
 
 `CLAUDE_PLUGIN_DATA` sets the base data directory; telemetry lives at `$CLAUDE_PLUGIN_DATA/telemetry/`. If unset, defaults to `~/.claude/plugin-data/mstefanko-plugins/swarm-do`.
 
-**Self-test:** `swarm-telemetry --test` runs 23 assertions against the synthetic fixtures in `tests/fixtures/` (66 synthetic runs, 35 synthetic findings) using an isolated temp directory. All 23 pass on a clean checkout.
+**Self-test:** `swarm-telemetry --test` runs `python3 -m unittest discover` against the full test suite. As of Phase 3, 52 tests run (OK) with 19 skipped: 18 parity tests gate on `LEGACY_SCRIPT.exists()` and auto-skip after deletion, plus 1 pre-existing skip.
