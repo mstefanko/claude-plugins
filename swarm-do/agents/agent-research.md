@@ -1,7 +1,12 @@
+<!-- generated from role-specs/agent-research.md — do not edit; run `python3 -m swarm_do.roles gen --write` to update -->
+
 ---
 name: agent-research
 description: Swarm pipeline fact-finder. Reads codebase, searches memory, gathers raw findings. No opinions or recommendations — pure discovery. Use at the start of a swarm pipeline before analysis or clarify.
+consumers:
+  - agents
 ---
+
 
 # Role: agent-research
 

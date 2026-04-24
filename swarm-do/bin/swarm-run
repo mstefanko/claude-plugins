@@ -146,6 +146,7 @@ PRIOR_RUN="none"
 
 STARTED="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 T_START_EPOCH="$(date +%s)"
+START_HEAD_SHA="$(git -C "${PWD}" rev-parse HEAD 2>/dev/null || true)"
 
 # Dependency / thread context from beads.
 DEP_CTX=""
@@ -216,10 +217,18 @@ _swarm_telemetry_write() {
     [[ -n "$_hash" ]] || _hash="null"
 
     # Git metadata — best-effort, null on failure.
-    _base_sha="$(git -C "${PWD}" rev-parse HEAD 2>/dev/null || true)"
-    _head_sha="$_base_sha"  # same: swarm-run does not commit; writer worktree may
+    # base_sha is captured at process start so writer runs preserve before/after SHAs.
+    _base_sha="$START_HEAD_SHA"
+    _head_sha="$(git -C "${PWD}" rev-parse HEAD 2>/dev/null || true)"
     _repo="$(git -C "${PWD}" remote get-url origin 2>/dev/null || true)"
-    _diff_bytes="$(git -C "${PWD}" diff --stat HEAD 2>/dev/null | wc -c | tr -d ' ' || true)"
+    # diff_size_bytes measures the run's actual delta:
+    #   - if backend committed (base != head), measure the committed range base..head
+    #   - else fall back to the dirty working tree vs HEAD (uncommitted edits)
+    if [[ -n "$_base_sha" && -n "$_head_sha" && "$_base_sha" != "$_head_sha" ]]; then
+      _diff_bytes="$(git -C "${PWD}" diff --stat "${_base_sha}..${_head_sha}" 2>/dev/null | wc -c | tr -d ' ' || true)"
+    else
+      _diff_bytes="$(git -C "${PWD}" diff --stat HEAD 2>/dev/null | wc -c | tr -d ' ' || true)"
+    fi
 
     # run_id: use the script-scope RUN_ID so findings.jsonl and runs.jsonl share the same run_id.
     _run_id="$RUN_ID"
@@ -242,6 +251,7 @@ _swarm_telemetry_write() {
       --argjson repo     "$(if [[ -n "$_repo" ]]; then printf '%s' "$_repo" | jq -Rs .; else echo "null"; fi)" \
       --argjson base_sha "$(if [[ -n "$_base_sha" ]]; then printf '"%s"' "$_base_sha"; else echo "null"; fi)" \
       --argjson head_sha "$(if [[ -n "$_head_sha" ]]; then printf '"%s"' "$_head_sha"; else echo "null"; fi)" \
+      --argjson diff_size_bytes "$(if [[ "$_diff_bytes" =~ ^[0-9]+$ ]]; then printf '%s' "$_diff_bytes"; else echo "null"; fi)" \
       '{
         run_id:             $run_id,
         timestamp_start:    $ts_start,
@@ -259,7 +269,7 @@ _swarm_telemetry_write() {
         repo:               $repo,
         base_sha:           $base_sha,
         head_sha:           $head_sha,
-        diff_size_bytes:    null,
+        diff_size_bytes:    $diff_size_bytes,
         input_tokens:       null,
         cached_input_tokens: null,
         output_tokens:      null,
@@ -315,7 +325,7 @@ BACKEND_OUT="$(cat "$OUT_FILE")"
 
 # Phase 9b: extract findings into findings.jsonl (fail-open, non-blocking).
 _extractor="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/extract-phase.sh"
-if [[ -x "$_extractor" && "$ROLE" == "agent-codex-review" && -f "$OUT_FILE" ]]; then
+if [[ -x "$_extractor" && ( "$ROLE" == "agent-codex-review" || "$ROLE" == "agent-review" || "$ROLE" == "agent-code-review" ) && -f "$OUT_FILE" ]]; then
   "$_extractor" "$OUT_FILE" "$RUN_ID" "$ROLE" "${ISSUE:-unknown}" 2>&1 | sed 's/^/extract-phase: /' >&2 || true
 fi
 

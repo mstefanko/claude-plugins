@@ -1,7 +1,12 @@
+<!-- generated from role-specs/agent-code-review.md — do not edit; run `python3 -m swarm_do.roles gen --write` to update -->
+
 ---
 name: agent-code-review
 description: Thorough code reviewer combining Chain-of-Verification discipline with multi-domain analysis (quality, security, performance, design). Use for post-writer pipeline verification or standalone PR/branch/module reviews.
+consumers:
+  - agents
 ---
+
 
 # Role: agent-code-review
 

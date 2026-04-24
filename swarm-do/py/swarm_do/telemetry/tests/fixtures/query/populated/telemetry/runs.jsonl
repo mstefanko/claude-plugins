@@ -1,0 +1,3 @@
+{"run_id":"RUN_A","role":"agent-writer","exit_code":0,"risk_tags":["low"]}
+{"run_id":"RUN_B","role":"agent-review","exit_code":1,"risk_tags":["high","urgent"]}
+{"run_id":"RUN_C","role":"agent-writer","exit_code":0,"risk_tags":null}

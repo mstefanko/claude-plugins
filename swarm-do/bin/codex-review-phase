@@ -16,7 +16,7 @@ set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_lib/paths.sh"
 
 readonly SCRIPT_NAME="codex-review-phase"
-readonly PERSONA_FILE="$AGENTS_DIR/agent-codex-review.md"
+readonly PERSONA_FILE="$AGENTS_DIR/agent-codex-review-phase0.md"
 readonly SCHEMA_FILE="$PHASE0_DIR/result-schema.json"
 
 usage() {
@@ -105,7 +105,7 @@ fi
 
 # --- assemble prompt -------------------------------------------------------
 #
-# Persona text is the body of agent-codex-review.md with YAML frontmatter
+# Persona text is the body of agent-codex-review-phase0.md with YAML frontmatter
 # stripped. We then append the phase-specific inputs, each in a fenced
 # block, so the model gets one self-contained prompt on stdin.
 

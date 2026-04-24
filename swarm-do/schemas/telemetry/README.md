@@ -5,6 +5,20 @@ observations. This is the authoritative reference for the ledger contract as shi
 in Phase 9a. For design rationale, sequencing, and the operator-console view over
 these ledgers, see `docs/plan.md` §1.8 (what to track) and §1.9 (storage architecture).
 
+The ledger table below is generated — do not hand-edit inside the markers; run `python3 -m swarm_do.telemetry.gen docs --write` to regenerate it from the LEDGERS registry.
+
+---
+
+<!-- BEGIN: generated-by swarm_do.telemetry.gen docs -->
+| Ledger | Filename | Schema | Fallback count |
+|--------|----------|--------|----------------|
+| adjudications | adjudications.jsonl | `swarm-do/schemas/telemetry/adjudications.v2.schema.json` | 2 |
+| finding_outcomes | finding_outcomes.jsonl | `swarm-do/schemas/telemetry/finding_outcomes.schema.json` | 1 |
+| findings | findings.jsonl | `swarm-do/schemas/telemetry/findings.v2.schema.json` | 2 |
+| outcomes | outcomes.jsonl | `swarm-do/schemas/telemetry/outcomes.schema.json` | 1 |
+| runs | runs.jsonl | `swarm-do/schemas/telemetry/runs.schema.json` | 1 |
+<!-- END: generated-by swarm_do.telemetry.gen docs -->
+
 ---
 
 ## Ledger types

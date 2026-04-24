@@ -1,7 +1,12 @@
+<!-- generated from role-specs/agent-writer-judge.md — do not edit; run `python3 -m swarm_do.roles gen --write` to update -->
+
 ---
 name: agent-writer-judge
 description: Competitive implementation judge. Reads two completed writer implementations, evaluates using execution signals and code quality criteria, and selects the winning implementation. Primary decision criterion is test results (objective). Secondary criteria are edge case coverage, code quality, and pattern adherence. Used in Pattern 5 — Competitive Implementation.
+consumers:
+  - agents
 ---
+
 
 # Role: agent-writer-judge
 

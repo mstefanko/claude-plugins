@@ -41,7 +41,7 @@
   "properties": {
     "run_id": {
       "type": "string",
-      "description": "Unique run identifier. Preferred format is a 26-character Crockford base32 ULID (^[0-9A-HJKMNP-TV-Z]{26}$). Pattern is intentionally relaxed here to accept the bash generator output (timestamp-hex + openssl entropy), which uses uppercase hex + digits but is not guaranteed to avoid ULID-excluded chars. Phase 10a will enforce strict ULID generation. See schema revision note: 2026-04-23.",
+      "description": "Unique run identifier. Preferred format is a 26-character Crockford base32 ULID (^[0-9A-HJKMNP-TV-Z]{26}$). Pattern kept relaxed pending swarm-run ULID migration (mstefanko-plugins-utu) — Phase 10a will enforce strict ULID once swarm-run's append path adopts ids.new_ulid.",
       "pattern": "^[0-9A-Z_-]{1,64}$"
     },
     "timestamp_start": {
@@ -50,9 +50,9 @@
       "description": "ISO-8601 UTC timestamp when swarm-run was invoked"
     },
     "timestamp_end": {
-      "type": "string",
+      "type": ["string", "null"],
       "format": "date-time",
-      "description": "ISO-8601 UTC timestamp when swarm-run EXIT trap fired"
+      "description": "ISO-8601 UTC timestamp when swarm-run EXIT trap fired. null if the EXIT trap did not fire cleanly."
     },
     "backend": {
       "type": "string",

@@ -1,0 +1,3 @@
+{"run_id":"RUN1","role":"agent-writer","phase_complexity":"simple","phase_kind":"feature"}
+{"run_id":"RUN2","role":"agent-review","phase_complexity":"moderate","phase_kind":"bug"}
+{"run_id":"RUN3","role":"agent-research","phase_complexity":"complex","phase_kind":"refactor"}

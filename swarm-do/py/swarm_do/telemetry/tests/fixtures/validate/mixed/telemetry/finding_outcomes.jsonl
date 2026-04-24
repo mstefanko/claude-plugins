@@ -1,0 +1,5 @@
+{"finding_outcome_id":"01HXXXXXXXXXXXXXXXXXXXXXXA","finding_id":"01HYYYYYYYYYYYYYYYYYYYYYYB","observed_at":"2026-04-23T00:00:00Z","maintainer_action":"ignored","schema_ok":true}
+{"finding_outcome_id":"01HXXXXXXXXXXXXXXXXXXXXXXB","finding_id":"01HYYYYYYYYYYYYYYYYYYYYYYC","observed_at":"2026-04-23T01:00:00Z","schema_ok":true}
+{"finding_outcome_id":"01HXXXXXXXXXXXXXXXXXXXXXXC","finding_id":"TOO_SHORT","observed_at":"2026-04-23T02:00:00Z","maintainer_action":"commented","schema_ok":true}
+{ this is not valid json
+{"finding_outcome_id":"01HXXXXXXXXXXXXXXXXXXXXXXD","finding_id":"01HYYYYYYYYYYYYYYYYYYYYYYE","observed_at":"2026-04-23T03:00:00Z","maintainer_action":"bogus_action","schema_ok":true}

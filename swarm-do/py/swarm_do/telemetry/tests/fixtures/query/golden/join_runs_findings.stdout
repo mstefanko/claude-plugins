@@ -1,0 +1,4 @@
+run_id	role	finding_id	severity
+RUN_A	agent-writer	F_1	low
+RUN_A	agent-writer	F_2	high
+RUN_B	agent-review	F_3	medium
