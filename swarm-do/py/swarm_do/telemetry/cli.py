@@ -35,9 +35,7 @@ def _parse_days_type(s: str) -> int:
     return int(match.group(1))
 
 
-SUBCOMMANDS = (
-    "join-outcomes",
-)
+SUBCOMMANDS: tuple = ()
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -154,6 +152,16 @@ def _build_parser() -> argparse.ArgumentParser:
     sfa_parser.add_argument("--since", dest="since", default=None)
     sfa_parser.add_argument("--output-root", dest="output_root", default=None)
 
+    # Add join-outcomes subcommand (Phase 3 native Python implementation).
+    jo_parser = subparsers.add_parser(
+        "join-outcomes",
+        add_help=True,
+        help="Correlate findings with post-merge maintainer actions.",
+    )
+    jo_parser.add_argument("--since", dest="since", default="30d")
+    jo_parser.add_argument("--repo", dest="repo", default=None)
+    jo_parser.add_argument("--dry-run", dest="dry_run", action="store_true")
+
     # Add legacy subcommands (Phase 1 passthrough).
     for name in SUBCOMMANDS:
         sub = subparsers.add_parser(name, add_help=False, help=f"{name} (delegates to legacy)")
@@ -221,6 +229,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if ns.subcommand == "sample-for-adjudication":
         from .subcommands import sample_for_adjudication as _sfa_cmd
         return _sfa_cmd.run(ns)
+
+    # Dispatch join-outcomes to native Python implementation (Phase 3 commit 6).
+    if ns.subcommand == "join-outcomes":
+        from .subcommands import join_outcomes as _jo_cmd
+        return _jo_cmd.run(ns)
 
     # Rebuild the argv for the legacy script: subcommand + pass-through rest.
     rest = getattr(ns, "rest", []) or []

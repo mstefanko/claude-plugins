@@ -104,6 +104,10 @@ def run_parity(
         tmp = Path(td)
         _copy_fixture(fixture_path, tmp)
 
+        # Substitute `{tempdir}` in args so tests can reference the copied
+        # fixture (e.g. --repo {tempdir}).
+        args_list = [a.replace("{tempdir}", str(tmp)) for a in args_list]
+
         base_env = dict(os.environ)
         # Purge host telemetry env so parity is reproducible.
         for key in (
