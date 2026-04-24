@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-from swarm_do.telemetry.registry import LEDGERS, PLUGIN_ROOT
+from swarm_do.telemetry.registry import LEDGERS, resolve_telemetry_dir
 
 _LEDGER_COLS: Dict[str, List[str]] = {
     "runs": [
@@ -50,11 +50,6 @@ _LEDGER_COLS: Dict[str, List[str]] = {
 }
 
 
-def _resolve_telemetry_dir() -> Path:
-    base = os.environ.get("CLAUDE_PLUGIN_DATA")
-    if base:
-        return Path(base) / "telemetry"
-    return PLUGIN_ROOT / "data" / "telemetry"
 
 
 def _load_ledger(tel_dir: Path, name: str, cols: List[str]) -> List[Dict[str, object]]:
@@ -91,7 +86,7 @@ def run(args: argparse.Namespace) -> int:
         print("swarm-telemetry: query requires a SQL argument", file=sys.stderr)
         return 1
 
-    tel_dir = _resolve_telemetry_dir()
+    tel_dir = resolve_telemetry_dir()
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
 

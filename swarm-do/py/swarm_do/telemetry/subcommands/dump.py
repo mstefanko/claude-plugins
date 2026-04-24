@@ -17,14 +17,7 @@ from pathlib import Path
 from typing import List
 
 from swarm_do.telemetry.jsonl import stream_read
-from swarm_do.telemetry.registry import LEDGERS, PLUGIN_ROOT
-
-
-def _resolve_telemetry_dir() -> Path:
-    base = os.environ.get("CLAUDE_PLUGIN_DATA")
-    if base:
-        return Path(base) / "telemetry"
-    return PLUGIN_ROOT / "data" / "telemetry"
+from swarm_do.telemetry.registry import LEDGERS, resolve_telemetry_dir
 
 
 def run(args: argparse.Namespace) -> int:
@@ -37,7 +30,7 @@ def run(args: argparse.Namespace) -> int:
         )
         return 1
 
-    path = _resolve_telemetry_dir() / LEDGERS[ledger_name].filename
+    path = resolve_telemetry_dir() / LEDGERS[ledger_name].filename
     if not path.is_file() or path.stat().st_size == 0:
         print("[]")
         return 0

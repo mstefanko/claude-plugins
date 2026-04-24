@@ -13,6 +13,7 @@ that owns the `swarm-do/` directory.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Tuple
@@ -84,3 +85,22 @@ LEDGERS: Dict[str, Ledger] = {
         fallback_order=(_TELEMETRY_SCHEMA_DIR / "finding_outcomes.schema.json",),
     ),
 }
+
+
+def resolve_telemetry_dir() -> Path:
+    """Return the directory containing ledger JSONL files.
+
+    CLAUDE_PLUGIN_DATA (when set) is the plugin's writable data root;
+    ledgers live under its `telemetry/` subdirectory — same layout
+    swarm-run and bin/swarm-telemetry.legacy used. When unset, fall
+    back to the in-repo development data tree.
+    """
+    base = os.environ.get("CLAUDE_PLUGIN_DATA")
+    if base:
+        return Path(base) / "telemetry"
+    return PLUGIN_ROOT / "data" / "telemetry"
+
+
+def resolve_ledger_path(ledger_name: str) -> Path:
+    """Return the absolute path to a named ledger's JSONL file."""
+    return resolve_telemetry_dir() / LEDGERS[ledger_name].filename

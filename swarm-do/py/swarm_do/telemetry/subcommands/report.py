@@ -20,14 +20,9 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from swarm_do.telemetry.registry import LEDGERS, PLUGIN_ROOT
+from swarm_do.telemetry.registry import LEDGERS, resolve_telemetry_dir
 
 
-def _resolve_telemetry_dir() -> Path:
-    base = os.environ.get("CLAUDE_PLUGIN_DATA")
-    if base:
-        return Path(base) / "telemetry"
-    return PLUGIN_ROOT / "data" / "telemetry"
 
 
 def _parse_ts(s: Any) -> Optional[datetime.datetime]:
@@ -65,7 +60,7 @@ def run(args: argparse.Namespace) -> int:
         )
         return 1
 
-    runs_path = _resolve_telemetry_dir() / LEDGERS["runs"].filename
+    runs_path = resolve_telemetry_dir() / LEDGERS["runs"].filename
     if not runs_path.is_file() or runs_path.stat().st_size == 0:
         print(
             f"swarm-telemetry: report: runs.jsonl absent or empty at {runs_path} — no data to report",

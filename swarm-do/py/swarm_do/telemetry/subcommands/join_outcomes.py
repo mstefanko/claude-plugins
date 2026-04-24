@@ -27,18 +27,13 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from swarm_do.telemetry.registry import LEDGERS, PLUGIN_ROOT
+from swarm_do.telemetry.registry import LEDGERS, resolve_telemetry_dir
 
 _SELF = "swarm-telemetry: join-outcomes"
 _CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 _HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
 
-def _resolve_telemetry_dir() -> Path:
-    base = os.environ.get("CLAUDE_PLUGIN_DATA")
-    if base:
-        return Path(base) / "telemetry"
-    return PLUGIN_ROOT / "data" / "telemetry"
 
 
 def _ulid() -> str:
@@ -141,7 +136,7 @@ def run(args: argparse.Namespace) -> int:
         print(f"{_SELF}: '{repo_path}' is not a git repository root", file=sys.stderr)
         return 1
 
-    tel_dir = _resolve_telemetry_dir()
+    tel_dir = resolve_telemetry_dir()
     findings_path = tel_dir / "findings.jsonl"
     ledger_path = tel_dir / "finding_outcomes.jsonl"
 

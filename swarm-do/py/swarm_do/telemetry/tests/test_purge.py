@@ -55,7 +55,7 @@ class PurgeRemoveOldRowTests(unittest.TestCase):
         """Fixture: 3 rows at NOW-30d, NOW-60d, NOW-120d; --older-than 90d removes only 120d row."""
         with tempfile.TemporaryDirectory() as tmpdir:
             now = datetime.now(timezone.utc)
-            path = Path(tmpdir) / "runs.jsonl"
+            path = Path(tmpdir) / "telemetry" / "runs.jsonl"
 
             # Create 3 rows at different ages.
             rows = [
@@ -129,7 +129,7 @@ class PurgeRemoveOldRowTests(unittest.TestCase):
             }
 
             for ledger_name in ledger_names:
-                path = Path(tmpdir) / f"{ledger_name}.jsonl"
+                path = Path(tmpdir) / "telemetry" / f"{ledger_name}.jsonl"
                 ts_field = ts_fields[ledger_name]
                 rows = [
                     {
@@ -163,7 +163,7 @@ class PurgeRemoveOldRowTests(unittest.TestCase):
         """--dry-run reports counts but does not modify file."""
         with tempfile.TemporaryDirectory() as tmpdir:
             now = datetime.now(timezone.utc)
-            path = Path(tmpdir) / "runs.jsonl"
+            path = Path(tmpdir) / "telemetry" / "runs.jsonl"
 
             rows = [
                 {
@@ -203,7 +203,7 @@ class PurgeRemoveOldRowTests(unittest.TestCase):
         """Output matches 'purge: <ledger>: removed N of M rows (kept M-N)'."""
         with tempfile.TemporaryDirectory() as tmpdir:
             now = datetime.now(timezone.utc)
-            path = Path(tmpdir) / "runs.jsonl"
+            path = Path(tmpdir) / "telemetry" / "runs.jsonl"
 
             rows = [
                 {
@@ -238,7 +238,7 @@ class PurgeRemoveOldRowTests(unittest.TestCase):
         """Explicit --older-than overrides DEFAULT_RETENTION_DAYS."""
         with tempfile.TemporaryDirectory() as tmpdir:
             now = datetime.now(timezone.utc)
-            path = Path(tmpdir) / "runs.jsonl"
+            path = Path(tmpdir) / "telemetry" / "runs.jsonl"
 
             # 2 rows: one at 30d, one at 60d.
             rows = [
@@ -289,6 +289,43 @@ class PurgeRemoveOldRowTests(unittest.TestCase):
 
             self.assertEqual(exit_code, 0)
             self.assertIn("not present, skipped", output)
+
+
+class PurgeTelemetryDirLayoutTests(unittest.TestCase):
+    """Regression tests for the telemetry-dir resolution bug.
+
+    Real swarm-run writes ledgers to $CLAUDE_PLUGIN_DATA/telemetry/<ledger>.jsonl.
+    purge must resolve to the same path — not $CLAUDE_PLUGIN_DATA/<ledger>.jsonl.
+    """
+
+    def test_purge_reads_from_telemetry_subdirectory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Place the ledger where swarm-run actually writes it.
+            real_path = Path(tmpdir) / "telemetry" / "runs.jsonl"
+            now = datetime.now(timezone.utc)
+            atomic_write(
+                real_path,
+                [
+                    {"id": "keep", "timestamp_start": (now - timedelta(days=30)).isoformat()},
+                    {"id": "drop", "timestamp_start": (now - timedelta(days=120)).isoformat()},
+                ],
+            )
+            # Decoy at the old (buggy) location — should not be touched.
+            decoy_path = Path(tmpdir) / "runs.jsonl"
+            atomic_write(decoy_path, [{"id": "decoy", "timestamp_start": (now - timedelta(days=500)).isoformat()}])
+
+            args = argparse.Namespace(older_than=90, ledger="runs", dry_run=False)
+            os.environ["CLAUDE_PLUGIN_DATA"] = tmpdir
+            try:
+                self.assertEqual(purge.run(args), 0)
+            finally:
+                os.environ.pop("CLAUDE_PLUGIN_DATA", None)
+
+            readback = list(stream_read(real_path))
+            self.assertEqual({r["id"] for r in readback}, {"keep"})
+
+            decoy_rows = list(stream_read(decoy_path))
+            self.assertEqual(len(decoy_rows), 1, "decoy at bad path must not be touched")
 
 
 if __name__ == "__main__":

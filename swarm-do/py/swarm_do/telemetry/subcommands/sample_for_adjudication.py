@@ -28,7 +28,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from swarm_do.telemetry.registry import LEDGERS, PLUGIN_ROOT
+from swarm_do.telemetry.registry import LEDGERS, PLUGIN_ROOT, resolve_telemetry_dir
 
 _SELF = "swarm-telemetry: sample-for-adjudication"
 
@@ -47,11 +47,6 @@ _ROLE_SUBDIR_MAP: Dict[str, str] = {
 }
 
 
-def _resolve_telemetry_dir() -> Path:
-    base = os.environ.get("CLAUDE_PLUGIN_DATA")
-    if base:
-        return Path(base) / "telemetry"
-    return PLUGIN_ROOT / "data" / "telemetry"
 
 
 def _resolve_phase0_root() -> str:
@@ -152,7 +147,7 @@ def run(args: argparse.Namespace) -> int:
             return 1
         since_n = int(n_str)
 
-    tel_dir = _resolve_telemetry_dir()
+    tel_dir = resolve_telemetry_dir()
     findings_path = tel_dir / "findings.jsonl"
     runs_path = tel_dir / "runs.jsonl"
     adjudications_path = tel_dir / "adjudications.jsonl"

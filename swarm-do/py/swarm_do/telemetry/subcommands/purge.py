@@ -9,13 +9,10 @@ ADR 0001 revision.
 from __future__ import annotations
 
 import argparse
-import os
-import sys
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 from swarm_do.telemetry.jsonl import atomic_write, stream_read
-from swarm_do.telemetry.registry import LEDGERS, PLUGIN_ROOT
+from swarm_do.telemetry.registry import LEDGERS, resolve_ledger_path
 
 
 # Maps each ledger name to its canonical timestamp field.
@@ -39,19 +36,6 @@ DEFAULT_RETENTION_DAYS = {
 }
 
 
-def _resolve_ledger_path(ledger_name: str) -> str:
-    """Resolve the filesystem path to a ledger file.
-
-    Respects CLAUDE_PLUGIN_DATA env var if set; otherwise uses PLUGIN_ROOT.
-    """
-    data_dir = os.environ.get("CLAUDE_PLUGIN_DATA")
-    if not data_dir:
-        data_dir = PLUGIN_ROOT / "data" / "telemetry"
-    else:
-        data_dir = Path(data_dir)
-
-    ledger = LEDGERS[ledger_name]
-    return str(data_dir / ledger.filename)
 
 
 def run(args: argparse.Namespace) -> int:
@@ -84,7 +68,7 @@ def run(args: argparse.Namespace) -> int:
 
     for ledger_name in ledger_names:
         try:
-            path = _resolve_ledger_path(ledger_name)
+            path = resolve_ledger_path(ledger_name)
             ts_field = LEDGER_TIMESTAMP_FIELD[ledger_name]
 
             # Stream and filter rows.

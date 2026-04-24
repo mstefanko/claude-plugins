@@ -27,7 +27,7 @@ import sys
 from pathlib import Path
 from typing import Iterable, List, Sequence, Tuple
 
-from swarm_do.telemetry.registry import LEDGERS, PLUGIN_ROOT
+from swarm_do.telemetry.registry import LEDGERS, resolve_telemetry_dir
 from swarm_do.telemetry.schemas import validate_value
 
 _SELF = "swarm-telemetry"
@@ -38,13 +38,6 @@ _LEDGER_ORDER: Tuple[str, ...] = (
     "adjudications",
     "finding_outcomes",
 )
-
-
-def _resolve_telemetry_dir() -> Path:
-    base = os.environ.get("CLAUDE_PLUGIN_DATA")
-    if base:
-        return Path(base) / "telemetry"
-    return PLUGIN_ROOT / "data" / "telemetry"
 
 
 def _schema_candidates_for_ledger(name: str) -> List[Path]:
@@ -128,7 +121,7 @@ def _validate_ledger(name: str, path: Path) -> int:
 
 def run(args: argparse.Namespace) -> int:
     target_ledger = getattr(args, "ledger", None)
-    tel_dir = _resolve_telemetry_dir()
+    tel_dir = resolve_telemetry_dir()
 
     print(f"{_SELF}: validate — checking ledgers in {tel_dir}", file=sys.stderr)
 
