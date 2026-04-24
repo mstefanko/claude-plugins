@@ -4,8 +4,9 @@ Date: 2026-04-24
 
 ## Status
 
-Accepted for spike. Provider stages are not accepted for stock pipelines until
-the MCO validation gate in `docs/plan.md` Section 1.11 passes.
+Accepted for experimental opt-in use. Provider stages are not accepted for the
+default pipeline until the MCO validation gate in `docs/plan.md` Section 1.11
+passes through dogfood measurement.
 
 ## Context
 
@@ -30,11 +31,12 @@ through `mco doctor --json`. This command is useful even if provider stages are
 never promoted because it gives operators one place to verify local backend
 readiness before a run.
 
-If the MCO spike passes, `provider` stages must obey these boundaries:
+After the MCO spike produced enough signal to continue, experimental
+`provider` stages must obey these boundaries:
 
 - `agents`, `fan_out`, and `provider` remain mutually exclusive stage kinds.
 - v1 provider stages allow `provider.type = "mco"` only.
-- Stock v1 provider pipelines use read-only `provider.command = "review"` only.
+- The opt-in lab pipeline uses read-only `provider.command = "review"` only.
 - Provider memory defaults to disabled and must be explicit to enable.
 - Raw provider output is stored under the swarm run artifact directory.
 - Normalized provider findings use a new schema version or provider-findings

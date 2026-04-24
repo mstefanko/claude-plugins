@@ -17,10 +17,49 @@ MERGE_STRATEGIES = {"synthesize", "vote"}
 TOLERANCE_MODES = {"strict", "quorum", "best-effort"}
 PIPELINE_TOP_KEYS = {"pipeline_version", "name", "description", "parallelism", "stages"}
 PRESET_TOP_KEYS = {"name", "description", "pipeline", "origin", "routing", "budget", "forked_from_hash"}
-STAGE_KEYS = {"id", "depends_on", "agents", "fan_out", "merge", "failure_tolerance"}
+STAGE_KEYS = {"id", "depends_on", "agents", "fan_out", "provider", "merge", "failure_tolerance"}
 FAN_OUT_KEYS = {"role", "count", "variant", "variants", "routes"}
 MERGE_KEYS = {"strategy", "agent"}
 AGENT_KEYS = {"role", "backend", "model", "effort", "route"}
+PROVIDER_KEYS = {
+    "type",
+    "command",
+    "providers",
+    "mode",
+    "strict_contract",
+    "output",
+    "memory",
+    "timeout_seconds",
+}
+PROVIDER_TYPES = {"mco"}
+PROVIDER_COMMANDS = {"review", "run"}
+PROVIDER_MODES = {"review", "debate", "divide"}
+PROVIDER_OUTPUTS = {"findings"}
+MCO_PROVIDERS = {"claude", "codex", "gemini", "opencode", "qwen"}
+WORK_UNIT_TOP_KEYS = {"schema_version", "plan_path", "bd_epic_id", "work_units"}
+WORK_UNIT_KEYS = {
+    "id",
+    "depends_on",
+    "files",
+    "acceptance_criteria",
+    "beads_id",
+    "worktree_branch",
+    "status",
+    "retry_count",
+    "handoff_count",
+}
+WORK_UNIT_REQUIRED_KEYS = {
+    "id",
+    "depends_on",
+    "files",
+    "acceptance_criteria",
+    "beads_id",
+    "worktree_branch",
+    "status",
+    "retry_count",
+    "handoff_count",
+}
+WORK_UNIT_STATUSES = {"pending", "running", "blocked", "approved", "merged", "failed"}
 
 
 @dataclass
@@ -60,6 +99,13 @@ def _all_roles(pipeline: Mapping[str, Any]) -> list[str]:
         if isinstance(merge, Mapping) and isinstance(merge.get("agent"), str):
             roles.append(merge["agent"])
     return roles
+
+
+def _provider_branch_count(stage: Mapping[str, Any]) -> int:
+    provider = stage.get("provider")
+    if isinstance(provider, Mapping) and isinstance(provider.get("providers"), list):
+        return len(provider["providers"])
+    return 1
 
 
 def schema_lint_preset(preset: Mapping[str, Any]) -> list[str]:
@@ -142,8 +188,9 @@ def schema_lint_pipeline(pipeline: Mapping[str, Any]) -> list[str]:
             errors.append(f"{path}.depends_on must be an array of stage ids")
         has_agents = "agents" in stage
         has_fan = "fan_out" in stage
-        if has_agents == has_fan:
-            errors.append(f"{path}: exactly one of agents or fan_out is required")
+        has_provider = "provider" in stage
+        if sum(1 for present in (has_agents, has_fan, has_provider) if present) != 1:
+            errors.append(f"{path}: exactly one of agents, fan_out, or provider is required")
         if has_agents:
             agents = stage.get("agents")
             if not isinstance(agents, list) or not agents:
@@ -195,6 +242,40 @@ def schema_lint_pipeline(pipeline: Mapping[str, Any]) -> list[str]:
                             errors.extend(_lint_route(route, f"{path}.fan_out.routes[{r_idx}]"))
             if "merge" not in stage:
                 errors.append(f"{path}: fan_out stages require merge")
+        if has_provider:
+            provider = stage.get("provider")
+            if not isinstance(provider, Mapping):
+                errors.append(f"{path}.provider must be an object")
+            else:
+                unknown_provider = sorted(set(provider.keys()) - PROVIDER_KEYS)
+                if unknown_provider:
+                    errors.append(f"{path}.provider: unknown keys: {', '.join(unknown_provider)}")
+                if provider.get("type") not in PROVIDER_TYPES:
+                    errors.append(f"{path}.provider.type must be one of {sorted(PROVIDER_TYPES)}")
+                if provider.get("command") not in PROVIDER_COMMANDS:
+                    errors.append(f"{path}.provider.command must be one of {sorted(PROVIDER_COMMANDS)}")
+                providers = provider.get("providers")
+                if not _is_str_list(providers) or not (1 <= len(providers) <= 5):
+                    errors.append(f"{path}.provider.providers must be an array of 1..5 provider names")
+                else:
+                    unknown_mco = sorted(set(providers) - MCO_PROVIDERS)
+                    if unknown_mco:
+                        errors.append(f"{path}.provider.providers contains unsupported MCO provider(s): {', '.join(unknown_mco)}")
+                if "mode" in provider and provider.get("mode") not in PROVIDER_MODES:
+                    errors.append(f"{path}.provider.mode must be one of {sorted(PROVIDER_MODES)}")
+                if "strict_contract" in provider and not isinstance(provider.get("strict_contract"), bool):
+                    errors.append(f"{path}.provider.strict_contract must be a boolean")
+                if "output" in provider and provider.get("output") not in PROVIDER_OUTPUTS:
+                    errors.append(f"{path}.provider.output must be one of {sorted(PROVIDER_OUTPUTS)}")
+                if "memory" in provider and not isinstance(provider.get("memory"), bool):
+                    errors.append(f"{path}.provider.memory must be a boolean")
+                if provider.get("memory") is True:
+                    errors.append(f"{path}.provider.memory=true is not allowed for experimental provider stages")
+                timeout = provider.get("timeout_seconds")
+                if not isinstance(timeout, int) or not (1 <= timeout <= 86400):
+                    errors.append(f"{path}.provider.timeout_seconds must be an integer from 1 to 86400")
+            if "merge" in stage:
+                errors.append(f"{path}: provider stages cannot define merge; use a downstream Claude-backed stage")
         if "merge" in stage:
             merge = stage["merge"]
             if not isinstance(merge, Mapping):
@@ -216,9 +297,12 @@ def schema_lint_pipeline(pipeline: Mapping[str, Any]) -> list[str]:
                 errors.append(f"{path}.failure_tolerance.mode must be one of {sorted(TOLERANCE_MODES)}")
             if mode == "quorum":
                 min_success = tolerance.get("min_success")
-                count = stage.get("fan_out", {}).get("count", 1) if isinstance(stage.get("fan_out"), Mapping) else 1
+                if isinstance(stage.get("fan_out"), Mapping):
+                    count = stage["fan_out"].get("count", 1)
+                else:
+                    count = _provider_branch_count(stage)
                 if not isinstance(min_success, int) or not (1 <= min_success <= count):
-                    errors.append(f"{path}.failure_tolerance.min_success must be 1..fan_out.count for quorum")
+                    errors.append(f"{path}.failure_tolerance.min_success must be 1..stage branch count for quorum")
             elif "min_success" in tolerance:
                 errors.append(f"{path}.failure_tolerance.min_success is only valid for quorum")
 
@@ -226,6 +310,76 @@ def schema_lint_pipeline(pipeline: Mapping[str, Any]) -> list[str]:
         for dep in stage.get("depends_on") or []:
             if dep not in ids:
                 errors.append(f"pipeline.stages[{idx}].depends_on references unknown stage {dep}")
+    return errors
+
+
+def schema_lint_work_units(artifact: Mapping[str, Any]) -> list[str]:
+    errors: list[str] = []
+    unknown = sorted(set(artifact.keys()) - WORK_UNIT_TOP_KEYS)
+    if unknown:
+        errors.append(f"work_units: unknown top-level keys: {', '.join(unknown)}")
+    if artifact.get("schema_version") != 1:
+        errors.append("work_units: schema_version must be 1")
+    for key in ("plan_path", "bd_epic_id"):
+        if key in artifact and artifact[key] is not None and not isinstance(artifact[key], str):
+            errors.append(f"work_units: {key} must be a string or null")
+
+    units = artifact.get("work_units")
+    if not isinstance(units, list) or not units:
+        errors.append("work_units: work_units must be a non-empty array")
+        return errors
+
+    ids: set[str] = set()
+    for idx, unit in enumerate(units):
+        path = f"work_units.work_units[{idx}]"
+        if not isinstance(unit, Mapping):
+            errors.append(f"{path}: unit must be an object")
+            continue
+        unknown_unit = sorted(set(unit.keys()) - WORK_UNIT_KEYS)
+        if unknown_unit:
+            errors.append(f"{path}: unknown keys: {', '.join(unknown_unit)}")
+        missing = sorted(WORK_UNIT_REQUIRED_KEYS - set(unit.keys()))
+        if missing:
+            errors.append(f"{path}: missing required keys: {', '.join(missing)}")
+
+        unit_id = unit.get("id")
+        if not isinstance(unit_id, str) or not unit_id:
+            errors.append(f"{path}.id must be a non-empty string")
+        elif unit_id in ids:
+            errors.append(f"{path}.id duplicates work-unit id {unit_id}")
+        else:
+            ids.add(unit_id)
+
+        if not _is_str_list(unit.get("depends_on")):
+            errors.append(f"{path}.depends_on must be an array of work-unit ids")
+        if not _is_str_list(unit.get("files")):
+            errors.append(f"{path}.files must be an array of strings")
+        if not _is_str_list(unit.get("acceptance_criteria")):
+            errors.append(f"{path}.acceptance_criteria must be an array of strings")
+        for key in ("beads_id", "worktree_branch"):
+            if unit.get(key) is not None and not isinstance(unit.get(key), str):
+                errors.append(f"{path}.{key} must be a string or null")
+        if unit.get("status") not in WORK_UNIT_STATUSES:
+            errors.append(f"{path}.status must be one of {sorted(WORK_UNIT_STATUSES)}")
+        for key in ("retry_count", "handoff_count"):
+            value = unit.get(key)
+            if not isinstance(value, int) or value < 0:
+                errors.append(f"{path}.{key} must be a non-negative integer")
+
+    for idx, unit in enumerate(units):
+        if not isinstance(unit, Mapping):
+            continue
+        for dep in unit.get("depends_on") or []:
+            if isinstance(dep, str) and dep not in ids:
+                errors.append(f"work_units.work_units[{idx}].depends_on references unknown work unit {dep}")
+
+    if not errors:
+        from .work_units import topological_work_unit_layers
+
+        try:
+            topological_work_unit_layers(artifact)
+        except ValueError as exc:
+            errors.append(str(exc))
     return errors
 
 

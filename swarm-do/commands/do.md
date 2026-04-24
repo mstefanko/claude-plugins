@@ -15,7 +15,7 @@ Orchestrate a multi-agent swarm pipeline against a plan file. Routes each phase 
 
 1. **Preflight:** verify `bd where` succeeds in the current repo. If not, halt with setup instructions — do **not** auto-init.
 2. **Load orchestration prompt:** the skill at `skills/swarm-do/SKILL.md` contains the full per-phase protocol. Follow it exactly.
-3. **Per phase:** load the active preset/pipeline, create beads issues for that graph, spawn subagents in topological order, poll background writers, merge worktrees, and close on APPROVED review.
+3. **Per phase:** load the active preset/pipeline, create beads issues for that graph, spawn subagents in topological order, and use the deterministic work-unit executor for the writer/spec-review lane when a `work_units.v1` artifact is present. Poll background writers, run validation before spec-review, merge only APPROVED unit branches into the integration branch, and close on APPROVED review.
 4. **After all phases:** open exactly one consolidated PR into `main`.
 
 ## Execute

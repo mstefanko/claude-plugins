@@ -49,6 +49,22 @@ class ProviderDoctorTests(unittest.TestCase):
         self.assertEqual(report.required_backends, ("claude", "codex"))
         self.assertTrue(any(check.name == "backend:codex" and check.status == "error" for check in report.checks))
 
+    def test_active_mco_lab_requires_mco_provider_doctor(self) -> None:
+        old = os.environ.get("CLAUDE_PLUGIN_DATA")
+        with tempfile.TemporaryDirectory() as td:
+            data = Path(td)
+            (data / "current-preset.txt").write_text("mco-review-lab\n", encoding="utf-8")
+            os.environ["CLAUDE_PLUGIN_DATA"] = td
+            try:
+                report = provider_doctor(which=lambda cmd: "/bin/claude" if cmd == "claude" else None)
+            finally:
+                _restore_env("CLAUDE_PLUGIN_DATA", old)
+
+        self.assertFalse(report.ok)
+        self.assertEqual(report.required_backends, ("claude",))
+        self.assertEqual(report.required_providers, ("mco",))
+        self.assertTrue(any(check.name == "provider:mco" and check.status == "error" for check in report.checks))
+
     def test_mco_doctor_json_passthrough(self) -> None:
         def which(cmd: str) -> str | None:
             return f"/bin/{cmd}" if cmd in {"claude", "mco"} else None

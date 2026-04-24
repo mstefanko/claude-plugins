@@ -58,7 +58,14 @@ Use the helpers:
 ```bash
 "$CLAUDE_PLUGIN_ROOT/bin/swarm" pipeline show default
 "$CLAUDE_PLUGIN_ROOT/bin/swarm-validate" <preset-name> --plan <plan-path>
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" work-units batches <work-units.json> --parallelism <n> --state-json-file <unit-state.json> --json
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" worktrees names --run-id <run-id> --unit-id <unit-id> --json
 ```
+
+Work-unit DAG math, artifact validation, ready-queue batching, resume-point
+selection, and git worktree branch naming are deterministic helper
+responsibilities. The dispatcher must not recompute those decisions in prompt
+logic.
 
 ## Dispatch Loop
 
@@ -89,13 +96,35 @@ does not depend solely on PreCompact firing:
 2. For each layer, dispatch every stage in the layer in parallel.
 3. For normal `agents` stages, create one beads issue per agent with the stage ID, role, upstream stage issues, full phase text, and verification checklist.
 4. For `fan_out` stages, create `fan_out.count` sibling issues assigned to `fan_out.role`. For `variant: prompt_variants`, load the corresponding file from `roles/<role>/variants/<name>.md` and include it as an additive overlay. For `variant: models`, use the resolved route for each branch.
-5. Create dependency edges matching `depends_on`. Fan-out branch issues all block the merge issue.
-6. Enforce `failure_tolerance` before starting a merge:
+5. For experimental `provider` stages, create one coordinator-owned beads issue for the stage, assemble a read-only review prompt from the phase text, upstream writer/spec evidence, changed files, and verification checklist, write that prompt under the run artifact directory, and invoke the provider helper. For MCO review stages use:
+
+```bash
+"$CLAUDE_PLUGIN_ROOT/bin/swarm-stage-mco" \
+  --command review \
+  --prompt-file <prompt-file> \
+  --providers <comma-separated-provider-list> \
+  --repo <repo> \
+  --output-dir "${CLAUDE_PLUGIN_DATA}/runs/<run_id>/stages/<stage_id>" \
+  --run-id <run-id> \
+  --issue-id <bd-id> \
+  --stage-id <stage-id> \
+  --timeout-seconds <timeout-seconds>
+```
+
+Provider stages are evidence-only. Attach the normalized
+`provider-findings.json` path and a short summary to the provider stage issue,
+then pass that evidence to downstream Claude-backed stages. Do not let provider
+results automatically approve, reject, merge, mutate beads state outside their
+stage issue, or write repo files. Treat provider failures according to the
+stage `failure_tolerance`; `best-effort` means continue with "no usable provider
+evidence."
+6. Create dependency edges matching `depends_on`. Fan-out branch issues all block the merge issue.
+7. Enforce `failure_tolerance` before starting a merge or downstream stage:
    - `strict`: all branches must succeed.
    - `quorum`: at least `min_success` branches must succeed.
    - `best-effort`: pass all available successful outputs, including an empty set.
-7. For `merge.strategy: synthesize`, dispatch the configured merge agent with only successful fan-out outputs.
-8. Repeat until all layers complete, then close issues and summarize.
+8. For `merge.strategy: synthesize`, dispatch the configured merge agent with only successful fan-out outputs.
+9. Repeat until all layers complete, then close issues and summarize.
 
 If a writer returns a bead note containing the exact sentinel
 `HANDOFF_REQUESTED`, stop dispatching that work unit, copy the structured
@@ -105,6 +134,79 @@ the unit cap recorded in BEADS/run events.
 If `agent-spec-review` returns `SPEC_MISMATCH`, respawn `agent-writer` with the
 review evidence and retry only the rejected spec items. Stop after two retries
 and escalate to the operator.
+
+## Work-Unit Executor Lane
+
+When the stage graph reaches the writer/spec-review implementation lane and a
+`work_units.v1` artifact is present, switch from stage-level dispatch to the
+work-unit executor contract for that lane:
+
+1. Load and fail-closed validate the artifact:
+
+```bash
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" work-units lint <work-units.json>
+```
+
+2. Create or reuse the integration branch named by the deterministic helper
+contract:
+
+```bash
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" worktrees names --repo <repo> --run-id <run-id> --unit-id <unit-id> --json
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" worktrees ensure-integration --repo <repo> --run-id <run-id> --json
+```
+
+3. Ask the helper for the next ready batch. Use the active pipeline's
+`parallelism` value, with `1` as the serial fallback:
+
+```bash
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" work-units batches <work-units.json> --parallelism <n> --state-json-file <unit-state.json> --json
+```
+
+4. For each ready unit in the returned batch, the coordinator creates exactly
+one child beads issue, creates the unit worktree/branch, and runs
+`agent-writer` in that worktree:
+
+```bash
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" worktrees add-unit --repo <repo> --run-id <run-id> --unit-id <unit-id> --json
+```
+
+5. After writer completion, the coordinator runs deterministic validation in
+the same worktree and attaches that objective output before launching
+`agent-spec-review`.
+6. Merge only units with an `APPROVED` spec-review verdict. The coordinator
+uses the helper to check out the integration branch and merge with
+`git merge --no-ff`; workers must never merge themselves or update cross-unit
+state:
+
+```bash
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" worktrees merge --repo <repo> --integration-branch <branch> --unit-branch <branch> --json
+```
+
+7. Continue asking for batches until the helper returns no ready units or
+`resume-point` reports completion.
+
+Rollback and pause policy for v1:
+
+- Writer failure before commit: mark the unit failed, leave branch/worktree in
+  place, write the child issue update and run event from the coordinator.
+- Validation failure: attach validation output, mark the unit failed or retry
+  according to the retry state machine, and do not launch approval merge.
+- `SPEC_MISMATCH`: retry the rejected spec items only; stop after two retries
+  and escalate.
+- `SPEC_AMBIGUOUS`: stop for operator clarification.
+- Merge conflict: stop all further work-unit dispatch, leave the integration
+  branch conflicted for inspection, and record a `worktree_merge_conflict`
+  run event. Do not auto-resolve, reset, rebase, or rewrite branches.
+- Operator cancel/resume: write active state and a checkpoint before pausing;
+  resume starts from the helper's first incomplete or failed unit.
+
+BEADS/run-event discipline:
+
+- Worker roles may append notes only to their own child issue.
+- The coordinator alone writes cross-unit summaries, merge state, retry state,
+  phase-completion state, and all run-event rows.
+- Run-event counters mirror coordinator decisions; do not infer them later from
+  worker notes.
 
 ## Resume Re-entry
 
@@ -133,7 +235,7 @@ Claude-backed stages use Claude Code `Agent()` with the loaded role persona. Cod
 
 For `agent-codex-review`, the runner enforces `SWARM_CODEX_REVIEW_TIMEOUT_SECONDS` (default 60). Timeout or backend failure emits a discarded sentinel in beads notes and returns success so the pipeline can continue. Treat those sentinels as "no usable Codex review", not as approval. Other Codex roles keep normal non-zero failure behavior.
 
-The stock `hybrid-review` preset is the Phase 1 dogfood lane: it adds `agent-codex-review` after `spec-review` while keeping the normal Claude review and docs lanes. The stock `competitive` preset is the manual Pattern 5 lane; `bin/swarm compete <plan-path>` validates and activates it.
+The stock `hybrid-review` preset is the Phase 1 dogfood lane: it adds `agent-codex-review` after `spec-review` while keeping the normal Claude review and docs lanes. The experimental `mco-review-lab` preset adds a read-only MCO provider stage after `writer`; Claude `agent-review` waits for both `spec-review` and the MCO evidence. It is opt-in only and uses the working MCO Claude provider until Codex provider support is fixed. The stock `competitive` preset is the manual Pattern 5 lane; `bin/swarm compete <plan-path>` validates and activates it.
 
 ## Role Loading
 

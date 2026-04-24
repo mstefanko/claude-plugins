@@ -149,9 +149,9 @@ Spike proof artifacts live under
 `${CLAUDE_PLUGIN_DATA}/runs/<run_id>/spikes/<spike-name>/` and include
 `metadata.json`, `stdout.txt`, `stderr.txt`, `stdin.json`, and `result.json`.
 
-Stock presets include `hybrid-review` for Phase 1 dogfooding. It keeps the default pipeline shape and adds a fail-open `agent-codex-review` lane after spec-review. `competitive` remains the manual Pattern 5 preset for two-writer trials.
+Stock presets include `hybrid-review` for Phase 1 dogfooding. It keeps the default pipeline shape and adds a fail-open `agent-codex-review` lane after spec-review. `mco-review-lab` is an opt-in experimental read-only provider lane: it runs MCO's working Claude provider after writer and feeds that evidence to the normal Claude review stage. `competitive` remains the manual Pattern 5 preset for two-writer trials.
 
-`swarm providers doctor` checks the local backend commands required by the active preset's pipeline, or the `default` pipeline when no preset is active. `--mco` additionally runs `mco doctor --json` and fails closed on missing, failing, or malformed MCO output; without `--mco`, MCO is reported as skipped.
+`swarm providers doctor` checks the local backend commands required by the active preset's pipeline, or the `default` pipeline when no preset is active. `--mco` additionally runs `mco doctor --json` and fails closed on missing, failing, or malformed MCO output. MCO is also checked automatically when the active pipeline contains an MCO provider stage; otherwise, without `--mco`, it is reported as skipped.
 
 ## Roles
 

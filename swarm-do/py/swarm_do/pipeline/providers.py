@@ -39,6 +39,7 @@ class ProviderDoctorReport:
     active_preset: str | None
     pipeline_name: str | None
     required_backends: tuple[str, ...]
+    required_providers: tuple[str, ...]
     checks: tuple[ProviderCheck, ...]
 
     @property
@@ -51,6 +52,7 @@ class ProviderDoctorReport:
             "active_preset": self.active_preset,
             "pipeline_name": self.pipeline_name,
             "required_backends": list(self.required_backends),
+            "required_providers": list(self.required_providers),
             "checks": [check.as_dict() for check in self.checks],
         }
 
@@ -119,6 +121,15 @@ def _required_backends(
         route = resolver.resolve(role, "hard", override=override)
         backends.add(route.backend)
     return tuple(sorted(backends))
+
+
+def _required_stage_providers(pipeline: Mapping[str, Any]) -> tuple[str, ...]:
+    providers: set[str] = set()
+    for stage in pipeline.get("stages") or []:
+        provider = stage.get("provider")
+        if isinstance(provider, Mapping) and isinstance(provider.get("type"), str):
+            providers.add(provider["type"])
+    return tuple(sorted(providers))
 
 
 def _local_backend_checks(
@@ -204,17 +215,19 @@ def provider_doctor(
     active, pipeline_name, preset_data, pipeline, load_error = _resolve_pipeline_for_doctor(preset_name)
     checks: list[ProviderCheck] = []
     required: tuple[str, ...] = ()
+    required_providers: tuple[str, ...] = ()
     if load_error:
         checks.append(load_error)
     elif pipeline is not None:
         try:
             required = _required_backends(pipeline, active, preset_data)
+            required_providers = _required_stage_providers(pipeline)
             checks.extend(_local_backend_checks(required, which))
         except Exception as exc:
             checks.append(ProviderCheck("backend-resolution", "error", f"backend resolution failed: {exc}"))
-    checks.append(_mco_check(run_mco, mco_timeout_seconds, which, runner))
+    checks.append(_mco_check(run_mco or "mco" in required_providers, mco_timeout_seconds, which, runner))
     checks.sort(key=lambda check: (STATUS_ORDER.get(check.status, 99), check.name))
-    return ProviderDoctorReport(active, pipeline_name, required, tuple(checks))
+    return ProviderDoctorReport(active, pipeline_name, required, required_providers, tuple(checks))
 
 
 def format_provider_report(report: ProviderDoctorReport) -> str:
@@ -223,6 +236,7 @@ def format_provider_report(report: ProviderDoctorReport) -> str:
         f"  active_preset: {report.active_preset or 'none'}",
         f"  pipeline: {report.pipeline_name or 'unknown'}",
         f"  required_backends: {', '.join(report.required_backends) or 'none'}",
+        f"  required_providers: {', '.join(report.required_providers) or 'none'}",
         "  checks:",
     ]
     for check in report.checks:

@@ -8,6 +8,7 @@ import json
 import shutil
 import sys
 from pathlib import Path
+from typing import Any
 
 from .engine import graph_lines
 from .paths import current_preset_path, resolve_data_dir, user_presets_dir
@@ -502,6 +503,120 @@ def cmd_run_state(args: argparse.Namespace) -> int:
     return 1
 
 
+def _load_unit_state_arg(args: argparse.Namespace) -> dict[str, Any]:
+    if not getattr(args, "state_json_file", None):
+        return {}
+    if args.state_json_file == "-":
+        value = json.loads(sys.stdin.read())
+    else:
+        value = json.loads(Path(args.state_json_file).read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError("unit state must be a JSON object")
+    return value
+
+
+def cmd_work_units(args: argparse.Namespace) -> int:
+    from .executor import execution_batches, load_work_units, next_resume_point, ready_work_units
+
+    try:
+        artifact = load_work_units(args.artifact)
+        state = _load_unit_state_arg(args)
+        if args.work_units_command == "lint":
+            print(f"work-units OK: {args.artifact}")
+            return 0
+        if args.work_units_command == "ready":
+            payload: Any = {"ready": ready_work_units(artifact, state)}
+        elif args.work_units_command == "batches":
+            payload = {"batches": execution_batches(artifact, state, args.parallelism)}
+        elif args.work_units_command == "resume-point":
+            payload = {"resume_point": next_resume_point(artifact, state)}
+        else:
+            print("swarm: work-units: missing command", file=sys.stderr)
+            return 1
+    except Exception as exc:
+        print(f"swarm: work-units {args.work_units_command}: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        if isinstance(payload, dict) and "ready" in payload:
+            print("\n".join(payload["ready"]))
+        elif isinstance(payload, dict) and "batches" in payload:
+            for idx, batch in enumerate(payload["batches"], 1):
+                print(f"batch {idx}: {', '.join(batch)}")
+        else:
+            point = payload.get("resume_point") if isinstance(payload, dict) else None
+            if point:
+                print(f"resume_point: {point['work_unit_id']} status={point['status']}")
+            else:
+                print("resume_point: complete")
+    return 0
+
+
+def cmd_worktrees(args: argparse.Namespace) -> int:
+    from .worktrees import (
+        WorktreeMergeConflict,
+        add_unit_worktree,
+        ensure_integration_branch,
+        integration_branch_name,
+        merge_unit_branch,
+        unit_branch_name,
+        unit_worktree_path,
+    )
+
+    repo = Path(args.repo)
+    try:
+        if args.worktrees_command == "names":
+            payload = {
+                "integration_branch": integration_branch_name(args.run_id),
+                "unit_branch": unit_branch_name(args.run_id, args.unit_id) if args.unit_id else None,
+                "worktree_path": str(unit_worktree_path(repo, args.run_id, args.unit_id)) if args.unit_id else None,
+            }
+        elif args.worktrees_command == "ensure-integration":
+            payload = {"integration_branch": ensure_integration_branch(repo, args.run_id, base_ref=args.base_ref)}
+        elif args.worktrees_command == "add-unit":
+            path, branch = add_unit_worktree(repo, args.run_id, args.unit_id, base_ref=args.base_ref)
+            payload = {"unit_branch": branch, "worktree_path": str(path)}
+        elif args.worktrees_command == "merge":
+            result = merge_unit_branch(repo, args.integration_branch, args.unit_branch)
+            payload = {
+                "integration_branch": result.integration_branch,
+                "unit_branch": result.unit_branch,
+                "head_sha": result.head_sha,
+            }
+        else:
+            print("swarm: worktrees: missing command", file=sys.stderr)
+            return 1
+    except WorktreeMergeConflict as exc:
+        print(f"swarm: worktrees merge: {exc}", file=sys.stderr)
+        if args.json:
+            print(
+                json.dumps(
+                    {
+                        "error": "worktree_merge_conflict",
+                        "integration_branch": exc.integration_branch,
+                        "unit_branch": exc.unit_branch,
+                        "conflicted_files": exc.conflicted_files,
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+        return 2
+    except Exception as exc:
+        print(f"swarm: worktrees {args.worktrees_command}: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        for key, value in payload.items():
+            if value is not None:
+                print(f"{key}: {value}")
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="swarm")
     sub = parser.add_subparsers(dest="subcommand")
@@ -579,6 +694,56 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--source", default="dispatcher-fallback")
     p.add_argument("--reason", default="end-of-unit")
     p.set_defaults(func=cmd_run_state)
+
+    work_units = sub.add_parser("work-units")
+    work_units_sub = work_units.add_subparsers(dest="work_units_command")
+    p = work_units_sub.add_parser("lint")
+    p.add_argument("artifact")
+    p.set_defaults(func=cmd_work_units)
+    p = work_units_sub.add_parser("ready")
+    p.add_argument("artifact")
+    p.add_argument("--state-json-file")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_work_units)
+    p = work_units_sub.add_parser("batches")
+    p.add_argument("artifact")
+    p.add_argument("--state-json-file")
+    p.add_argument("--parallelism", type=int, default=1)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_work_units)
+    p = work_units_sub.add_parser("resume-point")
+    p.add_argument("artifact")
+    p.add_argument("--state-json-file")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_work_units)
+
+    worktrees = sub.add_parser("worktrees")
+    worktrees_sub = worktrees.add_subparsers(dest="worktrees_command")
+    p = worktrees_sub.add_parser("names")
+    p.add_argument("--repo", default=".")
+    p.add_argument("--run-id", required=True)
+    p.add_argument("--unit-id")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_worktrees)
+    p = worktrees_sub.add_parser("ensure-integration")
+    p.add_argument("--repo", default=".")
+    p.add_argument("--run-id", required=True)
+    p.add_argument("--base-ref", default="HEAD")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_worktrees)
+    p = worktrees_sub.add_parser("add-unit")
+    p.add_argument("--repo", default=".")
+    p.add_argument("--run-id", required=True)
+    p.add_argument("--unit-id", required=True)
+    p.add_argument("--base-ref", default="HEAD")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_worktrees)
+    p = worktrees_sub.add_parser("merge")
+    p.add_argument("--repo", default=".")
+    p.add_argument("--integration-branch", required=True)
+    p.add_argument("--unit-branch", required=True)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_worktrees)
 
     permissions = sub.add_parser("permissions")
     permissions_sub = permissions.add_subparsers(dest="permissions_command")

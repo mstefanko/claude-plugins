@@ -21,6 +21,11 @@ class WorkUnitTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "cycle detected"):
             topological_work_unit_layers(artifact)
 
+    def test_missing_dependency_detection(self) -> None:
+        artifact = {"work_units": [{"id": "a", "depends_on": ["missing"]}]}
+        with self.assertRaisesRegex(ValueError, "unknown id: missing"):
+            topological_work_unit_layers(artifact)
+
     def test_retry_state_machine(self) -> None:
         self.assertEqual(retry_state_transition("APPROVED", 0), "approved")
         self.assertEqual(retry_state_transition("SPEC_MISMATCH", 1), "retry")

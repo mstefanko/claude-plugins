@@ -43,6 +43,9 @@ def stage_agent_count(stage: Mapping[str, Any]) -> int:
         if stage.get("merge", {}).get("strategy") == "synthesize":
             count += 1
         return count
+    if "provider" in stage:
+        providers = stage["provider"].get("providers", [])
+        return len(providers) if isinstance(providers, list) else 1
     return len(stage.get("agents") or [])
 
 
@@ -125,6 +128,16 @@ def graph_lines(pipeline: Mapping[str, Any]) -> list[str]:
                 lines.append(
                     f"  - {stage_id} depends_on={deps} fan_out={fan.get('count')} role={fan.get('role')} "
                     f"variant={fan.get('variant')} merge={merge.get('strategy')}:{merge.get('agent')}"
+                )
+            elif "provider" in stage:
+                provider = stage["provider"]
+                tolerance = stage.get("failure_tolerance", {"mode": "strict"})
+                lines.append(
+                    f"  - {stage_id} depends_on={deps} provider={provider.get('type')} "
+                    f"command={provider.get('command')} providers={provider.get('providers')} "
+                    f"mode={provider.get('mode', 'review')} output={provider.get('output', 'findings')} "
+                    f"memory={provider.get('memory', False)} timeout_seconds={provider.get('timeout_seconds')} "
+                    f"failure_tolerance={tolerance.get('mode', 'strict')}"
                 )
             else:
                 roles = [agent.get("role") for agent in stage.get("agents") or []]

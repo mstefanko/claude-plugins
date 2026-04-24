@@ -1,0 +1,9 @@
+name = "mco-review-lab"
+description = "Opt-in experimental pipeline that feeds read-only MCO Claude review evidence into the normal Claude review lane."
+pipeline = "mco-review-lab"
+origin = "experiment"
+
+[budget]
+max_agents_per_run = 200
+max_estimated_cost_usd = 50.0
+max_wall_clock_seconds = 50000

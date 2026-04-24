@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from swarm_do.pipeline.engine import topological_layers
+from swarm_do.pipeline.engine import graph_lines, stage_agent_count, topological_layers
 from swarm_do.pipeline.registry import find_pipeline, load_pipeline
 from swarm_do.pipeline.resolver import BackendResolver
 from swarm_do.pipeline.simple_yaml import loads
@@ -32,6 +32,60 @@ class PipelineValidationTests(unittest.TestCase):
         )
         result, *_ = validate_preset_and_pipeline("hybrid-review")
         self.assertTrue(result.ok, result.errors)
+
+    def test_mco_review_lab_adds_read_only_provider_before_claude_review(self) -> None:
+        item = find_pipeline("mco-review-lab")
+        self.assertIsNotNone(item)
+        pipeline = load_pipeline(item.path)
+        self.assertEqual(
+            topological_layers(pipeline),
+            [["research"], ["analysis", "clarify"], ["writer"], ["mco-review", "spec-review"], ["docs", "review"]],
+        )
+        mco_stage = next(stage for stage in pipeline["stages"] if stage["id"] == "mco-review")
+        self.assertEqual(stage_agent_count(mco_stage), 1)
+        rendered = "\n".join(graph_lines(pipeline))
+        self.assertIn("provider=mco command=review providers=['claude']", rendered)
+        self.assertIn("memory=False", rendered)
+        result, *_ = validate_preset_and_pipeline("mco-review-lab")
+        self.assertTrue(result.ok, result.errors)
+
+    def test_provider_stage_is_mutually_exclusive_with_agent_stage(self) -> None:
+        pipeline = loads(
+            """
+pipeline_version: 1
+name: bad-provider
+stages:
+  - id: mco
+    agents:
+      - role: agent-review
+    provider:
+      type: mco
+      command: review
+      providers: [claude]
+      timeout_seconds: 1800
+"""
+        )
+        errors = schema_lint_pipeline(pipeline)
+        self.assertTrue(any("exactly one of agents, fan_out, or provider" in e for e in errors))
+
+    def test_provider_stage_rejects_memory_and_unknown_provider(self) -> None:
+        pipeline = loads(
+            """
+pipeline_version: 1
+name: bad-provider
+stages:
+  - id: mco
+    provider:
+      type: mco
+      command: review
+      providers: [claude, not-real]
+      memory: true
+      timeout_seconds: 1800
+"""
+        )
+        errors = schema_lint_pipeline(pipeline)
+        self.assertTrue(any("unsupported MCO provider" in e for e in errors))
+        self.assertTrue(any("memory=true is not allowed" in e for e in errors))
 
     def test_failure_tolerance_string_is_rejected(self) -> None:
         pipeline = loads(
