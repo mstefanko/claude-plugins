@@ -172,9 +172,8 @@ def _payload_findings(payload: Mapping[str, Any]) -> list[Any]:
                 text = result.get(key)
                 if not isinstance(text, str) or not text.strip():
                     continue
-                try:
-                    nested = json.loads(text)
-                except json.JSONDecodeError:
+                nested = _load_json_text(text)
+                if nested is None:
                     continue
                 nested_findings = nested.get("findings") if isinstance(nested, Mapping) else None
                 if not isinstance(nested_findings, list):
@@ -190,6 +189,21 @@ def _payload_findings(payload: Mapping[str, Any]) -> list[Any]:
         if merged:
             return merged
     raise McoStageError("MCO JSON did not include a findings array")
+
+
+def _load_json_text(text: str) -> Any | None:
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        lines = stripped.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        stripped = "\n".join(lines).strip()
+    try:
+        return json.loads(stripped)
+    except json.JSONDecodeError:
+        return None
 
 
 def _provider_count(payload: Mapping[str, Any], selected_providers: Sequence[str]) -> int:
@@ -525,22 +539,6 @@ def run_stage(args: argparse.Namespace) -> int:
     raw_stdout.write_text(completed.stdout, encoding="utf-8")
     raw_stderr.write_text(completed.stderr, encoding="utf-8")
 
-    if completed.returncode != 0:
-        _write_result(
-            result_path,
-            error_result(
-                run_id=args.run_id,
-                issue_id=args.issue_id,
-                stage_id=args.stage_id,
-                command=args.command,
-                selected_providers=providers,
-                source_artifact_path=str(raw_stdout),
-                provider_error_class="mco_exit",
-                message=f"mco review exited {completed.returncode}",
-            ),
-        )
-        return 1
-
     try:
         payload = json.loads(completed.stdout)
         if not isinstance(payload, Mapping):
@@ -554,6 +552,21 @@ def run_stage(args: argparse.Namespace) -> int:
             source_artifact_path=str(raw_stdout),
         )
     except (json.JSONDecodeError, McoStageError) as exc:
+        if completed.returncode != 0:
+            _write_result(
+                result_path,
+                error_result(
+                    run_id=args.run_id,
+                    issue_id=args.issue_id,
+                    stage_id=args.stage_id,
+                    command=args.command,
+                    selected_providers=providers,
+                    source_artifact_path=str(raw_stdout),
+                    provider_error_class="mco_exit",
+                    message=f"mco review exited {completed.returncode}: {exc}",
+                ),
+            )
+            return 1
         _write_result(
             result_path,
             error_result(

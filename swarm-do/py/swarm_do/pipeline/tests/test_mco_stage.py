@@ -114,6 +114,26 @@ class McoStageTests(unittest.TestCase):
         self.assertEqual(finding["line_start"], 42)
         validate_provider_findings_artifact(result)
 
+    def test_normalizes_real_mco_provider_results_with_fenced_json(self) -> None:
+        payload = json.loads((FIXTURE_DIR / "mco_review_provider_results.json").read_text(encoding="utf-8"))
+        payload["provider_results"]["claude"]["final_text"] = (
+            "```json\n" + payload["provider_results"]["claude"]["final_text"] + "\n```"
+        )
+        result = normalize_mco_review_payload(
+            payload,
+            run_id="RUN_MCO",
+            issue_id="issue-123",
+            stage_id="mco-review-spike",
+            selected_providers=["claude", "codex"],
+            source_artifact_path="/tmp/run/mco.stdout.json",
+            timestamp="2026-04-24T00:00:00Z",
+        )
+
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["findings"][0]["detected_by"], ["claude"])
+        self.assertEqual(result["findings"][0]["file_path"], "plans/example.md")
+        validate_provider_findings_artifact(result)
+
     def test_missing_findings_array_fails_closed(self) -> None:
         with self.assertRaises(McoStageError):
             normalize_mco_review_payload(
