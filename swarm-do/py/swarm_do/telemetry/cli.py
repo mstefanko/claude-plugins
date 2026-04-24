@@ -36,7 +36,6 @@ def _parse_days_type(s: str) -> int:
 
 
 SUBCOMMANDS = (
-    "sample-for-adjudication",
     "join-outcomes",
 )
 
@@ -145,6 +144,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="stratification key (default: role)",
     )
 
+    # Add sample-for-adjudication subcommand (Phase 3 native Python implementation).
+    sfa_parser = subparsers.add_parser(
+        "sample-for-adjudication",
+        add_help=True,
+        help="Stratified random sample of non-adjudicated findings.",
+    )
+    sfa_parser.add_argument("--count", dest="count", required=False, default=None)
+    sfa_parser.add_argument("--since", dest="since", default=None)
+    sfa_parser.add_argument("--output-root", dest="output_root", default=None)
+
     # Add legacy subcommands (Phase 1 passthrough).
     for name in SUBCOMMANDS:
         sub = subparsers.add_parser(name, add_help=False, help=f"{name} (delegates to legacy)")
@@ -206,6 +215,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if ns.subcommand == "report":
         from .subcommands import report as _report_cmd
         return _report_cmd.run(ns)
+
+    # Dispatch sample-for-adjudication to native Python implementation
+    # (Phase 3 commit 5).
+    if ns.subcommand == "sample-for-adjudication":
+        from .subcommands import sample_for_adjudication as _sfa_cmd
+        return _sfa_cmd.run(ns)
 
     # Rebuild the argv for the legacy script: subcommand + pass-through rest.
     rest = getattr(ns, "rest", []) or []

@@ -1,0 +1,4 @@
+{"finding_id":"01HFINDING1AAAAAAAAAAAAAAA","run_id":"RUN1","timestamp":"2026-04-20T10:00:00Z","severity":"low","category":"style","summary":"s1"}
+{"finding_id":"01HFINDING2BBBBBBBBBBBBBBB","run_id":"RUN2","timestamp":"2026-04-21T10:00:00Z","severity":"high","category":"bug","summary":"s2"}
+{"finding_id":"01HFINDING3CCCCCCCCCCCCCCC","run_id":"RUN3","timestamp":"2026-04-22T10:00:00Z","severity":"medium","category":"bug","summary":"s3"}
+{"finding_id":"01HFINDING4DDDDDDDDDDDDDDD","run_id":"RUN1","timestamp":"2026-04-23T10:00:00Z","severity":"low","category":"style","summary":"s4"}

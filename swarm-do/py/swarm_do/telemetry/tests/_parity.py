@@ -114,7 +114,11 @@ def run_parity(
             base_env.pop(key, None)
         base_env["CLAUDE_PLUGIN_DATA"] = str(tmp)
         if env_overrides:
-            base_env.update(env_overrides)
+            # Allow test overrides to reference the tempdir (useful for
+            # subcommands that write into SWARM_PHASE0_ROOT). Substitute
+            # `{tempdir}` in every value.
+            for k, v in env_overrides.items():
+                base_env[k] = v.replace("{tempdir}", str(tmp))
 
         legacy_cmd = ["bash", str(LEGACY_SCRIPT), subcommand, *args_list]
         legacy_stdout, legacy_stderr, legacy_rc = _run(legacy_cmd, base_env)
