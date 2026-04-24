@@ -244,6 +244,7 @@ _swarm_telemetry_write() {
       --argjson repo     "$(if [[ -n "$_repo" ]]; then printf '%s' "$_repo" | jq -Rs .; else echo "null"; fi)" \
       --argjson base_sha "$(if [[ -n "$_base_sha" ]]; then printf '"%s"' "$_base_sha"; else echo "null"; fi)" \
       --argjson head_sha "$(if [[ -n "$_head_sha" ]]; then printf '"%s"' "$_head_sha"; else echo "null"; fi)" \
+      --argjson diff_size_bytes "$(if [[ "$_diff_bytes" =~ ^[0-9]+$ ]]; then printf '%s' "$_diff_bytes"; else echo "null"; fi)" \
       '{
         run_id:             $run_id,
         timestamp_start:    $ts_start,
@@ -261,7 +262,7 @@ _swarm_telemetry_write() {
         repo:               $repo,
         base_sha:           $base_sha,
         head_sha:           $head_sha,
-        diff_size_bytes:    null,
+        diff_size_bytes:    $diff_size_bytes,
         input_tokens:       null,
         cached_input_tokens: null,
         output_tokens:      null,
