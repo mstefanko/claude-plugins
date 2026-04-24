@@ -108,7 +108,20 @@ def run_parity(
 
     When `test_case` is provided, uses its assert helpers so failures surface
     with the test-method name. Otherwise raises AssertionError directly.
+
+    If swarm-telemetry.legacy has been deleted (post-Phase-3/7), the test is
+    skipped rather than failing — the port has already been frozen via byte
+    parity and historical proof lives in the git log.
     """
+    if not LEGACY_SCRIPT.exists():
+        reason = (
+            f"swarm-telemetry.legacy deleted; parity was proven in Phase 3 "
+            f"commits 1-6. Restore {LEGACY_SCRIPT} to re-verify."
+        )
+        if test_case is not None:
+            test_case.skipTest(reason)
+        raise unittest.SkipTest(reason)
+
     args_list = list(args)
 
     with tempfile.TemporaryDirectory() as td:

@@ -1,243 +1,171 @@
 """swarm-telemetry Python entry point.
 
-Phase 1 contract: top-level argparse exposes the same subcommand surface as
-the legacy bash implementation, but every subcommand is currently a
-pass-through to `swarm-telemetry.legacy`. Later phases will replace each
-subparser's handler with a native Python implementation.
-
-Help text is intentionally thin. `--help` at the top level lists the
-subcommands; per-subcommand help is deferred to the legacy script (each
-subparser uses add_help=False and accepts REMAINDER args).
+Post-Phase-3: every subcommand runs native Python. The legacy bash
+implementation at swarm-telemetry.legacy was deleted once all six
+subcommand parity tests were green. `--test` now runs the Python test
+suite via `python3 -m unittest discover`.
 """
 
 from __future__ import annotations
 
 import argparse
-import subprocess
 import sys
-from typing import List, Sequence
+from typing import Sequence
 
 from .registry import LEDGERS, PLUGIN_ROOT
 
 
-LEGACY_SCRIPT = PLUGIN_ROOT / "swarm-do" / "bin" / "swarm-telemetry.legacy"
-
-
 def _parse_days_type(s: str) -> int:
-    """Parse a days argument of format 'Nd' (e.g., '90d').
-
-    Raises argparse.ArgumentTypeError if format is invalid.
-    """
+    """Parse a days argument of format 'Nd' (e.g., '90d')."""
     import re
     match = re.match(r"^(\d+)d$", s)
     if not match:
-        raise argparse.ArgumentTypeError(f"invalid format: {s!r}; expected format: Nd (e.g., 90d)")
+        raise argparse.ArgumentTypeError(
+            f"invalid format: {s!r}; expected format: Nd (e.g., 90d)"
+        )
     return int(match.group(1))
-
-
-SUBCOMMANDS: tuple = ()
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="swarm-telemetry",
-        description=(
-            "swarm-do telemetry CLI. Phase 1 thin shim: all subcommands "
-            "delegate to swarm-telemetry.legacy. Phase 2+ will port them "
-            "to native Python incrementally."
-        ),
+        description="swarm-do telemetry CLI (native Python).",
         add_help=True,
     )
     parser.add_argument(
         "--test",
         action="store_true",
-        help="run the legacy self-test suite (delegates to swarm-telemetry.legacy --test).",
+        help="run the Python test suite via unittest discover.",
     )
 
     subparsers = parser.add_subparsers(dest="subcommand", metavar="SUBCOMMAND")
 
-    # Add purge subcommand (Phase 2 native Python implementation).
-    purge_parser = subparsers.add_parser("purge", add_help=True, help="Purge rows older than retention window")
+    purge_parser = subparsers.add_parser(
+        "purge", add_help=True, help="Purge rows older than retention window"
+    )
     purge_parser.add_argument(
-        "--older-than",
-        dest="older_than",
-        type=_parse_days_type,
-        required=True,
-        metavar="Nd",
+        "--older-than", dest="older_than", type=_parse_days_type,
+        required=True, metavar="Nd",
         help="purge rows older than N days (format: Nd, e.g., 90d)",
     )
     purge_parser.add_argument(
-        "--ledger",
-        dest="ledger",
-        choices=sorted(LEDGERS.keys()),
-        default=None,
+        "--ledger", dest="ledger",
+        choices=sorted(LEDGERS.keys()), default=None,
         help="purge a specific ledger; if omitted, purges all ledgers",
     )
     purge_parser.add_argument(
-        "--dry-run",
-        dest="dry_run",
-        action="store_true",
+        "--dry-run", dest="dry_run", action="store_true",
         help="report what would be purged without modifying files",
     )
 
-    # Add dump subcommand (Phase 3 native Python implementation).
     dump_parser = subparsers.add_parser(
-        "dump",
-        add_help=True,
-        help="Pretty-print a JSONL ledger as a JSON array.",
+        "dump", add_help=True, help="Pretty-print a JSONL ledger as a JSON array.",
     )
     dump_parser.add_argument(
-        "ledger",
-        choices=sorted(LEDGERS.keys()),
+        "ledger", choices=sorted(LEDGERS.keys()),
         help="ledger name (runs | findings | outcomes | adjudications | finding_outcomes)",
     )
 
-    # Add validate subcommand (Phase 3 native Python implementation).
     validate_parser = subparsers.add_parser(
-        "validate",
-        add_help=True,
+        "validate", add_help=True,
         help="Validate every ledger row against its JSON schema.",
     )
     validate_parser.add_argument(
-        "ledger",
-        nargs="?",
-        default=None,
+        "ledger", nargs="?", default=None,
         help="optional ledger name; omit to validate all ledgers",
     )
 
-    # Add query subcommand (Phase 3 native Python implementation).
     query_parser = subparsers.add_parser(
-        "query",
-        add_help=True,
+        "query", add_help=True,
         help="Execute SQL against all ledgers loaded into sqlite3 :memory:.",
     )
-    query_parser.add_argument(
-        "sql",
-        help="SQL statement (single argument; quote appropriately)",
-    )
+    query_parser.add_argument("sql", help="SQL statement (single argument; quote appropriately)")
 
-    # Add report subcommand (Phase 3 native Python implementation).
     report_parser = subparsers.add_parser(
-        "report",
-        add_help=True,
+        "report", add_help=True,
         help="Stratified markdown report from runs.jsonl.",
     )
+    report_parser.add_argument("--since", dest="since", default=None)
+    report_parser.add_argument("--role", dest="role", default=None)
     report_parser.add_argument(
-        "--since",
-        dest="since",
-        default=None,
-        help="filter to last N days (format: Nd)",
-    )
-    report_parser.add_argument(
-        "--role",
-        dest="role",
-        default=None,
-        help="filter to a specific role",
-    )
-    report_parser.add_argument(
-        "--bucket",
-        dest="bucket",
-        default="role",
+        "--bucket", dest="bucket", default="role",
         choices=["role", "complexity", "phase_kind", "risk_tag"],
-        help="stratification key (default: role)",
     )
 
-    # Add sample-for-adjudication subcommand (Phase 3 native Python implementation).
     sfa_parser = subparsers.add_parser(
-        "sample-for-adjudication",
-        add_help=True,
+        "sample-for-adjudication", add_help=True,
         help="Stratified random sample of non-adjudicated findings.",
     )
     sfa_parser.add_argument("--count", dest="count", required=False, default=None)
     sfa_parser.add_argument("--since", dest="since", default=None)
     sfa_parser.add_argument("--output-root", dest="output_root", default=None)
 
-    # Add join-outcomes subcommand (Phase 3 native Python implementation).
     jo_parser = subparsers.add_parser(
-        "join-outcomes",
-        add_help=True,
+        "join-outcomes", add_help=True,
         help="Correlate findings with post-merge maintainer actions.",
     )
     jo_parser.add_argument("--since", dest="since", default="30d")
     jo_parser.add_argument("--repo", dest="repo", default=None)
     jo_parser.add_argument("--dry-run", dest="dry_run", action="store_true")
 
-    # Add legacy subcommands (Phase 1 passthrough).
-    for name in SUBCOMMANDS:
-        sub = subparsers.add_parser(name, add_help=False, help=f"{name} (delegates to legacy)")
-        sub.add_argument("rest", nargs=argparse.REMAINDER)
     return parser
 
 
-def _delegate(argv: Sequence[str]) -> int:
-    """Invoke the legacy bash script with the given argv list and return its exit code."""
-    cmd: List[str] = ["bash", str(LEGACY_SCRIPT), *argv]
-    result = subprocess.run(cmd)
-    return result.returncode
+def _run_self_test() -> int:
+    """Run the Python test suite via unittest discover."""
+    import unittest
+    tests_dir = PLUGIN_ROOT / "swarm-do" / "py" / "swarm_do" / "telemetry" / "tests"
+    loader = unittest.TestLoader()
+    suite = loader.discover(start_dir=str(tests_dir), top_level_dir=str(PLUGIN_ROOT / "swarm-do" / "py"))
+    runner = unittest.TextTestRunner(verbosity=1)
+    result = runner.run(suite)
+    return 0 if result.wasSuccessful() else 1
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
 
-    # Short-circuit --test so `swarm-telemetry --test` hits the legacy self-test
-    # without forcing users to type a subcommand.
     if args and args[0] == "--test":
-        return _delegate(args)
+        return _run_self_test()
 
     parser = _build_parser()
-    # Special-case -h/--help at the top level: argparse handles it and exits 0.
     if not args or args[0] in ("-h", "--help"):
         parser.parse_args(args)
         return 0
 
     ns = parser.parse_args(args)
 
-    if ns.test:
-        return _delegate(["--test"])
+    if getattr(ns, "test", False):
+        return _run_self_test()
 
     if not ns.subcommand:
         parser.print_help()
         return 0
 
-    # Dispatch purge to native Python implementation.
     if ns.subcommand == "purge":
         from .subcommands import purge as _purge_cmd
         return _purge_cmd.run(ns)
-
-    # Dispatch dump to native Python implementation (Phase 3 commit 1).
     if ns.subcommand == "dump":
         from .subcommands import dump as _dump_cmd
         return _dump_cmd.run(ns)
-
-    # Dispatch validate to native Python implementation (Phase 3 commit 2).
     if ns.subcommand == "validate":
         from .subcommands import validate as _validate_cmd
         return _validate_cmd.run(ns)
-
-    # Dispatch query to native Python implementation (Phase 3 commit 3).
     if ns.subcommand == "query":
         from .subcommands import query as _query_cmd
         return _query_cmd.run(ns)
-
-    # Dispatch report to native Python implementation (Phase 3 commit 4).
     if ns.subcommand == "report":
         from .subcommands import report as _report_cmd
         return _report_cmd.run(ns)
-
-    # Dispatch sample-for-adjudication to native Python implementation
-    # (Phase 3 commit 5).
     if ns.subcommand == "sample-for-adjudication":
         from .subcommands import sample_for_adjudication as _sfa_cmd
         return _sfa_cmd.run(ns)
-
-    # Dispatch join-outcomes to native Python implementation (Phase 3 commit 6).
     if ns.subcommand == "join-outcomes":
         from .subcommands import join_outcomes as _jo_cmd
         return _jo_cmd.run(ns)
 
-    # Rebuild the argv for the legacy script: subcommand + pass-through rest.
-    rest = getattr(ns, "rest", []) or []
-    return _delegate([ns.subcommand, *rest])
+    parser.error(f"unknown subcommand: {ns.subcommand}")
+    return 2  # unreachable; parser.error raises SystemExit
 
 
 if __name__ == "__main__":
