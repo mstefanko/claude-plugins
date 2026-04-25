@@ -62,7 +62,14 @@
       "Bash(bats:*)",
       "Bash(gh:*)",
       "Write",
-      "Edit"
+      "Edit",
+      "Bash(cp swarm-do/bin/swarm-telemetry /tmp/polished-swarm-telemetry-backup)",
+      "Read(//tmp/**)",
+      "Bash(cp swarm-do/bin/swarm-telemetry /tmp/polished-swarm-telemetry-backup.bash)",
+      "Bash(md5 /tmp/polished-swarm-telemetry-backup.bash swarm-do/bin/swarm-telemetry)",
+      "Bash(git show *)",
+      "Bash(cp /tmp/polished-swarm-telemetry-backup.bash swarm-do/bin/swarm-telemetry.legacy)",
+      "Bash(md5 swarm-do/bin/swarm-telemetry.legacy)"
     ]
   },
   "prompt": "Before starting any work, run 'bd onboard' to understand the current project state and available issues."
