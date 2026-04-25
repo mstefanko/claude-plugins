@@ -18,13 +18,12 @@ else:  # pragma: no cover - UI smoke-tested through the wrapper in operator use.
     TEXTUAL_IMPORT_ERROR = None
 
 from swarm_do.pipeline.config_hash import active_config_hash
-from swarm_do.pipeline.engine import graph_lines
 from swarm_do.pipeline.registry import find_preset, list_pipelines, list_presets, load_pipeline, load_preset
 from swarm_do.pipeline.resolver import BACKENDS, EFFORTS, BackendResolver, ROLE_DEFAULTS, active_preset_name
 from swarm_do.pipeline.validation import schema_lint_pipeline, validate_preset_and_pipeline
 from swarm_do.pipeline import actions
 from swarm_do.pipeline.actions import load_in_flight
-from swarm_do.tui.state import load_runs, status_summary, token_burn_last_24h
+from swarm_do.tui.state import load_runs, pipeline_workbench_preview, status_summary, token_burn_last_24h
 
 
 if TEXTUAL_IMPORT_ERROR is None:
@@ -350,7 +349,7 @@ if TEXTUAL_IMPORT_ERROR is None:
                 self.query_one("#preview", Static).update("No pipelines found.")
                 return
             pipeline = load_pipeline(item.path)
-            self.query_one("#preview", Static).update("\n".join(graph_lines(pipeline)))
+            self.query_one("#preview", Static).update(pipeline_workbench_preview(pipeline))
 
         def action_lint_pipeline(self) -> None:
             item = self._selected()

@@ -16,17 +16,29 @@ from .resolver import BACKENDS, EFFORTS, BackendResolver
 VARIANTS = {"same", "prompt_variants", "models"}
 MERGE_STRATEGIES = {"synthesize", "vote"}
 TOLERANCE_MODES = {"strict", "quorum", "best-effort"}
-PIPELINE_TOP_KEYS = {"pipeline_version", "name", "description", "parallelism", "stages"}
+PIPELINE_TOP_KEYS = {
+    "pipeline_version",
+    "name",
+    "description",
+    "origin",
+    "forked_from",
+    "forked_from_hash",
+    "generated_by",
+    "parallelism",
+    "stages",
+}
 PRESET_TOP_KEYS = {
     "name",
     "description",
     "pipeline",
     "origin",
+    "forked_from",
     "routing",
     "budget",
     "decompose",
     "mem_prime",
     "forked_from_hash",
+    "generated_by",
 }
 STAGE_KEYS = {"id", "depends_on", "agents", "fan_out", "provider", "merge", "failure_tolerance"}
 FAN_OUT_KEYS = {"role", "count", "variant", "variants", "routes"}
@@ -183,6 +195,11 @@ def schema_lint_preset(preset: Mapping[str, Any]) -> list[str]:
             errors.append(f"preset: {key} must be a non-empty string")
     if "origin" in preset and preset["origin"] not in {"stock", "user", "experiment"}:
         errors.append("preset: origin must be stock, user, or experiment")
+    for key in ("forked_from", "forked_from_hash", "generated_by"):
+        if key in preset and not isinstance(preset.get(key), str):
+            errors.append(f"preset: {key} must be a string")
+    if isinstance(preset.get("forked_from_hash"), str) and not preset["forked_from_hash"].startswith("sha256:"):
+        errors.append("preset: forked_from_hash must start with sha256:")
     if "routing" in preset and not isinstance(preset["routing"], Mapping):
         errors.append("preset: routing must be a table")
     budget = preset.get("budget")
@@ -244,6 +261,13 @@ def schema_lint_pipeline(pipeline: Mapping[str, Any]) -> list[str]:
         errors.append("pipeline: pipeline_version must be an integer")
     if not isinstance(pipeline.get("name"), str) or not pipeline.get("name"):
         errors.append("pipeline: name must be a non-empty string")
+    if "origin" in pipeline and pipeline["origin"] not in {"stock", "user", "experiment"}:
+        errors.append("pipeline: origin must be stock, user, or experiment")
+    for key in ("forked_from", "forked_from_hash", "generated_by"):
+        if key in pipeline and not isinstance(pipeline.get(key), str):
+            errors.append(f"pipeline: {key} must be a string")
+    if isinstance(pipeline.get("forked_from_hash"), str) and not pipeline["forked_from_hash"].startswith("sha256:"):
+        errors.append("pipeline: forked_from_hash must start with sha256:")
     if "parallelism" in pipeline:
         parallelism = pipeline.get("parallelism")
         if not isinstance(parallelism, int) or parallelism < 1 or parallelism > 32:

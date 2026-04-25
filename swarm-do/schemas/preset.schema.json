@@ -10,7 +10,9 @@
     "description": { "type": "string" },
     "pipeline": { "type": "string", "minLength": 1 },
     "origin": { "type": "string", "enum": ["stock", "user", "experiment"] },
+    "forked_from": { "type": "string", "minLength": 1 },
     "forked_from_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "generated_by": { "type": "string", "minLength": 1 },
     "routing": {
       "type": "object",
       "additionalProperties": {

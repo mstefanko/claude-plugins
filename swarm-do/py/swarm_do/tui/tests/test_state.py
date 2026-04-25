@@ -24,6 +24,8 @@ from swarm_do.tui.state import (
     latest_observation,
     load_observations,
     load_run_events,
+    pipeline_lens_rows,
+    pipeline_workbench_preview,
     status_summary,
     token_burn_last_24h,
 )
@@ -140,6 +142,31 @@ class TuiStateTests(EnvTestCase):
         rendered = status_summary(now=datetime(2026, 4, 24, 13, tzinfo=UTC)).render()
         self.assertIn("latest_checkpoint=01ARZ3NDEKTSV4RRFFQ69G5FAV:writer", rendered)
         self.assertIn("latest_observation=writer_exit:swarm-run-exit", rendered)
+
+    def test_pipeline_workbench_preview_includes_typed_lens_metadata(self) -> None:
+        pipeline = {
+            "pipeline_version": 1,
+            "name": "ultra-preview",
+            "stages": [
+                {
+                    "id": "exploration",
+                    "fan_out": {
+                        "role": "agent-analysis",
+                        "count": 3,
+                        "variant": "prompt_variants",
+                        "variants": ["explorer-a", "explorer-b", "explorer-c"],
+                    },
+                    "merge": {"strategy": "synthesize", "agent": "agent-analysis-judge"},
+                }
+            ],
+        }
+
+        rows = pipeline_lens_rows(pipeline)
+        preview = pipeline_workbench_preview(pipeline)
+
+        self.assertEqual([row["lens_id"] for row in rows], ["architecture-risk", "api-contract", "state-data"])
+        self.assertIn("fan_out_only", preview)
+        self.assertIn("Preserve the agent-analysis output schema", preview)
 
 
 class TuiActionTests(EnvTestCase):

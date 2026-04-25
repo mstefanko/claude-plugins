@@ -14,11 +14,14 @@ from .actions import (
     cancel_run,
     delete_user_preset,
     find_in_flight,
+    fork_pipeline,
+    fork_preset_and_pipeline,
     rename_user_preset,
     request_handoff,
     set_user_preset_pipeline,
     validate_preset_name,
 )
+from .diff import diff_user_pipeline, stock_drift_for_pipeline
 from .engine import graph_lines
 from .paths import current_preset_path, resolve_data_dir, user_presets_dir
 from .registry import (
@@ -359,6 +362,56 @@ def cmd_pipeline_set(args: argparse.Namespace) -> int:
         print(f"swarm: pipeline set: {exc}", file=sys.stderr)
         return 1
     print(f"set active preset {preset} pipeline to {args.name}")
+    return 0
+
+
+def cmd_pipeline_fork(args: argparse.Namespace) -> int:
+    try:
+        if args.with_preset:
+            preset_path, pipeline_path = fork_preset_and_pipeline(args.with_preset, args.source, args.name)
+            print(f"forked preset {args.with_preset} -> {args.name}: {preset_path}")
+            print(f"forked pipeline {args.source} -> {args.name}: {pipeline_path}")
+        else:
+            path = fork_pipeline(args.source, args.name)
+            print(f"forked pipeline {args.source} -> {args.name}: {path}")
+    except (RuntimeError, ValueError) as exc:
+        print(f"swarm: pipeline fork: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_pipeline_diff(args: argparse.Namespace) -> int:
+    try:
+        diff = diff_user_pipeline(args.name)
+    except ValueError as exc:
+        print(f"swarm: pipeline diff: {exc}", file=sys.stderr)
+        return 1
+    if not diff.source_name:
+        print(f"user pipeline {args.name}: no recorded stock source")
+        return 0
+    if not diff.has_changes:
+        print(f"user pipeline {args.name}: no diff against {diff.source_name}")
+        return 0
+    print(diff.text())
+    return 0
+
+
+def cmd_pipeline_drift(args: argparse.Namespace) -> int:
+    try:
+        drift = stock_drift_for_pipeline(args.name)
+    except ValueError as exc:
+        print(f"swarm: pipeline drift: {exc}", file=sys.stderr)
+        return 1
+    if not drift.tracked:
+        print(f"user pipeline {args.name}: no tracked stock hash")
+        return 0
+    if drift.drifted:
+        print(
+            f"user pipeline {args.name}: source {drift.source_name} drifted "
+            f"{drift.stored_hash} -> {drift.current_hash}"
+        )
+        return 1
+    print(f"user pipeline {args.name}: source {drift.source_name} unchanged")
     return 0
 
 
@@ -758,6 +811,13 @@ def _build_parser() -> argparse.ArgumentParser:
     p = pipeline_sub.add_parser("show"); p.add_argument("name"); p.set_defaults(func=cmd_pipeline_show)
     p = pipeline_sub.add_parser("lint"); p.add_argument("path"); p.set_defaults(func=cmd_pipeline_lint)
     p = pipeline_sub.add_parser("set"); p.add_argument("name"); p.set_defaults(func=cmd_pipeline_set)
+    p = pipeline_sub.add_parser("fork")
+    p.add_argument("source")
+    p.add_argument("name")
+    p.add_argument("--with-preset", help="fork this source preset and point it at the new pipeline name")
+    p.set_defaults(func=cmd_pipeline_fork)
+    p = pipeline_sub.add_parser("diff"); p.add_argument("name"); p.set_defaults(func=cmd_pipeline_diff)
+    p = pipeline_sub.add_parser("drift"); p.add_argument("name"); p.set_defaults(func=cmd_pipeline_drift)
 
     providers = sub.add_parser("providers")
     providers_sub = providers.add_subparsers(dest="providers_command")

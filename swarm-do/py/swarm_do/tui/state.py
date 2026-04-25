@@ -14,7 +14,9 @@ from pathlib import Path
 from typing import Any
 
 from swarm_do.pipeline.actions import InFlightRun, in_flight_dir, load_in_flight
+from swarm_do.pipeline.catalog import lens_for_variant
 from swarm_do.pipeline.context import current_context
+from swarm_do.pipeline.engine import graph_lines
 from swarm_do.pipeline.paths import resolve_data_dir
 from swarm_do.pipeline.resolver import active_preset_name
 
@@ -191,3 +193,58 @@ def pid_is_alive(pid: int | None) -> bool:
     except OSError:
         return False
     return True
+
+
+def pipeline_lens_rows(pipeline: dict[str, Any]) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for stage in pipeline.get("stages") or []:
+        if not isinstance(stage, dict):
+            continue
+        fan = stage.get("fan_out")
+        if not isinstance(fan, dict) or fan.get("variant") != "prompt_variants":
+            continue
+        role = str(fan.get("role") or "")
+        for variant in fan.get("variants") or []:
+            if not isinstance(variant, str):
+                continue
+            lens = lens_for_variant(role, variant)
+            if lens is None:
+                rows.append(
+                    {
+                        "stage": str(stage.get("id") or "<unknown>"),
+                        "variant": variant,
+                        "lens_id": "(untyped)",
+                        "label": variant,
+                        "mode": "prompt_variants",
+                        "compatibility": f"{role} fan_out",
+                        "contract": "variant file only; no catalog metadata",
+                    }
+                )
+                continue
+            rows.append(
+                {
+                    "stage": str(stage.get("id") or "<unknown>"),
+                    "variant": variant,
+                    "lens_id": lens.lens_id,
+                    "label": lens.label,
+                    "mode": lens.execution_mode,
+                    "compatibility": f"{', '.join(lens.roles)} / {', '.join(lens.stage_kinds)}",
+                    "contract": lens.output_contract.schema_rule,
+                }
+            )
+    return rows
+
+
+def pipeline_workbench_preview(pipeline: dict[str, Any]) -> str:
+    lines = graph_lines(pipeline)
+    lens_rows = pipeline_lens_rows(pipeline)
+    if lens_rows:
+        lines.extend(["", "lenses:"])
+        for row in lens_rows:
+            lines.append(
+                "  - "
+                f"{row['stage']}:{row['variant']} -> {row['lens_id']} "
+                f"({row['label']}; {row['mode']}; {row['compatibility']})"
+            )
+            lines.append(f"    contract: {row['contract']}")
+    return "\n".join(lines)

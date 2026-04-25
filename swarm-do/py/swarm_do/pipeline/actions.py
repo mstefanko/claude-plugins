@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import copy
 import json
 import os
 import re
@@ -13,10 +14,21 @@ import tomllib
 from pathlib import Path
 from typing import Any, Mapping
 
-from swarm_do.pipeline.paths import current_preset_path, resolve_data_dir, user_presets_dir
-from swarm_do.pipeline.registry import find_preset, load_preset
+from swarm_do.pipeline.catalog import compile_prompt_variant_fan_out, get_module
+from swarm_do.pipeline.engine import topological_layers
+from swarm_do.pipeline.paths import current_preset_path, resolve_data_dir, user_pipelines_dir, user_presets_dir
+from swarm_do.pipeline.registry import find_pipeline, find_preset, load_pipeline, load_preset, sha256_file
+from swarm_do.pipeline.render_yaml import render_pipeline_yaml
 from swarm_do.pipeline.resolver import BACKENDS, EFFORTS, ROLE_DEFAULTS
-from swarm_do.pipeline.validation import validate_preset_mapping
+from swarm_do.pipeline.validation import (
+    invariant_errors,
+    role_existence_errors,
+    route_resolution_errors,
+    schema_lint_pipeline,
+    schema_lint_preset,
+    validate_preset_mapping,
+    variant_existence_errors,
+)
 
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 ISSUE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
@@ -103,7 +115,7 @@ def _route_inline(route: Mapping[str, Any]) -> str:
 
 def render_toml(data: Mapping[str, Any]) -> str:
     lines: list[str] = []
-    for key in ("name", "description", "pipeline", "origin", "forked_from_hash"):
+    for key in ("name", "description", "pipeline", "origin", "forked_from", "forked_from_hash", "generated_by"):
         value = data.get(key)
         if isinstance(value, str):
             lines.append(f"{key} = {_quote(value)}")
@@ -117,9 +129,31 @@ def render_toml(data: Mapping[str, Any]) -> str:
     budget = data.get("budget")
     if isinstance(budget, Mapping) and budget:
         lines.extend(["", "[budget]"])
-        for key in ("max_agents_per_run", "max_estimated_cost_usd", "max_wall_clock_seconds"):
+        for key in (
+            "max_agents_per_run",
+            "max_estimated_cost_usd",
+            "max_wall_clock_seconds",
+            "max_writer_tool_calls",
+            "max_writer_output_bytes",
+            "max_handoffs",
+        ):
             if key in budget:
                 lines.append(f"{key} = {budget[key]}")
+    decompose = data.get("decompose")
+    if isinstance(decompose, Mapping) and decompose:
+        lines.extend(["", "[decompose]"])
+        for key in ("mode",):
+            if isinstance(decompose.get(key), str):
+                lines.append(f"{key} = {_quote(str(decompose[key]))}")
+    mem_prime = data.get("mem_prime")
+    if isinstance(mem_prime, Mapping) and mem_prime:
+        lines.extend(["", "[mem_prime]"])
+        for key in ("mode", "adapter"):
+            if isinstance(mem_prime.get(key), str):
+                lines.append(f"{key} = {_quote(str(mem_prime[key]))}")
+        for key in ("max_tokens", "recency_days", "min_relevance"):
+            if key in mem_prime:
+                lines.append(f"{key} = {mem_prime[key]}")
     roles = data.get("roles")
     if isinstance(roles, Mapping):
         for role in sorted(roles):
@@ -156,6 +190,11 @@ def backends_path() -> Path:
 def validate_preset_name(name: str) -> None:
     if not NAME_RE.fullmatch(name):
         raise ValueError("preset name must be 1-64 chars of letters, numbers, dot, underscore, or dash")
+
+
+def validate_pipeline_name(name: str) -> None:
+    if not NAME_RE.fullmatch(name):
+        raise ValueError("pipeline name must be 1-64 chars of letters, numbers, dot, underscore, or dash")
 
 
 def validate_issue_id(issue_id: str) -> None:
@@ -256,6 +295,296 @@ def set_user_preset_pipeline(preset_name: str, pipeline_name: str) -> None:
     if not result.ok:
         raise ValueError("; ".join(result.errors))
     atomic_write_text(item.path, render_toml(data))
+
+
+def fork_preset(source_name: str, new_name: str) -> Path:
+    validate_preset_name(new_name)
+    if find_preset(new_name) is not None:
+        raise ValueError(f"preset already exists: {new_name}")
+    source = find_preset(source_name)
+    if source is None:
+        raise ValueError(f"source preset not found: {source_name}")
+    data = load_preset(source.path)
+    data["name"] = new_name
+    data["origin"] = "user"
+    data["forked_from"] = source.name
+    data["forked_from_hash"] = "sha256:" + sha256_file(source.path)
+    data.setdefault("generated_by", "swarm-do pipeline composer")
+    errors = schema_lint_preset(data)
+    if errors:
+        raise ValueError("; ".join(errors))
+    target = user_presets_dir() / f"{new_name}.toml"
+    atomic_write_text(target, render_toml(data))
+    return target
+
+
+def fork_pipeline(source_name: str, new_name: str) -> Path:
+    validate_pipeline_name(new_name)
+    if find_pipeline(new_name) is not None:
+        raise ValueError(f"pipeline already exists: {new_name}")
+    source = find_pipeline(source_name)
+    if source is None:
+        raise ValueError(f"source pipeline not found: {source_name}")
+    data = load_pipeline(source.path)
+    data["name"] = new_name
+    data["origin"] = "user"
+    data["forked_from"] = source.name
+    data["forked_from_hash"] = "sha256:" + sha256_file(source.path)
+    data.setdefault("generated_by", "swarm-do pipeline composer")
+    _raise_pipeline_errors(data)
+    target = user_pipelines_dir() / f"{new_name}.yaml"
+    atomic_write_text(target, render_pipeline_yaml(data))
+    return target
+
+
+def fork_preset_and_pipeline(
+    source_preset: str,
+    source_pipeline: str,
+    new_name: str,
+    *,
+    _simulate_failure_after_pipeline: bool = False,
+) -> tuple[Path, Path]:
+    validate_preset_name(new_name)
+    validate_pipeline_name(new_name)
+    if find_preset(new_name) is not None:
+        raise ValueError(f"preset already exists: {new_name}")
+    if find_pipeline(new_name) is not None:
+        raise ValueError(f"pipeline already exists: {new_name}")
+    preset_item = find_preset(source_preset)
+    if preset_item is None:
+        raise ValueError(f"source preset not found: {source_preset}")
+    pipeline_item = find_pipeline(source_pipeline)
+    if pipeline_item is None:
+        raise ValueError(f"source pipeline not found: {source_pipeline}")
+
+    preset = load_preset(preset_item.path)
+    pipeline = load_pipeline(pipeline_item.path)
+    pipeline["name"] = new_name
+    pipeline["origin"] = "user"
+    pipeline["forked_from"] = pipeline_item.name
+    pipeline["forked_from_hash"] = "sha256:" + sha256_file(pipeline_item.path)
+    pipeline.setdefault("generated_by", "swarm-do pipeline composer")
+
+    preset["name"] = new_name
+    preset["pipeline"] = new_name
+    preset["origin"] = "user"
+    preset["forked_from"] = preset_item.name
+    preset["forked_from_hash"] = "sha256:" + sha256_file(preset_item.path)
+    preset.setdefault("generated_by", "swarm-do pipeline composer")
+
+    errors = schema_lint_preset(preset)
+    errors.extend(_pipeline_errors(pipeline, preset_name=new_name, preset=preset))
+    if errors:
+        raise ValueError("; ".join(errors))
+
+    pipeline_target = user_pipelines_dir() / f"{new_name}.yaml"
+    preset_target = user_presets_dir() / f"{new_name}.toml"
+    atomic_write_text(pipeline_target, render_pipeline_yaml(pipeline))
+    if _simulate_failure_after_pipeline:
+        raise RuntimeError("simulated failure after pipeline replace")
+    atomic_write_text(preset_target, render_toml(preset))
+    return preset_target, pipeline_target
+
+
+def save_user_pipeline(name: str, pipeline_mapping: Mapping[str, Any]) -> Path:
+    validate_pipeline_name(name)
+    existing = find_pipeline(name)
+    if existing is not None and existing.origin != "user":
+        raise ValueError("stock pipelines are read-only; fork before editing")
+    data = copy.deepcopy(dict(pipeline_mapping))
+    data["name"] = name
+    data.setdefault("origin", "user")
+    data.setdefault("generated_by", "swarm-do pipeline composer")
+    _raise_pipeline_errors(data)
+    target = user_pipelines_dir() / f"{name}.yaml"
+    atomic_write_text(target, render_pipeline_yaml(data))
+    return target
+
+
+def set_stage_agent_route(
+    pipeline_name: str,
+    stage_id: str,
+    agent_index: int,
+    *,
+    backend: str | None = None,
+    model: str | None = None,
+    effort: str | None = None,
+    route: str | None = None,
+) -> Path:
+    item, pipeline = _load_user_pipeline(pipeline_name)
+    agent = _stage_agent(pipeline, stage_id, agent_index)
+    for key in ("backend", "model", "effort", "route"):
+        agent.pop(key, None)
+    if route is not None:
+        agent["route"] = route
+    else:
+        if backend not in BACKENDS:
+            raise ValueError(f"backend must be one of {sorted(BACKENDS)}")
+        if not model:
+            raise ValueError("model must be a non-empty string")
+        if effort not in EFFORTS:
+            raise ValueError(f"effort must be one of {sorted(EFFORTS)}")
+        agent.update({"backend": backend, "model": model, "effort": effort})
+    return save_user_pipeline(item.name, pipeline)
+
+
+def reset_stage_agent_route(pipeline_name: str, stage_id: str, agent_index: int) -> Path:
+    item, pipeline = _load_user_pipeline(pipeline_name)
+    agent = _stage_agent(pipeline, stage_id, agent_index)
+    for key in ("backend", "model", "effort", "route"):
+        agent.pop(key, None)
+    return save_user_pipeline(item.name, pipeline)
+
+
+def set_fan_out_routes(pipeline_name: str, stage_id: str, routes: list[Mapping[str, Any] | str]) -> Path:
+    item, pipeline = _load_user_pipeline(pipeline_name)
+    fan = _stage_fan_out(pipeline, stage_id)
+    if fan.get("variant") == "prompt_variants" or "variants" in fan:
+        raise ValueError("cannot combine prompt-variant lenses and per-branch model routes in one fan-out")
+    if not routes:
+        raise ValueError("routes must not be empty")
+    for idx, route in enumerate(routes):
+        if isinstance(route, Mapping):
+            _validate_route_values(route, f"routes[{idx}]")
+        elif not isinstance(route, str) or not route:
+            raise ValueError(f"routes[{idx}] must be a named route or route object")
+    fan["variant"] = "models"
+    fan["count"] = len(routes)
+    fan["routes"] = [copy.deepcopy(route) if isinstance(route, Mapping) else route for route in routes]
+    return save_user_pipeline(item.name, pipeline)
+
+
+def reset_fan_out_routes(pipeline_name: str, stage_id: str) -> Path:
+    item, pipeline = _load_user_pipeline(pipeline_name)
+    fan = _stage_fan_out(pipeline, stage_id)
+    fan["variant"] = "same"
+    fan.pop("routes", None)
+    fan.pop("variants", None)
+    return save_user_pipeline(item.name, pipeline)
+
+
+def set_prompt_variant_lenses(pipeline_name: str, stage_id: str, lens_ids: list[str]) -> Path:
+    item, pipeline = _load_user_pipeline(pipeline_name)
+    fan = _stage_fan_out(pipeline, stage_id)
+    if fan.get("variant") == "models" or "routes" in fan:
+        raise ValueError("cannot combine prompt-variant lenses and per-branch model routes in one fan-out")
+    role = fan.get("role")
+    if not isinstance(role, str) or not role:
+        raise ValueError(f"stage {stage_id} fan_out.role must be a non-empty string")
+    fan.clear()
+    fan.update(compile_prompt_variant_fan_out(role, lens_ids))
+    return save_user_pipeline(item.name, pipeline)
+
+
+def add_pipeline_stage_from_module(
+    pipeline_name: str,
+    module_id: str,
+    *,
+    stage_id: str | None = None,
+    depends_on: list[str] | None = None,
+) -> Path:
+    item, pipeline = _load_user_pipeline(pipeline_name)
+    module = get_module(module_id)
+    if module is None:
+        raise ValueError(f"unknown module: {module_id}")
+    stage = module.instantiate_stage(stage_id=stage_id)
+    existing_ids = {stage.get("id") for stage in pipeline.get("stages") or []}
+    if stage.get("id") in existing_ids:
+        raise ValueError(f"stage already exists: {stage.get('id')}")
+    if depends_on is not None:
+        stage["depends_on"] = depends_on
+    stages = pipeline.setdefault("stages", [])
+    if not isinstance(stages, list):
+        raise ValueError("pipeline stages must be a list")
+    stages.append(stage)
+    return save_user_pipeline(item.name, pipeline)
+
+
+def remove_pipeline_stage(pipeline_name: str, stage_id: str) -> Path:
+    item, pipeline = _load_user_pipeline(pipeline_name)
+    stages = pipeline.get("stages")
+    if not isinstance(stages, list):
+        raise ValueError("pipeline stages must be a list")
+    dependents = [
+        str(stage.get("id"))
+        for stage in stages
+        if isinstance(stage, Mapping) and stage_id in (stage.get("depends_on") or [])
+    ]
+    if dependents:
+        raise ValueError(f"stage {stage_id} is still required by: {', '.join(sorted(dependents))}")
+    next_stages = [stage for stage in stages if not (isinstance(stage, Mapping) and stage.get("id") == stage_id)]
+    if len(next_stages) == len(stages):
+        raise ValueError(f"stage not found: {stage_id}")
+    pipeline["stages"] = next_stages
+    return save_user_pipeline(item.name, pipeline)
+
+
+def _pipeline_errors(
+    pipeline: Mapping[str, Any],
+    *,
+    preset_name: str | None = None,
+    preset: Mapping[str, Any] | None = None,
+) -> list[str]:
+    errors = schema_lint_pipeline(pipeline)
+    errors.extend(role_existence_errors(pipeline))
+    errors.extend(variant_existence_errors(pipeline))
+    if preset is not None or preset_name is not None:
+        errors.extend(route_resolution_errors(pipeline, preset_name, preset))
+    errors.extend(invariant_errors(pipeline, preset_name, preset))
+    try:
+        topological_layers(pipeline)
+    except ValueError as exc:
+        errors.append(str(exc))
+    return errors
+
+
+def _raise_pipeline_errors(pipeline: Mapping[str, Any]) -> None:
+    errors = _pipeline_errors(pipeline)
+    if errors:
+        raise ValueError("; ".join(errors))
+
+
+def _load_user_pipeline(name: str) -> tuple[Any, dict[str, Any]]:
+    item = find_pipeline(name)
+    if item is None:
+        raise ValueError(f"pipeline not found: {name}")
+    if item.origin != "user":
+        raise ValueError("stock pipelines are read-only; fork before editing")
+    return item, load_pipeline(item.path)
+
+
+def _stage_by_id(pipeline: Mapping[str, Any], stage_id: str) -> dict[str, Any]:
+    for stage in pipeline.get("stages") or []:
+        if isinstance(stage, dict) and stage.get("id") == stage_id:
+            return stage
+    raise ValueError(f"stage not found: {stage_id}")
+
+
+def _stage_agent(pipeline: Mapping[str, Any], stage_id: str, agent_index: int) -> dict[str, Any]:
+    stage = _stage_by_id(pipeline, stage_id)
+    agents = stage.get("agents")
+    if not isinstance(agents, list):
+        raise ValueError(f"stage {stage_id} is not an agents stage")
+    if agent_index < 0 or agent_index >= len(agents) or not isinstance(agents[agent_index], dict):
+        raise ValueError(f"agent index out of range for stage {stage_id}: {agent_index}")
+    return agents[agent_index]
+
+
+def _stage_fan_out(pipeline: Mapping[str, Any], stage_id: str) -> dict[str, Any]:
+    stage = _stage_by_id(pipeline, stage_id)
+    fan = stage.get("fan_out")
+    if not isinstance(fan, dict):
+        raise ValueError(f"stage {stage_id} is not a fan_out stage")
+    return fan
+
+
+def _validate_route_values(route: Mapping[str, Any], path: str) -> None:
+    if route.get("backend") not in BACKENDS:
+        raise ValueError(f"{path}.backend must be one of {sorted(BACKENDS)}")
+    if not isinstance(route.get("model"), str) or not route.get("model"):
+        raise ValueError(f"{path}.model must be a non-empty string")
+    if route.get("effort") not in EFFORTS:
+        raise ValueError(f"{path}.effort must be one of {sorted(EFFORTS)}")
 
 
 def cancel_run(run: InFlightRun) -> None:
