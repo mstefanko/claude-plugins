@@ -20,7 +20,7 @@ from .actions import (
     set_user_preset_pipeline,
     validate_preset_name,
 )
-from .catalog import pipeline_activation_error
+from .catalog import pipeline_activation_error, pipeline_profile_for
 from .diff import diff_user_pipeline, diff_user_preset, stock_drift_for_pipeline
 from .engine import graph_lines
 from .paths import current_preset_path, resolve_data_dir, user_presets_dir
@@ -291,19 +291,7 @@ def cmd_rollout_history(args: argparse.Namespace) -> int:
 def cmd_compete(args: argparse.Namespace) -> int:
     preset_name = args.preset
     result, preset, pipeline, _ = validate_preset_and_pipeline(preset_name, args.plan_path, include_budget=True)
-    if result.budget:
-        b = result.budget
-        print("Budget preview")
-        print(f"  phases: {b.phase_count}")
-        print(f"  agents: {b.agent_count}")
-        print(f"  estimated_tokens: {b.estimated_tokens}")
-        print(f"  estimated_cost_usd: {b.estimated_cost_usd:.4f}")
-        print(f"  estimated_wall_clock_seconds: {b.estimated_wall_clock_seconds}")
-        print(f"  fan_out_width: {b.fan_out_width}")
-        print(f"  parallelism: {b.parallelism}")
-    if pipeline:
-        print("Stage graph")
-        print("\n".join(graph_lines(pipeline)))
+    _print_budget_and_graph(result, pipeline)
     _print_validation(result)
     if not result.ok:
         return 1
@@ -329,10 +317,7 @@ def _optional_existing_target_path(target: list[str]) -> str | None:
     return None
 
 
-def cmd_research(args: argparse.Namespace) -> int:
-    preset_name = args.preset
-    plan_path = _optional_existing_target_path(args.target)
-    result, preset, pipeline, _ = validate_preset_and_pipeline(preset_name, plan_path, include_budget=True)
+def _print_budget_and_graph(result: Any, pipeline: dict[str, Any]) -> None:
     if result.budget:
         b = result.budget
         print("Budget preview")
@@ -346,19 +331,50 @@ def cmd_research(args: argparse.Namespace) -> int:
     if pipeline:
         print("Stage graph")
         print("\n".join(graph_lines(pipeline)))
+
+
+def _cmd_output_profile(args: argparse.Namespace, *, profile_id: str) -> int:
+    preset_name = args.preset
+    plan_path = _optional_existing_target_path(args.target)
+    result, preset, pipeline, _ = validate_preset_and_pipeline(preset_name, plan_path, include_budget=True)
+    _print_budget_and_graph(result, pipeline)
     _print_validation(result)
     if not result.ok:
         return 1
+    actual_profile = pipeline_profile_for(str(preset.get("pipeline")), pipeline)
+    if actual_profile.profile_id != profile_id:
+        print(
+            f"swarm: {profile_id}: preset {preset_name} uses profile {actual_profile.profile_id}, expected {profile_id}",
+            file=sys.stderr,
+        )
+        return 1
     activation_error = pipeline_activation_error(str(preset.get("pipeline")), pipeline)
     if activation_error:
-        print(f"swarm: research: {activation_error}", file=sys.stderr)
+        print(f"swarm: {profile_id}: {activation_error}", file=sys.stderr)
         return 1
     if args.dry_run:
-        print(f"research preset {preset_name} is valid")
+        print(f"{profile_id} preset {preset_name} is valid")
         return 0
     _activate_preset(preset_name)
-    print(f"loaded preset {preset_name}; run /swarm-do:research to dispatch the evidence memo profile")
+    command = actual_profile.command_name or f"/swarm-do:{profile_id}"
+    print(f"loaded preset {preset_name}; run {command} to dispatch the {actual_profile.label.lower()} profile")
     return 0
+
+
+def cmd_brainstorm(args: argparse.Namespace) -> int:
+    return _cmd_output_profile(args, profile_id="brainstorm")
+
+
+def cmd_research(args: argparse.Namespace) -> int:
+    return _cmd_output_profile(args, profile_id="research")
+
+
+def cmd_design(args: argparse.Namespace) -> int:
+    return _cmd_output_profile(args, profile_id="design")
+
+
+def cmd_review(args: argparse.Namespace) -> int:
+    return _cmd_output_profile(args, profile_id="review")
 
 
 def cmd_pipeline_list(args: argparse.Namespace) -> int:
@@ -880,7 +896,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_providers_doctor)
 
     mode = sub.add_parser("mode")
-    mode.add_argument("name", choices=["claude-only", "codex-only", "balanced", "research", "custom"])
+    mode.add_argument("name", choices=["claude-only", "codex-only", "balanced", "brainstorm", "research", "design", "review", "custom"])
     mode.set_defaults(func=cmd_mode)
 
     status = sub.add_parser("status")
@@ -899,11 +915,29 @@ def _build_parser() -> argparse.ArgumentParser:
     compete.add_argument("--dry-run", action="store_true")
     compete.set_defaults(func=cmd_compete)
 
+    brainstorm = sub.add_parser("brainstorm")
+    brainstorm.add_argument("target", nargs="*", help="optional topic or existing file path for budget estimation")
+    brainstorm.add_argument("--preset", default="brainstorm")
+    brainstorm.add_argument("--dry-run", action="store_true")
+    brainstorm.set_defaults(func=cmd_brainstorm)
+
     research = sub.add_parser("research")
     research.add_argument("target", nargs="*", help="optional research question or existing file path for budget estimation")
     research.add_argument("--preset", default="research")
     research.add_argument("--dry-run", action="store_true")
     research.set_defaults(func=cmd_research)
+
+    design = sub.add_parser("design")
+    design.add_argument("target", nargs="*", help="optional design prompt or existing file path for budget estimation")
+    design.add_argument("--preset", default="design")
+    design.add_argument("--dry-run", action="store_true")
+    design.set_defaults(func=cmd_design)
+
+    review = sub.add_parser("review")
+    review.add_argument("target", nargs="*", help="optional branch, PR, diff, or existing file path for budget estimation")
+    review.add_argument("--preset", default="review")
+    review.add_argument("--dry-run", action="store_true")
+    review.set_defaults(func=cmd_review)
 
     handoff = sub.add_parser("handoff")
     handoff.add_argument("issue_id")
@@ -1006,12 +1040,12 @@ def _build_parser() -> argparse.ArgumentParser:
     permissions = sub.add_parser("permissions")
     permissions_sub = permissions.add_subparsers(dest="permissions_command")
     p = permissions_sub.add_parser("check")
-    p.add_argument("--role", action="append", choices=["writer", "spec-review", "review", "research", "clarify", "codex-review"])
+    p.add_argument("--role", action="append", choices=["writer", "spec-review", "review", "research", "clarify", "codex-review", "brainstorm"])
     p.add_argument("--scope", choices=["repo", "user"], default="repo")
     p.add_argument("--path")
     p.set_defaults(func=cmd_permissions_check)
     p = permissions_sub.add_parser("install")
-    p.add_argument("--role", action="append", required=True, choices=["writer", "spec-review", "review", "research", "clarify", "codex-review"])
+    p.add_argument("--role", action="append", required=True, choices=["writer", "spec-review", "review", "research", "clarify", "codex-review", "brainstorm"])
     p.add_argument("--scope", choices=["repo", "user"], default="repo")
     p.add_argument("--path")
     p.add_argument("--dry-run", action="store_true")

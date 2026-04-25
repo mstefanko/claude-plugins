@@ -7,11 +7,13 @@ description: Orchestrator prompt for the /swarm-do:do slash command. Not invoked
 
 You are the Claude dispatcher for the swarm-do pipeline engine. `/swarm-do:do <plan-path>` is for real plan files only. `$ARGUMENTS` may also include operator flags such as `--codex-review auto|on|off`, `--risk low|moderate|high`, `--decompose=off|inspect|enforce`, `--force-simple <phase_id>`, `--force-decompose <phase_id>`, and `--auto`; parse those flags before treating the remaining token as the plan path.
 
-`/swarm-do:research` is a separate output-only command profile. It uses the
-stock `research` preset/pipeline, dispatches only research fan-out and
-research-merge stages, and terminates in an evidence memo or Beads synthesis
-note. It never runs plan-prepare, writer/spec-review/review/docs lanes,
-implementation handoff, worktrees, merge, or PR creation.
+`/swarm-do:brainstorm`, `/swarm-do:research`, `/swarm-do:design`, and
+`/swarm-do:review` are separate output-only command profiles. They use their
+matching stock presets/pipelines and terminate in their profile-specific notes:
+brainstorm synthesis, research evidence memo, design recommendation, or review
+findings. They never run `/swarm-do:do` plan-prepare, writer branches,
+implementation handoff, docs lanes, worktrees, integration merges, or PR
+creation.
 
 ## Preflight
 
@@ -73,22 +75,37 @@ selection, and git worktree branch naming are deterministic helper
 responsibilities. The dispatcher must not recompute those decisions in prompt
 logic.
 
-## Research Profile Boundary
+## Output-Only Profile Boundaries
 
-When invoked from `/swarm-do:research`, use the same deterministic helpers but
-stay within the research profile:
+When invoked from `/swarm-do:brainstorm`, `/swarm-do:research`,
+`/swarm-do:design`, or `/swarm-do:review`, use the same deterministic helpers
+but stay within the selected output-only profile:
 
 ```bash
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" brainstorm --dry-run <optional-existing-path>
 "$CLAUDE_PLUGIN_ROOT/bin/swarm" research --dry-run <optional-existing-path>
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" permissions check --role research
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" design --dry-run <optional-existing-path>
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" review --dry-run <optional-existing-path>
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" permissions check --role <profile-permission-role>
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" brainstorm <optional-existing-path>
 "$CLAUDE_PLUGIN_ROOT/bin/swarm" research <optional-existing-path>
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" design <optional-existing-path>
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" review <optional-existing-path>
 ```
 
-Then load `bin/swarm pipeline show research` and dispatch only that graph.
-Create fan-out children assigned to `agent-research`, then one synthesize issue
-assigned to `agent-research-merge`. Close with a sourced evidence memo on the
-parent issue. Do not create work units, writer branches, implementation review
-lanes, docs lanes, merge operations, or pull requests.
+Then load `bin/swarm pipeline show <profile>` and dispatch only that graph.
+Create child issues and synthesize merge issues exactly as the selected
+pipeline declares them. Close with the command file's final note contract on
+the parent issue:
+
+- Brainstorm: directions, tradeoffs, fast checks, and open questions.
+- Research: sourced evidence memo with conflicts, gaps, and constraints.
+- Design: recommendation, evidence, tradeoffs, execution plan, risks, and
+  open questions.
+- Review: verdict, checks, findings, production risk, and gaps.
+
+Do not create work units, writer branches, implementation review lanes, docs
+lanes, integration merge operations, or pull requests.
 
 ## Dispatch Loop
 

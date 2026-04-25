@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "role": "brainstorm",
+  "merge_policy": "deny-wins",
+  "permissions": {
+    "allow": [
+      "Read",
+      "Bash(bd:*)"
+    ],
+    "deny": []
+  }
+}

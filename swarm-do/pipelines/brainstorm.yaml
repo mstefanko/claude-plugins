@@ -1,0 +1,16 @@
+pipeline_version: 1
+name: brainstorm
+description: Multi-agent ideation fan-out and synthesis note with no implementation stages.
+parallelism: 3
+stages:
+  - id: brainstorm
+    fan_out:
+      role: agent-brainstorm
+      count: 3
+      variant: same
+    merge:
+      strategy: synthesize
+      agent: agent-brainstorm
+    failure_tolerance:
+      mode: quorum
+      min_success: 2

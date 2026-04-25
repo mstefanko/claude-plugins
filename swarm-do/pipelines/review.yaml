@@ -1,0 +1,17 @@
+pipeline_version: 1
+name: review
+description: Output-only review fan-out with rubric lenses and a synthesized findings summary.
+parallelism: 5
+stages:
+  - id: review
+    fan_out:
+      role: agent-review
+      count: 5
+      variant: prompt_variants
+      variants: [correctness-rubric, api-contract, security-threat-model, performance-review, edge-case-review]
+    merge:
+      strategy: synthesize
+      agent: agent-review
+    failure_tolerance:
+      mode: quorum
+      min_success: 3

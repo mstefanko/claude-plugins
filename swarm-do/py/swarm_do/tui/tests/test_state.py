@@ -253,10 +253,14 @@ class TuiStateTests(EnvTestCase):
         self.assertIn("kind: fan_out", inspector)
         self.assertIn("branch[0]: variant=explorer-a lens=architecture-risk", inspector)
 
-    def test_research_profile_is_runnable_while_unknown_output_only_is_preview_only(self) -> None:
-        pipeline = load_pipeline(find_pipeline("research").path)
-        self.assertIn("profile: research status=runnable command=/swarm-do:research", pipeline_profile_summary("research", pipeline))
-        self.assertIsNone(pipeline_activation_blocker("research", pipeline))
+    def test_output_profiles_are_runnable_while_unknown_output_only_is_preview_only(self) -> None:
+        for name in ("brainstorm", "research", "design", "review"):
+            pipeline = load_pipeline(find_pipeline(name).path)
+            self.assertIn(
+                f"profile: {name} status=runnable command=/swarm-do:{name}",
+                pipeline_profile_summary(name, pipeline),
+            )
+            self.assertIsNone(pipeline_activation_blocker(name, pipeline))
 
         review_only = {
             "pipeline_version": 1,

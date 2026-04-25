@@ -1,0 +1,29 @@
+pipeline_version: 1
+name: design
+description: Research, clarification, and analysis fan-out that closes with an execution-ready design note.
+parallelism: 3
+stages:
+  - id: research
+    agents:
+      - role: agent-research
+  - id: exploration
+    depends_on: [research]
+    fan_out:
+      role: agent-analysis
+      count: 4
+      variant: prompt_variants
+      variants: [explorer-a, explorer-b, explorer-c, security-threat-model]
+    merge:
+      strategy: synthesize
+      agent: agent-analysis-judge
+    failure_tolerance:
+      mode: quorum
+      min_success: 3
+  - id: clarify
+    depends_on: [research]
+    agents:
+      - role: agent-clarify
+  - id: recommendation
+    depends_on: [research, exploration, clarify]
+    agents:
+      - role: agent-analysis

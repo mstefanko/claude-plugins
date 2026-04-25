@@ -31,6 +31,7 @@ HARDCODED_DEFAULT = Route("claude", "claude-opus-4-7", "high", "hardcoded-defaul
 
 ROLE_DEFAULTS: dict[str, dict[str, Route] | Route] = {
     "orchestrator": Route("claude", "claude-opus-4-7", "high", "role-default"),
+    "agent-brainstorm": Route("claude", "claude-sonnet-4-6", "high", "role-default"),
     "agent-research": Route("claude", "claude-sonnet-4-6", "high", "role-default"),
     "agent-analysis": Route("claude", "claude-opus-4-7", "xhigh", "role-default"),
     "agent-debug": Route("claude", "claude-opus-4-7", "xhigh", "role-default"),

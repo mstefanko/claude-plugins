@@ -1,0 +1,25 @@
+name = "design"
+description = "Output-only design profile that produces a recommendation and execution-ready plan without writer branches or a PR."
+pipeline = "design"
+origin = "stock"
+
+[routing]
+"roles.agent-research" = { backend = "claude", model = "claude-sonnet-4-6", effort = "high" }
+"roles.agent-analysis" = { backend = "claude", model = "claude-opus-4-7", effort = "xhigh" }
+"roles.agent-analysis-judge" = { backend = "claude", model = "claude-opus-4-7", effort = "high" }
+"roles.agent-clarify" = { backend = "claude", model = "claude-sonnet-4-6", effort = "medium" }
+
+[budget]
+max_agents_per_run = 60
+max_estimated_cost_usd = 20.0
+max_wall_clock_seconds = 14400
+
+[decompose]
+mode = "off"
+
+[mem_prime]
+mode = "off"
+max_tokens = 500
+recency_days = 90
+min_relevance = 0.6
+adapter = "dispatch_file"

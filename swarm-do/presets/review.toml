@@ -1,0 +1,22 @@
+name = "review"
+description = "Output-only review profile that produces a findings/evidence summary without writer branches or a PR."
+pipeline = "review"
+origin = "stock"
+
+[routing]
+"roles.agent-review" = { backend = "claude", model = "claude-opus-4-7", effort = "high" }
+
+[budget]
+max_agents_per_run = 30
+max_estimated_cost_usd = 12.0
+max_wall_clock_seconds = 7200
+
+[decompose]
+mode = "off"
+
+[mem_prime]
+mode = "off"
+max_tokens = 500
+recency_days = 90
+min_relevance = 0.6
+adapter = "dispatch_file"

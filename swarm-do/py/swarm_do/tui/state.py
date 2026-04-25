@@ -78,18 +78,22 @@ class StatusSummary:
 
 
 PIPELINE_INTENTS: dict[str, str] = {
+    "brainstorm": "brainstorm",
     "default": "implement",
+    "design": "design",
     "lightweight": "implement",
     "hybrid-review": "review",
     "mco-review-lab": "mco-assisted review",
     "compete": "competitive implementation",
     "research": "research",
+    "review": "review",
     "ultra-plan": "design",
 }
 PIPELINE_INTENT_ORDER = (
-    "implement",
-    "design",
+    "brainstorm",
     "research",
+    "design",
+    "implement",
     "review",
     "competitive implementation",
     "mco-assisted review",

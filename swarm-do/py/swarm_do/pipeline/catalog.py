@@ -636,6 +636,20 @@ _IMPLEMENTATION_PROFILE = PipelineProfileSpec(
 )
 
 
+_BRAINSTORM_PROFILE = PipelineProfileSpec(
+    profile_id="brainstorm",
+    label="Brainstorm",
+    description="Output-only ideation pipeline that produces a synthesis note without writer branches or a PR.",
+    command_name="/swarm-do:brainstorm",
+    terminal_behavior="synthesis note with directions, tradeoffs, fast checks, and open questions; no writer branch, implementation handoff, or PR",
+    output_only=True,
+    preview_only=False,
+    requires_command_profile=False,
+    pipeline_names=("brainstorm",),
+    preset_names=("brainstorm",),
+)
+
+
 _RESEARCH_PROFILE = PipelineProfileSpec(
     profile_id="research",
     label="Research",
@@ -650,6 +664,34 @@ _RESEARCH_PROFILE = PipelineProfileSpec(
 )
 
 
+_DESIGN_PROFILE = PipelineProfileSpec(
+    profile_id="design",
+    label="Design",
+    description="Output-only design pipeline that produces a recommendation and execution-ready plan.",
+    command_name="/swarm-do:design",
+    terminal_behavior="recommendation and execution-ready design note; no writer branch, implementation handoff, or PR",
+    output_only=True,
+    preview_only=False,
+    requires_command_profile=False,
+    pipeline_names=("design",),
+    preset_names=("design",),
+)
+
+
+_REVIEW_PROFILE = PipelineProfileSpec(
+    profile_id="review",
+    label="Review",
+    description="Output-only review pipeline that produces a findings and evidence summary.",
+    command_name="/swarm-do:review",
+    terminal_behavior="findings/evidence summary with checks, issues, and production risk; no writer branch, implementation handoff, or PR",
+    output_only=True,
+    preview_only=False,
+    requires_command_profile=False,
+    pipeline_names=("review",),
+    preset_names=("review",),
+)
+
+
 _PREVIEW_ONLY_PROFILE = PipelineProfileSpec(
     profile_id="preview-only",
     label="Preview Only",
@@ -659,6 +701,14 @@ _PREVIEW_ONLY_PROFILE = PipelineProfileSpec(
     output_only=True,
     preview_only=True,
     requires_command_profile=True,
+)
+
+
+_OUTPUT_PROFILES: tuple[PipelineProfileSpec, ...] = (
+    _BRAINSTORM_PROFILE,
+    _RESEARCH_PROFILE,
+    _DESIGN_PROFILE,
+    _REVIEW_PROFILE,
 )
 
 
@@ -781,7 +831,14 @@ def compile_prompt_variant_fan_out(role: str, lens_ids: list[str] | tuple[str, .
 
 
 def list_pipeline_profiles() -> list[PipelineProfileSpec]:
-    return [_IMPLEMENTATION_PROFILE, _RESEARCH_PROFILE, _PREVIEW_ONLY_PROFILE]
+    return [_IMPLEMENTATION_PROFILE, *_OUTPUT_PROFILES, _PREVIEW_ONLY_PROFILE]
+
+
+def _named_profile_for(pipeline_name: str, source_name: str | None) -> PipelineProfileSpec | None:
+    for profile in _OUTPUT_PROFILES:
+        if pipeline_name in profile.pipeline_names or source_name in profile.pipeline_names:
+            return profile
+    return None
 
 
 def _pipeline_roles(pipeline: Mapping[str, Any]) -> set[str]:
@@ -817,8 +874,9 @@ def pipeline_is_research_only(pipeline: Mapping[str, Any]) -> bool:
 
 def pipeline_profile_for(pipeline_name: str, pipeline: Mapping[str, Any]) -> PipelineProfileSpec:
     source = pipeline.get("forked_from") if isinstance(pipeline.get("forked_from"), str) else None
-    if pipeline_name in _RESEARCH_PROFILE.pipeline_names or source in _RESEARCH_PROFILE.pipeline_names:
-        return _RESEARCH_PROFILE
+    named_profile = _named_profile_for(pipeline_name, source)
+    if named_profile is not None:
+        return named_profile
     if pipeline_is_research_only(pipeline):
         return _RESEARCH_PROFILE
     if pipeline_has_writer(pipeline):
