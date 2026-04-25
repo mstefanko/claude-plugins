@@ -18,9 +18,9 @@
       "category": "discovery"
     },
     {
-      "name": "swarm-do",
+      "name": "swarmdaddy",
       "source": "./swarm-do",
-      "description": "Beads-backed multi-agent swarm orchestration: plans, writer/review pipeline, Claude+Codex routing.",
+      "description": "SwarmDaddy: Beads-backed multi-agent orchestration for plans, reviews, research, and Claude+Codex routing.",
       "category": "orchestration"
     }
   ]

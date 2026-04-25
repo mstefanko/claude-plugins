@@ -6,6 +6,11 @@ Vertical {
     height: 1fr;
 }
 
+#logo {
+    padding: 0 1;
+    height: 6;
+}
+
 #banner, #target, #hash, #burn {
     padding: 0 1;
     height: 1;

@@ -1,4 +1,4 @@
-"""Textual operator console for swarm-do."""
+"""Textual operator console for SwarmDaddy."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 try:  # Optional dependency installed by bin/swarm-tui.
+    from rich.text import Text
     from textual.app import App, ComposeResult
     from textual.containers import Container, Horizontal, Vertical
     from textual.screen import ModalScreen, Screen
@@ -75,6 +76,24 @@ from swarm_do.tui.state import (
 
 
 if TEXTUAL_IMPORT_ERROR is None:
+
+    def swarmdaddy_logo() -> Text:
+        logo = Text()
+        amber = "#c98418"
+        ink = "#dfe7e5"
+        teal = "#65b8b0"
+        logo.append("       __    __          ", style=f"bold {amber}")
+        logo.append("Swarm", style=f"bold {ink}")
+        logo.append("Daddy\n", style=f"bold {amber}")
+        logo.append("    __/  \\__/  \\__\n", style=f"bold {amber}")
+        logo.append("   /  \\__/", style=f"bold {amber}")
+        logo.append("[]", style=f"bold {teal}")
+        logo.append("\\__/  \\\n", style=f"bold {amber}")
+        logo.append("   \\__/  \\__/  \\__/\n", style=f"bold {amber}")
+        logo.append("   /  \\__/  \\__/  \\\n", style=f"bold {amber}")
+        logo.append("   \\__/  \\__/  \\__/", style=f"bold {amber}")
+        return logo
+
 
     class StatusBar(Static):
         def refresh_status(self) -> None:
@@ -330,6 +349,7 @@ if TEXTUAL_IMPORT_ERROR is None:
         def compose(self) -> ComposeResult:
             yield Header()
             with Vertical():
+                yield Static(swarmdaddy_logo(), id="logo")
                 yield Static("", id="banner")
                 yield DataTable(id="inflight")
                 yield Static("", id="burn")
@@ -1117,7 +1137,7 @@ if TEXTUAL_IMPORT_ERROR is None:
 
     class SwarmTui(App):
         CSS_PATH = "app.tcss"
-        TITLE = "swarm-do"
+        TITLE = "SwarmDaddy"
         BINDINGS = [
             ("d", "dashboard", "Dashboard"),
             ("s", "settings", "Settings"),

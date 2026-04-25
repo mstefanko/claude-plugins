@@ -1,17 +1,19 @@
-# swarm-do
+# SwarmDaddy
 
-`swarm-do` is a Claude Code plugin for running Beads-backed multi-agent
+![SwarmDaddy terminal honeycomb logo](docs/assets/swarmdaddy-readme-logo.png)
+
+`SwarmDaddy` is a Claude Code plugin for running Beads-backed multi-agent
 workflows. It turns a plan, research question, design question, review target,
 or brainstorm topic into a structured swarm run with explicit roles,
 checkpoints, telemetry, and backend routing across Claude and Codex.
 
 The plugin has two main modes:
 
-- **Implementation runs** with `/swarm-do:do`: inspect a phased plan, create
+- **Implementation runs** with `/swarmdaddy:do`: inspect a phased plan, create
   Beads issues, dispatch research/analysis/clarify/writer/spec-review/review/docs
   roles, use worktrees for writer units, and finish with one consolidated PR.
-- **Output-only runs** with `/swarm-do:brainstorm`, `/swarm-do:research`,
-  `/swarm-do:design`, and `/swarm-do:review`: gather evidence or judgment and
+- **Output-only runs** with `/swarmdaddy:brainstorm`, `/swarmdaddy:research`,
+  `/swarmdaddy:design`, and `/swarmdaddy:review`: gather evidence or judgment and
   close with notes. These profiles do not create writer branches or PRs.
 
 ## Requirements
@@ -24,7 +26,7 @@ The plugin has two main modes:
   `codex` for Codex-backed stages, and optional `mco` for MCO provider stages.
 - Optional TUI dependencies are managed by `bin/swarm-tui` on first launch.
 
-The plugin never initializes Beads implicitly. Run `/swarm-do:init-beads` only
+The plugin never initializes Beads implicitly. Run `/swarmdaddy:init-beads` only
 when you have decided the current repo should get a `.beads/` store.
 
 ## Quick Start
@@ -33,14 +35,14 @@ when you have decided the current repo should get a `.beads/` store.
 
    ```text
    /plugin marketplace update mstefanko-plugins
-   /plugin install swarm-do@mstefanko-plugins
+   /plugin install swarmdaddy@mstefanko-plugins
    /reload-plugins
    ```
 
 2. In the repo where you want to run a swarm, initialize Beads if needed:
 
    ```text
-   /swarm-do:init-beads
+   /swarmdaddy:init-beads
    ```
 
 3. Check the active routing profile:
@@ -54,23 +56,23 @@ when you have decided the current repo should get a `.beads/` store.
 4. Pick a command:
 
    ```text
-   /swarm-do:do docs/my-plan.md --decompose=inspect
-   /swarm-do:research "How does auth state flow through this repo?"
-   /swarm-do:design docs/cache-redesign-question.md
-   /swarm-do:review main..feature/my-branch
-   /swarm-do:brainstorm "Safer migration paths for the telemetry schema"
+   /swarmdaddy:do docs/my-plan.md --decompose=inspect
+   /swarmdaddy:research "How does auth state flow through this repo?"
+   /swarmdaddy:design docs/cache-redesign-question.md
+   /swarmdaddy:review main..feature/my-branch
+   /swarmdaddy:brainstorm "Safer migration paths for the telemetry schema"
    ```
 
 5. Resume interrupted implementation work by Beads epic id:
 
    ```text
-   /swarm-do:resume bd-123
-   /swarm-do:resume bd-123 --merge
+   /swarmdaddy:resume bd-123
+   /swarmdaddy:resume bd-123 --merge
    ```
 
 ## Choosing A Profile
 
-Fresh installs have no active preset. With no active preset, `/swarm-do:do`
+Fresh installs have no active preset. With no active preset, `/swarmdaddy:do`
 uses the `default` pipeline and route resolution falls back to
 `${CLAUDE_PLUGIN_DATA}/backends.toml` and built-in role defaults.
 
@@ -101,30 +103,30 @@ bin/swarm compete docs/my-plan.md
 
 `bin/swarm compete <plan-path>` validates and activates the `competitive`
 preset. It does not dispatch by itself; after it succeeds, run
-`/swarm-do:do <plan-path>`.
+`/swarmdaddy:do <plan-path>`.
 
 ## Slash Commands
 
-- `/swarm-do:do <plan-path> [flags]`: run the implementation pipeline.
+- `/swarmdaddy:do <plan-path> [flags]`: run the implementation pipeline.
   Supported flags include `--codex-review auto|on|off`,
   `--risk low|moderate|high`, `--decompose=off|inspect|enforce`,
   `--force-simple <phase_id>`, `--force-decompose <phase_id>`, and `--auto`.
-- `/swarm-do:brainstorm <topic-or-path> [--dry-run]`: output-only divergent
+- `/swarmdaddy:brainstorm <topic-or-path> [--dry-run]`: output-only divergent
   exploration with a synthesis note.
-- `/swarm-do:research <question-or-path> [--dry-run]`: output-only evidence
+- `/swarmdaddy:research <question-or-path> [--dry-run]`: output-only evidence
   gathering with a research memo.
-- `/swarm-do:design <question-or-path> [--dry-run]`: output-only design
+- `/swarmdaddy:design <question-or-path> [--dry-run]`: output-only design
   exploration with an execution-ready recommendation.
-- `/swarm-do:review <branch-pr-diff-or-path> [--dry-run]`: output-only review
+- `/swarmdaddy:review <branch-pr-diff-or-path> [--dry-run]`: output-only review
   with findings, checks, risk, and gaps.
-- `/swarm-do:init-beads`: explicit, idempotent `bd init --stealth` bootstrap.
-- `/swarm-do:resume <bd-id> [--merge]`: resume from a Beads epic/run issue.
+- `/swarmdaddy:init-beads`: explicit, idempotent `bd init --stealth` bootstrap.
+- `/swarmdaddy:resume <bd-id> [--merge]`: resume from a Beads epic/run issue.
 
-There is no shipped `/swarm-do:debug`, `/swarm-do:help`, or
-`/swarm-do:compete` slash command. Use the role and CLI surfaces documented
+There is no shipped `/swarmdaddy:debug`, `/swarmdaddy:help`, or
+`/swarmdaddy:compete` slash command. Use the role and CLI surfaces documented
 here instead.
 
-## What Happens In `/swarm-do:do`
+## What Happens In `/swarmdaddy:do`
 
 1. Preflight checks Beads, preset budget, rollout status, permissions, and
    provider readiness.
@@ -136,7 +138,7 @@ here instead.
 5. Writer work uses isolated unit branches/worktrees. Spec-review approval is
    required before merging a unit into the integration branch.
 6. Review and docs lanes run after implementation evidence exists.
-7. Completed units write checkpoints; `/swarm-do:resume` uses Beads id plus
+7. Completed units write checkpoints; `/swarmdaddy:resume` uses Beads id plus
    run-event mappings to find the right resume point.
 8. A clean full run ends with one consolidated PR into `main`.
 
@@ -404,7 +406,7 @@ the assessment and proposed refactor path.
 ## Development Notes
 
 - Edit the marketplace clone, not the install cache. The cache under
-  `~/.claude/plugins/cache/.../swarm-do/` is overwritten by marketplace
+  `~/.claude/plugins/cache/.../swarmdaddy/` is overwritten by marketplace
   updates. Make code changes in the marketplace/worktree clone, commit, push,
   then run `/plugin marketplace update mstefanko-plugins` and `/reload-plugins`.
 - Do not hand-edit generated README sections bounded by

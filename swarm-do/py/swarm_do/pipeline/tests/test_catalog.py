@@ -113,10 +113,10 @@ class PipelineCatalogTests(unittest.TestCase):
 
     def test_pipeline_profiles_mark_phase4_output_profiles_runnable(self) -> None:
         profiles = {profile.profile_id: profile for profile in list_pipeline_profiles()}
-        self.assertEqual(profiles["brainstorm"].command_name, "/swarm-do:brainstorm")
-        self.assertEqual(profiles["research"].command_name, "/swarm-do:research")
-        self.assertEqual(profiles["design"].command_name, "/swarm-do:design")
-        self.assertEqual(profiles["review"].command_name, "/swarm-do:review")
+        self.assertEqual(profiles["brainstorm"].command_name, "/swarmdaddy:brainstorm")
+        self.assertEqual(profiles["research"].command_name, "/swarmdaddy:research")
+        self.assertEqual(profiles["design"].command_name, "/swarmdaddy:design")
+        self.assertEqual(profiles["review"].command_name, "/swarmdaddy:review")
 
         for name in ("brainstorm", "research", "design", "review"):
             pipeline = load_pipeline(find_pipeline(name).path)

@@ -1,6 +1,6 @@
 {
-  "name": "swarm-do",
-  "description": "Beads-backed multi-agent swarm orchestration: plans, writer/review pipeline, Claude+Codex routing.",
+  "name": "swarmdaddy",
+  "description": "SwarmDaddy: Beads-backed multi-agent orchestration for plans, reviews, research, and Claude+Codex routing.",
   "author": { "name": "mstefanko" },
-  "keywords": ["swarm", "beads", "orchestration", "codex", "multi-agent"]
+  "keywords": ["swarmdaddy", "swarm", "beads", "orchestration", "codex", "multi-agent"]
 }

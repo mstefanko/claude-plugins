@@ -3,11 +3,11 @@ description: "Run an output-only research swarm and produce an evidence memo"
 argument-hint: "<research-question-or-path> [--dry-run]"
 ---
 
-# /swarm-do:research
+# /swarmdaddy:research
 
 Run a research-only swarm profile. This command gathers evidence and closes with
 a memo or Beads synthesis note. It must not open writer branches, implementation
-handoffs, docs lanes, consolidated PRs, or `/swarm-do:do` plan-prepare work.
+handoffs, docs lanes, consolidated PRs, or `/swarmdaddy:do` plan-prepare work.
 
 ## Argument
 
@@ -17,7 +17,7 @@ prints the graph without dispatching agents.
 
 ## What Happens
 
-1. **Preflight:** verify Beads is available with the normal swarm-do helper.
+1. **Preflight:** verify Beads is available with the normal SwarmDaddy helper.
 2. **Profile validation:** validate and activate the `research` preset/pipeline,
    including budget preview and route invariants.
 3. **Permissions:** check the read-only research permission preset.
@@ -34,7 +34,7 @@ after the validation commands below.
 Run preflight:
 
 ```bash
-bash "$CLAUDE_PLUGIN_ROOT/bin/_lib/beads-preflight.sh" swarm-do
+bash "$CLAUDE_PLUGIN_ROOT/bin/_lib/beads-preflight.sh" swarmdaddy
 ```
 
 Validate the command profile. If the research request is a single existing file

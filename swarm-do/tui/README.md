@@ -1,6 +1,6 @@
-# swarm-do TUI
+# SwarmDaddy TUI
 
-The operator console is an optional Textual app. The CLI and `/swarm-do:do`
+The operator console is an optional Textual app. The CLI and `/swarmdaddy:do`
 continue to work without installing these dependencies.
 
 ## Launch
@@ -45,7 +45,7 @@ coverage live in `actions.py`.
   Stock pipelines remain read-only; editing starts by forking a pipeline and
   its matching preset into user-owned files.
 - The stock `brainstorm`, `research`, `design`, and `review` pipelines are
-  runnable through their matching `/swarm-do:*` commands. User or experimental
+  runnable through their matching `/swarmdaddy:*` commands. User or experimental
   output-only pipelines remain activation-gated unless their profile is known.
 
 ## Composer Flow

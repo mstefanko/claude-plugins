@@ -299,7 +299,7 @@ def cmd_compete(args: argparse.Namespace) -> int:
         print(f"competitive preset {preset_name} is valid for {args.plan_path}")
         return 0
     _activate_preset(preset_name)
-    print(f"loaded preset {preset_name}; run /swarm-do:do {args.plan_path} to start Pattern 5")
+    print(f"loaded preset {preset_name}; run /swarmdaddy:do {args.plan_path} to start Pattern 5")
     return 0
 
 
@@ -356,7 +356,7 @@ def _cmd_output_profile(args: argparse.Namespace, *, profile_id: str) -> int:
         print(f"{profile_id} preset {preset_name} is valid")
         return 0
     _activate_preset(preset_name)
-    command = actual_profile.command_name or f"/swarm-do:{profile_id}"
+    command = actual_profile.command_name or f"/swarmdaddy:{profile_id}"
     print(f"loaded preset {preset_name}; run {command} to dispatch the {actual_profile.label.lower()} profile")
     return 0
 

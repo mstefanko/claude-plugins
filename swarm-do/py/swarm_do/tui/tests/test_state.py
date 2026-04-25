@@ -283,7 +283,7 @@ class TuiStateTests(EnvTestCase):
         for name in ("brainstorm", "research", "design", "review"):
             pipeline = load_pipeline(find_pipeline(name).path)
             self.assertIn(
-                f"profile: {name} status=runnable command=/swarm-do:{name}",
+                f"profile: {name} status=runnable command=/swarmdaddy:{name}",
                 pipeline_profile_summary(name, pipeline),
             )
             self.assertIsNone(pipeline_activation_blocker(name, pipeline))

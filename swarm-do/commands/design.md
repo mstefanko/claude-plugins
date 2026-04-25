@@ -3,12 +3,12 @@ description: "Run an output-only design swarm and produce an execution-ready rec
 argument-hint: "<design-question-or-path> [--dry-run]"
 ---
 
-# /swarm-do:design
+# /swarmdaddy:design
 
 Run a design-only swarm profile. This command gathers evidence, explores design
 risks through analysis lenses, checks ambiguities, and closes with an
 execution-ready recommendation. It must not open writer branches,
-implementation handoffs, docs lanes, consolidated PRs, or `/swarm-do:do`
+implementation handoffs, docs lanes, consolidated PRs, or `/swarmdaddy:do`
 plan-prepare work.
 
 ## Argument
@@ -19,7 +19,7 @@ prints the graph without dispatching agents.
 
 ## What Happens
 
-1. **Preflight:** verify Beads is available with the normal swarm-do helper.
+1. **Preflight:** verify Beads is available with the normal SwarmDaddy helper.
 2. **Profile validation:** validate and activate the `design` preset/pipeline,
    including budget preview and route invariants.
 3. **Permissions:** check read-only research and clarify permission presets.
@@ -36,7 +36,7 @@ after the validation commands below.
 Run preflight:
 
 ```bash
-bash "$CLAUDE_PLUGIN_ROOT/bin/_lib/beads-preflight.sh" swarm-do
+bash "$CLAUDE_PLUGIN_ROOT/bin/_lib/beads-preflight.sh" swarmdaddy
 ```
 
 Validate the command profile. If the design request is a single existing file

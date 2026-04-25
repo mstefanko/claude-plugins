@@ -3,12 +3,12 @@ description: "Run an output-only review swarm and produce a findings/evidence su
 argument-hint: "<branch-pr-diff-or-path> [--dry-run]"
 ---
 
-# /swarm-do:review
+# /swarmdaddy:review
 
 Run a review-only swarm profile. This command inspects an existing branch, PR,
 diff, or code area and closes with a findings/evidence summary. It must not
 open writer branches, implementation handoffs, docs lanes, consolidated PRs, or
-`/swarm-do:do` plan-prepare work.
+`/swarmdaddy:do` plan-prepare work.
 
 ## Argument
 
@@ -19,7 +19,7 @@ agents.
 
 ## What Happens
 
-1. **Preflight:** verify Beads is available with the normal swarm-do helper.
+1. **Preflight:** verify Beads is available with the normal SwarmDaddy helper.
 2. **Profile validation:** validate and activate the `review` preset/pipeline,
    including budget preview and route invariants.
 3. **Permissions:** check the read-only review permission preset.
@@ -35,7 +35,7 @@ after the validation commands below.
 Run preflight:
 
 ```bash
-bash "$CLAUDE_PLUGIN_ROOT/bin/_lib/beads-preflight.sh" swarm-do
+bash "$CLAUDE_PLUGIN_ROOT/bin/_lib/beads-preflight.sh" swarmdaddy
 ```
 
 Validate the command profile. If the review target is a single existing file

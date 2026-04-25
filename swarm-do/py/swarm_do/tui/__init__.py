@@ -1,2 +1,2 @@
-"""Textual operator console for swarm-do."""
+"""Textual operator console for SwarmDaddy."""
 

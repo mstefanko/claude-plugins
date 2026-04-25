@@ -391,7 +391,7 @@ def fork_preset(source_name: str, new_name: str) -> Path:
     data["origin"] = "user"
     data["forked_from"] = source.name
     data["forked_from_hash"] = "sha256:" + sha256_file(source.path)
-    data.setdefault("generated_by", "swarm-do pipeline composer")
+    data.setdefault("generated_by", "SwarmDaddy pipeline composer")
     errors = schema_lint_preset(data)
     if errors:
         raise ValueError("; ".join(errors))
@@ -412,7 +412,7 @@ def fork_pipeline(source_name: str, new_name: str) -> Path:
     data["origin"] = "user"
     data["forked_from"] = source.name
     data["forked_from_hash"] = "sha256:" + sha256_file(source.path)
-    data.setdefault("generated_by", "swarm-do pipeline composer")
+    data.setdefault("generated_by", "SwarmDaddy pipeline composer")
     _raise_pipeline_errors(data)
     activation_error = pipeline_activation_error(new_name, data)
     if activation_error:
@@ -448,14 +448,14 @@ def fork_preset_and_pipeline(
     pipeline["origin"] = "user"
     pipeline["forked_from"] = pipeline_item.name
     pipeline["forked_from_hash"] = "sha256:" + sha256_file(pipeline_item.path)
-    pipeline.setdefault("generated_by", "swarm-do pipeline composer")
+    pipeline.setdefault("generated_by", "SwarmDaddy pipeline composer")
 
     preset["name"] = new_name
     preset["pipeline"] = new_name
     preset["origin"] = "user"
     preset["forked_from"] = preset_item.name
     preset["forked_from_hash"] = "sha256:" + sha256_file(preset_item.path)
-    preset.setdefault("generated_by", "swarm-do pipeline composer")
+    preset.setdefault("generated_by", "SwarmDaddy pipeline composer")
 
     errors = schema_lint_preset(preset)
     errors.extend(_pipeline_errors(pipeline, preset_name=new_name, preset=preset))
@@ -495,7 +495,7 @@ def save_user_pipeline(name: str, pipeline_mapping: Mapping[str, Any], *, expect
     data = copy.deepcopy(dict(pipeline_mapping))
     data["name"] = name
     data.setdefault("origin", "user")
-    data.setdefault("generated_by", "swarm-do pipeline composer")
+    data.setdefault("generated_by", "SwarmDaddy pipeline composer")
     _raise_pipeline_errors(data)
     activation_error = pipeline_activation_error(name, data)
     if activation_error:

@@ -1,4 +1,4 @@
-"""Shared state readers for the swarm-do TUI.
+"""Shared state readers for the SwarmDaddy TUI.
 
 This module intentionally has no Textual dependency so it can be unit-tested
 without installing the optional TUI stack.

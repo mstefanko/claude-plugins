@@ -3,11 +3,11 @@ description: "Run an output-only brainstorm swarm and produce a synthesis note"
 argument-hint: "<topic-or-path> [--dry-run]"
 ---
 
-# /swarm-do:brainstorm
+# /swarmdaddy:brainstorm
 
 Run a brainstorm-only swarm profile. This command explores options and closes
 with a synthesis note. It must not open writer branches, implementation
-handoffs, docs lanes, consolidated PRs, or `/swarm-do:do` plan-prepare work.
+handoffs, docs lanes, consolidated PRs, or `/swarmdaddy:do` plan-prepare work.
 
 ## Argument
 
@@ -17,7 +17,7 @@ without dispatching agents.
 
 ## What Happens
 
-1. **Preflight:** verify Beads is available with the normal swarm-do helper.
+1. **Preflight:** verify Beads is available with the normal SwarmDaddy helper.
 2. **Profile validation:** validate and activate the `brainstorm`
    preset/pipeline, including budget preview and route invariants.
 3. **Permissions:** check the read-only brainstorm permission preset.
@@ -33,7 +33,7 @@ after the validation commands below.
 Run preflight:
 
 ```bash
-bash "$CLAUDE_PLUGIN_ROOT/bin/_lib/beads-preflight.sh" swarm-do
+bash "$CLAUDE_PLUGIN_ROOT/bin/_lib/beads-preflight.sh" swarmdaddy
 ```
 
 Validate the command profile. If the brainstorm target is a single existing

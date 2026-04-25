@@ -1,17 +1,17 @@
 ---
-name: swarm-do
-description: Orchestrator prompt for the /swarm-do:do slash command. Not invoked directly — the plugin's command file fires this skill when the operator runs /swarm-do:do <plan-path>.
+name: swarmdaddy
+description: Orchestrator prompt for the /swarmdaddy:do slash command. Not invoked directly — the plugin's command file fires this skill when the operator runs /swarmdaddy:do <plan-path>.
 ---
 
 # Do Plan
 
-You are the Claude dispatcher for the swarm-do pipeline engine. `/swarm-do:do <plan-path>` is for real plan files only. `$ARGUMENTS` may also include operator flags such as `--codex-review auto|on|off`, `--risk low|moderate|high`, `--decompose=off|inspect|enforce`, `--force-simple <phase_id>`, `--force-decompose <phase_id>`, and `--auto`; parse those flags before treating the remaining token as the plan path.
+You are the Claude dispatcher for the SwarmDaddy pipeline engine. `/swarmdaddy:do <plan-path>` is for real plan files only. `$ARGUMENTS` may also include operator flags such as `--codex-review auto|on|off`, `--risk low|moderate|high`, `--decompose=off|inspect|enforce`, `--force-simple <phase_id>`, `--force-decompose <phase_id>`, and `--auto`; parse those flags before treating the remaining token as the plan path.
 
-`/swarm-do:brainstorm`, `/swarm-do:research`, `/swarm-do:design`, and
-`/swarm-do:review` are separate output-only command profiles. They use their
+`/swarmdaddy:brainstorm`, `/swarmdaddy:research`, `/swarmdaddy:design`, and
+`/swarmdaddy:review` are separate output-only command profiles. They use their
 matching stock presets/pipelines and terminate in their profile-specific notes:
 brainstorm synthesis, research evidence memo, design recommendation, or review
-findings. They never run `/swarm-do:do` plan-prepare, writer branches,
+findings. They never run `/swarmdaddy:do` plan-prepare, writer branches,
 implementation handoff, docs lanes, worktrees, integration merges, or PR
 creation.
 
@@ -20,7 +20,7 @@ creation.
 1. Run the beads preflight exactly once before creating issues:
 
 ```bash
-bash "$CLAUDE_PLUGIN_ROOT/bin/_lib/beads-preflight.sh" swarm-do
+bash "$CLAUDE_PLUGIN_ROOT/bin/_lib/beads-preflight.sh" swarmdaddy
 ```
 
 On failure, halt and surface the helper's stderr. Do not auto-init beads.
@@ -77,8 +77,8 @@ logic.
 
 ## Output-Only Profile Boundaries
 
-When invoked from `/swarm-do:brainstorm`, `/swarm-do:research`,
-`/swarm-do:design`, or `/swarm-do:review`, use the same deterministic helpers
+When invoked from `/swarmdaddy:brainstorm`, `/swarmdaddy:research`,
+`/swarmdaddy:design`, or `/swarmdaddy:review`, use the same deterministic helpers
 but stay within the selected output-only profile:
 
 ```bash
@@ -298,7 +298,7 @@ claude-mem itself.
 
 ## Resume Re-entry
 
-`/swarm-do:resume <bd-id>` first runs:
+`/swarmdaddy:resume <bd-id>` first runs:
 
 ```bash
 "$CLAUDE_PLUGIN_ROOT/bin/swarm" resume <bd-id> --json
@@ -311,7 +311,7 @@ resume at the plan-prepare gate before creating child issues. If the manifest is
 `drift`, `not-found`, or `complete`, do not dispatch new work; surface the state
 to the operator.
 
-Never auto-merge during resume drift. `/swarm-do:resume <bd-id>` and
+Never auto-merge during resume drift. `/swarmdaddy:resume <bd-id>` and
 `bin/swarm resume <bd-id>` default to inspect/no-merge; `--merge` is explicit
 operator opt-in and still requires clean drift status.
 

@@ -3,9 +3,9 @@ description: "Initialize a stealth beads rig in the current repo (idempotent, ex
 argument-hint: ""
 ---
 
-# /swarm-do:init-beads
+# /swarmdaddy:init-beads
 
-Explicit helper for bootstrapping a beads rig so `/swarm-do:do` can run in this repo. **Never auto-invoked.** The swarm pipeline enforces the `bd where` precondition but never creates a rig itself — this command is the supported path when the operator decides a repo should get one.
+Explicit helper for bootstrapping a beads rig so `/swarmdaddy:do` can run in this repo. **Never auto-invoked.** The swarm pipeline enforces the `bd where` precondition but never creates a rig itself — this command is the supported path when the operator decides a repo should get one.
 
 ## Execute
 
@@ -20,7 +20,7 @@ Run these steps in order. Stop on any error and surface it to the operator.
    ```bash
    if rig="$(bd where 2>/dev/null)" && [[ -n "$rig" ]]; then
      echo "beads rig already present: $rig"
-     echo "nothing to do — /swarm-do:do will use this rig"
+     echo "nothing to do — /swarmdaddy:do will use this rig"
      exit 0
    fi
    ```
