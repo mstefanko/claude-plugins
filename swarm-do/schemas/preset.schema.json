@@ -58,6 +58,17 @@
         "min_relevance": { "type": "number", "minimum": 0 },
         "adapter": { "type": "string", "enum": ["dispatch_file", "local_sqlite"] }
       }
+    },
+    "review_providers": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "selection": { "type": "string", "enum": ["auto", "explicit", "off"] },
+        "min_success": { "type": "integer", "minimum": 1 },
+        "max_parallel": { "type": "integer", "minimum": 1, "maximum": 32 },
+        "include": { "type": "array", "items": { "type": "string" } },
+        "exclude": { "type": "array", "items": { "type": "string" } }
+      }
     }
   }
 }

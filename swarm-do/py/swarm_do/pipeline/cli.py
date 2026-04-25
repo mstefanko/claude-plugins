@@ -491,6 +491,7 @@ def cmd_providers_doctor(args: argparse.Namespace) -> int:
     report = provider_doctor(
         preset_name=args.preset,
         run_mco=args.mco,
+        run_review=args.review,
         mco_timeout_seconds=args.mco_timeout_seconds,
     )
     if args.json:
@@ -891,6 +892,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p = providers_sub.add_parser("doctor")
     p.add_argument("--preset", default="current", help="preset to inspect; default is the active preset, falling back to default pipeline")
     p.add_argument("--mco", action="store_true", help="also run mco doctor --json")
+    p.add_argument("--review", action="store_true", help="run internal swarm-review provider shim diagnostics")
     p.add_argument("--mco-timeout-seconds", type=int, default=30)
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_providers_doctor)

@@ -170,7 +170,24 @@ context pointers.
 2. For each layer, dispatch every stage in the layer in parallel.
 3. For normal `agents` stages, create one beads issue per agent with the stage ID, role, upstream stage issues, full phase text, and verification checklist. If the agent has `lens: <lens-id>`, resolve that lens through `py/swarm_do/pipeline/catalog.py`, load the mapped `roles/<role>/variants/<name>.md` file, and include it as an additive overlay after the normal role prompt. Only singular `lens` is valid; do not stack or invent `lenses`.
 4. For `fan_out` stages, create `fan_out.count` sibling issues assigned to `fan_out.role`. For `variant: prompt_variants`, load the corresponding file from `roles/<role>/variants/<name>.md` and include it as an additive overlay. For `variant: models`, use the resolved route for each branch.
-5. For experimental `provider` stages, create one coordinator-owned beads issue for the stage, assemble a read-only review prompt from the phase text, upstream writer/spec evidence, changed files, and verification checklist, write that prompt under the run artifact directory, and invoke the provider helper. For MCO review stages use:
+5. For experimental `provider` stages, create one coordinator-owned beads issue for the stage, assemble a read-only review prompt from the phase text, upstream writer/spec evidence, changed files, and verification checklist, write that prompt under the run artifact directory, and invoke the provider helper. For internal provider review stages (`provider.type: swarm-review`) use:
+
+```bash
+"$CLAUDE_PLUGIN_ROOT/bin/swarm-provider-review" \
+  --command review \
+  --prompt-file <prompt-file> \
+  --selection <auto|explicit|off> \
+  --providers <comma-separated-provider-list-if-explicit> \
+  --repo <repo> \
+  --output-dir "${CLAUDE_PLUGIN_DATA}/runs/<run_id>/stages/<stage_id>" \
+  --run-id <run-id> \
+  --issue-id <bd-id> \
+  --stage-id <stage-id> \
+  --timeout-seconds <timeout-seconds> \
+  --max-parallel <max-parallel>
+```
+
+For MCO review stages use:
 
 ```bash
 "$CLAUDE_PLUGIN_ROOT/bin/swarm-stage-mco" \
@@ -328,7 +345,7 @@ When dispatching a Codex-backed normal agent with `lens`, pass
 
 For `agent-codex-review`, the runner enforces `SWARM_CODEX_REVIEW_TIMEOUT_SECONDS` (default 60). Timeout or backend failure emits a discarded sentinel in beads notes and returns success so the pipeline can continue. Treat those sentinels as "no usable Codex review", not as approval. Other Codex roles keep normal non-zero failure behavior.
 
-The stock `hybrid-review` preset is the Phase 1 dogfood lane: it adds `agent-codex-review` after `spec-review` while keeping the normal Claude review and docs lanes. The experimental `mco-review-lab` preset adds a read-only MCO provider stage after `writer`; Claude `agent-review` waits for both `spec-review` and the MCO evidence. It is opt-in only and uses the working MCO Claude provider until Codex provider support is fixed. The stock `competitive` preset is the manual Pattern 5 lane; `bin/swarm compete <plan-path>` validates and activates it.
+The stock `hybrid-review` preset is the Phase 1 dogfood lane: it adds `agent-codex-review` after `spec-review` while keeping the normal Claude review and docs lanes. The experimental `mco-review-lab` preset adds a read-only MCO provider stage after `writer`; Claude `agent-review` waits for both `spec-review` and the MCO evidence. It is opt-in only and remains a comparison spike. The internal `swarm-review` provider path is the preferred direction, but real Claude/Codex shims are not eligible for stock automatic selection until their Phase 0 read-only and CLI-drift gates are green. The stock `competitive` preset is the manual Pattern 5 lane; `bin/swarm compete <plan-path>` validates and activates it.
 
 ## Role Loading
 

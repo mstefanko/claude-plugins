@@ -107,8 +107,10 @@ class PipelineCatalogTests(unittest.TestCase):
     def test_module_and_route_catalogs_include_mco_gating(self) -> None:
         module_ids = {module.module_id for module in list_modules()}
         self.assertIn("mco-review", module_ids)
+        self.assertIn("provider-review", module_ids)
         self.assertTrue(get_module("mco-review").experimental)
         self.assertTrue(get_module("mco-review").requires_provider_doctor)
+        self.assertTrue(get_module("provider-review").requires_provider_doctor)
         self.assertIn("fan-out-model-routes", {lens.lens_id for lens in list_route_lenses()})
 
     def test_pipeline_profiles_mark_phase4_output_profiles_runnable(self) -> None:

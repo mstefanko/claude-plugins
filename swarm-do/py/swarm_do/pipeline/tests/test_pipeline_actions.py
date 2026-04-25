@@ -19,6 +19,7 @@ from swarm_do.pipeline.actions import (
     save_user_pipeline,
     set_fan_out_routes,
     set_prompt_variant_lenses,
+    set_provider_review_config,
     set_stage_agent_lens,
     set_stage_agent_route,
     set_user_preset_pipeline,
@@ -421,6 +422,25 @@ stages:
         stage = next(stage for stage in edited["stages"] if stage["id"] == "codex-review-extra")
         self.assertEqual(stage["agents"][0]["role"], "agent-codex-review")
         self.assertEqual(stage["failure_tolerance"]["mode"], "best-effort")
+
+    def test_provider_review_module_and_config_editor_use_selection_policy(self) -> None:
+        fork_pipeline("default", "provider-review-edit")
+        add_pipeline_stage_from_module("provider-review-edit", "provider-review")
+        set_provider_review_config(
+            "provider-review-edit",
+            "provider-review",
+            selection="explicit",
+            providers=["codex", "claude", "codex"],
+            timeout_seconds=900,
+            max_parallel=2,
+        )
+
+        edited = load_pipeline(find_pipeline("provider-review-edit").path)
+        stage = next(stage for stage in edited["stages"] if stage["id"] == "provider-review")
+        self.assertEqual(stage["provider"]["type"], "swarm-review")
+        self.assertEqual(stage["provider"]["selection"], "explicit")
+        self.assertEqual(stage["provider"]["providers"], ["codex", "claude"])
+        self.assertEqual(stage["provider"]["max_parallel"], 2)
 
     def test_module_stage_addition_rejects_path_like_module_id(self) -> None:
         fork_pipeline("default", "path-module-edit")

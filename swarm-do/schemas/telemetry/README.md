@@ -126,18 +126,26 @@ orchestration decisions.
 
 Schema: `knowledge.schema.json#v1`
 
-### `provider-findings.json` — per-run external provider artifact, not a ledger
+### `provider-findings.json` — per-run provider artifact, not a ledger
 
 `bin/swarm-stage-mco` writes one normalized provider-findings artifact under the
 swarm run artifact directory. This file is intentionally not appended to
 `${CLAUDE_PLUGIN_DATA}/telemetry/` yet; it is the experimental contract used to
 evaluate whether external provider stages deserve promotion into the pipeline DSL.
 
-Schema: `provider_findings.schema.json#v1-draft`
+The internal `bin/swarm-provider-review` runner writes the side-by-side
+`provider-findings.v2-draft` shape. MCO keeps the original v1 draft contract.
+
+Schemas: `provider_findings.schema.json#v1-draft` for MCO,
+`provider_findings.v2.schema.json#v2-draft` for `swarm-review`.
 
 Key provider fields: `provider`, `provider_count`, `selected_providers`,
 `detected_by`, `consensus_score`, `consensus_level`, `source_artifact_path`,
 and `provider_error_class`.
+
+Raw provider sidecars for `swarm-review` stay under the run stage artifact
+directory and are classified as local sensitive run artifacts. They are retained
+or purged with that run directory and are not promoted into telemetry ledgers.
 
 ---
 

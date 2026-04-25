@@ -24,6 +24,8 @@ The plugin has two main modes:
 - `git` for implementation runs that create branches and worktrees.
 - Backend CLIs for the lanes you enable: `claude` for Claude-backed stages,
   `codex` for Codex-backed stages, and optional `mco` for MCO provider stages.
+  Internal `swarm-review` provider shims use the same local CLIs but are
+  eligible only after their read-only Phase 0 checks pass.
 - Optional TUI dependencies are managed by `bin/swarm-tui` on first launch.
 
 The plugin never initializes Beads implicitly. Run `/swarmdaddy:init-beads` only
@@ -49,7 +51,8 @@ when you have decided the current repo should get a `.beads/` store.
 
    ```bash
    "${CLAUDE_PLUGIN_ROOT}/bin/swarm" preset list
-   "${CLAUDE_PLUGIN_ROOT}/bin/swarm" providers doctor
+  "${CLAUDE_PLUGIN_ROOT}/bin/swarm" providers doctor
+  "${CLAUDE_PLUGIN_ROOT}/bin/swarm" providers doctor --review
    "${CLAUDE_PLUGIN_ROOT}/bin/swarm" permissions check
    ```
 
@@ -181,7 +184,7 @@ bin/swarm pipeline diff <name>
 bin/swarm pipeline drift <name>
 
 bin/swarm mode claude-only|codex-only|balanced|brainstorm|research|design|review|custom
-bin/swarm providers doctor [--preset <name|current>] [--mco] [--mco-timeout-seconds N] [--json]
+bin/swarm providers doctor [--preset <name|current>] [--review] [--mco] [--mco-timeout-seconds N] [--json]
 bin/swarm permissions check [--role <role>] [--scope repo|user] [--path <settings.json>]
 bin/swarm permissions install --role <role> [--dry-run] [--rollback] [--scope repo|user] [--path <settings.json>]
 
@@ -227,6 +230,7 @@ Additional helpers:
   role fallback runner for writer/spec-review/review/codex-review lanes.
 - `bin/swarm-gpt`, `bin/swarm-claude`, `bin/swarm-gpt-review`: convenience
   aliases over `swarm-run`.
+- `bin/swarm-provider-review`: internal read-only provider evidence runner.
 - `bin/swarm-stage-mco`: provider-stage helper used by MCO pipeline stages.
 - `bin/extract-phase.sh`: findings extraction shim.
 - `bin/swarm-telemetry`: telemetry inspection and maintenance CLI.
@@ -260,7 +264,8 @@ Pipelines support these stage shapes:
 - `agents`: one or more role agents in a stage.
 - `fan_out`: multiple branches of one role, optionally with prompt variants or
   model routes, followed by a merge agent.
-- `provider`: read-only external evidence stages, currently MCO review.
+- `provider`: read-only evidence stages. `swarm-review` is the internal
+  runner; `mco` remains the experimental comparison path.
 
 Prompt lenses are cataloged overlays for specific roles and pipeline positions.
 Fan-out prompt variants and single-agent `lens` overlays are validated against

@@ -638,6 +638,28 @@ _MODULES: tuple[ModuleSpec, ...] = (
         requires_provider_doctor=True,
         experimental=True,
     ),
+    ModuleSpec(
+        module_id="provider-review",
+        label="Provider Review",
+        description="Internal swarm-owned read-only provider evidence stage.",
+        category="provider",
+        stage_template={
+            "id": "provider-review",
+            "depends_on": ["writer"],
+            "provider": {
+                "type": "swarm-review",
+                "command": "review",
+                "selection": "auto",
+                "output": "findings",
+                "memory": False,
+                "timeout_seconds": 1800,
+                "max_parallel": 4,
+            },
+            "failure_tolerance": {"mode": "best-effort"},
+        },
+        requires_provider_doctor=True,
+        experimental=True,
+    ),
 )
 
 

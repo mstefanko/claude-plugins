@@ -48,6 +48,15 @@ def stage_agent_count(stage: Mapping[str, Any]) -> int:
         return count
     provider = stage.get("provider") if isinstance(stage, Mapping) else None
     if isinstance(provider, Mapping):
+        if provider.get("type") == "swarm-review":
+            selection = provider.get("selection", "auto")
+            if selection == "off":
+                return 0
+            if selection == "explicit":
+                providers = provider.get("providers", [])
+                return len(providers) if isinstance(providers, list) else 0
+            max_parallel = provider.get("max_parallel")
+            return min(max_parallel if isinstance(max_parallel, int) and max_parallel > 0 else 4, 3)
         providers = provider.get("providers", [])
         return len(providers) if isinstance(providers, list) else 1
     agents = stage.get("agents") if isinstance(stage, Mapping) else None
@@ -137,9 +146,11 @@ def graph_lines(pipeline: Mapping[str, Any]) -> list[str]:
             elif "provider" in stage:
                 provider = stage["provider"]
                 tolerance = stage.get("failure_tolerance", {"mode": "strict"})
+                selection = provider.get("selection")
+                selection_text = f" selection={selection}" if selection is not None else ""
                 lines.append(
                     f"  - {stage_id} depends_on={deps} provider={provider.get('type')} "
-                    f"command={provider.get('command')} providers={provider.get('providers')} "
+                    f"command={provider.get('command')}{selection_text} providers={provider.get('providers')} "
                     f"mode={provider.get('mode', 'review')} output={provider.get('output', 'findings')} "
                     f"memory={provider.get('memory', False)} timeout_seconds={provider.get('timeout_seconds')} "
                     f"failure_tolerance={tolerance.get('mode', 'strict')}"

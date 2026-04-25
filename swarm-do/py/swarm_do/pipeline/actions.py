@@ -20,8 +20,11 @@ from swarm_do.pipeline.editing import (
     mutable_stage_by_id as _stage_by_id,
     mutable_stage_fan_out as _stage_fan_out,
     normalize_mco_providers as _normalize_mco_providers,
+    normalize_review_providers as _normalize_review_providers,
     provider_failure_tolerance as _provider_failure_tolerance,
     validate_mco_timeout as _validate_mco_timeout,
+    validate_provider_review_max_parallel as _validate_provider_review_max_parallel,
+    validate_provider_review_selection as _validate_provider_review_selection,
 )
 from swarm_do.pipeline.engine import topological_layers
 from swarm_do.pipeline.paths import current_preset_path, resolve_data_dir, user_pipelines_dir, user_presets_dir
@@ -231,6 +234,19 @@ def render_toml(data: Mapping[str, Any]) -> str:
         for key in ("max_tokens", "recency_days", "min_relevance"):
             if key in mem_prime:
                 lines.append(f"{key} = {mem_prime[key]}")
+    review_providers = data.get("review_providers")
+    if isinstance(review_providers, Mapping) and review_providers:
+        lines.extend(["", "[review_providers]"])
+        for key in ("selection",):
+            if isinstance(review_providers.get(key), str):
+                lines.append(f"{key} = {_quote(str(review_providers[key]))}")
+        for key in ("min_success", "max_parallel"):
+            if key in review_providers:
+                lines.append(f"{key} = {review_providers[key]}")
+        for key in ("include", "exclude"):
+            value = review_providers.get(key)
+            if isinstance(value, list):
+                lines.append(f"{key} = [{', '.join(_quote(str(item)) for item in value)}]")
     roles = data.get("roles")
     if isinstance(roles, Mapping):
         for role in sorted(roles):
@@ -666,6 +682,44 @@ def set_mco_provider_config(
         failure_tolerance_mode,
         min_success,
         branch_count=len(provider["providers"]),
+    )
+    return save_user_pipeline(item.name, pipeline)
+
+
+def set_provider_review_config(
+    pipeline_name: str,
+    stage_id: str,
+    *,
+    selection: str,
+    providers: list[str] | None = None,
+    timeout_seconds: int,
+    max_parallel: int = 4,
+    failure_tolerance_mode: str = "best-effort",
+    min_success: int | None = None,
+) -> Path:
+    item, pipeline = _load_user_pipeline(pipeline_name)
+    stage = _stage_by_id(pipeline, stage_id)
+    provider = stage.get("provider")
+    if not isinstance(provider, dict) or provider.get("type") != "swarm-review":
+        raise ValueError(f"stage {stage_id} is not a swarm-review provider stage")
+    normalized_selection = _validate_provider_review_selection(selection)
+    provider["type"] = "swarm-review"
+    provider["command"] = "review"
+    provider["selection"] = normalized_selection
+    provider["output"] = "findings"
+    provider["memory"] = False
+    provider["timeout_seconds"] = _validate_mco_timeout(timeout_seconds)
+    provider["max_parallel"] = _validate_provider_review_max_parallel(max_parallel)
+    if normalized_selection == "explicit":
+        provider["providers"] = _normalize_review_providers(providers or [])
+        branch_count = len(provider["providers"])
+    else:
+        provider.pop("providers", None)
+        branch_count = 0 if normalized_selection == "off" else provider["max_parallel"]
+    stage["failure_tolerance"] = _provider_failure_tolerance(
+        failure_tolerance_mode,
+        min_success,
+        branch_count=branch_count,
     )
     return save_user_pipeline(item.name, pipeline)
 

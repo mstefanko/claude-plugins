@@ -26,12 +26,14 @@ MERGE_ORDER = ("strategy", "agent")
 PROVIDER_ORDER = (
     "type",
     "command",
+    "selection",
     "providers",
     "mode",
     "strict_contract",
     "output",
     "memory",
     "timeout_seconds",
+    "max_parallel",
 )
 FAILURE_TOLERANCE_ORDER = ("mode", "min_success")
 
@@ -122,7 +124,7 @@ def _order_for_mapping(mapping: Mapping[str, Any]) -> tuple[str, ...]:
         return ROUTE_ORDER
     if {"strategy", "agent"} & keys:
         return MERGE_ORDER
-    if "type" in keys and "providers" in keys:
+    if "type" in keys and ("providers" in keys or "selection" in keys):
         return PROVIDER_ORDER
     if "mode" in keys and keys <= set(FAILURE_TOLERANCE_ORDER):
         return FAILURE_TOLERANCE_ORDER

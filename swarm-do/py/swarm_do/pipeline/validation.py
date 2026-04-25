@@ -38,6 +38,7 @@ PRESET_TOP_KEYS = {
     "budget",
     "decompose",
     "mem_prime",
+    "review_providers",
     "forked_from_hash",
     "generated_by",
 }
@@ -50,18 +51,22 @@ PROVIDER_KEYS = {
     "type",
     "command",
     "providers",
+    "selection",
     "mode",
     "strict_contract",
     "output",
     "memory",
     "timeout_seconds",
+    "max_parallel",
 }
-PROVIDER_TYPES = {"mco"}
+PROVIDER_TYPES = {"mco", "swarm-review"}
 PROVIDER_COMMANDS = {"review"}
 PROVIDER_MODES = {"review", "debate", "divide"}
 PROVIDER_OUTPUTS = {"findings"}
+REVIEW_PROVIDER_SELECTIONS = {"auto", "explicit", "off"}
 MCO_PROVIDER_ORDER = ("claude", "codex", "gemini", "opencode", "qwen")
 MCO_PROVIDERS = set(MCO_PROVIDER_ORDER)
+REVIEW_PROVIDER_POLICY_KEYS = {"selection", "min_success", "max_parallel", "include", "exclude"}
 WORK_UNIT_TOP_KEYS = {"schema_version", "plan_path", "bd_epic_id", "work_units"}
 WORK_UNIT_KEYS = {
     "id",
@@ -183,8 +188,17 @@ def _all_roles(pipeline: Mapping[str, Any]) -> list[str]:
 
 def _provider_branch_count(stage: Mapping[str, Any]) -> int:
     provider = stage.get("provider")
-    if isinstance(provider, Mapping) and isinstance(provider.get("providers"), list):
-        return len(provider["providers"])
+    if isinstance(provider, Mapping):
+        if provider.get("type") == "swarm-review":
+            selection = provider.get("selection", "auto")
+            if selection == "off":
+                return 0
+            if selection == "explicit" and isinstance(provider.get("providers"), list):
+                return len(provider["providers"])
+            max_parallel = provider.get("max_parallel")
+            return max_parallel if isinstance(max_parallel, int) and max_parallel > 0 else 4
+        if isinstance(provider.get("providers"), list):
+            return len(provider["providers"])
     return 1
 
 
@@ -237,6 +251,27 @@ def schema_lint_preset(preset: Mapping[str, Any]) -> list[str]:
                 errors.append("preset: mem_prime.min_relevance must be a number")
             if "adapter" in mem_prime and mem_prime.get("adapter") not in MEM_PRIME_ADAPTERS:
                 errors.append(f"preset: mem_prime.adapter must be one of {sorted(MEM_PRIME_ADAPTERS)}")
+    review_providers = preset.get("review_providers")
+    if review_providers is not None:
+        if not isinstance(review_providers, Mapping):
+            errors.append("preset: review_providers must be a table")
+        else:
+            unknown_review = sorted(set(review_providers.keys()) - REVIEW_PROVIDER_POLICY_KEYS)
+            if unknown_review:
+                errors.append(
+                    "preset: review_providers supports only run-shaping policy keys; "
+                    f"unknown keys: {', '.join(unknown_review)}"
+                )
+            if "selection" in review_providers and review_providers.get("selection") not in REVIEW_PROVIDER_SELECTIONS:
+                errors.append(f"preset: review_providers.selection must be one of {sorted(REVIEW_PROVIDER_SELECTIONS)}")
+            for key in ("include", "exclude"):
+                if key in review_providers and not _is_str_list(review_providers.get(key)):
+                    errors.append(f"preset: review_providers.{key} must be an array of strings")
+            for key in ("min_success", "max_parallel"):
+                if key in review_providers and (
+                    not isinstance(review_providers.get(key), int) or review_providers.get(key) < 1
+                ):
+                    errors.append(f"preset: review_providers.{key} must be a positive integer")
     return errors
 
 
@@ -383,13 +418,37 @@ def schema_lint_pipeline(pipeline: Mapping[str, Any]) -> list[str]:
                     errors.append(f"{path}.provider.type must be one of {sorted(PROVIDER_TYPES)}")
                 if provider.get("command") not in PROVIDER_COMMANDS:
                     errors.append(f"{path}.provider.command must be one of {sorted(PROVIDER_COMMANDS)}")
+                provider_type = provider.get("type")
                 providers = provider.get("providers")
-                if not _is_str_list(providers) or not (1 <= len(providers) <= 5):
-                    errors.append(f"{path}.provider.providers must be an array of 1..5 provider names")
-                else:
-                    unknown_mco = sorted(set(providers) - MCO_PROVIDERS)
-                    if unknown_mco:
-                        errors.append(f"{path}.provider.providers contains unsupported MCO provider(s): {', '.join(unknown_mco)}")
+                if provider_type == "mco":
+                    if "selection" in provider:
+                        errors.append(f"{path}.provider.selection is only valid for swarm-review provider stages")
+                    if not _is_str_list(providers) or not (1 <= len(providers) <= 5):
+                        errors.append(f"{path}.provider.providers must be an array of 1..5 provider names")
+                    else:
+                        unknown_mco = sorted(set(providers) - MCO_PROVIDERS)
+                        if unknown_mco:
+                            errors.append(f"{path}.provider.providers contains unsupported MCO provider(s): {', '.join(unknown_mco)}")
+                elif provider_type == "swarm-review":
+                    selection = provider.get("selection", "auto")
+                    if selection not in REVIEW_PROVIDER_SELECTIONS:
+                        errors.append(f"{path}.provider.selection must be one of {sorted(REVIEW_PROVIDER_SELECTIONS)}")
+                    if pipeline.get("origin") == "stock" and providers is not None:
+                        errors.append(f"{path}.provider.providers is not allowed in stock swarm-review pipelines")
+                    if selection in {"auto", "off"} and providers is not None:
+                        errors.append(f"{path}.provider.providers is only valid when selection is explicit")
+                    if selection == "explicit":
+                        if not _is_str_list(providers) or not (1 <= len(providers) <= 16):
+                            errors.append(f"{path}.provider.providers must be an array of 1..16 provider names for explicit selection")
+                        else:
+                            invalid_review = sorted(
+                                name for name in providers if not name or "/" in name or "\\" in name or name.startswith(".")
+                            )
+                            if invalid_review:
+                                errors.append(f"{path}.provider.providers contains invalid provider id(s): {', '.join(invalid_review)}")
+                    max_parallel = provider.get("max_parallel")
+                    if max_parallel is not None and (not isinstance(max_parallel, int) or not (1 <= max_parallel <= 32)):
+                        errors.append(f"{path}.provider.max_parallel must be an integer from 1 to 32")
                 if "mode" in provider and provider.get("mode") not in PROVIDER_MODES:
                     errors.append(f"{path}.provider.mode must be one of {sorted(PROVIDER_MODES)}")
                 if "strict_contract" in provider and not isinstance(provider.get("strict_contract"), bool):

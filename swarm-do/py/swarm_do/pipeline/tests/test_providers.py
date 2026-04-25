@@ -143,6 +143,56 @@ class ProviderDoctorTests(unittest.TestCase):
         self.assertFalse(report.ok)
         self.assertTrue(any(check.name == "provider:mco" and check.status == "error" for check in report.checks))
 
+    def test_review_doctor_reports_fake_internal_provider_selection(self) -> None:
+        old_data = os.environ.get("CLAUDE_PLUGIN_DATA")
+        old_fake = os.environ.get("SWARM_PROVIDER_REVIEW_FAKE_PROVIDERS")
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["CLAUDE_PLUGIN_DATA"] = td
+            os.environ["SWARM_PROVIDER_REVIEW_FAKE_PROVIDERS"] = "claude,codex"
+            try:
+                report = provider_doctor(
+                    run_review=True,
+                    which=lambda cmd: f"/bin/{cmd}" if cmd == "claude" else None,
+                )
+            finally:
+                _restore_env("CLAUDE_PLUGIN_DATA", old_data)
+                _restore_env("SWARM_PROVIDER_REVIEW_FAKE_PROVIDERS", old_fake)
+
+        self.assertTrue(report.ok)
+        payload = report.as_dict()
+        self.assertFalse(payload["review_required"])
+        self.assertEqual(payload["selected_review_providers"], ["claude", "codex"])
+        rendered = format_provider_report(report)
+        self.assertIn("provider-review:claude", rendered)
+        self.assertIn("selected: claude, codex", rendered)
+
+    def test_review_and_mco_doctor_contracts_can_be_combined(self) -> None:
+        def which(cmd: str) -> str | None:
+            return f"/bin/{cmd}" if cmd in {"claude", "mco"} else None
+
+        def runner(*args, **kwargs):
+            return subprocess.CompletedProcess(
+                args=args[0],
+                returncode=0,
+                stdout=json.dumps({"providers": [{"name": "claude", "status": "ok"}]}),
+                stderr="",
+            )
+
+        old_data = os.environ.get("CLAUDE_PLUGIN_DATA")
+        old_fake = os.environ.get("SWARM_PROVIDER_REVIEW_FAKE_PROVIDERS")
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["CLAUDE_PLUGIN_DATA"] = td
+            os.environ["SWARM_PROVIDER_REVIEW_FAKE_PROVIDERS"] = "claude"
+            try:
+                report = provider_doctor(run_review=True, run_mco=True, which=which, runner=runner)
+            finally:
+                _restore_env("CLAUDE_PLUGIN_DATA", old_data)
+                _restore_env("SWARM_PROVIDER_REVIEW_FAKE_PROVIDERS", old_fake)
+
+        self.assertTrue(report.ok)
+        self.assertTrue(any(check.name == "provider:mco" and check.status == "ok" for check in report.checks))
+        self.assertTrue(any(check.name == "provider-review:claude" and check.status == "ok" for check in report.checks))
+
 
 if __name__ == "__main__":
     unittest.main()

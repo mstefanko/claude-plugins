@@ -41,7 +41,8 @@ coverage live in `actions.py`.
 - Pipelines open a composer workbench: intent-sorted gallery, selectable
   stage rows, focused stage inspector, validation rail, fork-first edit dialog,
   in-memory draft save/discard state, route/module edit controls, and
-  undo/redo. MCO provider stages are visibly experimental and read-only.
+  undo/redo. Provider-review stages are visibly experimental and read-only;
+  MCO remains the comparison path.
   Stock pipelines remain read-only; editing starts by forking a pipeline and
   its matching preset into user-owned files.
 - The stock `brainstorm`, `research`, `design`, and `review` pipelines are
@@ -63,10 +64,10 @@ On the Pipelines screen:
   lists each lens id, category, execution mode, output-contract rule, merge
   expectation, and safety note. Lens edits stay in the in-memory draft until
   validation passes and `Ctrl+S` writes the YAML.
-- Press `o` on an MCO provider stage to edit selected providers, timeout, and
-  failure tolerance. The editor preserves `command=review`, `memory=false`,
-  `output=findings`, and strict-contract read-only boundaries.
-- Press `d` on an MCO-bearing pipeline to run provider doctor and view local
+- Press `o` on a provider-review stage to edit selected providers or selection
+  mode, timeout, and failure tolerance. The editor preserves `command=review`,
+  `memory=false`, `output=findings`, and read-only boundaries.
+- Press `d` on a provider-bearing pipeline to run provider doctor and view local
   provider readiness before activation.
 - Press `m` to add a catalog module to the draft, or `Delete` to remove the
   selected stage when nothing still depends on it.
@@ -84,7 +85,7 @@ Prompt lenses can now target fan-out branches or one normal agents-stage entry.
 Normal agents stages accept only singular `lens`; synthesize merge agents still
 have no prompt-overlay field.
 
-MCO result previews appear in the stage inspector when a prior
+Provider result previews appear in the stage inspector when a prior
 `${CLAUDE_PLUGIN_DATA}/runs/<run-id>/stages/<stage-id>/provider-findings.json`
 artifact exists. The preview shows status, provider count, selected providers,
 provider errors, and finding count; provider output remains evidence for

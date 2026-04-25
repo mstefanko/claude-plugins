@@ -9,6 +9,7 @@ import subprocess
 from collections.abc import Callable
 from typing import Any, Mapping
 
+from .provider_review import ReviewProviderResolver, ReviewSelectionResult
 from .registry import find_pipeline, load_pipeline
 from .resolver import BackendResolver, active_preset_name, load_preset_by_name
 
@@ -41,13 +42,15 @@ class ProviderDoctorReport:
     required_backends: tuple[str, ...]
     required_providers: tuple[str, ...]
     checks: tuple[ProviderCheck, ...]
+    review_required: bool = False
+    review_selection: ReviewSelectionResult | None = None
 
     @property
     def ok(self) -> bool:
         return all(check.status != "error" for check in self.checks)
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        row: dict[str, Any] = {
             "ok": self.ok,
             "active_preset": self.active_preset,
             "pipeline_name": self.pipeline_name,
@@ -55,6 +58,30 @@ class ProviderDoctorReport:
             "required_providers": list(self.required_providers),
             "checks": [check.as_dict() for check in self.checks],
         }
+        if self.review_required or self.review_selection is not None:
+            selection = self.review_selection
+            row.update(
+                {
+                    "review_required": self.review_required,
+                    "review_policy": selection.policy.as_dict() if selection else None,
+                    "configured_review_providers": list(selection.configured_providers) if selection else [],
+                    "eligible_review_providers": list(selection.eligible_providers) if selection else [],
+                    "selected_review_providers": list(selection.selected_providers) if selection else [],
+                    "skipped_review_providers": [status.as_dict() for status in selection.skipped_providers] if selection else [],
+                    "review_schema_flags": {
+                        status.provider_id: status.schema_mode for status in selection.provider_statuses
+                    }
+                    if selection
+                    else {},
+                    "review_read_only_flags": {
+                        status.provider_id: status.read_only_mode for status in selection.provider_statuses
+                    }
+                    if selection
+                    else {},
+                    "review_selection_result": selection.selection_result if selection else None,
+                }
+            )
+        return row
 
 
 def _stage_roles(pipeline: Mapping[str, Any]) -> list[tuple[str, Mapping[str, Any] | str | None]]:
@@ -142,6 +169,22 @@ def _required_mco_providers(pipeline: Mapping[str, Any]) -> tuple[str, ...]:
             if isinstance(name, str) and name:
                 providers.add(name)
     return tuple(sorted(providers))
+
+
+def _review_stage_request(pipeline: Mapping[str, Any]) -> tuple[str | None, tuple[str, ...], int | None]:
+    for stage in pipeline.get("stages") or []:
+        provider = stage.get("provider")
+        if not isinstance(provider, Mapping) or provider.get("type") != "swarm-review":
+            continue
+        providers = provider.get("providers")
+        explicit = tuple(item for item in providers if isinstance(item, str)) if isinstance(providers, list) else ()
+        max_parallel = provider.get("max_parallel")
+        return (
+            str(provider.get("selection")) if isinstance(provider.get("selection"), str) else None,
+            explicit,
+            max_parallel if isinstance(max_parallel, int) else None,
+        )
+    return None, (), None
 
 
 def _local_backend_checks(
@@ -254,6 +297,7 @@ def provider_doctor(
     *,
     preset_name: str | None = "current",
     run_mco: bool = False,
+    run_review: bool = False,
     mco_timeout_seconds: int = 30,
     which: Callable[[str], str | None] = shutil.which,
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
@@ -263,6 +307,8 @@ def provider_doctor(
     required: tuple[str, ...] = ()
     required_providers: tuple[str, ...] = ()
     required_mco_providers: tuple[str, ...] = ()
+    review_selection: ReviewSelectionResult | None = None
+    review_required = False
     if load_error:
         checks.append(load_error)
     elif pipeline is not None:
@@ -270,7 +316,34 @@ def provider_doctor(
             required = _required_backends(pipeline, active, preset_data)
             required_providers = _required_stage_providers(pipeline)
             required_mco_providers = _required_mco_providers(pipeline)
+            review_required = "swarm-review" in required_providers
             checks.extend(_local_backend_checks(required, which))
+            if run_review or review_required:
+                selection, explicit, max_parallel = _review_stage_request(pipeline)
+                resolver = ReviewProviderResolver(
+                    preset_name=active,
+                    preset_data=preset_data,
+                    which=which,
+                    runner=runner,
+                )
+                review_selection = resolver.select(
+                    selection=selection,
+                    explicit_providers=explicit,
+                    max_parallel=max_parallel,
+                )
+                selected = set(review_selection.selected_providers)
+                for status in review_selection.provider_statuses:
+                    check_status = "ok" if status.provider_id in selected or status.eligible else status.status
+                    if check_status == "eligible":
+                        check_status = "ok"
+                    checks.append(
+                        ProviderCheck(
+                            f"provider-review:{status.provider_id}",
+                            check_status,
+                            status.reason,
+                            status.as_dict(),
+                        )
+                    )
         except Exception as exc:
             checks.append(ProviderCheck("backend-resolution", "error", f"backend resolution failed: {exc}"))
     checks.append(
@@ -283,7 +356,15 @@ def provider_doctor(
         )
     )
     checks.sort(key=lambda check: (STATUS_ORDER.get(check.status, 99), check.name))
-    return ProviderDoctorReport(active, pipeline_name, required, required_providers, tuple(checks))
+    return ProviderDoctorReport(
+        active,
+        pipeline_name,
+        required,
+        required_providers,
+        tuple(checks),
+        review_required=review_required,
+        review_selection=review_selection,
+    )
 
 
 def format_provider_report(report: ProviderDoctorReport) -> str:
@@ -297,4 +378,16 @@ def format_provider_report(report: ProviderDoctorReport) -> str:
     ]
     for check in report.checks:
         lines.append(f"    {check.status.upper():7} {check.name} - {check.detail}")
+    if report.review_required or report.review_selection is not None:
+        selection = report.review_selection
+        lines.append("  provider_review:")
+        lines.append(f"    required: {str(report.review_required).lower()}")
+        if selection is None:
+            lines.append("    selection_result: not-run")
+        else:
+            lines.append(f"    selection: {selection.policy.selection}")
+            lines.append(f"    configured: {', '.join(selection.configured_providers) or 'none'}")
+            lines.append(f"    eligible: {', '.join(selection.eligible_providers) or 'none'}")
+            lines.append(f"    selected: {', '.join(selection.selected_providers) or 'none'}")
+            lines.append(f"    selection_result: {selection.selection_result}")
     return "\n".join(lines)

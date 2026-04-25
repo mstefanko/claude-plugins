@@ -115,6 +115,68 @@ stages:
         self.assertTrue(any("unsupported MCO provider" in e for e in errors))
         self.assertTrue(any("memory=true is not allowed" in e for e in errors))
 
+    def test_swarm_review_provider_stage_supports_auto_selection(self) -> None:
+        pipeline = loads(
+            """
+pipeline_version: 1
+name: provider-review
+stages:
+  - id: provider-review
+    provider:
+      type: swarm-review
+      command: review
+      selection: auto
+      output: findings
+      memory: false
+      timeout_seconds: 1800
+      max_parallel: 2
+"""
+        )
+
+        self.assertEqual(schema_lint_pipeline(pipeline), [])
+        self.assertEqual(stage_agent_count(pipeline["stages"][0]), 2)
+        rendered = "\n".join(graph_lines(pipeline))
+        self.assertIn("provider=swarm-review command=review selection=auto", rendered)
+
+    def test_swarm_review_rejects_providers_unless_selection_is_explicit(self) -> None:
+        pipeline = loads(
+            """
+pipeline_version: 1
+name: bad-provider-review
+stages:
+  - id: provider-review
+    provider:
+      type: swarm-review
+      command: review
+      selection: auto
+      providers: [claude]
+      timeout_seconds: 1800
+"""
+        )
+
+        errors = schema_lint_pipeline(pipeline)
+        self.assertTrue(any("providers is only valid when selection is explicit" in e for e in errors))
+
+    def test_stock_swarm_review_rejects_hardcoded_provider_lists(self) -> None:
+        pipeline = loads(
+            """
+pipeline_version: 1
+name: stock-provider-review
+origin: stock
+stages:
+  - id: provider-review
+    provider:
+      type: swarm-review
+      command: review
+      selection: explicit
+      providers: [claude]
+      timeout_seconds: 1800
+"""
+        )
+
+        errors = schema_lint_pipeline(pipeline)
+        self.assertTrue(any("providers is not allowed in stock swarm-review pipelines" in e for e in errors))
+
     def test_failure_tolerance_string_is_rejected(self) -> None:
         pipeline = loads(
             """
