@@ -7,23 +7,23 @@ import unittest
 from datetime import UTC, datetime
 from pathlib import Path
 
-from swarm_do.pipeline.config_hash import active_config_hash
-from swarm_do.pipeline.registry import load_preset
-from swarm_do.tui import actions as tui_actions
-from swarm_do.tui.actions import (
+from swarm_do.pipeline import actions as pipeline_actions
+from swarm_do.pipeline.actions import (
+    InFlightRun,
+    load_in_flight,
     request_handoff,
     rename_user_preset,
     set_base_route,
     set_user_preset_pipeline,
     set_user_preset_route,
 )
+from swarm_do.pipeline.config_hash import active_config_hash
+from swarm_do.pipeline.registry import load_preset
 from swarm_do.tui.state import (
     latest_checkpoint_event,
     latest_observation,
-    load_in_flight,
     load_observations,
     load_run_events,
-    InFlightRun,
     status_summary,
     token_burn_last_24h,
 )
@@ -210,13 +210,13 @@ max_wall_clock_seconds = 1800
 
     def test_cancel_refuses_non_swarm_run_pid(self) -> None:
         run = InFlightRun("bd-1", "agent-writer", "claude", "opus", "high", 12345, None, "running", self.root / "in-flight" / "bd-1.lock")
-        old = tui_actions._pid_command
-        tui_actions._pid_command = lambda pid: "/usr/bin/python something-else"
+        old = pipeline_actions._pid_command
+        pipeline_actions._pid_command = lambda pid: "/usr/bin/python something-else"
         try:
             with self.assertRaisesRegex(ValueError, "non-swarm-run"):
-                tui_actions.cancel_run(run)
+                pipeline_actions.cancel_run(run)
         finally:
-            tui_actions._pid_command = old
+            pipeline_actions._pid_command = old
 
 
 if __name__ == "__main__":

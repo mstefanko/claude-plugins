@@ -10,6 +10,15 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from .actions import (
+    cancel_run,
+    delete_user_preset,
+    find_in_flight,
+    rename_user_preset,
+    request_handoff,
+    set_user_preset_pipeline,
+    validate_preset_name,
+)
 from .engine import graph_lines
 from .paths import current_preset_path, resolve_data_dir, user_presets_dir
 from .registry import (
@@ -83,8 +92,6 @@ def cmd_preset_list(args: argparse.Namespace) -> int:
 
 
 def cmd_preset_save(args: argparse.Namespace) -> int:
-    from swarm_do.tui.actions import validate_preset_name
-
     try:
         validate_preset_name(args.name)
     except ValueError as exc:
@@ -144,8 +151,6 @@ def cmd_preset_diff(args: argparse.Namespace) -> int:
 
 
 def cmd_preset_rename(args: argparse.Namespace) -> int:
-    from swarm_do.tui.actions import rename_user_preset
-
     try:
         rename_user_preset(args.old_name, args.new_name)
     except ValueError as exc:
@@ -156,8 +161,6 @@ def cmd_preset_rename(args: argparse.Namespace) -> int:
 
 
 def cmd_preset_delete(args: argparse.Namespace) -> int:
-    from swarm_do.tui.actions import delete_user_preset
-
     try:
         delete_user_preset(args.name)
     except ValueError as exc:
@@ -345,7 +348,6 @@ def cmd_pipeline_lint(args: argparse.Namespace) -> int:
 
 def cmd_pipeline_set(args: argparse.Namespace) -> int:
     from .resolver import active_preset_name
-    from swarm_do.tui.actions import set_user_preset_pipeline
 
     preset = active_preset_name()
     if not preset:
@@ -387,8 +389,6 @@ def cmd_mode(args: argparse.Namespace) -> int:
 
 
 def cmd_handoff(args: argparse.Namespace) -> int:
-    from swarm_do.tui.actions import request_handoff
-
     try:
         path = request_handoff(args.issue_id, args.to)
     except ValueError as exc:
@@ -399,8 +399,6 @@ def cmd_handoff(args: argparse.Namespace) -> int:
 
 
 def cmd_cancel(args: argparse.Namespace) -> int:
-    from swarm_do.tui.actions import cancel_run, find_in_flight
-
     run = find_in_flight(args.issue_id)
     if run is None:
         print(f"swarm: cancel: no in-flight run for {args.issue_id}", file=sys.stderr)

@@ -22,8 +22,9 @@ from swarm_do.pipeline.engine import graph_lines
 from swarm_do.pipeline.registry import find_preset, list_pipelines, list_presets, load_pipeline, load_preset
 from swarm_do.pipeline.resolver import BACKENDS, EFFORTS, BackendResolver, ROLE_DEFAULTS, active_preset_name
 from swarm_do.pipeline.validation import schema_lint_pipeline, validate_preset_and_pipeline
-from swarm_do.tui import actions
-from swarm_do.tui.state import load_in_flight, load_runs, status_summary, token_burn_last_24h
+from swarm_do.pipeline import actions
+from swarm_do.pipeline.actions import load_in_flight
+from swarm_do.tui.state import load_runs, status_summary, token_burn_last_24h
 
 
 if TEXTUAL_IMPORT_ERROR is None:

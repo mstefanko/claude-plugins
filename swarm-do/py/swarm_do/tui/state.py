@@ -13,26 +13,10 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from swarm_do.pipeline.actions import InFlightRun, in_flight_dir, load_in_flight
 from swarm_do.pipeline.context import current_context
 from swarm_do.pipeline.paths import resolve_data_dir
 from swarm_do.pipeline.resolver import active_preset_name
-
-
-@dataclasses.dataclass(frozen=True)
-class InFlightRun:
-    issue_id: str
-    role: str
-    backend: str
-    model: str
-    effort: str
-    pid: int | None
-    started_at: str | None
-    status: str
-    path: Path
-
-    @property
-    def display_pid(self) -> str:
-        return str(self.pid) if self.pid is not None else "n/a"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -71,10 +55,6 @@ class StatusSummary:
 
 def telemetry_dir(data_dir: Path | None = None) -> Path:
     return (data_dir or resolve_data_dir()) / "telemetry"
-
-
-def in_flight_dir(data_dir: Path | None = None) -> Path:
-    return (data_dir or resolve_data_dir()) / "in-flight"
 
 
 def runs_path(data_dir: Path | None = None) -> Path:
@@ -143,33 +123,6 @@ def latest_checkpoint_event(data_dir: Path | None = None) -> dict[str, Any] | No
 def latest_observation(data_dir: Path | None = None) -> dict[str, Any] | None:
     rows = load_observations(data_dir)
     return rows[-1] if rows else None
-
-
-def load_in_flight(data_dir: Path | None = None) -> list[InFlightRun]:
-    base = in_flight_dir(data_dir)
-    if not base.is_dir():
-        return []
-    runs: list[InFlightRun] = []
-    for path in sorted(base.glob("*.lock")):
-        try:
-            value = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        pid = value.get("pid")
-        runs.append(
-            InFlightRun(
-                issue_id=str(value.get("issue_id") or path.stem.removeprefix("bd-")),
-                role=str(value.get("role") or "unknown"),
-                backend=str(value.get("backend") or "unknown"),
-                model=str(value.get("model") or "unknown"),
-                effort=str(value.get("effort") or "unknown"),
-                pid=pid if isinstance(pid, int) else None,
-                started_at=value.get("started_at") if isinstance(value.get("started_at"), str) else None,
-                status=str(value.get("status") or "running"),
-                path=path,
-            )
-        )
-    return runs
 
 
 def token_burn_last_24h(rows: list[dict[str, Any]], now: datetime | None = None) -> dict[str, int | None]:
