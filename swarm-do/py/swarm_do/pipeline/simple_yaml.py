@@ -17,6 +17,9 @@ class YamlError(ValueError):
     pass
 
 
+CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
 def load_yaml(path: str | Path) -> Any:
     p = Path(path)
     return loads(p.read_text(encoding="utf-8"), source=str(p))
@@ -25,6 +28,8 @@ def load_yaml(path: str | Path) -> Any:
 def loads(text: str, source: str = "<string>") -> Any:
     lines: list[tuple[int, str, int]] = []
     for lineno, raw in enumerate(text.splitlines(), 1):
+        if CONTROL_RE.search(raw):
+            raise YamlError(f"{source}:{lineno}: control characters are not supported")
         stripped = _strip_comment(raw).rstrip()
         if not stripped.strip():
             continue
@@ -45,9 +50,9 @@ def _strip_comment(raw: str) -> str:
     in_single = False
     in_double = False
     for i, ch in enumerate(raw):
-        if ch == "'" and not in_double:
+        if ch == "'" and not in_double and not _is_escaped(raw, i):
             in_single = not in_single
-        elif ch == '"' and not in_single:
+        elif ch == '"' and not in_single and not _is_escaped(raw, i):
             in_double = not in_double
         elif ch == "#" and not in_single and not in_double:
             return raw[:i]
@@ -149,7 +154,10 @@ def _parse_scalar(text: str) -> Any:
     if text == "false":
         return False
     if (text.startswith('"') and text.endswith('"')) or (text.startswith("'") and text.endswith("'")):
-        return ast.literal_eval(text)
+        value = ast.literal_eval(text)
+        if isinstance(value, str):
+            _reject_control_scalar(value)
+        return value
     if text.startswith("[") and text.endswith("]"):
         inner = text[1:-1].strip()
         if not inner:
@@ -170,7 +178,13 @@ def _parse_scalar(text: str) -> Any:
         return int(text)
     if re.fullmatch(r"-?[0-9]+\.[0-9]+", text):
         return float(text)
+    _reject_control_scalar(text)
     return text
+
+
+def _reject_control_scalar(value: str) -> None:
+    if CONTROL_RE.search(value):
+        raise YamlError("control characters are not supported in scalar strings")
 
 
 def _split_commas(text: str) -> Iterable[str]:
@@ -180,7 +194,7 @@ def _split_commas(text: str) -> Iterable[str]:
     quote = ""
     for i, ch in enumerate(text):
         if quote:
-            if ch == quote:
+            if ch == quote and not _is_escaped(text, i):
                 quote = ""
             continue
         if ch in ("'", '"'):
@@ -194,3 +208,12 @@ def _split_commas(text: str) -> Iterable[str]:
             start = i + 1
     parts.append(text[start:])
     return parts
+
+
+def _is_escaped(text: str, index: int) -> bool:
+    backslashes = 0
+    cursor = index - 1
+    while cursor >= 0 and text[cursor] == "\\":
+        backslashes += 1
+        cursor -= 1
+    return backslashes % 2 == 1

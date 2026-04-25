@@ -410,6 +410,30 @@ class TuiStateTests(EnvTestCase):
         self.assertTrue(draft.undo())
         self.assertEqual(current_stage_agent_lens_id(draft.pipeline, "analysis"), "architecture-risk")
 
+    def test_pipeline_draft_save_detects_disk_race(self) -> None:
+        fork_preset_and_pipeline("balanced", "default", "race-draft")
+        draft = start_pipeline_draft("race-draft")
+
+        set_stage_agent_route(
+            "race-draft",
+            "analysis",
+            0,
+            backend="codex",
+            model="gpt-5.4",
+            effort="high",
+        )
+        draft_set_stage_agent_lens(draft, "analysis", 0, "architecture-risk")
+
+        with self.assertRaisesRegex(ValueError, "changed on disk"):
+            pipeline_actions.save_user_pipeline(
+                draft.pipeline_name,
+                draft.pipeline,
+                expected_hash=draft.original_disk_hash,
+            )
+        saved = load_pipeline(find_pipeline("race-draft").path)
+        agent = next(stage for stage in saved["stages"] if stage["id"] == "analysis")["agents"][0]
+        self.assertNotIn("lens", agent)
+
     def test_pipeline_draft_module_palette_add_remove_and_undo(self) -> None:
         fork_preset_and_pipeline("balanced", "default", "module-draft")
         draft = start_pipeline_draft("module-draft")

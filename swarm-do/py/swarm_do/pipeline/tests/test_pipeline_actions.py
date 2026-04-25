@@ -26,8 +26,8 @@ from swarm_do.pipeline.actions import (
 from swarm_do.pipeline.cli import cmd_preset_diff
 from swarm_do.pipeline.diff import diff_user_pipeline, stock_drift_for_pipeline
 from swarm_do.pipeline.registry import find_pipeline, find_preset, load_pipeline, load_preset
-from swarm_do.pipeline.render_yaml import render_pipeline_yaml
-from swarm_do.pipeline.simple_yaml import loads
+from swarm_do.pipeline.render_yaml import render_pipeline_yaml, render_yaml
+from swarm_do.pipeline.simple_yaml import YamlError, loads
 
 
 class PipelinePersistenceTests(unittest.TestCase):
@@ -76,7 +76,7 @@ class PipelinePersistenceTests(unittest.TestCase):
         self.assertEqual(find_preset("my-coupled").origin, "user")
         self.assertEqual(find_pipeline("my-coupled").origin, "user")
 
-    def test_coupled_fork_partial_failure_leaves_only_inactive_pipeline(self) -> None:
+    def test_coupled_fork_partial_failure_rolls_back_pipeline(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "simulated failure"):
             fork_preset_and_pipeline(
                 "ultra-plan",
@@ -85,8 +85,9 @@ class PipelinePersistenceTests(unittest.TestCase):
                 _simulate_failure_after_pipeline=True,
             )
 
-        self.assertTrue((self.root / "pipelines" / "partial-coupled.yaml").is_file())
+        self.assertFalse((self.root / "pipelines" / "partial-coupled.yaml").exists())
         self.assertFalse((self.root / "presets" / "partial-coupled.toml").exists())
+        self.assertIsNone(find_pipeline("partial-coupled"))
         self.assertIsNone(find_preset("partial-coupled"))
 
     def test_name_collisions_are_rejected(self) -> None:
@@ -116,6 +117,46 @@ stages:
         with self.assertRaisesRegex(ValueError, "variant file missing"):
             save_user_pipeline("bad", bad)
         self.assertFalse((self.root / "pipelines" / "bad.yaml").exists())
+
+    def test_save_user_pipeline_rejects_preview_only_pipeline(self) -> None:
+        preview_only = loads(
+            """
+pipeline_version: 1
+name: review-only
+stages:
+  - id: review
+    agents:
+      - role: agent-review
+"""
+        )
+
+        with self.assertRaisesRegex(ValueError, "preview-only"):
+            save_user_pipeline("review-only", preview_only)
+        self.assertFalse((self.root / "pipelines" / "review-only.yaml").exists())
+
+    def test_fork_pipeline_rejects_preview_only_source(self) -> None:
+        pipelines = self.root / "pipelines"
+        pipelines.mkdir()
+        (pipelines / "legacy-preview.yaml").write_text(
+            render_pipeline_yaml(
+                loads(
+                    """
+pipeline_version: 1
+name: legacy-preview
+origin: user
+stages:
+  - id: review
+    agents:
+      - role: agent-review
+"""
+                )
+            ),
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(ValueError, "preview-only"):
+            fork_pipeline("legacy-preview", "legacy-preview-copy")
+        self.assertFalse((self.root / "pipelines" / "legacy-preview-copy.yaml").exists())
 
     def test_stable_yaml_renderer_round_trips_pipeline_subset(self) -> None:
         pipeline = loads(
@@ -157,6 +198,27 @@ stages:
         )
 
         self.assertEqual(loads(rendered)["stages"][0]["id"], "123")
+
+    def test_simple_yaml_round_trips_supported_scalar_corpus(self) -> None:
+        value = {
+            "plain": "alpha",
+            "space": "hello world",
+            "reserved": "true",
+            "numeric": "42",
+            "hash": "value # not a comment",
+            "colon": "a: b",
+            "quote": 'say "hi"',
+            "backslash": "roles\\agent",
+            "list": ["x y", "false", "1.2", "bracket [value]"],
+        }
+
+        self.assertEqual(loads(render_yaml(value)), value)
+
+    def test_simple_yaml_rejects_control_character_scalars(self) -> None:
+        with self.assertRaisesRegex(YamlError, "control characters"):
+            loads("name: bad\x01\n")
+        with self.assertRaisesRegex(YamlError, "control characters"):
+            loads('name: "\\u0001"\n')
 
     def test_stock_pipeline_mutation_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "stock pipelines are read-only"):
@@ -208,6 +270,15 @@ stages:
 
         saved = load_pipeline(find_pipeline("bad-agent-lens-edit").path)
         agent = next(stage for stage in saved["stages"] if stage["id"] == "writer")["agents"][0]
+        self.assertNotIn("lens", agent)
+
+    def test_stage_agent_lens_rejects_path_like_lens_id_before_save(self) -> None:
+        fork_pipeline("default", "path-lens-edit")
+        with self.assertRaisesRegex(ValueError, "unknown lens"):
+            set_stage_agent_lens("path-lens-edit", "analysis", 0, "../escape")
+
+        saved = load_pipeline(find_pipeline("path-lens-edit").path)
+        agent = next(stage for stage in saved["stages"] if stage["id"] == "analysis")["agents"][0]
         self.assertNotIn("lens", agent)
 
     def test_fan_out_route_reset_returns_to_resolver_default_shape(self) -> None:
@@ -264,10 +335,12 @@ max_wall_clock_seconds = 1800
 """,
             encoding="utf-8",
         )
-        save_user_pipeline(
-            "review-only",
-            loads(
-                """
+        pipelines = self.root / "pipelines"
+        pipelines.mkdir()
+        (pipelines / "review-only.yaml").write_text(
+            render_pipeline_yaml(
+                loads(
+                    """
 pipeline_version: 1
 name: review-only
 stages:
@@ -275,7 +348,9 @@ stages:
     agents:
       - role: agent-review
 """
+                )
             ),
+            encoding="utf-8",
         )
 
         with self.assertRaisesRegex(ValueError, "preview-only"):
@@ -320,6 +395,8 @@ stages:
                 """
 pipeline_version: 1
 name: review-lens-edit
+origin: user
+forked_from: review
 stages:
   - id: review
     fan_out:
@@ -344,6 +421,14 @@ stages:
         stage = next(stage for stage in edited["stages"] if stage["id"] == "codex-review-extra")
         self.assertEqual(stage["agents"][0]["role"], "agent-codex-review")
         self.assertEqual(stage["failure_tolerance"]["mode"], "best-effort")
+
+    def test_module_stage_addition_rejects_path_like_module_id(self) -> None:
+        fork_pipeline("default", "path-module-edit")
+        with self.assertRaisesRegex(ValueError, "unknown module"):
+            add_pipeline_stage_from_module("path-module-edit", "../codex-review")
+
+        edited = load_pipeline(find_pipeline("path-module-edit").path)
+        self.assertFalse(any(stage.get("id") == "codex-review" for stage in edited["stages"]))
 
     def test_stock_drift_and_diff_use_recorded_source(self) -> None:
         fork_pipeline("default", "drift-edit")

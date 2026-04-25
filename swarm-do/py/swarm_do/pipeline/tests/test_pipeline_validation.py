@@ -261,6 +261,33 @@ stages:
             errors = variant_existence_errors(pipeline)
         self.assertTrue(any("variant file missing" in e and "fake-missing" in e for e in errors))
 
+    def test_merge_agents_cannot_carry_lens_field(self) -> None:
+        pipeline = loads(
+            """
+pipeline_version: 1
+name: merge-lens
+stages:
+  - id: explore
+    fan_out:
+      role: agent-analysis
+      count: 2
+      variant: same
+    merge:
+      strategy: synthesize
+      agent: agent-analysis-judge
+      lens: architecture-risk
+"""
+        )
+
+        errors = schema_lint_pipeline(pipeline)
+        self.assertTrue(any("merge.lens is not supported" in e for e in errors))
+        self.assertFalse(any("unknown keys: lens" in e for e in errors))
+
+    def test_stage_agent_count_tolerates_malformed_stage_shapes(self) -> None:
+        self.assertEqual(stage_agent_count({"fan_out": {"count": "many"}, "merge": []}), 0)
+        self.assertEqual(stage_agent_count({"provider": {"providers": "claude"}}), 1)
+        self.assertEqual(stage_agent_count({"agents": "agent-review"}), 0)
+
     def test_bare_model_id_in_models_variant_is_rejected(self) -> None:
         pipeline = loads(
             """

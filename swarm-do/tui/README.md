@@ -38,15 +38,15 @@ coverage live in `actions.py`.
 - Dashboard reads `telemetry/runs.jsonl` and `in-flight/*.lock`.
 - Settings edits `${CLAUDE_PLUGIN_DATA}/backends.toml` through invariant-checked helpers.
 - Presets browse stock and user presets; stock presets are read-only.
-- Pipelines open a Phase 2B composer shell: intent-sorted gallery, selectable
+- Pipelines open a composer workbench: intent-sorted gallery, selectable
   stage rows, focused stage inspector, validation rail, fork-first edit dialog,
   in-memory draft save/discard state, route/module edit controls, and
   undo/redo. MCO provider stages are visibly experimental and read-only.
   Stock pipelines remain read-only; editing starts by forking a pipeline and
   its matching preset into user-owned files.
-- The stock `research` pipeline is runnable through `/swarm-do:research`.
-  Other output-only pipeline shapes remain preview-only until they have their
-  own command/profile binding.
+- The stock `brainstorm`, `research`, `design`, and `review` pipelines are
+  runnable through their matching `/swarm-do:*` commands. User or experimental
+  output-only pipelines remain activation-gated unless their profile is known.
 
 ## Composer Flow
 
@@ -92,6 +92,6 @@ downstream Claude-backed stages, not an automatic quality gate decision.
 
 ## Invariant Guards
 
-The TUI must share the same hard rejects as Phase 10 validation. In particular,
+The TUI must share the same hard rejects as pipeline validation. In particular,
 `orchestrator`, `agent-code-synthesizer`, and synthesize-merge agents must remain
 Claude-backed. There is no force-save path. See `docs/adr/0002-pipeline-invariants.md`.

@@ -30,9 +30,9 @@ else:  # pragma: no cover - UI smoke-tested through the wrapper in operator use.
     TEXTUAL_IMPORT_ERROR = None
 
 from swarm_do.pipeline.config_hash import active_config_hash
-from swarm_do.pipeline.registry import find_pipeline, find_preset, list_presets, load_pipeline, load_preset
+from swarm_do.pipeline.registry import find_pipeline, find_preset, list_presets, load_pipeline, load_preset, sha256_file
 from swarm_do.pipeline.resolver import BACKENDS, EFFORTS, BackendResolver, ROLE_DEFAULTS, active_preset_name
-from swarm_do.pipeline.validation import schema_lint_pipeline
+from swarm_do.pipeline.validation import MCO_PROVIDER_ORDER, schema_lint_pipeline
 from swarm_do.pipeline import actions
 from swarm_do.pipeline.actions import load_in_flight
 from swarm_do.tui.state import (
@@ -56,7 +56,6 @@ from swarm_do.tui.state import (
     effective_fan_out_branch_route,
     effective_stage_agent_route,
     load_runs,
-    MCO_PROVIDER_ORDER,
     module_palette_rows,
     pipeline_gallery_rows,
     pipeline_activation_blocker,
@@ -1025,11 +1024,15 @@ if TEXTUAL_IMPORT_ERROR is None:
                 self.app.push_screen(MessageModal("Save blocked", "\n".join(result.errors)))
                 return
             try:
-                actions.save_user_pipeline(self._draft.pipeline_name, self._draft.pipeline)
+                path = actions.save_user_pipeline(
+                    self._draft.pipeline_name,
+                    self._draft.pipeline,
+                    expected_hash=self._draft.original_disk_hash,
+                )
             except Exception as exc:
                 self.app.push_screen(MessageModal("Save failed", str(exc)))
                 return
-            self._draft.mark_saved()
+            self._draft.mark_saved("sha256:" + sha256_file(path))
             self.refresh_pipelines()
             self.app.push_screen(MessageModal("Saved", f"{self._draft.pipeline_name}.yaml passed validation and was written."))
 

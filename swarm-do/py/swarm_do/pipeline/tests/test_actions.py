@@ -34,6 +34,16 @@ class PipelineActionTests(unittest.TestCase):
         self.assertEqual(payload["status"], "handoff-requested")
         self.assertEqual(payload["requested_backend"], "codex")
 
+    def test_request_handoff_refuses_corrupt_lockfile(self) -> None:
+        lock_dir = self.root / "in-flight"
+        lock_dir.mkdir()
+        lock = lock_dir / "bd-123.lock"
+        lock.write_text("{not json", encoding="utf-8")
+
+        with self.assertRaisesRegex(ValueError, "not valid JSON"):
+            request_handoff("123", "codex")
+        self.assertEqual(lock.read_text(encoding="utf-8"), "{not json")
+
     def test_load_in_flight_round_trips_lockfile(self) -> None:
         lock_dir = self.root / "in-flight"
         lock_dir.mkdir()

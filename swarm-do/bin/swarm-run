@@ -150,6 +150,7 @@ LENS_VARIANT_PATH=""
 if [[ -n "$LENS" ]]; then
   if ! LENS_VARIANT_PATH="$(PYTHONPATH="${_PY_ROOT}:${PYTHONPATH:-}" python3 -c 'import sys
 from swarm_do.pipeline.catalog import get_lens, validate_prompt_lens_selection
+from swarm_do.pipeline.paths import REPO_ROOT
 role, lens_id = sys.argv[1], sys.argv[2]
 errors = validate_prompt_lens_selection(role, [lens_id], stage_kind="agents", require_files=True)
 if errors:
@@ -160,7 +161,17 @@ path = lens.variant_file_for_role(role) if lens is not None else None
 if path is None:
     print(f"{lens_id} has no prompt variant mapping for {role}", file=sys.stderr)
     raise SystemExit(1)
-print(path)
+try:
+    resolved = path.resolve(strict=True)
+    roles_root = (REPO_ROOT / "roles").resolve(strict=True)
+    resolved.relative_to(roles_root)
+except ValueError:
+    print(f"{lens_id} prompt variant escapes roles directory: {path}", file=sys.stderr)
+    raise SystemExit(1)
+except OSError as exc:
+    print(f"{lens_id} prompt variant cannot be resolved: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+print(resolved)
 ' "$ROLE" "$LENS" 2>&1)"; then
     die "$LENS_VARIANT_PATH"
   fi

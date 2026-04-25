@@ -15,15 +15,20 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from swarm_do.pipeline.catalog import compile_prompt_variant_fan_out, get_module, pipeline_activation_error
+from swarm_do.pipeline.editing import (
+    mutable_stage_agent as _stage_agent,
+    mutable_stage_by_id as _stage_by_id,
+    mutable_stage_fan_out as _stage_fan_out,
+    normalize_mco_providers as _normalize_mco_providers,
+    provider_failure_tolerance as _provider_failure_tolerance,
+    validate_mco_timeout as _validate_mco_timeout,
+)
 from swarm_do.pipeline.engine import topological_layers
 from swarm_do.pipeline.paths import current_preset_path, resolve_data_dir, user_pipelines_dir, user_presets_dir
 from swarm_do.pipeline.registry import find_pipeline, find_preset, load_pipeline, load_preset, sha256_file
 from swarm_do.pipeline.render_yaml import render_pipeline_yaml
 from swarm_do.pipeline.resolver import BACKENDS, EFFORTS, ROLE_DEFAULTS
 from swarm_do.pipeline.validation import (
-    MCO_PROVIDER_ORDER,
-    MCO_PROVIDERS,
-    TOLERANCE_MODES,
     invariant_errors,
     role_existence_errors,
     route_resolution_errors,
@@ -87,6 +92,17 @@ def load_in_flight(data_dir: Path | None = None) -> list[InFlightRun]:
 
 def atomic_write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _prepare_atomic_text(path, text)
+    try:
+        tmp.replace(path)
+        _fsync_parent_dir(path)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+
+
+def _prepare_atomic_text(path: Path, text: str) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
     fd, name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
     tmp = Path(name)
     try:
@@ -94,10 +110,68 @@ def atomic_write_text(path: Path, text: str) -> None:
             f.write(text)
             f.flush()
             os.fsync(f.fileno())
-        tmp.replace(path)
-    finally:
+    except Exception:
         if tmp.exists():
             tmp.unlink()
+        raise
+    return tmp
+
+
+def _fsync_parent_dir(path: Path) -> None:
+    try:
+        fd = os.open(str(path.parent), os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def _restore_path(path: Path, original: bytes | None) -> None:
+    if original is None:
+        try:
+            path.unlink()
+            _fsync_parent_dir(path)
+        except FileNotFoundError:
+            pass
+        return
+    atomic_write_text(path, original.decode("utf-8"))
+
+
+def _atomic_write_pair(
+    first_path: Path,
+    first_text: str,
+    second_path: Path,
+    second_text: str,
+    *,
+    _simulate_failure_after_first: bool = False,
+) -> None:
+    first_tmp = _prepare_atomic_text(first_path, first_text)
+    second_tmp = _prepare_atomic_text(second_path, second_text)
+    first_original = first_path.read_bytes() if first_path.exists() else None
+    second_original = second_path.read_bytes() if second_path.exists() else None
+    first_replaced = False
+    try:
+        first_tmp.replace(first_path)
+        first_replaced = True
+        _fsync_parent_dir(first_path)
+        if _simulate_failure_after_first:
+            raise RuntimeError("simulated failure after pipeline replace")
+        second_tmp.replace(second_path)
+        _fsync_parent_dir(second_path)
+    except Exception:
+        if first_replaced:
+            _restore_path(first_path, first_original)
+        if second_path.exists() and second_original is None and not second_tmp.exists():
+            _restore_path(second_path, None)
+        raise
+    finally:
+        for tmp in (first_tmp, second_tmp):
+            if tmp.exists():
+                tmp.unlink()
 
 
 def _quote(value: str) -> str:
@@ -340,6 +414,9 @@ def fork_pipeline(source_name: str, new_name: str) -> Path:
     data["forked_from_hash"] = "sha256:" + sha256_file(source.path)
     data.setdefault("generated_by", "swarm-do pipeline composer")
     _raise_pipeline_errors(data)
+    activation_error = pipeline_activation_error(new_name, data)
+    if activation_error:
+        raise ValueError(activation_error)
     target = user_pipelines_dir() / f"{new_name}.yaml"
     atomic_write_text(target, render_pipeline_yaml(data))
     return target
@@ -382,28 +459,47 @@ def fork_preset_and_pipeline(
 
     errors = schema_lint_preset(preset)
     errors.extend(_pipeline_errors(pipeline, preset_name=new_name, preset=preset))
+    activation_error = pipeline_activation_error(new_name, pipeline)
+    if activation_error:
+        errors.append(activation_error)
     if errors:
         raise ValueError("; ".join(errors))
 
     pipeline_target = user_pipelines_dir() / f"{new_name}.yaml"
     preset_target = user_presets_dir() / f"{new_name}.toml"
-    atomic_write_text(pipeline_target, render_pipeline_yaml(pipeline))
-    if _simulate_failure_after_pipeline:
-        raise RuntimeError("simulated failure after pipeline replace")
-    atomic_write_text(preset_target, render_toml(preset))
+    _atomic_write_pair(
+        pipeline_target,
+        render_pipeline_yaml(pipeline),
+        preset_target,
+        render_toml(preset),
+        _simulate_failure_after_first=_simulate_failure_after_pipeline,
+    )
     return preset_target, pipeline_target
 
 
-def save_user_pipeline(name: str, pipeline_mapping: Mapping[str, Any]) -> Path:
+def _normalize_expected_hash(expected_hash: str) -> str:
+    return expected_hash.removeprefix("sha256:")
+
+
+def save_user_pipeline(name: str, pipeline_mapping: Mapping[str, Any], *, expected_hash: str | None = None) -> Path:
     validate_pipeline_name(name)
     existing = find_pipeline(name)
     if existing is not None and existing.origin != "user":
         raise ValueError("stock pipelines are read-only; fork before editing")
+    if expected_hash is not None:
+        if existing is None:
+            raise ValueError("cannot save with an expected hash because the pipeline does not exist on disk")
+        actual_hash = sha256_file(existing.path)
+        if actual_hash != _normalize_expected_hash(expected_hash):
+            raise ValueError("pipeline changed on disk; reload before saving")
     data = copy.deepcopy(dict(pipeline_mapping))
     data["name"] = name
     data.setdefault("origin", "user")
     data.setdefault("generated_by", "swarm-do pipeline composer")
     _raise_pipeline_errors(data)
+    activation_error = pipeline_activation_error(name, data)
+    if activation_error:
+        raise ValueError(activation_error)
     target = user_pipelines_dir() / f"{name}.yaml"
     atomic_write_text(target, render_pipeline_yaml(data))
     return target
@@ -608,31 +704,6 @@ def _load_user_pipeline(name: str) -> tuple[Any, dict[str, Any]]:
     return item, load_pipeline(item.path)
 
 
-def _stage_by_id(pipeline: Mapping[str, Any], stage_id: str) -> dict[str, Any]:
-    for stage in pipeline.get("stages") or []:
-        if isinstance(stage, dict) and stage.get("id") == stage_id:
-            return stage
-    raise ValueError(f"stage not found: {stage_id}")
-
-
-def _stage_agent(pipeline: Mapping[str, Any], stage_id: str, agent_index: int) -> dict[str, Any]:
-    stage = _stage_by_id(pipeline, stage_id)
-    agents = stage.get("agents")
-    if not isinstance(agents, list):
-        raise ValueError(f"stage {stage_id} is not an agents stage")
-    if agent_index < 0 or agent_index >= len(agents) or not isinstance(agents[agent_index], dict):
-        raise ValueError(f"agent index out of range for stage {stage_id}: {agent_index}")
-    return agents[agent_index]
-
-
-def _stage_fan_out(pipeline: Mapping[str, Any], stage_id: str) -> dict[str, Any]:
-    stage = _stage_by_id(pipeline, stage_id)
-    fan = stage.get("fan_out")
-    if not isinstance(fan, dict):
-        raise ValueError(f"stage {stage_id} is not a fan_out stage")
-    return fan
-
-
 def _validate_route_values(route: Mapping[str, Any], path: str) -> None:
     if route.get("backend") not in BACKENDS:
         raise ValueError(f"{path}.backend must be one of {sorted(BACKENDS)}")
@@ -640,39 +711,6 @@ def _validate_route_values(route: Mapping[str, Any], path: str) -> None:
         raise ValueError(f"{path}.model must be a non-empty string")
     if route.get("effort") not in EFFORTS:
         raise ValueError(f"{path}.effort must be one of {sorted(EFFORTS)}")
-
-
-def _normalize_mco_providers(providers: list[str]) -> list[str]:
-    if not isinstance(providers, list):
-        raise ValueError("providers must be a list")
-    normalized: list[str] = []
-    for provider in providers:
-        if not isinstance(provider, str) or not provider.strip():
-            raise ValueError("providers must contain non-empty provider names")
-        name = provider.strip()
-        if name not in MCO_PROVIDERS:
-            raise ValueError(f"unsupported MCO provider: {name}")
-        if name not in normalized:
-            normalized.append(name)
-    if not (1 <= len(normalized) <= 5):
-        raise ValueError("MCO providers must contain 1..5 unique provider names")
-    return [name for name in MCO_PROVIDER_ORDER if name in normalized]
-
-
-def _validate_mco_timeout(timeout_seconds: int) -> int:
-    if not isinstance(timeout_seconds, int) or not (1 <= timeout_seconds <= 86400):
-        raise ValueError("timeout_seconds must be an integer from 1 to 86400")
-    return timeout_seconds
-
-
-def _provider_failure_tolerance(mode: str, min_success: int | None, *, branch_count: int) -> dict[str, int | str]:
-    if mode not in TOLERANCE_MODES:
-        raise ValueError(f"failure_tolerance mode must be one of {sorted(TOLERANCE_MODES)}")
-    if mode != "quorum":
-        return {"mode": mode}
-    if not isinstance(min_success, int) or not (1 <= min_success <= branch_count):
-        raise ValueError("min_success must be 1..provider count for quorum")
-    return {"mode": mode, "min_success": min_success}
 
 
 def cancel_run(run: InFlightRun) -> None:
@@ -693,11 +731,13 @@ def request_handoff(issue_id: str, backend: str) -> Path:
     lock = in_flight_dir() / f"bd-{issue_id}.lock"
     data: dict[str, Any] = {}
     if lock.is_file():
-        data = load_toml_file(lock) if lock.suffix == ".toml" else {}
         try:
-            data = json.loads(lock.read_text(encoding="utf-8"))
-        except Exception:
-            data = {}
+            loaded = json.loads(lock.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise ValueError(f"cannot request handoff because lockfile is not valid JSON: {lock}") from exc
+        if not isinstance(loaded, dict):
+            raise ValueError(f"cannot request handoff because lockfile root is not an object: {lock}")
+        data = loaded
     data.update({"issue_id": issue_id, "status": "handoff-requested", "requested_backend": backend})
     atomic_write_text(lock, json.dumps(data, sort_keys=True) + "\n")
     return lock

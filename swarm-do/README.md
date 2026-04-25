@@ -1,168 +1,355 @@
 # swarm-do
 
-Beads-backed multi-agent swarm orchestration for Claude Code. Plans execute through a research → analysis → writer → review pipeline, with per-role backend routing across Claude and Codex.
+`swarm-do` is a Claude Code plugin for running Beads-backed multi-agent
+workflows. It turns a plan, research question, design question, review target,
+or brainstorm topic into a structured swarm run with explicit roles,
+checkpoints, telemetry, and backend routing across Claude and Codex.
 
-## Status
+The plugin has two main modes:
 
-Packaging migration is complete and `docs/plan.md` is the canonical roadmap.
-Preset/pipeline routing, telemetry ledgers, rollout status, provider doctoring,
-resume helpers, and the TUI MVP are all in the plugin. Phase 0's standalone
-Codex review harness is retained as an experiment surface only; normal dogfood
-measurement now happens through plugin presets and telemetry.
+- **Implementation runs** with `/swarm-do:do`: inspect a phased plan, create
+  Beads issues, dispatch research/analysis/clarify/writer/spec-review/review/docs
+  roles, use worktrees for writer units, and finish with one consolidated PR.
+- **Output-only runs** with `/swarm-do:brainstorm`, `/swarm-do:research`,
+  `/swarm-do:design`, and `/swarm-do:review`: gather evidence or judgment and
+  close with notes. These profiles do not create writer branches or PRs.
 
-## Commands
+## Requirements
 
-Shipped:
+- Claude Code with this plugin installed and reloaded.
+- `bd` on `PATH`. Swarm runs require an existing Beads rig in the target repo.
+- Python 3.10 or newer for the helper CLIs.
+- `git` for implementation runs that create branches and worktrees.
+- Backend CLIs for the lanes you enable: `claude` for Claude-backed stages,
+  `codex` for Codex-backed stages, and optional `mco` for MCO provider stages.
+- Optional TUI dependencies are managed by `bin/swarm-tui` on first launch.
 
-- `/swarm-do:do <plan>` — main orchestrator. Full beads pipeline per phase.
-- `/swarm-do:research <question-or-path>` — output-only research swarm; closes with an evidence memo and no PR.
-- `/swarm-do:init-beads` — explicit, idempotent `bd init --stealth` bootstrap for a repo.
-- `/swarm-do:resume <bd-id>` — resume entrypoint keyed by the BEADS epic/run issue.
-- `bin/swarm preset ...` — preset load/save/diff/list/clear/dry-run.
-- `bin/swarm pipeline ...` — stock/user pipeline list/show/lint.
-- `bin/swarm permissions ...` — role-scoped permission preflight, dry-run install, and rollback support.
-- `bin/swarm providers doctor [--mco]` — local backend health checks plus optional `mco doctor --json`.
-- `bin/swarm status` / `bin/swarm rollout ...` — rollout status and decision log.
-- `bin/swarm resume <bd-id> [--json]` — resume manifest, checkpoint lookup, and drift reporting.
-- `bin/swarm-spike [precompact|hook-context|writer-observability|all]` — operator harness for hook and live-signal proof artifacts.
-- `bin/swarm compete <plan-path>` — manual Pattern 5 setup; validates and activates the competitive preset.
-- `bin/swarm research [<question-or-path>] [--dry-run]` — validates and activates the research profile.
-- `bin/swarm-validate <preset>` — validation gates for preset + pipeline loading.
+The plugin never initializes Beads implicitly. Run `/swarm-do:init-beads` only
+when you have decided the current repo should get a `.beads/` store.
 
-Planned (packaging Phase 3 and Integration Phases 1–2):
+## Quick Start
 
-- `/swarm-do:debug <bd-id>` — agent-debug on an existing issue
-- `/swarm-do:review <target>` — review-only on code / PR / branch
-- `/swarm-do:brainstorm <topic>` — pre-plan exploration
-- `/swarm-do:compete <analysis-bd-id>` — Pattern 5 manual (gated on integration Phase 2)
-- `/swarm-do:help` — decision tree
+1. Install or refresh the plugin from Claude Code:
 
-## Invariants
+   ```text
+   /plugin marketplace update mstefanko-plugins
+   /plugin install swarm-do@mstefanko-plugins
+   /reload-plugins
+   ```
 
-- **Memory layer stays pluggable.** No role file, command body, or runner script imports claude-mem-specific commands or data shapes. Memory interaction is via skills only.
-- **Beads coupling is accepted but disciplined.** Single `bd_preflight_or_die` helper at `bin/_lib/beads-preflight.sh`, uniform flag patterns. No wrapper abstraction until a concrete alternative is under evaluation.
-- **Never edit the install cache.** `~/.claude/plugins/cache/mstefanko-plugins/swarm-do/` is overwritten on `/plugin marketplace update`. Edit the marketplace clone at `~/.claude/plugins/marketplaces/mstefanko-plugins/swarm-do/`, commit, push, then `/plugin marketplace update mstefanko-plugins` + `/reload-plugins`.
-- **Never auto-init beads.** `bd init --stealth` is always operator-invoked via `/swarm-do:init-beads` (or directly). The pipeline halts with a setup message if the rig is missing.
+2. In the repo where you want to run a swarm, initialize Beads if needed:
 
-## Rollback
+   ```text
+   /swarm-do:init-beads
+   ```
 
-The migration is reversible. A pre-migration backup lives at `~/swarm-backup-<timestamp>.tgz` — snapshot of the old fallback runner directory, `~/.claude/agents/agent-*.md`, and the thedotmack claude-mem `/do` skill with the original swarm fork edits.
+3. Check the active routing profile:
 
-If swarm-do becomes unusable and you need the pre-packaging workflow back:
+   ```bash
+   "${CLAUDE_PLUGIN_ROOT}/bin/swarm" preset list
+   "${CLAUDE_PLUGIN_ROOT}/bin/swarm" providers doctor
+   "${CLAUDE_PLUGIN_ROOT}/bin/swarm" permissions check
+   ```
 
-```sh
-# 1. Uninstall the plugin.
-/plugin uninstall swarm-do@mstefanko-plugins
+4. Pick a command:
 
-# 2. Restore the originals. The tarball paths are absolute, so extract at /.
-tar xzf ~/swarm-backup-<timestamp>.tgz -C /
+   ```text
+   /swarm-do:do docs/my-plan.md --decompose=inspect
+   /swarm-do:research "How does auth state flow through this repo?"
+   /swarm-do:design docs/cache-redesign-question.md
+   /swarm-do:review main..feature/my-branch
+   /swarm-do:brainstorm "Safer migration paths for the telemetry schema"
+   ```
 
-# 3. Restore the fork edits to the claude-mem install cache.
-cp ~/.claude/plugins/marketplaces/thedotmack/plugin/skills/do/SKILL.md \
-   ~/.claude/plugins/cache/thedotmack/claude-mem/10.5.2/skills/do/SKILL.md
-cp ~/.claude/plugins/marketplaces/thedotmack/plugin/skills/make-plan/SKILL.md \
-   ~/.claude/plugins/cache/thedotmack/claude-mem/10.5.2/skills/make-plan/SKILL.md
+5. Resume interrupted implementation work by Beads epic id:
 
-# 4. Reload.
-/reload-plugins
+   ```text
+   /swarm-do:resume bd-123
+   /swarm-do:resume bd-123 --merge
+   ```
 
-# 5. Verify the swarm fork is live again via claude-mem.
-/claude-mem:do <some-plan-path>
+## Choosing A Profile
+
+Fresh installs have no active preset. With no active preset, `/swarm-do:do`
+uses the `default` pipeline and route resolution falls back to
+`${CLAUDE_PLUGIN_DATA}/backends.toml` and built-in role defaults.
+
+Use `bin/swarm mode <name>` or `bin/swarm preset load <name>` to activate a
+stock preset:
+
+- `balanced`: standard implementation pipeline with normal role defaults.
+- `claude-only`: force all mutable orchestration through Claude.
+- `codex-only`: route supported roles through Codex where allowed by invariants.
+- `lightweight`: lower-cost implementation routing.
+- `ultra-plan`: wider planning/exploration before writing.
+- `hybrid-review`: standard implementation plus an opt-in Codex review lane.
+- `mco-review-lab`: experimental read-only MCO provider evidence before review.
+- `competitive`: manual Pattern 5 setup for two-writer trials.
+- `brainstorm`, `research`, `design`, `review`: output-only command profiles.
+
+Useful profile commands:
+
+```bash
+bin/swarm preset list
+bin/swarm preset load balanced
+bin/swarm preset clear
+bin/swarm mode research
+bin/swarm preset dry-run hybrid-review docs/my-plan.md
+bin/swarm compete docs/my-plan.md --dry-run
+bin/swarm compete docs/my-plan.md
 ```
 
-The pre-migration entry point was `/claude-mem:do` (or bare `/do`, which claude-mem registers). After rollback, use that instead of `/swarm-do:do`.
+`bin/swarm compete <plan-path>` validates and activates the `competitive`
+preset. It does not dispatch by itself; after it succeeds, run
+`/swarm-do:do <plan-path>`.
 
-The fork-diff patch that was active pre-rollback is preserved in `docs/provenance/fork-diff-<date>.patch` for audit — no need to reconstruct it from the tarball.
+## Slash Commands
 
-## Directory layout
+- `/swarm-do:do <plan-path> [flags]`: run the implementation pipeline.
+  Supported flags include `--codex-review auto|on|off`,
+  `--risk low|moderate|high`, `--decompose=off|inspect|enforce`,
+  `--force-simple <phase_id>`, `--force-decompose <phase_id>`, and `--auto`.
+- `/swarm-do:brainstorm <topic-or-path> [--dry-run]`: output-only divergent
+  exploration with a synthesis note.
+- `/swarm-do:research <question-or-path> [--dry-run]`: output-only evidence
+  gathering with a research memo.
+- `/swarm-do:design <question-or-path> [--dry-run]`: output-only design
+  exploration with an execution-ready recommendation.
+- `/swarm-do:review <branch-pr-diff-or-path> [--dry-run]`: output-only review
+  with findings, checks, risk, and gaps.
+- `/swarm-do:init-beads`: explicit, idempotent `bd init --stealth` bootstrap.
+- `/swarm-do:resume <bd-id> [--merge]`: resume from a Beads epic/run issue.
 
-> Several contract-level sections in this file and in `schemas/telemetry/README.md` are generator-backed — bounded by `<!-- BEGIN/END: generated-by ... -->` markers. Do not hand-edit inside those markers; run the relevant generator instead (see `## Roles` and `## bin/swarm-telemetry` sections below for the exact commands).
+There is no shipped `/swarm-do:debug`, `/swarm-do:help`, or
+`/swarm-do:compete` slash command. Use the role and CLI surfaces documented
+here instead.
 
+## What Happens In `/swarm-do:do`
+
+1. Preflight checks Beads, preset budget, rollout status, permissions, and
+   provider readiness.
+2. `bin/swarm plan inspect` prepares the run and classifies phases.
+3. If decomposition is enabled, each phase is converted into a
+   `work_units.v2` artifact and linted before writer/spec-review issues exist.
+4. The active pipeline is resolved into topological layers. Stages in the same
+   layer can run in parallel.
+5. Writer work uses isolated unit branches/worktrees. Spec-review approval is
+   required before merging a unit into the integration branch.
+6. Review and docs lanes run after implementation evidence exists.
+7. Completed units write checkpoints; `/swarm-do:resume` uses Beads id plus
+   run-event mappings to find the right resume point.
+8. A clean full run ends with one consolidated PR into `main`.
+
+## Output-Only Profiles
+
+Output-only profiles use the same preset, pipeline, role, permission, and
+telemetry infrastructure but intentionally stop before implementation. They are
+good for questions where you want a swarm's evidence or judgment without code
+changes.
+
+- `brainstorm`: directions, tradeoffs, fast checks, and open questions.
+- `research`: sourced evidence memo with conflicts, gaps, and constraints.
+- `design`: recommendation, tradeoffs, execution plan, risks, and open
+  questions.
+- `review`: verdict, checks run, findings, production risk, and gaps.
+
+Each command has a matching `bin/swarm <profile> --dry-run` helper for graph and
+budget validation.
+
+## CLI Reference
+
+`bin/swarm` is the main deterministic helper CLI:
+
+```bash
+bin/swarm preset list
+bin/swarm preset load <name>
+bin/swarm preset clear
+bin/swarm preset save <new-name> --from <current|preset-name>
+bin/swarm preset diff <name>
+bin/swarm preset rename <old-name> <new-name>
+bin/swarm preset delete <name>
+bin/swarm preset dry-run <name> <plan-path>
+
+bin/swarm pipeline list
+bin/swarm pipeline show <name>
+bin/swarm pipeline lint <name-or-path>
+bin/swarm pipeline fork <source> <name> [--with-preset <preset>]
+bin/swarm pipeline set <name>
+bin/swarm pipeline diff <name>
+bin/swarm pipeline drift <name>
+
+bin/swarm mode claude-only|codex-only|balanced|brainstorm|research|design|review|custom
+bin/swarm providers doctor [--preset <name|current>] [--mco] [--mco-timeout-seconds N] [--json]
+bin/swarm permissions check [--role <role>] [--scope repo|user] [--path <settings.json>]
+bin/swarm permissions install --role <role> [--dry-run] [--rollback] [--scope repo|user] [--path <settings.json>]
+
+bin/swarm status
+bin/swarm rollout show [--json]
+bin/swarm rollout dogfood [--notes "..."]
+bin/swarm rollout set <path> <value>
+bin/swarm rollout history
+
+bin/swarm brainstorm [<topic-or-path>] [--dry-run]
+bin/swarm research [<question-or-path>] [--dry-run]
+bin/swarm design [<question-or-path>] [--dry-run]
+bin/swarm review [<target>] [--dry-run]
+bin/swarm compete <plan-path> [--preset competitive] [--dry-run]
+
+bin/swarm resume <bd-id> [--merge] [--json]
+bin/swarm handoff <issue-id> --to claude|codex
+bin/swarm cancel <issue-id>
+
+bin/swarm run-state write --json-file <path|->
+bin/swarm run-state checkpoint [--source <name>] [--reason <name>]
+bin/swarm run-state clear
+
+bin/swarm plan inspect <plan-path> [--phase <id>] [--json] [--no-write]
+bin/swarm plan decompose <plan-path> --phase <id> [--write <path>] [--bd-epic-id <id>] [--allow-rejected] [--json]
+
+bin/swarm work-units lint <artifact>
+bin/swarm work-units migrate <artifact> [--in-place]
+bin/swarm work-units ready <artifact> [--state-json-file <path>] [--json]
+bin/swarm work-units batches <artifact> [--parallelism <n>] [--state-json-file <path>] [--json]
+bin/swarm work-units resume-point <artifact> [--state-json-file <path>] [--json]
+
+bin/swarm worktrees names --run-id <run-id> [--unit-id <unit-id>] [--repo <repo>] [--json]
+bin/swarm worktrees ensure-integration --run-id <run-id> [--repo <repo>] [--base-ref <ref>] [--json]
+bin/swarm worktrees add-unit --run-id <run-id> --unit-id <unit-id> [--repo <repo>] [--base-ref <ref>] [--json]
+bin/swarm worktrees merge --integration-branch <branch> --unit-branch <branch> [--repo <repo>] [--json]
 ```
-swarm-do/
-├── .claude-plugin/plugin.json    Plugin manifest
-├── commands/                     Slash-command surface (/swarm-do:*)
-├── hooks/                        PreCompact hook wiring + checkpoint writer
-├── permissions/                  Role-scoped permission preset fragments
-├── skills/swarm-do/SKILL.md      Shared orchestrator/profile prompt notes
-├── agents/agent-*.md             Per-role personas (15 roles)
-├── bin/
-│   ├── _lib/
-│   │   ├── paths.sh              Plugin-root resolution (source from runners)
-│   │   ├── beads-preflight.sh    Shared bd_preflight_or_die helper
-│   │   ├── hash-bundle.sh        SHA-256 of role prompt bundle (interface: hash-bundle.sh <role> <backend> → 64-char hex)
-│   │   └── normalize-path.sh     Canonical repo-relative path for stable hash input; strips WORKTREE_ROOT then REPO_ROOT prefix
-│   ├── swarm-run                 M1 manual runner (one role, one beads issue)
-│   ├── swarm-spike               Operator spike harness for hook/context/writer observability
-│   ├── swarm                     Preset/pipeline CLI
-│   ├── swarm-validate            Preset/pipeline validation shim
-│   ├── extract-phase.sh          Findings extractor — thin shim; dispatches to python3 -m swarm_do.telemetry.extractors (Phase 4)
-│   ├── swarm-telemetry           Read-only reporter for telemetry ledgers (Phase 9c) — see below
-│   ├── swarm-gpt                 alias → swarm-run --backend codex
-│   ├── swarm-claude              alias → swarm-run --backend claude
-│   ├── swarm-gpt-review          alias → swarm-run --backend codex --role agent-codex-review
-│   ├── codex-review-phase        Standalone Phase 0 experiment harness (not wired into /swarm-do:do)
-│   └── load-role.sh              emit <plugin>/agents/agent-<role>.md for prompt injection
-├── roles/agent-<role>/           Prompt bundles (shared.md + claude.md + codex.md overlays)
-├── presets/                      Stock preset TOML files
-├── pipelines/                    Stock pipeline YAML files
-├── schemas/{preset,pipeline}.schema.json  Preset/pipeline JSON Schema contracts
-├── schemas/telemetry/            JSON Schema ledger definitions (runs, findings, outcomes, adjudications, run_events, observations, knowledge) — see schemas/telemetry/README.md
-├── tests/fixtures/               Synthetic ledger data for self-test and dev (generate-synthetic-runs.sh, 66 runs, 35 findings)
-├── phase0/                       Standalone Phase 0 experiment artifacts
-├── docs/history/                 Archived migration/spike summaries
-└── docs/provenance/              Audit trail for the claude-mem unfork
+
+Additional helpers:
+
+- `bin/swarm-validate <preset> [--plan <path>]`: preset/pipeline gate shim.
+- `bin/swarm-run --backend claude|codex --issue <bd-id> [...]`: manual single
+  role fallback runner for writer/spec-review/review/codex-review lanes.
+- `bin/swarm-gpt`, `bin/swarm-claude`, `bin/swarm-gpt-review`: convenience
+  aliases over `swarm-run`.
+- `bin/swarm-stage-mco`: provider-stage helper used by MCO pipeline stages.
+- `bin/extract-phase.sh`: findings extraction shim.
+- `bin/swarm-telemetry`: telemetry inspection and maintenance CLI.
+- `bin/swarm-tui`: optional Textual operator console.
+
+## Data And Configuration
+
+In Claude Code, writable plugin state lives under `${CLAUDE_PLUGIN_DATA}`.
+Important paths:
+
+- `${CLAUDE_PLUGIN_DATA}/current-preset.txt`: active preset name.
+- `${CLAUDE_PLUGIN_DATA}/backends.toml`: fallback role routing overrides.
+- `${CLAUDE_PLUGIN_DATA}/presets/` and `pipelines/`: user-owned forks.
+- `${CLAUDE_PLUGIN_DATA}/telemetry/*.jsonl`: runs, findings, outcomes,
+  adjudications, run events, observations, and knowledge ledgers.
+- `${CLAUDE_PLUGIN_DATA}/active-run.json`: dispatcher-owned active run state.
+- `${CLAUDE_PLUGIN_DATA}/runs/<run_id>/checkpoint.v1.json`: resume checkpoints.
+- `${CLAUDE_PLUGIN_DATA}/in-flight/*.lock`: running backend process locks.
+
+From a development shell where `CLAUDE_PLUGIN_DATA` is not set, most pipeline
+helpers use the repo's `data/` directory as a local fallback.
+
+## Presets, Pipelines, And Prompt Lenses
+
+Stock presets live in `presets/`; stock pipelines live in `pipelines/`. User
+forks are written to `${CLAUDE_PLUGIN_DATA}/presets/` and
+`${CLAUDE_PLUGIN_DATA}/pipelines/`.
+
+Pipelines support these stage shapes:
+
+- `agents`: one or more role agents in a stage.
+- `fan_out`: multiple branches of one role, optionally with prompt variants or
+  model routes, followed by a merge agent.
+- `provider`: read-only external evidence stages, currently MCO review.
+
+Prompt lenses are cataloged overlays for specific roles and pipeline positions.
+Fan-out prompt variants and single-agent `lens` overlays are validated against
+the catalog before a pipeline can activate.
+
+## Permissions
+
+Role permission fragments live in `permissions/`. The default repo-scope target
+is `.claude/settings.local.json` in the current repo; user scope targets
+`~/.claude/settings.local.json`.
+
+Always inspect before installing:
+
+```bash
+bin/swarm permissions check --role writer --scope repo
+bin/swarm permissions install --role writer --scope repo --dry-run
+bin/swarm permissions install --role writer --scope repo
 ```
 
-## bin/swarm
+`--rollback` removes that role fragment's rules from the target settings file.
 
-Preset and pipeline registry CLI:
+## TUI
 
-```sh
-swarm preset list
-swarm preset load <name>
-swarm preset clear
-swarm preset save <new-name> --from <current|preset-name>
-swarm preset diff <name>
-swarm preset dry-run <name> <plan-path>
-swarm pipeline list
-swarm pipeline show <name>
-swarm pipeline lint <name-or-path>
-swarm permissions check [--role <role>] [--scope repo|user] [--path <settings.json>]
-swarm permissions install --role <role> [--dry-run] [--rollback] [--scope repo|user] [--path <settings.json>]
-swarm providers doctor [--mco] [--json]
-swarm mode claude-only|codex-only|balanced|research|custom
-swarm status
-swarm resume <bd-id> [--merge] [--json]
-swarm run-state write --json-file <path|->
-swarm run-state checkpoint [--source <name>] [--reason <name>]
-swarm run-state clear
-swarm rollout show [--json]
-swarm rollout dogfood [--notes "..."]
-swarm rollout set <path> <value>
-swarm rollout history
-swarm compete <plan-path> [--dry-run]
-swarm research [<question-or-path>] [--dry-run]
+`bin/swarm-tui` launches the optional operator console. On first launch it
+creates or updates a managed virtualenv under `${CLAUDE_PLUGIN_DATA}/tui/.venv`
+from `tui/requirements.lock`. Set `SWARM_TUI_AUTO_INSTALL=1` for
+non-interactive bootstrap in a dev shell.
+
+The TUI reads the same telemetry, preset, pipeline, provider, and in-flight
+state as the CLI. See `tui/README.md` for screen-specific controls.
+
+## Telemetry
+
+`bin/swarm-telemetry` reports and maintains JSONL ledgers:
+
+```bash
+bin/swarm-telemetry dump <ledger>
+bin/swarm-telemetry validate [<ledger>]
+bin/swarm-telemetry query '<sql>'
+bin/swarm-telemetry report [--since Nd] [--role R] [--bucket K]
+bin/swarm-telemetry sample-for-adjudication --count N [--since Nd] [--output-root PATH]
+bin/swarm-telemetry join-outcomes [--since Nd] [--repo PATH] [--dry-run]
+bin/swarm-telemetry purge --older-than Nd [--ledger <ledger>] [--dry-run]
 ```
 
-Active preset state lives at `${CLAUDE_PLUGIN_DATA}/current-preset.txt`. Fresh installs have no active preset; routing falls back to `backends.toml`, while the runtime uses the `default` pipeline.
+<!-- BEGIN: generated-by swarm_do.telemetry.gen readme-section -->
+| Subcommand | What it does |
+|------------|--------------|
+| `dump` | Pretty-print a JSONL ledger as a JSON array. |
+| `join-outcomes` | Correlate findings with post-merge maintainer actions. |
+| `purge` | Purge rows older than retention window |
+| `query` | Execute SQL against all ledgers loaded into sqlite3 :memory:. |
+| `report` | Stratified markdown report from runs.jsonl. |
+| `sample-for-adjudication` |  Stratified random sample of non-adjudicated findings. |
+| `validate` | Validate every ledger row against its JSON schema. |
+<!-- END: generated-by swarm_do.telemetry.gen readme-section -->
 
-Dispatcher state lives at `${CLAUDE_PLUGIN_DATA}/active-run.json`. The
-dispatcher owns that file via `swarm run-state`; PreCompact and the
-end-of-unit fallback both write `${CLAUDE_PLUGIN_DATA}/runs/<run_id>/checkpoint.v1.json`
-and append `checkpoint_written` rows to `telemetry/run_events.jsonl`.
+Self-test:
 
-Spike proof artifacts live under
-`${CLAUDE_PLUGIN_DATA}/runs/<run_id>/spikes/<spike-name>/` and include
-`metadata.json`, `stdout.txt`, `stderr.txt`, `stdin.json`, and `result.json`.
+```bash
+bin/swarm-telemetry --test
+bin/swarm-telemetry --test --check-docs
+```
 
-Stock presets include output-only `brainstorm`, `research`, `design`, and `review` profiles that produce notes without writer branches or a PR. `hybrid-review` keeps the default pipeline shape and adds a fail-open `agent-codex-review` lane after spec-review. `mco-review-lab` is an opt-in experimental read-only provider lane: it runs MCO's working Claude provider after writer and feeds that evidence to the normal Claude review stage. `competitive` remains the manual Pattern 5 preset for two-writer trials.
+## Findings Extraction
 
-`swarm providers doctor` checks the local backend commands required by the active preset's pipeline, or the `default` pipeline when no preset is active. `--mco` additionally runs `mco doctor --json` and fails closed on missing, failing, or malformed MCO output. MCO is also checked automatically when the active pipeline contains an MCO provider stage; otherwise, without `--mco`, it is reported as skipped.
+`bin/extract-phase.sh` is a thin shim over
+`python3 -m swarm_do.telemetry.extractors`.
+
+```bash
+bin/extract-phase.sh <findings-json-or-notes-md> <run-id> <role> <issue-id>
+bin/extract-phase.sh --test
+```
+
+Role dispatch:
+
+| Role | Extractor |
+|------|-----------|
+| `agent-codex-review` | Parses Codex `findings.json` payloads. |
+| `agent-review`, `agent-code-review` | Parses reviewer markdown notes. |
+| Any other role | Skipped with a warning and exit 0. |
+
+Finding hashes use the stable four-field payload
+`file_normalized|category_class|line_bucket|short_summary` so cross-backend
+deduplication remains stable.
 
 ## Roles
 
-Roles are the personas the swarm pipeline dispatches to; this inventory is generated from `role-specs/` — edit specs, then run `python3 -m swarm_do.roles gen readme-section --write`.
+Roles are the personas the swarm pipeline dispatches to. This inventory is
+generated from `role-specs/`; edit specs, then run
+`PYTHONPATH=py python3 -m swarm_do.roles gen readme-section --write`.
 
 <!-- BEGIN: generated-by swarm_do.roles gen readme-section -->
 | Name | Description | Consumers |
@@ -186,61 +373,49 @@ Roles are the personas the swarm pipeline dispatches to; this inventory is gener
 | `agent-writer` | Swarm pipeline executor. Implements exactly what agent-analysis specified. Holds the merge slot for the duration of work. Reads analysis and clarify notes before writing any code. | agents, roles-shared |
 <!-- END: generated-by swarm_do.roles gen readme-section -->
 
-## bin/swarm-telemetry
+## Testing
 
-Reporter and write utility for the telemetry ledgers. Read-only subcommands shipped in Phase 9c; `join-outcomes` write subcommand shipped in Phase 9d. As of Phase 3, all six subcommands (`dump`, `validate`, `query`, `report`, `sample-for-adjudication`, `join-outcomes`) are native Python. The old bash implementation has been deleted. `bin/swarm-telemetry` is a 9-line shim that sources `bin/_lib/python-bootstrap.sh` and execs `python3 -m swarm_do.telemetry.cli "$@"`. The `--test` flag runs `python3 -m unittest discover` (not a bespoke assertion harness).
+The current Python suite uses `unittest` and covers pipeline validation,
+preset/pipeline persistence, telemetry parity and golden files, role
+generation, work-unit execution helpers, worktrees, provider doctoring, resume
+state, and TUI state helpers.
 
-```
-swarm-telemetry query <sql>
-swarm-telemetry report [--since Nd] [--role R] [--bucket K]
-swarm-telemetry dump <ledger>
-swarm-telemetry validate [<ledger>]
-swarm-telemetry sample-for-adjudication --count N [--since Nd] [--output-root PATH]
-swarm-telemetry join-outcomes [--since Nd] [--dry-run]
-swarm-telemetry purge <args>
-```
+Run the full suite from the repo root:
 
-**Subcommands:**
-
-<!-- BEGIN: generated-by swarm_do.telemetry.gen readme-section -->
-| Subcommand | What it does |
-|------------|--------------|
-| `dump` | Pretty-print a JSONL ledger as a JSON array. |
-| `join-outcomes` | Correlate findings with post-merge maintainer actions. |
-| `purge` | Purge rows older than retention window |
-| `query` | Execute SQL against all ledgers loaded into sqlite3 :memory:. |
-| `report` | Stratified markdown report from runs.jsonl. |
-| `sample-for-adjudication` |  Stratified random sample of non-adjudicated findings. |
-| `validate` | Validate every ledger row against its JSON schema. |
-<!-- END: generated-by swarm_do.telemetry.gen readme-section -->
-
-**Environment:**
-
-`CLAUDE_PLUGIN_DATA` sets the base data directory; telemetry lives at `$CLAUDE_PLUGIN_DATA/telemetry/`. If unset, defaults to `~/.claude/plugin-data/mstefanko-plugins/swarm-do`.
-
-**Self-test:** `swarm-telemetry --test` runs `python3 -m unittest discover` against the full test suite. Add `--check-docs` to verify the generator-backed telemetry docs sections.
-
-## bin/extract-phase.sh
-
-Findings extractor for reviewer roles. The CLI surface is unchanged:
-
-```
-extract-phase.sh <findings-json-or-notes-md> <run-id> <role> <issue-id>
-extract-phase.sh --test
+```bash
+PYTHONPATH=py python3 -m unittest discover -s py -p 'test_*.py'
 ```
 
-As of Phase 4, `extract-phase.sh` is a thin 9-line shim that execs `python3 -m swarm_do.telemetry.extractors "$@"`. All extraction logic lives in `swarm-do/py/swarm_do/telemetry/extractors/`.
+Check generator-backed docs:
 
-**Role dispatch** (in `extractors/__init__.py`):
+```bash
+PYTHONPATH=py python3 -m swarm_do.roles gen readme-section --check
+PYTHONPATH=py python3 -m swarm_do.telemetry.gen readme-section --check
+PYTHONPATH=py python3 -m swarm_do.telemetry.gen docs --check
+```
 
-| Role(s) | Extractor |
-|---|---|
-| `agent-codex-review` | `codex_review.extract` — parses `findings.json` (JSON list under `"findings"`) |
-| `agent-review`, `agent-code-review` | `claude_review.extract` — parses reviewer markdown notes |
-| any other role | skipped with a stderr warning (fail-open, exits 0) |
+The current recommendation is not a wholesale pytest migration. Keep
+`unittest` as the baseline until a dev dependency story is added, then adopt
+pytest incrementally for the places where it buys real coverage: CLI scenario
+fixtures, Textual async interaction tests, shell wrapper smoke tests, coverage
+reporting, and property tests for parsers. See `docs/testing-strategy.md` for
+the assessment and proposed refactor path.
 
-**Hashing:** `stable_finding_hash_v1` algorithm is unchanged from the Phase 9b bash implementation — same 4-field SHA-256 payload (`file_normalized|category_class|line_bucket|short_summary`), same hex encoding. Cross-backend dedup in the findings ledger is preserved.
+## Development Notes
 
-**Self-test:** `extract-phase.sh --test` passes `--test` through to the Python entrypoint, which runs `python3 -m unittest discover`.
+- Edit the marketplace clone, not the install cache. The cache under
+  `~/.claude/plugins/cache/.../swarm-do/` is overwritten by marketplace
+  updates. Make code changes in the marketplace/worktree clone, commit, push,
+  then run `/plugin marketplace update mstefanko-plugins` and `/reload-plugins`.
+- Do not hand-edit generated README sections bounded by
+  `<!-- BEGIN/END: generated-by ... -->` markers. Run the listed generators.
+- Do not add role files, command bodies, or runner scripts that depend directly
+  on claude-mem internals. Memory stays pluggable through skill surfaces and
+  dispatcher-produced artifacts.
+- Keep Beads coupling explicit and disciplined. `bin/_lib/beads-preflight.sh`
+  is the single shared shell preflight helper.
+- Do not auto-init Beads from a hook, subagent, or run helper.
 
-**Environment:** Same `CLAUDE_PLUGIN_DATA` variable as `swarm-telemetry`.
+Historical migration and provenance notes live under `docs/history/` and
+`docs/provenance/`. They are audit references, not setup instructions for new
+users.

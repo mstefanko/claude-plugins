@@ -28,13 +28,22 @@ from swarm_do.pipeline.catalog import (
 )
 from swarm_do.pipeline.context import current_context
 from swarm_do.pipeline.diff import diff_user_pipeline, stock_drift_for_pipeline
+from swarm_do.pipeline.editing import (
+    find_stage_by_id as _stage_by_id,
+    mutable_mco_provider_stage as _mutable_mco_provider_stage,
+    mutable_stage_agent as _mutable_stage_agent,
+    mutable_stage_by_id as _mutable_stage_by_id,
+    mutable_stage_fan_out as _mutable_stage_fan_out,
+    normalize_mco_providers as _normalize_mco_providers,
+    provider_failure_tolerance as _provider_failure_tolerance,
+    validate_mco_timeout as _validate_mco_timeout,
+)
 from swarm_do.pipeline.engine import graph_lines, topological_layers
 from swarm_do.pipeline.paths import resolve_data_dir
 from swarm_do.pipeline.providers import ProviderDoctorReport, provider_doctor
-from swarm_do.pipeline.registry import find_pipeline, list_pipelines, list_presets, load_pipeline, load_preset
+from swarm_do.pipeline.registry import find_pipeline, list_pipelines, list_presets, load_pipeline, load_preset, sha256_file
 from swarm_do.pipeline.resolver import BACKENDS, EFFORTS, BackendResolver, active_preset_name
 from swarm_do.pipeline.validation import (
-    MCO_PROVIDER_ORDER,
     MCO_PROVIDERS,
     TOLERANCE_MODES,
     ValidationResult,
@@ -141,6 +150,7 @@ class PipelineEditDraft:
     origin: str
     pipeline: dict[str, Any]
     original_pipeline: dict[str, Any]
+    original_disk_hash: str
     status: str = "saved"
     message: str = "draft ready"
     undo_stack: list[dict[str, Any]] = dataclasses.field(default_factory=list)
@@ -150,8 +160,10 @@ class PipelineEditDraft:
     def dirty(self) -> bool:
         return self.pipeline != self.original_pipeline
 
-    def mark_saved(self) -> None:
+    def mark_saved(self, disk_hash: str | None = None) -> None:
         self.original_pipeline = copy.deepcopy(self.pipeline)
+        if disk_hash is not None:
+            self.original_disk_hash = disk_hash
         self.status = "saved"
         self.message = "saved"
         self.undo_stack.clear()
@@ -256,13 +268,6 @@ def pipeline_stage_rows(pipeline: Mapping[str, Any]) -> list[StageRow]:
     return rows
 
 
-def _stage_by_id(pipeline: Mapping[str, Any], stage_id: str) -> Mapping[str, Any] | None:
-    for stage in pipeline.get("stages") or []:
-        if isinstance(stage, Mapping) and stage.get("id") == stage_id:
-            return stage
-    return None
-
-
 def select_source_preset_for_pipeline(pipeline_name: str) -> str | None:
     active = active_preset_name()
     if active:
@@ -308,40 +313,8 @@ def start_pipeline_draft(pipeline_name: str, *, preset_name: str | None = None) 
         origin=item.origin,
         pipeline=copy.deepcopy(pipeline),
         original_pipeline=copy.deepcopy(pipeline),
+        original_disk_hash="sha256:" + sha256_file(item.path),
     )
-
-
-def _mutable_stage_by_id(pipeline: dict[str, Any], stage_id: str) -> dict[str, Any]:
-    for stage in pipeline.get("stages") or []:
-        if isinstance(stage, dict) and stage.get("id") == stage_id:
-            return stage
-    raise ValueError(f"stage not found: {stage_id}")
-
-
-def _mutable_stage_agent(pipeline: dict[str, Any], stage_id: str, agent_index: int) -> dict[str, Any]:
-    stage = _mutable_stage_by_id(pipeline, stage_id)
-    agents = stage.get("agents")
-    if not isinstance(agents, list):
-        raise ValueError(f"stage {stage_id} is not an agents stage")
-    if agent_index < 0 or agent_index >= len(agents) or not isinstance(agents[agent_index], dict):
-        raise ValueError(f"agent index out of range for stage {stage_id}: {agent_index}")
-    return agents[agent_index]
-
-
-def _mutable_stage_fan_out(pipeline: dict[str, Any], stage_id: str) -> dict[str, Any]:
-    stage = _mutable_stage_by_id(pipeline, stage_id)
-    fan = stage.get("fan_out")
-    if not isinstance(fan, dict):
-        raise ValueError(f"stage {stage_id} is not a fan_out stage")
-    return fan
-
-
-def _mutable_mco_provider_stage(pipeline: dict[str, Any], stage_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
-    stage = _mutable_stage_by_id(pipeline, stage_id)
-    provider = stage.get("provider")
-    if not isinstance(provider, dict) or provider.get("type") != "mco":
-        raise ValueError(f"stage {stage_id} is not an MCO provider stage")
-    return stage, provider
 
 
 def _validate_route_parts(backend: str, model: str, effort: str) -> dict[str, str]:
@@ -524,39 +497,6 @@ def draft_set_mco_provider_config(
     provider["memory"] = False
     provider["timeout_seconds"] = timeout
     stage["failure_tolerance"] = tolerance
-
-
-def _normalize_mco_providers(providers: list[str]) -> list[str]:
-    if not isinstance(providers, list):
-        raise ValueError("providers must be a list")
-    selected: list[str] = []
-    for provider in providers:
-        if not isinstance(provider, str) or not provider.strip():
-            raise ValueError("providers must contain non-empty provider names")
-        name = provider.strip()
-        if name not in MCO_PROVIDERS:
-            raise ValueError(f"unsupported MCO provider: {name}")
-        if name not in selected:
-            selected.append(name)
-    if not (1 <= len(selected) <= 5):
-        raise ValueError("MCO providers must contain 1..5 unique provider names")
-    return [name for name in MCO_PROVIDER_ORDER if name in selected]
-
-
-def _validate_mco_timeout(timeout_seconds: int) -> int:
-    if not isinstance(timeout_seconds, int) or not (1 <= timeout_seconds <= 86400):
-        raise ValueError("timeout_seconds must be an integer from 1 to 86400")
-    return timeout_seconds
-
-
-def _provider_failure_tolerance(mode: str, min_success: int | None, *, branch_count: int) -> dict[str, int | str]:
-    if mode not in TOLERANCE_MODES:
-        raise ValueError(f"failure_tolerance mode must be one of {sorted(TOLERANCE_MODES)}")
-    if mode != "quorum":
-        return {"mode": mode}
-    if not isinstance(min_success, int) or not (1 <= min_success <= branch_count):
-        raise ValueError("min_success must be 1..provider count for quorum")
-    return {"mode": mode, "min_success": min_success}
 
 
 def current_stage_agent_lens_id(pipeline: Mapping[str, Any], stage_id: str, agent_index: int = 0) -> str | None:
@@ -1144,7 +1084,11 @@ def validate_pipeline_draft(draft: PipelineEditDraft, *, plan_path: str | None =
         preset = load_preset(preset_item.path)
         preset = copy.deepcopy(preset)
         preset["pipeline"] = draft.pipeline_name
-        return validate_preset_pipeline_mappings(preset, draft.pipeline, draft.preset_name, plan_path, include_budget)
+        result = validate_preset_pipeline_mappings(preset, draft.pipeline, draft.preset_name, plan_path, include_budget)
+        activation_error = pipeline_activation_error(draft.pipeline_name, draft.pipeline)
+        if activation_error:
+            result.add(activation_error)
+        return result
 
     result = ValidationResult()
     result.errors.extend(schema_lint_pipeline(draft.pipeline))
@@ -1152,6 +1096,9 @@ def validate_pipeline_draft(draft: PipelineEditDraft, *, plan_path: str | None =
     result.errors.extend(variant_existence_errors(draft.pipeline))
     result.errors.extend(route_resolution_errors(draft.pipeline, None, None))
     result.errors.extend(invariant_errors(draft.pipeline, None, None))
+    activation_error = pipeline_activation_error(draft.pipeline_name, draft.pipeline)
+    if activation_error:
+        result.add(activation_error)
     try:
         topological_layers(draft.pipeline)
     except ValueError as exc:

@@ -124,6 +124,9 @@ class PipelineProfileSpec:
     preset_names: tuple[str, ...] = ()
 
 
+AGENTS_LENS_STACKING_ERROR = "lens stacking is disabled for normal agents stages; use singular lens"
+
+
 ANALYSIS_CONTRACT = OutputContract(
     sections=(
         "Assumptions",
@@ -799,7 +802,7 @@ def validate_prompt_lens_selection(
     if not lens_ids:
         errors.append("at least one lens is required")
     if stage_kind == "agents" and len(lens_ids) > 1:
-        errors.append("lens stacking is disabled for normal agents stages; use singular lens")
+        errors.append(AGENTS_LENS_STACKING_ERROR)
     seen: set[str] = set()
     selected: list[LensSpec] = []
     for lens_id in lens_ids:

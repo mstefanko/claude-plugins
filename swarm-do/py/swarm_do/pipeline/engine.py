@@ -38,15 +38,20 @@ def topological_layers(pipeline: Mapping[str, Any]) -> list[list[str]]:
 
 
 def stage_agent_count(stage: Mapping[str, Any]) -> int:
-    if "fan_out" in stage:
-        count = int(stage["fan_out"].get("count", 0))
-        if stage.get("merge", {}).get("strategy") == "synthesize":
+    fan = stage.get("fan_out") if isinstance(stage, Mapping) else None
+    if isinstance(fan, Mapping):
+        raw_count = fan.get("count", 0)
+        count = raw_count if isinstance(raw_count, int) and raw_count >= 0 else 0
+        merge = stage.get("merge")
+        if isinstance(merge, Mapping) and merge.get("strategy") == "synthesize":
             count += 1
         return count
-    if "provider" in stage:
-        providers = stage["provider"].get("providers", [])
+    provider = stage.get("provider") if isinstance(stage, Mapping) else None
+    if isinstance(provider, Mapping):
+        providers = provider.get("providers", [])
         return len(providers) if isinstance(providers, list) else 1
-    return len(stage.get("agents") or [])
+    agents = stage.get("agents") if isinstance(stage, Mapping) else None
+    return len(agents) if isinstance(agents, list) else 0
 
 
 def pipeline_agent_count(pipeline: Mapping[str, Any]) -> int:

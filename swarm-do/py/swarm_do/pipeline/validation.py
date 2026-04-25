@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
-from .catalog import get_lens, validate_prompt_lens_selection
+from .catalog import AGENTS_LENS_STACKING_ERROR, get_lens, validate_prompt_lens_selection
 from .engine import BudgetPreview, budget_preview, topological_layers
 from .paths import REPO_ROOT
 from .registry import find_pipeline, find_preset, load_pipeline, load_preset
@@ -317,7 +317,7 @@ def schema_lint_pipeline(pipeline: Mapping[str, Any]) -> list[str]:
                         errors.append(f"{a_path}: agent must be an object")
                         continue
                     if "lenses" in agent:
-                        errors.append(f"{a_path}.lenses is not supported; use singular lens")
+                        errors.append(f"{a_path}.lenses is not supported; {AGENTS_LENS_STACKING_ERROR}")
                     unknown_agent = sorted(set(agent.keys()) - AGENT_KEYS - UNSUPPORTED_AGENT_KEYS)
                     if unknown_agent:
                         errors.append(f"{a_path}: unknown keys: {', '.join(unknown_agent)}")
@@ -411,6 +411,9 @@ def schema_lint_pipeline(pipeline: Mapping[str, Any]) -> list[str]:
                 errors.append(f"{path}.merge must be an object")
             else:
                 unknown_merge = sorted(set(merge.keys()) - MERGE_KEYS)
+                if "lens" in merge:
+                    errors.append(f"{path}.merge.lens is not supported; merge schema has no variant or lens slot")
+                    unknown_merge = [key for key in unknown_merge if key != "lens"]
                 if unknown_merge:
                     errors.append(f"{path}.merge: unknown keys: {', '.join(unknown_merge)}")
                 if merge.get("strategy") not in MERGE_STRATEGIES:
