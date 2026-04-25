@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from .. import gen as telemetry_gen
 from ..gen import (
     MARKER_BEGIN_TELEMETRY_README,
     MARKER_END_TELEMETRY_README,
@@ -60,7 +61,7 @@ class TestCmdReadmeSectionWrite(unittest.TestCase):
             readme_path.write_text(initial_content)
 
             # Mock PLUGIN_ROOT
-            with patch("swarm_do.telemetry.gen.PLUGIN_ROOT", tmp_path):
+            with patch.object(telemetry_gen, "PLUGIN_ROOT", tmp_path):
                 result = cmd_readme_section_write()
 
             self.assertEqual(result, 0)
@@ -75,7 +76,7 @@ class TestCmdReadmeSectionWrite(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
 
-            with patch("swarm_do.telemetry.gen.PLUGIN_ROOT", tmp_path):
+            with patch.object(telemetry_gen, "PLUGIN_ROOT", tmp_path):
                 result = cmd_readme_section_write()
 
             self.assertEqual(result, 1)
@@ -100,7 +101,7 @@ class TestCmdReadmeSectionCheck(unittest.TestCase):
             )
             readme_path.write_text(initial_content)
 
-            with patch("swarm_do.telemetry.gen.PLUGIN_ROOT", tmp_path):
+            with patch.object(telemetry_gen, "PLUGIN_ROOT", tmp_path):
                 # Write first to generate correct content
                 cmd_readme_section_write()
                 # Then check should pass
@@ -124,7 +125,7 @@ class TestCmdReadmeSectionCheck(unittest.TestCase):
             )
             readme_path.write_text(initial_content)
 
-            with patch("swarm_do.telemetry.gen.PLUGIN_ROOT", tmp_path):
+            with patch.object(telemetry_gen, "PLUGIN_ROOT", tmp_path):
                 # Write correct content first
                 cmd_readme_section_write()
 
@@ -143,7 +144,7 @@ class TestCmdReadmeSectionCheck(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
 
-            with patch("swarm_do.telemetry.gen.PLUGIN_ROOT", tmp_path):
+            with patch.object(telemetry_gen, "PLUGIN_ROOT", tmp_path):
                 result = cmd_readme_section_check()
 
             self.assertEqual(result, 1)
@@ -168,7 +169,7 @@ class TestIntegration(unittest.TestCase):
             )
             readme_path.write_text(initial_content)
 
-            with patch("swarm_do.telemetry.gen.PLUGIN_ROOT", tmp_path):
+            with patch.object(telemetry_gen, "PLUGIN_ROOT", tmp_path):
                 # Write should succeed
                 self.assertEqual(cmd_readme_section_write(), 0)
 

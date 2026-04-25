@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from .. import cli as roles_cli
 from ..cli import _render_roles_table, _cmd_readme_section_gen
 import argparse
 
@@ -59,7 +60,7 @@ class TestCmdReadmeSectionGen(unittest.TestCase):
             readme_path.write_text(initial_content, encoding="utf-8")
 
             # Mock the repo root finder
-            with patch("swarm_do.roles.cli._find_repo_root") as mock_repo_root:
+            with patch.object(roles_cli, "_find_repo_root") as mock_repo_root:
                 mock_repo_root.return_value = tmp_path
 
                 args = argparse.Namespace(write=True, check=False)
@@ -88,7 +89,7 @@ class TestCmdReadmeSectionGen(unittest.TestCase):
             )
             readme_path.write_text(initial_content, encoding="utf-8")
 
-            with patch("swarm_do.roles.cli._find_repo_root") as mock_repo_root:
+            with patch.object(roles_cli, "_find_repo_root") as mock_repo_root:
                 mock_repo_root.return_value = tmp_path
 
                 # Write first
@@ -118,7 +119,7 @@ class TestCmdReadmeSectionGen(unittest.TestCase):
             )
             readme_path.write_text(initial_content, encoding="utf-8")
 
-            with patch("swarm_do.roles.cli._find_repo_root") as mock_repo_root:
+            with patch.object(roles_cli, "_find_repo_root") as mock_repo_root:
                 mock_repo_root.return_value = tmp_path
 
                 # Write correct content first
@@ -146,7 +147,7 @@ class TestCmdReadmeSectionGen(unittest.TestCase):
             # Create file WITHOUT markers
             readme_path.write_text("# README\nNo markers here.", encoding="utf-8")
 
-            with patch("swarm_do.roles.cli._find_repo_root") as mock_repo_root:
+            with patch.object(roles_cli, "_find_repo_root") as mock_repo_root:
                 mock_repo_root.return_value = tmp_path
 
                 args = argparse.Namespace(write=True, check=False)
@@ -159,7 +160,7 @@ class TestCmdReadmeSectionGen(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
 
-            with patch("swarm_do.roles.cli._find_repo_root") as mock_repo_root:
+            with patch.object(roles_cli, "_find_repo_root") as mock_repo_root:
                 mock_repo_root.return_value = tmp_path
 
                 args = argparse.Namespace(write=True, check=False)
@@ -188,7 +189,7 @@ class TestIntegration(unittest.TestCase):
             )
             readme_path.write_text(initial_content, encoding="utf-8")
 
-            with patch("swarm_do.roles.cli._find_repo_root") as mock_repo_root:
+            with patch.object(roles_cli, "_find_repo_root") as mock_repo_root:
                 mock_repo_root.return_value = tmp_path
 
                 # Write should succeed

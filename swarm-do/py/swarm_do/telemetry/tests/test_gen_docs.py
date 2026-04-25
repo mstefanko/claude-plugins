@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from .. import gen as telemetry_gen
 from ..gen import (
     MARKER_BEGIN_TELEMETRY_DOCS,
     MARKER_END_TELEMETRY_DOCS,
@@ -93,7 +94,7 @@ class TestCmdDocsWrite(unittest.TestCase):
             readme_path = schema_dir / "README.md"
 
             # Mock PLUGIN_ROOT to point to tmpdir
-            with patch("swarm_do.telemetry.gen.PLUGIN_ROOT", tmp_path):
+            with patch.object(telemetry_gen, "PLUGIN_ROOT", tmp_path):
                 result = cmd_docs_write()
 
             self.assertEqual(result, 0)
@@ -108,7 +109,7 @@ class TestCmdDocsWrite(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
 
-            with patch("swarm_do.telemetry.gen.PLUGIN_ROOT", tmp_path):
+            with patch.object(telemetry_gen, "PLUGIN_ROOT", tmp_path):
                 result = cmd_docs_write()
 
             self.assertEqual(result, 0)
@@ -128,7 +129,7 @@ class TestCmdDocsCheck(unittest.TestCase):
             readme_path = schema_dir / "README.md"
 
             # Create file with up-to-date content
-            with patch("swarm_do.telemetry.gen.PLUGIN_ROOT", tmp_path):
+            with patch.object(telemetry_gen, "PLUGIN_ROOT", tmp_path):
                 cmd_docs_write()
                 result = cmd_docs_check()
 
@@ -143,7 +144,7 @@ class TestCmdDocsCheck(unittest.TestCase):
             readme_path = schema_dir / "README.md"
 
             # Create file with initial content
-            with patch("swarm_do.telemetry.gen.PLUGIN_ROOT", tmp_path):
+            with patch.object(telemetry_gen, "PLUGIN_ROOT", tmp_path):
                 cmd_docs_write()
 
                 # Modify the content between markers to introduce drift
@@ -161,7 +162,7 @@ class TestCmdDocsCheck(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
 
-            with patch("swarm_do.telemetry.gen.PLUGIN_ROOT", tmp_path):
+            with patch.object(telemetry_gen, "PLUGIN_ROOT", tmp_path):
                 result = cmd_docs_check()
 
             self.assertEqual(result, 1)
@@ -176,7 +177,7 @@ class TestIntegration(unittest.TestCase):
             tmp_path = Path(tmpdir)
             schema_dir = tmp_path / "swarm-do" / "schemas" / "telemetry"
 
-            with patch("swarm_do.telemetry.gen.PLUGIN_ROOT", tmp_path):
+            with patch.object(telemetry_gen, "PLUGIN_ROOT", tmp_path):
                 # Write should succeed
                 self.assertEqual(cmd_docs_write(), 0)
 
