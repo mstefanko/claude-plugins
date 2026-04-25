@@ -45,7 +45,7 @@ Planned (packaging Phase 3 and Integration Phases 1–2):
 
 ## Rollback
 
-The migration is reversible. A pre-migration backup lives at `~/swarm-backup-<timestamp>.tgz` — snapshot of `~/.swarm/`, `~/.claude/agents/agent-*.md`, and the thedotmack claude-mem `/do` skill with the original swarm fork edits.
+The migration is reversible. A pre-migration backup lives at `~/swarm-backup-<timestamp>.tgz` — snapshot of the old fallback runner directory, `~/.claude/agents/agent-*.md`, and the thedotmack claude-mem `/do` skill with the original swarm fork edits.
 
 If swarm-do becomes unusable and you need the pre-packaging workflow back:
 
