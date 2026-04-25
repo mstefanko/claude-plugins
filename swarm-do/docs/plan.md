@@ -119,7 +119,7 @@ These invariants are not refactors to execute now; they are rules to enforce goi
 
 ## Status (as of 2026-04-24)
 
-- **M1 manual fallback runner — SHIPPED.** Installed at `~/.swarm/bin/{swarm-run,swarm-claude,swarm-gpt,swarm-gpt-review}`. Role bundles at `~/.swarm/roles/agent-{writer,review,spec-review,codex-review}/{shared,claude,codex}.md`. Beads preflight hard-stop embedded in the runner. See `~/.swarm/README.md`.
+- **M1 manual fallback runner — SHIPPED.** The fallback runner is now plugin-owned under `bin/{swarm-run,swarm-claude,swarm-gpt,swarm-gpt-review}` with role bundles under `roles/agent-{writer,review,spec-review,codex-review}/{shared,claude,codex}.md`. Beads preflight hard-stop embedded in the runner.
 - **Phase 0 initial experiments — COMPLETE; decision: DOGFOOD IN PLUGIN.** The first harness round produced enough signal to stop isolated experimentation for now. We will learn faster by shipping opt-in Codex lanes inside `/swarm-do` and using normal plugin runs as the measurement surface. The blinded 12-15 phase cohort remains useful if later data is noisy, but it no longer blocks Phase 1.
 - **Phase 9a (append-only ledgers) — SHIPPED (2026-04-23, PR #1, merged at `ff14fc8`; follow-ups landed by 2026-04-24).** v1-frozen JSONSchemas under `swarm-do/schemas/telemetry/`; `bin/_lib/hash-bundle.sh` (portable sha256 over `shared.md + <backend>.md`); `bin/swarm-run` EXIT-trap appends one `runs.jsonl` row per invocation, fail-open. Follow-ups now landed: strict Crockford ULIDs via `swarm_do.telemetry.ids`, `diff_size_bytes` wired from the run delta, and nullable `timestamp_end` in the schema.
 - **Phase 9b (findings extractor) — SHIPPED (2026-04-23, commit `6b62467`; Claude extractor landed by 2026-04-24).** `bin/extract-phase.sh` appends one `findings.jsonl` row per reviewer finding. It handles `agent-codex-review` JSON output plus Claude-style `agent-review` / `agent-code-review` markdown, and `bin/_lib/normalize-path.sh` strips worktree prefix so main-repo and worktree paths hash identically. `findings.v2.schema.json` carries `stable_finding_hash_v1`, `duplicate_cluster_id` (always null on append), and `short_summary`. `swarm-run` wires the extractor after review roles with a fail-open guard.
@@ -548,7 +548,7 @@ Before flipping any role from claude-primary to codex-primary:
 
 Same methodology Phase 0 applies to `agent-codex-review`; same rigor for each promotion.
 
-**Pre-registered templates:** `~/.swarm/measurements/` holds one pre-registration file per role. `agent-docs.md` is the first, landed 2026-04-20 — fully specified cohort criteria, blinded rating rubric, decision rule, and veto conditions. Fill in the results sections only after the experiment runs. Pre-registering the rubric before data lands is the whole point — otherwise the "parity or better" gate is vibes.
+**Pre-registered templates:** `${CLAUDE_PLUGIN_DATA}/measurements/` holds one pre-registration file per role. `agent-docs.md` is the first, landed 2026-04-20 — fully specified cohort criteria, blinded rating rubric, decision rule, and veto conditions. Fill in the results sections only after the experiment runs. Pre-registering the rubric before data lands is the whole point — otherwise the "parity or better" gate is vibes.
 
 **Recommended promotion order (lowest risk first):** agent-docs → agent-spec-review → agent-clarify → agent-writer.simple. Do not measure higher-risk roles (writer.moderate, research, analysis, debug, review, judges) until at least two lower-risk roles have passed the gate.
 
@@ -1454,16 +1454,16 @@ Policy in Part 1 defines **what** the swarm routes and **how** it measures. Part
 
 ## Section 2.0 — Phase 0 pre-flight: harness and rubric cleanup
 
-**Do not start the cohort until this section is green.** The harness exists but — verified against `~/.swarm/bin/codex-review-phase` on 2026-04-22 — has six measurement-integrity issues. Fix them in a single cleanup pass before any phase is fed through the experiment. Running the cohort against the current harness would poison the blinded adjudication and force a redo.
+**Do not start the cohort until this section is green.** The harness exists but — verified against `bin/codex-review-phase` on 2026-04-22 — has six measurement-integrity issues. Fix them in a single cleanup pass before any phase is fed through the experiment. Running the cohort against the current harness would poison the blinded adjudication and force a redo.
 
-### Fixes required in `~/.swarm/bin/codex-review-phase`
+### Fixes required in `bin/codex-review-phase`
 
 1. **Remove the Claude-findings leak — CLOSED 2026-04-24.** The `## Claude-side findings (for duplicate_of_claude detection)` section has been removed from `bin/codex-review-phase`. Codex must not see Claude's findings during the run — duplicate detection is the adjudicator's job, computed **after** unblinding, using the §2 match rule (same file, same defect class, line references within ±3 lines). Each Codex finding is emitted with `duplicate_of_claude: unknown` unconditionally at run time.
 2. **Resolve Mode A honestly.** Current Mode A lists changed-file *paths* (lines 167-172) but no contents. Pick one of:
    - **Option A1 (recommended):** inline the full contents of each changed file post-diff into the prompt under `## Changed file snapshots` (bounded by a max-bytes cap — truncate with a visible marker if exceeded). Keep the name "scoped review."
    - **Option A2:** leave Mode A as path-list + diff only, and rename it **"diff-only review"** in both the plan and the script's help text so the contract matches reality. The signal interpretation is different.
    Choose before the first cohort run and record the choice in the rubric.
-3. **Post-process Codex output into a single schema-conforming object.** `codex exec --json` emits a JSONL event stream; redirecting it to `codex-review-<phase>-mode<X>.json` does not produce the `~/.swarm/phase0/result-schema.json` shape the rubric expects. Two acceptable approaches:
+3. **Post-process Codex output into a single schema-conforming object.** `codex exec --json` emits a JSONL event stream; redirecting it to `codex-review-<phase>-mode<X>.json` does not produce the `${CLAUDE_PLUGIN_ROOT}/phase0/result-schema.json` shape the rubric expects. Two acceptable approaches:
    - Switch to `--output-last-message <path>` so Codex writes only the final structured message, then read that file and fill top-level `phase_id`, `mode`, `model`, `effort` in a post-run pass.
    - Keep `--json` for event telemetry but capture events to `events.jsonl` (sidecar), extract the final assistant message via `jq`, validate it against the schema, and write the resulting object to the primary output file.
    Either way, write a **sidecar metadata file** (`meta.json`) alongside the primary output containing `wall_clock_seconds`, approximate `input_tokens` / `output_tokens` / `estimated_cost_usd` (parse from the event stream), `codex_version`, `model`, `effort`, and `mode`. Latency and cost must not live only in stderr.
@@ -1485,7 +1485,7 @@ Policy in Part 1 defines **what** the swarm routes and **how** it measures. Part
 Create one directory per phase per cohort date:
 
 ```
-~/.swarm/phase0/runs/<YYYY-MM-DD>/<phase-id>/
+${CLAUDE_PLUGIN_DATA}/phase0/runs/<YYYY-MM-DD>/<phase-id>/
   inputs/
     diff.patch
     analysis-notes.md
@@ -1544,7 +1544,7 @@ Older phases often won't have `analysis-notes.md` or `acceptance-criteria.md` ar
    ---
    ```
    Telemetry + adjudication can filter or weight on `completeness`. Reconstructed phases should stay <30% of the cohort; if more phases need reconstruction, the cohort's underlying signal is probably not informative enough to run.
-5. **Document excluded phases** in `~/.swarm/phase0/runs/<date>/excluded.md` with one line per exclusion and the reason. Keeps the experiment honest about selection bias in reporting.
+5. **Document excluded phases** in `${CLAUDE_PLUGIN_DATA}/phase0/runs/<date>/excluded.md` with one line per exclusion and the reason. Keeps the experiment honest about selection bias in reporting.
 
 If you cannot assemble a 12-phase cohort under these rules with ≥3 rework-bucket phases, delay Phase 0 until more recent phases accumulate the needed artifacts — do not dilute the experiment.
 
@@ -1579,7 +1579,7 @@ That means Phase 0 should compare a cheap scoped review against a richer repo-aw
 
 **Setup:** Complete §2.0 pre-flight first — the harness and rubric cleanup pass is a precondition, not a bonus. Once that is green, Phase 0 runs against the corrected harness with the following contract:
 
-1. The wrapper (`~/.swarm/bin/codex-review-phase`, cleaned per §2.0) runs **two modes** against the same completed phase:
+1. The wrapper (`bin/codex-review-phase`, cleaned per §2.0) runs **two modes** against the same completed phase:
    - **Mode A — Scoped review** (or "Diff-only review" if §2.0 Option A2 was chosen)
      - writer diff
      - analysis notes
@@ -1614,7 +1614,7 @@ That means Phase 0 should compare a cheap scoped review against a richer repo-aw
   - the full default Claude review chain (`agent-spec-review` + `agent-review`) as control — see §1.5 Blocker 1. Optional `agent-code-review` is excluded from the control unless it ran as part of that phase's normal execution.
   - Codex Mode A
   - Codex Mode B
-- Rubric is **pre-registered** in `~/.swarm/phase0/rubric-template.md` (populated per §2.0 exit criteria) and covers:
+- Rubric is **pre-registered** in `${CLAUDE_PLUGIN_ROOT}/phase0/rubric-template.md` (populated per §2.0 exit criteria) and covers:
   - what counts as a true positive
   - what counts as a false positive
   - what counts as ambiguous
@@ -2175,7 +2175,7 @@ Implements the continuous-measurement architecture from §1.9. Ships in staged o
 **Objective:** Pick a stratified random sample of findings that don't yet have an `adjudications.jsonl` row, laid out so the existing `blind-findings` + `unblind-findings` machinery works unchanged.
 
 **What to implement:**
-- `swarm telemetry sample-for-adjudication --count 20 --since 30d` — picks a stratified random sample of findings without adjudication rows. Output is a directory laid out like `~/.swarm/phase0/runs/<date>/`.
+- `swarm telemetry sample-for-adjudication --count 20 --since 30d` — picks a stratified random sample of findings without adjudication rows. Output is a directory laid out like `${CLAUDE_PLUGIN_DATA}/phase0/runs/<date>/`.
 - Monthly cadence suggested; operator triggers manually. Results append to `adjudications.jsonl`.
 - Keep the same rubric version pinned in `swarm-do/rubrics/` so adjudication outcomes are comparable over time.
 
@@ -2617,7 +2617,7 @@ The file at `${CLAUDE_PLUGIN_DATA}/state/rollout-status.json` is the authoritati
     "selected_mode": "A | B | plugin | none",
     "decided_on": "YYYY-MM-DD | null",
     "cohort_run_date": "YYYY-MM-DD | null",
-    "notes": "short rationale; full detail in ~/.swarm/phase0/runs/<cohort_run_date>/"
+    "notes": "short rationale; full detail in ${CLAUDE_PLUGIN_DATA}/phase0/runs/<cohort_run_date>/"
   },
   "phase_1": {
     "status": "pending | live | rolled-back",

@@ -1,11 +1,11 @@
 """`swarm-telemetry sample-for-adjudication` — stratified random sample.
 
-Byte-parity port of swarm-telemetry.legacy:720-1026. Preserves:
+Python port of the legacy sample-for-adjudication command. Preserves:
   - role_subdir_map (claude vs codex-mode-a routing)
   - finding_slug = finding_id.lower()[:12] directory layout
   - Proportional allocation with floor-1 per non-empty stratum
   - Env vars: SWARM_PHASE0_ROOT, CLAUDE_PLUGIN_DATA, SWARM_TELEMETRY_NOW
-  - Preferred output root -> ~/.swarm/phase0/runs (or SWARM_PHASE0_ROOT)
+  - Preferred output root -> <plugin-data>/phase0/runs (or SWARM_PHASE0_ROOT)
     with fallback to <plugin-data>/phase0/runs on PermissionError
   - Adjudication exclusion: union of finding_id and overridden_finding_ids
     across adjudications.jsonl
@@ -49,18 +49,22 @@ _ROLE_SUBDIR_MAP: Dict[str, str] = {
 
 
 
-def _resolve_phase0_root() -> str:
-    explicit = os.environ.get("SWARM_PHASE0_ROOT")
-    if explicit:
-        return explicit
-    return os.path.expanduser("~/.swarm/phase0/runs")
-
-
-def _resolve_phase0_fallback_root() -> str:
+def _plugin_data_phase0_root() -> str:
     base = os.environ.get("CLAUDE_PLUGIN_DATA") or os.path.expanduser(
         "~/.claude/plugin-data/mstefanko-plugins/swarm-do"
     )
     return os.path.join(base, "phase0", "runs")
+
+
+def _resolve_phase0_root() -> str:
+    explicit = os.environ.get("SWARM_PHASE0_ROOT")
+    if explicit:
+        return explicit
+    return _plugin_data_phase0_root()
+
+
+def _resolve_phase0_fallback_root() -> str:
+    return _plugin_data_phase0_root()
 
 
 def _parse_ts(s: Any) -> Optional[datetime.datetime]:

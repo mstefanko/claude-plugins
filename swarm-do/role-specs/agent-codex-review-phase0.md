@@ -85,7 +85,7 @@ because of missing context.
 ## Output schema
 
 Emit a single JSON object conforming to
-`~/.swarm/phase0/result-schema.json`. Each finding must have:
+`${CLAUDE_PLUGIN_ROOT}/phase0/result-schema.json`. Each finding must have:
 
 - `finding_id` — string, stable within the review (e.g. `F1`, `F2`).
 - `severity` — one of `critical | warning | info`.
@@ -112,7 +112,7 @@ issue; they do not close or open work by themselves.
 ## Invocation note
 
 This agent is not invoked through Claude Code's Task tool. The harness
-lives at `~/.swarm/bin/codex-review-phase` (a thin bash wrapper around
+lives at `${CLAUDE_PLUGIN_ROOT}/bin/codex-review-phase` (a thin bash wrapper around
 `codex exec --json`) and it reads this file's body text verbatim as the
 persona prompt. Editing this file changes the persona the wrapper ships
 to Codex on the next invocation.
