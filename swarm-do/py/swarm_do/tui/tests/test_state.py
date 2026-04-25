@@ -24,11 +24,20 @@ from swarm_do.pipeline.config_hash import active_config_hash
 from swarm_do.pipeline.providers import ProviderCheck, ProviderDoctorReport
 from swarm_do.pipeline.registry import find_pipeline, load_pipeline, load_preset
 from swarm_do.tui.state import (
+    draft_add_module_stage,
+    draft_remove_stage,
+    draft_reset_fan_out_routes,
+    draft_set_fan_out_branch_route,
+    draft_set_stage_agent_route,
+    draft_status_line,
     draft_validation_lines,
+    effective_fan_out_branch_route,
+    effective_stage_agent_route,
     latest_checkpoint_event,
     latest_observation,
     load_observations,
     load_run_events,
+    module_palette_rows,
     pipeline_gallery_rows,
     pipeline_lens_rows,
     pipeline_stage_rows,
@@ -250,6 +259,78 @@ class TuiStateTests(EnvTestCase):
         self.assertIn("depends_on references unknown stage missing-stage", rail)
         self.assertIn("save blocked", rail)
         self.assertEqual(item.path.read_text(encoding="utf-8"), before)
+
+    def test_pipeline_draft_stage_route_edits_are_undoable_and_deferred_until_save(self) -> None:
+        fork_preset_and_pipeline("balanced", "default", "route-draft")
+        item = find_pipeline("route-draft")
+        before = item.path.read_text(encoding="utf-8")
+        draft = start_pipeline_draft("route-draft")
+
+        draft_set_stage_agent_route(
+            draft,
+            "analysis",
+            0,
+            backend="codex",
+            model="gpt-5.4",
+            effort="high",
+        )
+
+        route = effective_stage_agent_route(draft, "analysis", 0)
+        self.assertEqual(route["backend"], "codex")
+        self.assertIn("undo=1 redo=0", draft_status_line(draft))
+        self.assertEqual(item.path.read_text(encoding="utf-8"), before)
+        self.assertTrue(validate_pipeline_draft(draft).ok)
+
+        self.assertTrue(draft.undo())
+        agent = next(stage for stage in draft.pipeline["stages"] if stage["id"] == "analysis")["agents"][0]
+        self.assertEqual(agent, {"role": "agent-analysis"})
+        self.assertIn("undo=0 redo=1", draft_status_line(draft))
+
+        self.assertTrue(draft.redo())
+        route = effective_stage_agent_route(draft, "analysis", 0)
+        self.assertEqual(route["backend"], "codex")
+
+    def test_pipeline_draft_fan_out_branch_routes_can_be_changed_and_reset(self) -> None:
+        fork_preset_and_pipeline("competitive", "compete", "fanout-draft")
+        draft = start_pipeline_draft("fanout-draft")
+
+        draft_set_fan_out_branch_route(
+            draft,
+            "writers",
+            0,
+            backend="codex",
+            model="gpt-5.4-mini",
+            effort="medium",
+        )
+
+        route = effective_fan_out_branch_route(draft, "writers", 0)
+        fan = next(stage for stage in draft.pipeline["stages"] if stage["id"] == "writers")["fan_out"]
+        self.assertEqual(route["model"], "gpt-5.4-mini")
+        self.assertEqual(fan["variant"], "models")
+        self.assertEqual(fan["routes"][1]["backend"], "codex")
+
+        draft_reset_fan_out_routes(draft, "writers")
+        fan = next(stage for stage in draft.pipeline["stages"] if stage["id"] == "writers")["fan_out"]
+        self.assertEqual(fan, {"role": "agent-writer", "count": 2, "variant": "same"})
+        self.assertTrue(validate_pipeline_draft(draft).ok)
+
+    def test_pipeline_draft_module_palette_add_remove_and_undo(self) -> None:
+        fork_preset_and_pipeline("balanced", "default", "module-draft")
+        draft = start_pipeline_draft("module-draft")
+        palette = module_palette_rows(draft.pipeline)
+
+        self.assertIn("provider doctor required", next(row for row in palette if row["module_id"] == "mco-review")["detail"])
+        with self.assertRaisesRegex(ValueError, "still required"):
+            draft_remove_stage(draft, "research")
+
+        draft_add_module_stage(draft, "codex-review", stage_id="codex-review-ui")
+        self.assertTrue(any(stage["id"] == "codex-review-ui" for stage in draft.pipeline["stages"]))
+        self.assertTrue(validate_pipeline_draft(draft).ok)
+
+        draft_remove_stage(draft, "codex-review-ui")
+        self.assertFalse(any(stage["id"] == "codex-review-ui" for stage in draft.pipeline["stages"]))
+        self.assertTrue(draft.undo())
+        self.assertTrue(any(stage["id"] == "codex-review-ui" for stage in draft.pipeline["stages"]))
 
     def test_pipeline_workbench_preview_includes_validation_and_diff_for_user_fork(self) -> None:
         fork_preset_and_pipeline("balanced", "default", "ui-preview")

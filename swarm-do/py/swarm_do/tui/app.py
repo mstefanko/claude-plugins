@@ -27,9 +27,18 @@ from swarm_do.tui.state import (
     PipelineEditDraft,
     PipelineGalleryRow,
     StageRow,
+    draft_add_module_stage,
+    draft_remove_stage,
+    draft_reset_fan_out_routes,
+    draft_reset_stage_agent_route,
+    draft_set_fan_out_branch_route,
+    draft_set_stage_agent_route,
     draft_status_line,
     draft_validation_lines,
+    effective_fan_out_branch_route,
+    effective_stage_agent_route,
     load_runs,
+    module_palette_rows,
     pipeline_gallery_rows,
     pipeline_stage_rows,
     pipeline_validation_report,
@@ -118,6 +127,86 @@ if TEXTUAL_IMPORT_ERROR is None:
                 self.dismiss(None)
                 return
             self.dismiss(self.query_one("#fork-name", Input).value.strip())
+
+
+    class BranchRouteModal(ModalScreen[tuple[str, str, str, str] | None]):
+        def __init__(self, stage_id: str, branch_count: int, current: tuple[str, str, str]):
+            super().__init__()
+            self.stage_id = stage_id
+            self.branch_count = branch_count
+            self.current = current
+
+        def compose(self) -> ComposeResult:
+            with Container(id="modal"):
+                yield Label(f"{self.stage_id} branch route", classes="modal-title")
+                yield Static(f"branch index: 0..{max(0, self.branch_count - 1)}")
+                yield Input(value="0", placeholder="branch index", id="branch-index")
+                yield Select([(b, b) for b in sorted(BACKENDS)], value=self.current[0], id="backend")
+                yield Input(value=self.current[1], placeholder="model", id="model")
+                yield Select([(e, e) for e in sorted(EFFORTS - {'none'})], value=self.current[2], id="effort")
+                with Horizontal(classes="buttons"):
+                    yield Button("Save", id="save", variant="primary")
+                    yield Button("Cancel", id="cancel")
+
+        def on_button_pressed(self, event: Button.Pressed) -> None:
+            event.stop()
+            if event.button.id == "cancel":
+                self.dismiss(None)
+                return
+            self.dismiss(
+                (
+                    self.query_one("#branch-index", Input).value.strip(),
+                    str(self.query_one("#backend", Select).value),
+                    self.query_one("#model", Input).value.strip(),
+                    str(self.query_one("#effort", Select).value),
+                )
+            )
+
+
+    class ModuleModal(ModalScreen[tuple[str, str, str] | None]):
+        def __init__(self, rows: list[dict[str, str]]):
+            super().__init__()
+            self.rows = rows
+
+        def compose(self) -> ComposeResult:
+            options = [
+                (f"{row['category']}: {row['module_id']} ({row['status']})", row["module_id"])
+                for row in self.rows
+            ]
+            default = self.rows[0] if self.rows else {"module_id": "", "suggested_stage_id": ""}
+            with Container(id="modal"):
+                yield Label("Add Module", classes="modal-title")
+                yield Select(options, value=default["module_id"], id="module")
+                yield Static(default.get("detail", ""), id="module-detail")
+                yield Static("stage id defaults to the suggestion for the selected module")
+                yield Input(value=default["suggested_stage_id"], placeholder="stage id", id="stage-id")
+                yield Input(value="", placeholder="depends_on, comma separated (optional)", id="depends-on")
+                with Horizontal(classes="buttons"):
+                    yield Button("Add", id="add", variant="primary")
+                    yield Button("Cancel", id="cancel")
+
+        def on_button_pressed(self, event: Button.Pressed) -> None:
+            event.stop()
+            if event.button.id == "cancel":
+                self.dismiss(None)
+                return
+            self.dismiss(
+                (
+                    str(self.query_one("#module", Select).value),
+                    self.query_one("#stage-id", Input).value.strip(),
+                    self.query_one("#depends-on", Input).value.strip(),
+                )
+            )
+
+        def on_select_changed(self, event: Select.Changed) -> None:
+            if event.select.id != "module":
+                return
+            selected = str(event.value)
+            for row in self.rows:
+                if row["module_id"] == selected:
+                    self.query_one("#stage-id", Input).value = row["suggested_stage_id"]
+                    self.query_one("#module-detail", Static).update(row["detail"])
+                    break
 
 
     class DashboardScreen(Screen):
@@ -354,6 +443,13 @@ if TEXTUAL_IMPORT_ERROR is None:
         BINDINGS = [
             ("enter", "begin_edit", "Edit"),
             ("f", "begin_edit", "Fork/Edit"),
+            ("r", "edit_stage_route", "Route"),
+            ("b", "edit_branch_route", "Branch"),
+            ("m", "add_module", "Module"),
+            ("delete", "remove_stage", "Remove"),
+            ("ctrl+r", "reset_selected_route", "Reset route"),
+            ("ctrl+z", "undo_draft", "Undo"),
+            ("ctrl+y", "redo_draft", "Redo"),
             ("ctrl+s", "save_draft", "Save"),
             ("escape", "discard_draft", "Discard"),
             ("l", "lint_pipeline", "Lint"),
@@ -467,6 +563,34 @@ if TEXTUAL_IMPORT_ERROR is None:
             if event.list_view.id == "stage-rows":
                 self.refresh_stage_inspector()
 
+        def _draft_for_selected(self) -> PipelineEditDraft | None:
+            row = self._selected_gallery_row()
+            if row is None:
+                return None
+            if self._draft is not None and self._draft.pipeline_name == row.name:
+                return self._draft
+            item = find_pipeline(row.name)
+            if item is not None and item.origin == "user":
+                try:
+                    self._draft = start_pipeline_draft(item.name, preset_name=row.preset)
+                except Exception as exc:
+                    self.app.push_screen(MessageModal("Draft refused", str(exc)))
+                    return None
+                self.refresh_stages()
+                return self._draft
+            self.app.push_screen(MessageModal("Fork first", "Press f or Enter to fork this stock pipeline before editing."))
+            return None
+
+        def _selected_stage_mapping(self) -> dict[str, Any] | None:
+            pipeline = self._current_pipeline()
+            stage = self._selected_stage_row()
+            if pipeline is None or stage is None:
+                return None
+            for candidate in pipeline.get("stages") or []:
+                if isinstance(candidate, dict) and candidate.get("id") == stage.stage_id:
+                    return candidate
+            return None
+
         def action_begin_edit(self) -> None:
             row = self._selected_gallery_row()
             if row is None:
@@ -505,6 +629,165 @@ if TEXTUAL_IMPORT_ERROR is None:
                 self.app.push_screen(MessageModal("Fork ready", f"{new_name} is user-owned and open as an in-memory draft."))
 
             self.app.push_screen(ForkPipelineModal(item.name, source_preset, suggested), fork_done)
+
+        def action_edit_stage_route(self) -> None:
+            draft = self._draft_for_selected()
+            stage = self._selected_stage_row()
+            if draft is None or stage is None:
+                return
+            mapping = self._selected_stage_mapping()
+            if mapping is None or not isinstance(mapping.get("agents"), list):
+                self.app.push_screen(MessageModal("Route edit", "Select an agents stage to edit its first agent route."))
+                return
+            try:
+                current = effective_stage_agent_route(draft, stage.stage_id, 0)
+            except Exception as exc:
+                self.app.push_screen(MessageModal("Route unavailable", str(exc)))
+                return
+
+            def done(value: tuple[str, str, str] | None) -> None:
+                if value is None:
+                    return
+                backend, model, effort = value
+                try:
+                    draft_set_stage_agent_route(
+                        draft,
+                        stage.stage_id,
+                        0,
+                        backend=backend,
+                        model=model,
+                        effort=effort,
+                    )
+                except Exception as exc:
+                    self.app.push_screen(MessageModal("Route refused", str(exc)))
+                    return
+                self.refresh_stages()
+
+            self.app.push_screen(
+                RouteModal(stage.stage_id, current.get("source"), (current["backend"], current["model"], current["effort"])),
+                done,
+            )
+
+        def action_edit_branch_route(self) -> None:
+            draft = self._draft_for_selected()
+            stage = self._selected_stage_row()
+            if draft is None or stage is None:
+                return
+            mapping = self._selected_stage_mapping()
+            fan = mapping.get("fan_out") if isinstance(mapping, dict) else None
+            if not isinstance(fan, dict):
+                self.app.push_screen(MessageModal("Branch route", "Select a fan-out stage to edit branch routes."))
+                return
+            if fan.get("variant") == "prompt_variants":
+                self.app.push_screen(MessageModal("Branch route", "Prompt-variant fan-outs cannot also use model routes."))
+                return
+            count = fan.get("count")
+            if not isinstance(count, int):
+                self.app.push_screen(MessageModal("Branch route", "Fan-out count is invalid."))
+                return
+            try:
+                current = effective_fan_out_branch_route(draft, stage.stage_id, 0)
+            except Exception as exc:
+                self.app.push_screen(MessageModal("Branch route unavailable", str(exc)))
+                return
+
+            def done(value: tuple[str, str, str, str] | None) -> None:
+                if value is None:
+                    return
+                branch_text, backend, model, effort = value
+                try:
+                    branch_index = int(branch_text)
+                    draft_set_fan_out_branch_route(
+                        draft,
+                        stage.stage_id,
+                        branch_index,
+                        backend=backend,
+                        model=model,
+                        effort=effort,
+                    )
+                except Exception as exc:
+                    self.app.push_screen(MessageModal("Branch route refused", str(exc)))
+                    return
+                self.refresh_stages()
+
+            self.app.push_screen(
+                BranchRouteModal(stage.stage_id, count, (current["backend"], current["model"], current["effort"])),
+                done,
+            )
+
+        def action_reset_selected_route(self) -> None:
+            draft = self._draft_for_selected()
+            stage = self._selected_stage_row()
+            if draft is None or stage is None:
+                return
+            mapping = self._selected_stage_mapping()
+            try:
+                if isinstance(mapping, dict) and isinstance(mapping.get("fan_out"), dict):
+                    draft_reset_fan_out_routes(draft, stage.stage_id)
+                elif isinstance(mapping, dict) and isinstance(mapping.get("agents"), list):
+                    draft_reset_stage_agent_route(draft, stage.stage_id, 0)
+                else:
+                    self.app.push_screen(MessageModal("Reset route", "Select an agents or fan-out stage."))
+                    return
+            except Exception as exc:
+                self.app.push_screen(MessageModal("Reset refused", str(exc)))
+                return
+            self.refresh_stages()
+
+        def action_add_module(self) -> None:
+            draft = self._draft_for_selected()
+            if draft is None:
+                return
+            rows = module_palette_rows(draft.pipeline)
+
+            def done(value: tuple[str, str, str] | None) -> None:
+                if value is None:
+                    return
+                module_id, stage_id, depends_text = value
+                depends_on = [part.strip() for part in depends_text.split(",") if part.strip()] or None
+                try:
+                    draft_add_module_stage(
+                        draft,
+                        module_id,
+                        stage_id=stage_id or None,
+                        depends_on=depends_on,
+                    )
+                except Exception as exc:
+                    self.app.push_screen(MessageModal("Module refused", str(exc)))
+                    return
+                self.refresh_stages()
+
+            self.app.push_screen(ModuleModal(rows), done)
+
+        def action_remove_stage(self) -> None:
+            draft = self._draft_for_selected()
+            stage = self._selected_stage_row()
+            if draft is None or stage is None:
+                return
+            try:
+                draft_remove_stage(draft, stage.stage_id)
+            except Exception as exc:
+                self.app.push_screen(MessageModal("Remove refused", str(exc)))
+                return
+            self.refresh_stages()
+
+        def action_undo_draft(self) -> None:
+            if self._draft is None:
+                self.app.push_screen(MessageModal("Undo", "No open draft."))
+                return
+            if not self._draft.undo():
+                self.app.push_screen(MessageModal("Undo", "Nothing to undo."))
+                return
+            self.refresh_stages()
+
+        def action_redo_draft(self) -> None:
+            if self._draft is None:
+                self.app.push_screen(MessageModal("Redo", "No open draft."))
+                return
+            if not self._draft.redo():
+                self.app.push_screen(MessageModal("Redo", "Nothing to redo."))
+                return
+            self.refresh_stages()
 
         def action_save_draft(self) -> None:
             if self._draft is None:

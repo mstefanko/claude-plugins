@@ -814,6 +814,21 @@ def invariant_errors(
     except Exception as exc:
         errors.append(f"invariant: synthesizer route resolution failed: {exc}")
     for stage in pipeline.get("stages") or []:
+        stage_id = stage.get("id", "<unknown>")
+        for agent_entry in stage.get("agents") or []:
+            if not isinstance(agent_entry, Mapping):
+                continue
+            role = agent_entry.get("role")
+            if role not in {"orchestrator", "agent-code-synthesizer"}:
+                continue
+            override = agent_entry.get("route")
+            if override is None and {"backend", "model", "effort"} <= set(agent_entry):
+                override = agent_entry
+            try:
+                if not resolver.is_claude_backed(role, "hard", override=override):
+                    errors.append(f"invariant: stage {stage_id} role {role} must resolve to a Claude backend")
+            except Exception as exc:
+                errors.append(f"invariant: stage {stage_id} role {role} route resolution failed: {exc}")
         merge = stage.get("merge")
         if isinstance(merge, Mapping) and merge.get("strategy") == "synthesize":
             agent = merge.get("agent")

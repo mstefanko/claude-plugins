@@ -15,14 +15,14 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from swarm_do.pipeline.actions import InFlightRun, in_flight_dir, load_in_flight
-from swarm_do.pipeline.catalog import lens_for_variant
+from swarm_do.pipeline.catalog import get_module, lens_for_variant, list_modules
 from swarm_do.pipeline.context import current_context
 from swarm_do.pipeline.diff import diff_user_pipeline, stock_drift_for_pipeline
 from swarm_do.pipeline.engine import graph_lines, topological_layers
 from swarm_do.pipeline.paths import resolve_data_dir
 from swarm_do.pipeline.providers import ProviderDoctorReport, provider_doctor
 from swarm_do.pipeline.registry import find_pipeline, list_pipelines, list_presets, load_pipeline, load_preset
-from swarm_do.pipeline.resolver import active_preset_name
+from swarm_do.pipeline.resolver import BACKENDS, EFFORTS, BackendResolver, active_preset_name
 from swarm_do.pipeline.validation import (
     ValidationResult,
     invariant_errors,
@@ -125,6 +125,8 @@ class PipelineEditDraft:
     original_pipeline: dict[str, Any]
     status: str = "saved"
     message: str = "draft ready"
+    undo_stack: list[dict[str, Any]] = dataclasses.field(default_factory=list)
+    redo_stack: list[dict[str, Any]] = dataclasses.field(default_factory=list)
 
     @property
     def dirty(self) -> bool:
@@ -134,10 +136,38 @@ class PipelineEditDraft:
         self.original_pipeline = copy.deepcopy(self.pipeline)
         self.status = "saved"
         self.message = "saved"
+        self.undo_stack.clear()
+        self.redo_stack.clear()
 
     def mark_invalid(self, message: str) -> None:
         self.status = "invalid"
         self.message = message
+
+    def checkpoint(self, message: str) -> None:
+        self.undo_stack.append(copy.deepcopy(self.pipeline))
+        if len(self.undo_stack) > 50:
+            self.undo_stack.pop(0)
+        self.redo_stack.clear()
+        self.status = "dirty"
+        self.message = message
+
+    def undo(self) -> bool:
+        if not self.undo_stack:
+            return False
+        self.redo_stack.append(copy.deepcopy(self.pipeline))
+        self.pipeline = self.undo_stack.pop()
+        self.status = "dirty" if self.dirty else "saved"
+        self.message = "undo"
+        return True
+
+    def redo(self) -> bool:
+        if not self.redo_stack:
+            return False
+        self.undo_stack.append(copy.deepcopy(self.pipeline))
+        self.pipeline = self.redo_stack.pop()
+        self.status = "dirty"
+        self.message = "redo"
+        return True
 
 
 def pipeline_intent(name: str, pipeline: Mapping[str, Any]) -> str:
@@ -261,6 +291,239 @@ def start_pipeline_draft(pipeline_name: str, *, preset_name: str | None = None) 
         pipeline=copy.deepcopy(pipeline),
         original_pipeline=copy.deepcopy(pipeline),
     )
+
+
+def _mutable_stage_by_id(pipeline: dict[str, Any], stage_id: str) -> dict[str, Any]:
+    for stage in pipeline.get("stages") or []:
+        if isinstance(stage, dict) and stage.get("id") == stage_id:
+            return stage
+    raise ValueError(f"stage not found: {stage_id}")
+
+
+def _mutable_stage_agent(pipeline: dict[str, Any], stage_id: str, agent_index: int) -> dict[str, Any]:
+    stage = _mutable_stage_by_id(pipeline, stage_id)
+    agents = stage.get("agents")
+    if not isinstance(agents, list):
+        raise ValueError(f"stage {stage_id} is not an agents stage")
+    if agent_index < 0 or agent_index >= len(agents) or not isinstance(agents[agent_index], dict):
+        raise ValueError(f"agent index out of range for stage {stage_id}: {agent_index}")
+    return agents[agent_index]
+
+
+def _mutable_stage_fan_out(pipeline: dict[str, Any], stage_id: str) -> dict[str, Any]:
+    stage = _mutable_stage_by_id(pipeline, stage_id)
+    fan = stage.get("fan_out")
+    if not isinstance(fan, dict):
+        raise ValueError(f"stage {stage_id} is not a fan_out stage")
+    return fan
+
+
+def _validate_route_parts(backend: str, model: str, effort: str) -> dict[str, str]:
+    backend = backend.strip()
+    model = model.strip()
+    effort = effort.strip()
+    if backend not in BACKENDS:
+        raise ValueError(f"backend must be one of {sorted(BACKENDS)}")
+    if not model:
+        raise ValueError("model must be a non-empty string")
+    if effort not in EFFORTS:
+        raise ValueError(f"effort must be one of {sorted(EFFORTS)}")
+    return {"backend": backend, "model": model, "effort": effort}
+
+
+def _route_object_from_resolver(draft: PipelineEditDraft, role: str) -> dict[str, str]:
+    route = BackendResolver(preset_name=draft.preset_name).resolve(role, "hard")
+    return {"backend": route.backend, "model": route.model, "effort": route.effort}
+
+
+def effective_stage_agent_route(draft: PipelineEditDraft, stage_id: str, agent_index: int = 0) -> dict[str, str]:
+    agent = _mutable_stage_agent(draft.pipeline, stage_id, agent_index)
+    role = agent.get("role")
+    if not isinstance(role, str) or not role:
+        raise ValueError(f"agent[{agent_index}] in {stage_id} has no role")
+    override: Any = agent.get("route")
+    if override is None and {"backend", "model", "effort"} <= set(agent):
+        override = agent
+    route = BackendResolver(preset_name=draft.preset_name).resolve(role, "hard", override=override)
+    return {
+        "backend": route.backend,
+        "model": route.model,
+        "effort": route.effort,
+        "source": route.setting_source,
+    }
+
+
+def effective_fan_out_branch_route(draft: PipelineEditDraft, stage_id: str, branch_index: int = 0) -> dict[str, str]:
+    fan = _mutable_stage_fan_out(draft.pipeline, stage_id)
+    role = fan.get("role")
+    if not isinstance(role, str) or not role:
+        raise ValueError(f"fan_out stage {stage_id} has no role")
+    count = fan.get("count")
+    if not isinstance(count, int) or count < 1:
+        raise ValueError(f"fan_out stage {stage_id} has invalid count")
+    if branch_index < 0 or branch_index >= count:
+        raise ValueError(f"branch index out of range for stage {stage_id}: {branch_index}")
+    override: Any = None
+    if fan.get("variant") == "models":
+        routes = fan.get("routes")
+        if isinstance(routes, list) and branch_index < len(routes):
+            override = routes[branch_index]
+    route = BackendResolver(preset_name=draft.preset_name).resolve(role, "hard", override=override)
+    return {
+        "backend": route.backend,
+        "model": route.model,
+        "effort": route.effort,
+        "source": route.setting_source,
+    }
+
+
+def draft_set_stage_agent_route(
+    draft: PipelineEditDraft,
+    stage_id: str,
+    agent_index: int,
+    *,
+    backend: str,
+    model: str,
+    effort: str,
+) -> None:
+    route = _validate_route_parts(backend, model, effort)
+    agent = _mutable_stage_agent(draft.pipeline, stage_id, agent_index)
+    draft.checkpoint(f"set route for {stage_id}.agents[{agent_index}]")
+    for key in ("backend", "model", "effort", "route"):
+        agent.pop(key, None)
+    agent.update(route)
+
+
+def draft_reset_stage_agent_route(draft: PipelineEditDraft, stage_id: str, agent_index: int) -> None:
+    agent = _mutable_stage_agent(draft.pipeline, stage_id, agent_index)
+    draft.checkpoint(f"reset route for {stage_id}.agents[{agent_index}]")
+    for key in ("backend", "model", "effort", "route"):
+        agent.pop(key, None)
+
+
+def draft_set_fan_out_branch_route(
+    draft: PipelineEditDraft,
+    stage_id: str,
+    branch_index: int,
+    *,
+    backend: str,
+    model: str,
+    effort: str,
+) -> None:
+    route = _validate_route_parts(backend, model, effort)
+    fan = _mutable_stage_fan_out(draft.pipeline, stage_id)
+    if fan.get("variant") == "prompt_variants" or "variants" in fan:
+        raise ValueError("cannot combine prompt-variant lenses and per-branch model routes in one fan-out")
+    role = fan.get("role")
+    if not isinstance(role, str) or not role:
+        raise ValueError(f"fan_out stage {stage_id} has no role")
+    count = fan.get("count")
+    if not isinstance(count, int) or count < 1:
+        raise ValueError(f"fan_out stage {stage_id} has invalid count")
+    if branch_index < 0 or branch_index >= count:
+        raise ValueError(f"branch index out of range for stage {stage_id}: {branch_index}")
+    existing = fan.get("routes") if fan.get("variant") == "models" else None
+    if isinstance(existing, list) and len(existing) == count:
+        routes: list[Any] = copy.deepcopy(existing)
+    else:
+        default_route = _route_object_from_resolver(draft, role)
+        routes = [copy.deepcopy(default_route) for _ in range(count)]
+    draft.checkpoint(f"set route for {stage_id}.fan_out[{branch_index}]")
+    routes[branch_index] = route
+    fan["variant"] = "models"
+    fan["count"] = count
+    fan["routes"] = routes
+    fan.pop("variants", None)
+
+
+def draft_reset_fan_out_routes(draft: PipelineEditDraft, stage_id: str) -> None:
+    fan = _mutable_stage_fan_out(draft.pipeline, stage_id)
+    draft.checkpoint(f"reset fan-out routes for {stage_id}")
+    fan["variant"] = "same"
+    fan.pop("routes", None)
+    fan.pop("variants", None)
+
+
+def suggest_stage_id(pipeline: Mapping[str, Any], base: str) -> str:
+    existing = {str(stage.get("id")) for stage in pipeline.get("stages") or [] if isinstance(stage, Mapping)}
+    if base not in existing:
+        return base
+    idx = 2
+    while f"{base}-{idx}" in existing:
+        idx += 1
+    return f"{base}-{idx}"
+
+
+def draft_add_module_stage(
+    draft: PipelineEditDraft,
+    module_id: str,
+    *,
+    stage_id: str | None = None,
+    depends_on: list[str] | None = None,
+) -> None:
+    module = get_module(module_id)
+    if module is None:
+        raise ValueError(f"unknown module: {module_id}")
+    default_id = str(module.stage_template.get("id") or module.module_id)
+    resolved_stage_id = stage_id.strip() if stage_id else suggest_stage_id(draft.pipeline, default_id)
+    if not resolved_stage_id:
+        raise ValueError("stage id must be a non-empty string")
+    existing = {str(stage.get("id")) for stage in draft.pipeline.get("stages") or [] if isinstance(stage, Mapping)}
+    if resolved_stage_id in existing:
+        raise ValueError(f"stage already exists: {resolved_stage_id}")
+    stage = module.instantiate_stage(stage_id=resolved_stage_id)
+    if depends_on is not None:
+        stage["depends_on"] = depends_on
+    stages = draft.pipeline.setdefault("stages", [])
+    if not isinstance(stages, list):
+        raise ValueError("pipeline stages must be a list")
+    draft.checkpoint(f"add module {module_id} as {resolved_stage_id}")
+    stages.append(stage)
+
+
+def draft_remove_stage(draft: PipelineEditDraft, stage_id: str) -> None:
+    stages = draft.pipeline.get("stages")
+    if not isinstance(stages, list):
+        raise ValueError("pipeline stages must be a list")
+    _mutable_stage_by_id(draft.pipeline, stage_id)
+    dependents = [
+        str(stage.get("id"))
+        for stage in stages
+        if isinstance(stage, Mapping) and stage_id in (stage.get("depends_on") or [])
+    ]
+    if dependents:
+        raise ValueError(f"stage {stage_id} is still required by: {', '.join(sorted(dependents))}")
+    draft.checkpoint(f"remove stage {stage_id}")
+    draft.pipeline["stages"] = [
+        stage for stage in stages if not (isinstance(stage, Mapping) and stage.get("id") == stage_id)
+    ]
+
+
+def module_palette_rows(pipeline: Mapping[str, Any]) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for module in list_modules():
+        default_id = str(module.stage_template.get("id") or module.module_id)
+        suggested = suggest_stage_id(pipeline, default_id)
+        status = "ready"
+        notes: list[str] = []
+        if suggested != default_id:
+            notes.append(f"default id exists; suggested {suggested}")
+        if module.experimental:
+            status = "experimental"
+            notes.append("experimental")
+        if module.requires_provider_doctor:
+            notes.append("provider doctor required before activation")
+        rows.append(
+            {
+                "module_id": module.module_id,
+                "label": module.label,
+                "category": module.category,
+                "status": status,
+                "suggested_stage_id": suggested,
+                "detail": "; ".join(notes) if notes else module.description,
+            }
+        )
+    return rows
 
 
 def telemetry_dir(data_dir: Path | None = None) -> Path:
@@ -560,7 +823,10 @@ def draft_status_line(draft: PipelineEditDraft | None) -> str:
     if draft is None:
         return "draft: none"
     state = "dirty" if draft.dirty else draft.status
-    return f"draft: {state} pipeline={draft.pipeline_name} preset={draft.preset_name or 'none'} message={draft.message}"
+    return (
+        f"draft: {state} pipeline={draft.pipeline_name} preset={draft.preset_name or 'none'} "
+        f"undo={len(draft.undo_stack)} redo={len(draft.redo_stack)} message={draft.message}"
+    )
 
 
 def draft_validation_lines(draft: PipelineEditDraft) -> list[str]:

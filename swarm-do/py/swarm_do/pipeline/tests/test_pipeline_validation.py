@@ -262,6 +262,50 @@ max_wall_clock_seconds = 1800
                 else:
                     os.environ["CLAUDE_PLUGIN_DATA"] = old
 
+    def test_inline_stage_override_cannot_move_synthesizer_to_codex(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            data = Path(td)
+            (data / "presets").mkdir()
+            (data / "pipelines").mkdir()
+            (data / "pipelines" / "bad-synth.yaml").write_text(
+                """
+pipeline_version: 1
+name: bad-synth
+stages:
+  - id: synth
+    agents:
+      - role: agent-code-synthesizer
+        backend: codex
+        model: gpt-5.4
+        effort: high
+""",
+                encoding="utf-8",
+            )
+            (data / "presets" / "bad-synth.toml").write_text(
+                """
+name = "bad-synth"
+pipeline = "bad-synth"
+origin = "user"
+
+[budget]
+max_agents_per_run = 20
+max_estimated_cost_usd = 5.0
+max_wall_clock_seconds = 1800
+""",
+                encoding="utf-8",
+            )
+            old = os.environ.get("CLAUDE_PLUGIN_DATA")
+            os.environ["CLAUDE_PLUGIN_DATA"] = td
+            try:
+                result, *_ = validate_preset_and_pipeline("bad-synth")
+                self.assertFalse(result.ok)
+                self.assertTrue(any("stage synth role agent-code-synthesizer" in e for e in result.errors))
+            finally:
+                if old is None:
+                    os.environ.pop("CLAUDE_PLUGIN_DATA", None)
+                else:
+                    os.environ["CLAUDE_PLUGIN_DATA"] = old
+
     def test_variant_lint_catches_dangling_variant(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             data = Path(td)
