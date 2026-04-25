@@ -56,8 +56,39 @@ class PipelineCatalogTests(unittest.TestCase):
 
     def test_scanned_variants_are_enriched_by_typed_lenses(self) -> None:
         scanned = discover_prompt_variant_files()
-        self.assertEqual(set(scanned["agent-analysis"]), {"explorer-a", "explorer-b", "explorer-c"})
+        self.assertGreaterEqual(
+            set(scanned["agent-analysis"]),
+            {"explorer-a", "explorer-b", "explorer-c", "security-threat-model"},
+        )
+        self.assertGreaterEqual(
+            set(scanned["agent-research"]),
+            {"prior-art-search", "codebase-map", "risk-discovery"},
+        )
+        self.assertGreaterEqual(
+            set(scanned["agent-review"]),
+            {"correctness-rubric", "api-contract", "security-threat-model", "performance-review", "edge-case-review"},
+        )
         self.assertEqual(get_lens("state-data").variant_name, "explorer-c")
+
+    def test_phase3_lenses_compile_to_role_specific_prompt_variants(self) -> None:
+        research = compile_prompt_variant_fan_out(
+            "agent-research",
+            ["codebase-map", "prior-art-search", "risk-discovery"],
+        )
+        self.assertEqual(research["variants"], ["codebase-map", "prior-art-search", "risk-discovery"])
+
+        analysis_security = compile_prompt_variant_fan_out("agent-analysis", ["security-threat-model"])
+        self.assertEqual(analysis_security["variants"], ["security-threat-model"])
+
+        review = compile_prompt_variant_fan_out(
+            "agent-review",
+            ["correctness-rubric", "api-contract", "security-threat-model", "performance-review", "edge-case-review"],
+        )
+        self.assertEqual(
+            review["variants"],
+            ["correctness-rubric", "api-contract", "security-threat-model", "performance-review", "edge-case-review"],
+        )
+        self.assertIn("agent-review output schema", get_lens("api-contract").output_contract_for_role("agent-review").schema_rule)
 
     def test_module_and_route_catalogs_include_mco_gating(self) -> None:
         module_ids = {module.module_id for module in list_modules()}

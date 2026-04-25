@@ -24,7 +24,9 @@ from swarm_do.pipeline.config_hash import active_config_hash
 from swarm_do.pipeline.providers import ProviderCheck, ProviderDoctorReport
 from swarm_do.pipeline.registry import find_pipeline, load_pipeline, load_preset
 from swarm_do.tui.state import (
+    current_prompt_lens_ids,
     draft_add_module_stage,
+    draft_set_prompt_variant_lenses,
     draft_remove_stage,
     draft_reset_fan_out_routes,
     draft_set_fan_out_branch_route,
@@ -47,6 +49,7 @@ from swarm_do.tui.state import (
     pipeline_workbench_preview,
     select_source_preset_for_pipeline,
     stage_inspector_text,
+    stage_lens_option_rows,
     start_pipeline_draft,
     status_summary,
     suggested_fork_name,
@@ -330,6 +333,29 @@ class TuiStateTests(EnvTestCase):
         fan = next(stage for stage in draft.pipeline["stages"] if stage["id"] == "writers")["fan_out"]
         self.assertEqual(fan, {"role": "agent-writer", "count": 2, "variant": "same"})
         self.assertTrue(validate_pipeline_draft(draft).ok)
+
+    def test_pipeline_draft_prompt_lenses_can_be_changed_cleared_and_undone(self) -> None:
+        fork_preset_and_pipeline("ultra-plan", "ultra-plan", "lens-draft")
+        draft = start_pipeline_draft("lens-draft")
+
+        rows = stage_lens_option_rows(draft.pipeline, "exploration")
+        self.assertIn("security-sensitive", next(row for row in rows if row["lens_id"] == "security-threat-model")["safety"])
+        self.assertEqual(current_prompt_lens_ids(draft.pipeline, "exploration"), ["architecture-risk", "api-contract", "state-data"])
+
+        draft_set_prompt_variant_lenses(draft, "exploration", ["security-threat-model", "architecture-risk"])
+
+        fan = next(stage for stage in draft.pipeline["stages"] if stage["id"] == "exploration")["fan_out"]
+        self.assertEqual(fan["count"], 2)
+        self.assertEqual(fan["variants"], ["security-threat-model", "explorer-a"])
+        self.assertTrue(validate_pipeline_draft(draft).ok)
+
+        draft_set_prompt_variant_lenses(draft, "exploration", [])
+        fan = next(stage for stage in draft.pipeline["stages"] if stage["id"] == "exploration")["fan_out"]
+        self.assertEqual(fan, {"role": "agent-analysis", "count": 2, "variant": "same"})
+
+        self.assertTrue(draft.undo())
+        fan = next(stage for stage in draft.pipeline["stages"] if stage["id"] == "exploration")["fan_out"]
+        self.assertEqual(fan["variants"], ["security-threat-model", "explorer-a"])
 
     def test_pipeline_draft_module_palette_add_remove_and_undo(self) -> None:
         fork_preset_and_pipeline("balanced", "default", "module-draft")

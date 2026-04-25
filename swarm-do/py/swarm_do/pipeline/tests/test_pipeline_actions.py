@@ -266,6 +266,51 @@ stages:
         self.assertEqual(fan["count"], 2)
         self.assertEqual(fan["variants"], ["explorer-c", "explorer-b"])
 
+    def test_prompt_variant_lenses_compile_for_research_and_review_roles(self) -> None:
+        save_user_pipeline(
+            "research-lens-edit",
+            loads(
+                """
+pipeline_version: 1
+name: research-lens-edit
+stages:
+  - id: research
+    fan_out:
+      role: agent-research
+      count: 3
+      variant: same
+    merge:
+      strategy: synthesize
+      agent: agent-research-merge
+"""
+            ),
+        )
+        set_prompt_variant_lenses("research-lens-edit", "research", ["codebase-map", "prior-art-search"])
+        research = load_pipeline(find_pipeline("research-lens-edit").path)
+        self.assertEqual(research["stages"][0]["fan_out"]["variants"], ["codebase-map", "prior-art-search"])
+
+        save_user_pipeline(
+            "review-lens-edit",
+            loads(
+                """
+pipeline_version: 1
+name: review-lens-edit
+stages:
+  - id: review
+    fan_out:
+      role: agent-review
+      count: 3
+      variant: same
+    merge:
+      strategy: synthesize
+      agent: agent-code-synthesizer
+"""
+            ),
+        )
+        set_prompt_variant_lenses("review-lens-edit", "review", ["correctness-rubric", "api-contract", "edge-case-review"])
+        review = load_pipeline(find_pipeline("review-lens-edit").path)
+        self.assertEqual(review["stages"][0]["fan_out"]["variants"], ["correctness-rubric", "api-contract", "edge-case-review"])
+
     def test_module_stage_addition_uses_catalog_template(self) -> None:
         fork_pipeline("default", "module-edit")
         add_pipeline_stage_from_module("module-edit", "codex-review", stage_id="codex-review-extra")

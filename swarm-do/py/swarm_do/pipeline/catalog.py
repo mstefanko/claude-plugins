@@ -36,6 +36,8 @@ class LensSpec:
     variant_path: str | None
     output_contract: OutputContract
     merge_expectation: str
+    role_variants: Mapping[str, tuple[str, str]] = dataclasses.field(default_factory=dict)
+    role_output_contracts: Mapping[str, OutputContract] = dataclasses.field(default_factory=dict)
     conflicts: tuple[str, ...] = ()
     stacking_policy: str = "one lens per branch; no stacked prompt overlays in v1"
     safety_notes: tuple[str, ...] = ()
@@ -47,6 +49,25 @@ class LensSpec:
         if self.variant_path is None:
             return None
         return REPO_ROOT / self.variant_path
+
+    def variant_for_role(self, role: str) -> str | None:
+        role_variant = self.role_variants.get(role)
+        if role_variant is not None:
+            return role_variant[0]
+        if role in self.roles:
+            return self.variant_name
+        return None
+
+    def variant_file_for_role(self, role: str) -> Path | None:
+        role_variant = self.role_variants.get(role)
+        if role_variant is not None:
+            return REPO_ROOT / role_variant[1]
+        if role in self.roles:
+            return self.variant_file
+        return None
+
+    def output_contract_for_role(self, role: str) -> OutputContract:
+        return self.role_output_contracts.get(role, self.output_contract)
 
     def supports(self, *, role: str, stage_kind: str) -> bool:
         return role in self.roles and stage_kind in self.stage_kinds
@@ -125,6 +146,81 @@ ANALYSIS_CONTRACT = OutputContract(
 )
 
 
+RESEARCH_CONTRACT = OutputContract(
+    sections=(
+        "Relevant Files",
+        "Existing Patterns",
+        "Constraints",
+        "Prior Solutions",
+        "Raw Notes",
+        "Sources",
+    ),
+    allowed_tags={
+        "Relevant Files": (
+            "[ENTRY-POINT]",
+            "[CONFIG]",
+            "[HOT-PATH]",
+            "[TEST]",
+            "[FIXTURE]",
+            "[GENERATED]",
+        ),
+        "Prior Solutions": ("[REUSE]", "[ADAPT]", "[REJECTED-EARLIER]", "[NONE]"),
+        "Constraints": (
+            "[REGRESSION-RISK]",
+            "[CONTRACT-CONSTRAINT]",
+            "[ENVIRONMENTAL]",
+            "[CULTURAL]",
+        ),
+        "Raw Notes": (
+            "[REGRESSION-RISK]",
+            "[CONTRACT-CONSTRAINT]",
+            "[ENVIRONMENTAL]",
+            "[CULTURAL]",
+        ),
+    },
+    schema_rule="Preserve the agent-research output schema, required sections, and COMPLETE | NEEDS_INPUT status vocabulary.",
+)
+
+
+REVIEW_CONTRACT = OutputContract(
+    sections=(
+        "Verdict",
+        "Checks Run",
+        "Issues Found",
+        "Production Risk",
+    ),
+    allowed_tags={
+        "Issues Found": (
+            "[LOGIC]",
+            "[CONTRACT]",
+            "[INVARIANT]",
+            "[STATE-MACHINE]",
+            "[API-BREAK]",
+            "[API-COMPAT]",
+            "[SPOOF]",
+            "[TAMPER]",
+            "[REPUDIATION]",
+            "[INFO-DISCLOSURE]",
+            "[DOS]",
+            "[ELEVATION]",
+            "[N+1]",
+            "[O-N2]",
+            "[ALLOC]",
+            "[BLOCKING-IO]",
+            "[CONTENTION]",
+            "[NULL]",
+            "[OFF-BY-ONE]",
+            "[BOUNDARY]",
+            "[EMPTY]",
+            "[OVERFLOW]",
+            "[TIME-ZONE]",
+            "[UNICODE]",
+        ),
+    },
+    schema_rule="Preserve the agent-review output schema, section names, no-edit rule, and APPROVED | NEEDS_CHANGES verdict vocabulary.",
+)
+
+
 _PROMPT_LENSES: tuple[LensSpec, ...] = (
     LensSpec(
         lens_id="architecture-risk",
@@ -162,7 +258,7 @@ _PROMPT_LENSES: tuple[LensSpec, ...] = (
             "file formats, environment variables, and compatibility promises."
         ),
         stability="stock",
-        roles=("agent-analysis",),
+        roles=("agent-analysis", "agent-review"),
         stage_kinds=("fan_out",),
         execution_mode="fan_out_only",
         variant_name="explorer-b",
@@ -172,10 +268,15 @@ _PROMPT_LENSES: tuple[LensSpec, ...] = (
             "agent-analysis-judge should prefer concrete break vectors with "
             "file or schema citations and surface compatibility disagreements."
         ),
+        role_variants={
+            "agent-review": ("api-contract", "roles/agent-review/variants/api-contract.md"),
+        },
+        role_output_contracts={"agent-review": REVIEW_CONTRACT},
         telemetry_tags=(
             "category=task-rubric",
             "axis=api-compat",
             "host=agent-analysis",
+            "host=agent-review",
             "mode=fan_out",
             "signal=break-vector-density",
         ),
@@ -205,6 +306,186 @@ _PROMPT_LENSES: tuple[LensSpec, ...] = (
             "host=agent-analysis",
             "mode=fan_out",
             "signal=migration-density",
+        ),
+    ),
+    LensSpec(
+        lens_id="security-threat-model",
+        label="Security Threat Model",
+        category="task-rubric",
+        description=(
+            "Bias analysis or review toward trust boundaries, untrusted input, "
+            "secret handling, authorization, injection, and security-critical state."
+        ),
+        stability="stock",
+        roles=("agent-analysis", "agent-review"),
+        stage_kinds=("fan_out",),
+        execution_mode="fan_out_only",
+        variant_name="security-threat-model",
+        variant_path="roles/agent-analysis/variants/security-threat-model.md",
+        output_contract=ANALYSIS_CONTRACT,
+        merge_expectation=(
+            "Merge should prefer concrete trust-boundary evidence and attacker-input "
+            "examples, surfacing reachability disagreements instead of smoothing them over."
+        ),
+        role_variants={
+            "agent-review": ("security-threat-model", "roles/agent-review/variants/security-threat-model.md"),
+        },
+        role_output_contracts={"agent-review": REVIEW_CONTRACT},
+        safety_notes=(
+            "security-sensitive",
+            "Threat modeling and review notes only; do not generate proof-of-concept exploits or bypass no-edit constraints.",
+        ),
+        telemetry_tags=(
+            "category=task-rubric",
+            "axis=security",
+            "host=agent-analysis",
+            "host=agent-review",
+            "mode=fan_out",
+            "signal=stride-coverage",
+            "signal=trust-boundary-density",
+        ),
+    ),
+    LensSpec(
+        lens_id="prior-art-search",
+        label="Prior Art Search",
+        category="scoping",
+        description="Bias research toward prior commits, ADRs, docs, memory observations, and external precedent.",
+        stability="stock",
+        roles=("agent-research",),
+        stage_kinds=("fan_out",),
+        execution_mode="fan_out_only",
+        variant_name="prior-art-search",
+        variant_path="roles/agent-research/variants/prior-art-search.md",
+        output_contract=RESEARCH_CONTRACT,
+        merge_expectation=(
+            "agent-research-merge should consolidate prior solutions into cross-cutting "
+            "patterns and surface duplicate or rejected prior attempts."
+        ),
+        telemetry_tags=(
+            "category=scoping",
+            "axis=prior-art",
+            "host=agent-research",
+            "mode=fan_out",
+            "signal=duplicate-detection",
+        ),
+    ),
+    LensSpec(
+        lens_id="codebase-map",
+        label="Codebase Map",
+        category="scoping",
+        description="Bias research toward exhaustive affected-surface mapping and file roles.",
+        stability="stock",
+        roles=("agent-research",),
+        stage_kinds=("fan_out",),
+        execution_mode="fan_out_only",
+        variant_name="codebase-map",
+        variant_path="roles/agent-research/variants/codebase-map.md",
+        output_contract=RESEARCH_CONTRACT,
+        merge_expectation=(
+            "agent-research-merge should deduplicate file citations, preserve file-role "
+            "classifications, and flag files that siblings classify differently."
+        ),
+        telemetry_tags=(
+            "category=scoping",
+            "axis=scope",
+            "host=agent-research",
+            "mode=fan_out",
+            "signal=file-role-coverage",
+        ),
+    ),
+    LensSpec(
+        lens_id="risk-discovery",
+        label="Risk Discovery",
+        category="scoping",
+        description="Bias research toward regression, environmental, contract, and prior-attempt risks.",
+        stability="stock",
+        roles=("agent-research",),
+        stage_kinds=("fan_out",),
+        execution_mode="fan_out_only",
+        variant_name="risk-discovery",
+        variant_path="roles/agent-research/variants/risk-discovery.md",
+        output_contract=RESEARCH_CONTRACT,
+        merge_expectation=(
+            "agent-research-merge should lift risk flags into cross-cutting concerns "
+            "and preserve conflicting risk assessments."
+        ),
+        telemetry_tags=(
+            "category=scoping",
+            "axis=risk-surface",
+            "host=agent-research",
+            "mode=fan_out",
+            "signal=constraint-density",
+        ),
+    ),
+    LensSpec(
+        lens_id="correctness-rubric",
+        label="Correctness Rubric",
+        category="task-rubric",
+        description="Bias review toward logic, invariants, state machines, and behavioral contracts.",
+        stability="stock",
+        roles=("agent-review",),
+        stage_kinds=("fan_out",),
+        execution_mode="fan_out_only",
+        variant_name="correctness-rubric",
+        variant_path="roles/agent-review/variants/correctness-rubric.md",
+        output_contract=REVIEW_CONTRACT,
+        merge_expectation=(
+            "Review synthesis should prefer concrete behavioral failures with file:line "
+            "evidence and preserve disagreements about invariant boundaries."
+        ),
+        telemetry_tags=(
+            "category=task-rubric",
+            "axis=correctness",
+            "host=agent-review",
+            "mode=fan_out",
+            "signal=invariant-density",
+        ),
+    ),
+    LensSpec(
+        lens_id="performance-review",
+        label="Performance Review",
+        category="task-rubric",
+        description="Bias review toward hot paths, asymptotic behavior, blocking IO, allocations, and contention.",
+        stability="stock",
+        roles=("agent-review",),
+        stage_kinds=("fan_out",),
+        execution_mode="fan_out_only",
+        variant_name="performance-review",
+        variant_path="roles/agent-review/variants/performance-review.md",
+        output_contract=REVIEW_CONTRACT,
+        merge_expectation=(
+            "Review synthesis should prefer findings with concrete input sizes, call "
+            "frequencies, or load triggers over abstract complexity concerns."
+        ),
+        telemetry_tags=(
+            "category=task-rubric",
+            "axis=performance",
+            "host=agent-review",
+            "mode=fan_out",
+            "signal=trigger-density",
+        ),
+    ),
+    LensSpec(
+        lens_id="edge-case-review",
+        label="Edge Case Review",
+        category="task-rubric",
+        description="Bias review toward null, empty, boundary, overflow, timezone, unicode, and concurrency edges.",
+        stability="stock",
+        roles=("agent-review",),
+        stage_kinds=("fan_out",),
+        execution_mode="fan_out_only",
+        variant_name="edge-case-review",
+        variant_path="roles/agent-review/variants/edge-case-review.md",
+        output_contract=REVIEW_CONTRACT,
+        merge_expectation=(
+            "Review synthesis should prefer concrete failing inputs over abstract edge-class labels."
+        ),
+        telemetry_tags=(
+            "category=task-rubric",
+            "axis=edge-cases",
+            "host=agent-review",
+            "mode=fan_out",
+            "signal=concrete-input-density",
         ),
     ),
 )
@@ -411,7 +692,7 @@ def lens_for_variant(role: str, variant_name: str) -> LensSpec | None:
         (
             lens
             for lens in _PROMPT_LENSES
-            if role in lens.roles and lens.variant_name == variant_name
+            if lens.variant_for_role(role) == variant_name
         ),
         None,
     )
@@ -451,6 +732,8 @@ def validate_prompt_lens_selection(
     require_files: bool = True,
 ) -> list[str]:
     errors: list[str] = []
+    if not lens_ids:
+        errors.append("at least one lens is required")
     seen: set[str] = set()
     selected: list[LensSpec] = []
     for lens_id in lens_ids:
@@ -465,8 +748,9 @@ def validate_prompt_lens_selection(
         reason = explain_lens_incompatibility(lens_id, role=role, stage_kind=stage_kind)
         if reason:
             errors.append(reason)
-        if require_files and lens.variant_file is not None and not lens.variant_file.is_file():
-            errors.append(f"variant file missing for {lens.lens_id}: {lens.variant_file}")
+        variant_file = lens.variant_file_for_role(role)
+        if require_files and variant_file is not None and not variant_file.is_file():
+            errors.append(f"variant file missing for {lens.lens_id}: {variant_file}")
         selected.append(lens)
 
     selected_ids = {lens.lens_id for lens in selected}
@@ -484,9 +768,10 @@ def compile_prompt_variant_fan_out(role: str, lens_ids: list[str] | tuple[str, .
     variants: list[str] = []
     for lens_id in lens_ids:
         lens = get_lens(lens_id)
-        if lens is None or lens.variant_name is None:
+        variant_name = lens.variant_for_role(role) if lens is not None else None
+        if lens is None or variant_name is None:
             raise ValueError(f"lens has no prompt variant mapping: {lens_id}")
-        variants.append(lens.variant_name)
+        variants.append(variant_name)
     return {
         "role": role,
         "count": len(variants),

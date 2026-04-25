@@ -16,9 +16,11 @@ from typing import Any, Callable, Mapping
 
 from swarm_do.pipeline.actions import InFlightRun, in_flight_dir, load_in_flight
 from swarm_do.pipeline.catalog import (
+    compile_prompt_variant_fan_out,
     get_module,
     lens_for_variant,
     list_modules,
+    list_prompt_lenses,
     pipeline_activation_error,
     pipeline_profile_for,
 )
@@ -451,6 +453,79 @@ def draft_reset_fan_out_routes(draft: PipelineEditDraft, stage_id: str) -> None:
     fan.pop("variants", None)
 
 
+def current_prompt_lens_ids(pipeline: Mapping[str, Any], stage_id: str) -> list[str]:
+    stage = _stage_by_id(pipeline, stage_id)
+    if stage is None:
+        raise ValueError(f"stage not found: {stage_id}")
+    fan = stage.get("fan_out")
+    if not isinstance(fan, Mapping):
+        raise ValueError(f"stage {stage_id} is not a fan_out stage")
+    role = fan.get("role")
+    if not isinstance(role, str) or not role:
+        raise ValueError(f"fan_out stage {stage_id} has no role")
+    if fan.get("variant") != "prompt_variants":
+        return []
+    lens_ids: list[str] = []
+    for variant in fan.get("variants") or []:
+        if not isinstance(variant, str):
+            continue
+        lens = lens_for_variant(role, variant)
+        lens_ids.append(lens.lens_id if lens is not None else variant)
+    return lens_ids
+
+
+def draft_set_prompt_variant_lenses(draft: PipelineEditDraft, stage_id: str, lens_ids: list[str]) -> None:
+    fan = _mutable_stage_fan_out(draft.pipeline, stage_id)
+    if fan.get("variant") == "models" or "routes" in fan:
+        raise ValueError("cannot combine prompt-variant lenses and per-branch model routes in one fan-out")
+    role = fan.get("role")
+    if not isinstance(role, str) or not role:
+        raise ValueError(f"fan_out stage {stage_id} has no role")
+    if not lens_ids:
+        count = fan.get("count")
+        draft.checkpoint(f"clear prompt lenses for {stage_id}")
+        fan["role"] = role
+        fan["count"] = count if isinstance(count, int) and count > 0 else 1
+        fan["variant"] = "same"
+        fan.pop("variants", None)
+        return
+    compiled = compile_prompt_variant_fan_out(role, lens_ids)
+    draft.checkpoint(f"set prompt lenses for {stage_id}")
+    fan.clear()
+    fan.update(compiled)
+
+
+def stage_lens_option_rows(pipeline: Mapping[str, Any], stage_id: str) -> list[dict[str, str]]:
+    stage = _stage_by_id(pipeline, stage_id)
+    if stage is None:
+        raise ValueError(f"stage not found: {stage_id}")
+    fan = stage.get("fan_out")
+    if not isinstance(fan, Mapping):
+        raise ValueError(f"stage {stage_id} is not a fan_out stage")
+    role = fan.get("role")
+    if not isinstance(role, str) or not role:
+        raise ValueError(f"fan_out stage {stage_id} has no role")
+    selected = set(current_prompt_lens_ids(pipeline, stage_id))
+    rows: list[dict[str, str]] = []
+    for lens in list_prompt_lenses(role=role, stage_kind="fan_out"):
+        contract = lens.output_contract_for_role(role)
+        rows.append(
+            {
+                "lens_id": lens.lens_id,
+                "label": lens.label,
+                "category": lens.category,
+                "mode": lens.execution_mode,
+                "selected": "yes" if lens.lens_id in selected else "no",
+                "variant": lens.variant_for_role(role) or "",
+                "contract": contract.schema_rule,
+                "merge_expectation": lens.merge_expectation,
+                "conflicts": ", ".join(lens.conflicts) if lens.conflicts else "none",
+                "safety": ", ".join(lens.safety_notes) if lens.safety_notes else "none",
+            }
+        )
+    return rows
+
+
 def suggest_stage_id(pipeline: Mapping[str, Any], base: str) -> str:
     existing = {str(stage.get("id")) for stage in pipeline.get("stages") or [] if isinstance(stage, Mapping)}
     if base not in existing:
@@ -707,7 +782,7 @@ def pipeline_lens_rows(pipeline: dict[str, Any]) -> list[dict[str, str]]:
                     "label": lens.label,
                     "mode": lens.execution_mode,
                     "compatibility": f"{', '.join(lens.roles)} / {', '.join(lens.stage_kinds)}",
-                    "contract": lens.output_contract.schema_rule,
+                    "contract": lens.output_contract_for_role(role).schema_rule,
                 }
             )
     return rows

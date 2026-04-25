@@ -27,10 +27,12 @@ from swarm_do.tui.state import (
     PipelineEditDraft,
     PipelineGalleryRow,
     StageRow,
+    current_prompt_lens_ids,
     draft_add_module_stage,
     draft_remove_stage,
     draft_reset_fan_out_routes,
     draft_reset_stage_agent_route,
+    draft_set_prompt_variant_lenses,
     draft_set_fan_out_branch_route,
     draft_set_stage_agent_route,
     draft_status_line,
@@ -46,6 +48,7 @@ from swarm_do.tui.state import (
     pipeline_validation_report,
     select_source_preset_for_pipeline,
     stage_inspector_text,
+    stage_lens_option_rows,
     start_pipeline_draft,
     status_summary,
     suggested_fork_name,
@@ -209,6 +212,48 @@ if TEXTUAL_IMPORT_ERROR is None:
                     self.query_one("#stage-id", Input).value = row["suggested_stage_id"]
                     self.query_one("#module-detail", Static).update(row["detail"])
                     break
+
+
+    class LensModal(ModalScreen[list[str] | None]):
+        def __init__(self, stage_id: str, role: str, rows: list[dict[str, str]], current_ids: list[str]):
+            super().__init__()
+            self.stage_id = stage_id
+            self.role = role
+            self.rows = rows
+            self.current_ids = current_ids
+
+        def compose(self) -> ComposeResult:
+            body_lines = []
+            for row in self.rows:
+                body_lines.extend(
+                    [
+                        f"{row['lens_id']} [{row['category']}; {row['mode']}; selected={row['selected']}]",
+                        f"  variant: {row['variant']}",
+                        f"  contract: {row['contract']}",
+                        f"  merge: {row['merge_expectation']}",
+                        f"  safety: {row['safety']}",
+                        "",
+                    ]
+                )
+            body = "\n".join(body_lines).strip() or "No compatible fan-out lenses."
+            with Container(id="modal"):
+                yield Label(f"{self.stage_id} lenses ({self.role})", classes="modal-title")
+                yield Static(body, id="lens-detail")
+                yield Input(value=", ".join(self.current_ids), placeholder="lens ids, comma separated", id="lens-ids")
+                with Horizontal(classes="buttons"):
+                    yield Button("Save", id="save", variant="primary")
+                    yield Button("Cancel", id="cancel")
+
+        def on_button_pressed(self, event: Button.Pressed) -> None:
+            event.stop()
+            if event.button.id == "cancel":
+                self.dismiss(None)
+                return
+            raw = self.query_one("#lens-ids", Input).value.strip()
+            if not raw:
+                self.dismiss([])
+                return
+            self.dismiss([part.strip() for part in raw.split(",") if part.strip()])
 
 
     class DashboardScreen(Screen):
@@ -447,6 +492,7 @@ if TEXTUAL_IMPORT_ERROR is None:
             ("f", "begin_edit", "Fork/Edit"),
             ("r", "edit_stage_route", "Route"),
             ("b", "edit_branch_route", "Branch"),
+            ("n", "edit_lenses", "Lens"),
             ("m", "add_module", "Module"),
             ("delete", "remove_stage", "Remove"),
             ("ctrl+r", "reset_selected_route", "Reset route"),
@@ -716,6 +762,45 @@ if TEXTUAL_IMPORT_ERROR is None:
                 BranchRouteModal(stage.stage_id, count, (current["backend"], current["model"], current["effort"])),
                 done,
             )
+
+        def action_edit_lenses(self) -> None:
+            draft = self._draft_for_selected()
+            stage = self._selected_stage_row()
+            if draft is None or stage is None:
+                return
+            mapping = self._selected_stage_mapping()
+            fan = mapping.get("fan_out") if isinstance(mapping, dict) else None
+            if not isinstance(fan, dict):
+                self.app.push_screen(MessageModal("Lens edit", "Select a fan-out stage to apply prompt lenses."))
+                return
+            if fan.get("variant") == "models" or "routes" in fan:
+                self.app.push_screen(MessageModal("Lens edit", "Model-route fan-outs cannot also use prompt lenses. Reset routes first."))
+                return
+            role = fan.get("role")
+            if not isinstance(role, str) or not role:
+                self.app.push_screen(MessageModal("Lens edit", "Fan-out role is invalid."))
+                return
+            try:
+                rows = stage_lens_option_rows(draft.pipeline, stage.stage_id)
+                current_ids = current_prompt_lens_ids(draft.pipeline, stage.stage_id)
+            except Exception as exc:
+                self.app.push_screen(MessageModal("Lens unavailable", str(exc)))
+                return
+            if not rows:
+                self.app.push_screen(MessageModal("Lens edit", f"No compatible fan-out lenses for {role}."))
+                return
+
+            def done(lens_ids: list[str] | None) -> None:
+                if lens_ids is None:
+                    return
+                try:
+                    draft_set_prompt_variant_lenses(draft, stage.stage_id, lens_ids)
+                except Exception as exc:
+                    self.app.push_screen(MessageModal("Lens refused", str(exc)))
+                    return
+                self.refresh_stages()
+
+            self.app.push_screen(LensModal(stage.stage_id, role, rows, current_ids), done)
 
         def action_reset_selected_route(self) -> None:
             draft = self._draft_for_selected()
