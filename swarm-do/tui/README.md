@@ -58,7 +58,7 @@ On the Pipelines screen:
 - Press `r` on an agents stage to override the first agent route in the draft.
 - Press `b` on a model fan-out stage to edit a branch route. Prompt-variant
   fan-outs stay lens-only and cannot be mixed with per-branch model routes.
-- Press `n` on a fan-out stage to apply compatible prompt lenses. The modal
+- Press `n` on a fan-out or normal agents stage to apply compatible prompt lenses. The modal
   lists each lens id, category, execution mode, output-contract rule, merge
   expectation, and safety note. Lens edits stay in the in-memory draft until
   validation passes and `Ctrl+S` writes the YAML.
@@ -74,8 +74,9 @@ On the Pipelines screen:
   Preview-only output graphs can still be browsed, forked, linted, and saved,
   but activation is blocked.
 
-V1 prompt lenses are fan-out-only. Normal `agents` stages and synthesize merge
-agents have no prompt-overlay field until the single-agent schema phase.
+Prompt lenses can now target fan-out branches or one normal agents-stage entry.
+Normal agents stages accept only singular `lens`; synthesize merge agents still
+have no prompt-overlay field.
 
 ## Invariant Guards
 

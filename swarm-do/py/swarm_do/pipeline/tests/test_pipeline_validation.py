@@ -7,13 +7,15 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
+from swarm_do.pipeline import catalog
 from swarm_do.pipeline.cli import cmd_research
 from swarm_do.pipeline.engine import graph_lines, stage_agent_count, topological_layers
 from swarm_do.pipeline.registry import find_pipeline, load_pipeline
 from swarm_do.pipeline.resolver import BackendResolver
 from swarm_do.pipeline.simple_yaml import loads
-from swarm_do.pipeline.validation import schema_lint_pipeline, validate_preset_and_pipeline
+from swarm_do.pipeline.validation import schema_lint_pipeline, validate_preset_and_pipeline, variant_existence_errors
 
 
 class PipelineValidationTests(unittest.TestCase):
@@ -170,6 +172,94 @@ stages:
         bad["parallelism"] = 0
         errors = schema_lint_pipeline(bad)
         self.assertTrue(any("parallelism must be an integer" in e for e in errors))
+
+    def test_single_agent_lens_schema_lints_valid_overlay(self) -> None:
+        pipeline = loads(
+            """
+pipeline_version: 1
+name: single-lens
+stages:
+  - id: analysis
+    agents:
+      - role: agent-analysis
+        lens: architecture-risk
+"""
+        )
+        self.assertEqual(schema_lint_pipeline(pipeline), [])
+        self.assertEqual(variant_existence_errors(pipeline), [])
+
+    def test_single_agent_lens_rejects_stacking_unknown_and_incompatible_lenses(self) -> None:
+        stacked = loads(
+            """
+pipeline_version: 1
+name: stacked
+stages:
+  - id: analysis
+    agents:
+      - role: agent-analysis
+        lenses: [architecture-risk, api-contract]
+"""
+        )
+        stacked_errors = schema_lint_pipeline(stacked)
+        self.assertTrue(any("lenses is not supported" in e for e in stacked_errors))
+
+        unknown = loads(
+            """
+pipeline_version: 1
+name: unknown
+stages:
+  - id: analysis
+    agents:
+      - role: agent-analysis
+        lens: not-real
+"""
+        )
+        unknown_errors = schema_lint_pipeline(unknown)
+        self.assertTrue(any("unknown lens: not-real" in e for e in unknown_errors))
+
+        incompatible = loads(
+            """
+pipeline_version: 1
+name: incompatible
+stages:
+  - id: writer
+    agents:
+      - role: agent-writer
+        lens: architecture-risk
+"""
+        )
+        incompatible_errors = schema_lint_pipeline(incompatible)
+        self.assertTrue(any("compatible with agent-analysis" in e for e in incompatible_errors))
+
+    def test_single_agent_lens_missing_variant_file_fails_validation(self) -> None:
+        pipeline = loads(
+            """
+pipeline_version: 1
+name: missing-single-lens-file
+stages:
+  - id: analysis
+    agents:
+      - role: agent-analysis
+        lens: fake-missing
+"""
+        )
+        fake_lens = catalog.LensSpec(
+            lens_id="fake-missing",
+            label="Fake Missing",
+            category="test",
+            description="test lens with absent file",
+            stability="test",
+            roles=("agent-analysis",),
+            stage_kinds=("agents",),
+            execution_mode="single_agent",
+            variant_name="fake-missing",
+            variant_path="/tmp/swarm-do-missing-lens-file.md",
+            output_contract=catalog.ANALYSIS_CONTRACT,
+            merge_expectation="test",
+        )
+        with patch.object(catalog, "_PROMPT_LENSES", catalog._PROMPT_LENSES + (fake_lens,)):
+            errors = variant_existence_errors(pipeline)
+        self.assertTrue(any("variant file missing" in e and "fake-missing" in e for e in errors))
 
     def test_bare_model_id_in_models_variant_is_rejected(self) -> None:
         pipeline = loads(

@@ -72,6 +72,10 @@ class LensSpec:
     def supports(self, *, role: str, stage_kind: str) -> bool:
         return role in self.roles and stage_kind in self.stage_kinds
 
+    @property
+    def supports_single_agent(self) -> bool:
+        return "agents" in self.stage_kinds
+
 
 @dataclasses.dataclass(frozen=True)
 class RouteLensSpec:
@@ -232,8 +236,8 @@ _PROMPT_LENSES: tuple[LensSpec, ...] = (
         ),
         stability="stock",
         roles=("agent-analysis",),
-        stage_kinds=("fan_out",),
-        execution_mode="fan_out_only",
+        stage_kinds=("fan_out", "agents"),
+        execution_mode="fan_out_or_single_agent",
         variant_name="explorer-a",
         variant_path="roles/agent-analysis/variants/explorer-a.md",
         output_contract=ANALYSIS_CONTRACT,
@@ -246,6 +250,7 @@ _PROMPT_LENSES: tuple[LensSpec, ...] = (
             "axis=architecture",
             "host=agent-analysis",
             "mode=fan_out",
+            "mode=single_agent",
             "signal=reversibility-density",
         ),
     ),
@@ -259,8 +264,8 @@ _PROMPT_LENSES: tuple[LensSpec, ...] = (
         ),
         stability="stock",
         roles=("agent-analysis", "agent-review"),
-        stage_kinds=("fan_out",),
-        execution_mode="fan_out_only",
+        stage_kinds=("fan_out", "agents"),
+        execution_mode="fan_out_or_single_agent",
         variant_name="explorer-b",
         variant_path="roles/agent-analysis/variants/explorer-b.md",
         output_contract=ANALYSIS_CONTRACT,
@@ -278,6 +283,7 @@ _PROMPT_LENSES: tuple[LensSpec, ...] = (
             "host=agent-analysis",
             "host=agent-review",
             "mode=fan_out",
+            "mode=single_agent",
             "signal=break-vector-density",
         ),
     ),
@@ -291,8 +297,8 @@ _PROMPT_LENSES: tuple[LensSpec, ...] = (
         ),
         stability="stock",
         roles=("agent-analysis",),
-        stage_kinds=("fan_out",),
-        execution_mode="fan_out_only",
+        stage_kinds=("fan_out", "agents"),
+        execution_mode="fan_out_or_single_agent",
         variant_name="explorer-c",
         variant_path="roles/agent-analysis/variants/explorer-c.md",
         output_contract=ANALYSIS_CONTRACT,
@@ -305,6 +311,7 @@ _PROMPT_LENSES: tuple[LensSpec, ...] = (
             "axis=state-data",
             "host=agent-analysis",
             "mode=fan_out",
+            "mode=single_agent",
             "signal=migration-density",
         ),
     ),
@@ -318,8 +325,8 @@ _PROMPT_LENSES: tuple[LensSpec, ...] = (
         ),
         stability="stock",
         roles=("agent-analysis", "agent-review"),
-        stage_kinds=("fan_out",),
-        execution_mode="fan_out_only",
+        stage_kinds=("fan_out", "agents"),
+        execution_mode="fan_out_or_single_agent",
         variant_name="security-threat-model",
         variant_path="roles/agent-analysis/variants/security-threat-model.md",
         output_contract=ANALYSIS_CONTRACT,
@@ -341,6 +348,7 @@ _PROMPT_LENSES: tuple[LensSpec, ...] = (
             "host=agent-analysis",
             "host=agent-review",
             "mode=fan_out",
+            "mode=single_agent",
             "signal=stride-coverage",
             "signal=trust-boundary-density",
         ),
@@ -352,8 +360,8 @@ _PROMPT_LENSES: tuple[LensSpec, ...] = (
         description="Bias research toward prior commits, ADRs, docs, memory observations, and external precedent.",
         stability="stock",
         roles=("agent-research",),
-        stage_kinds=("fan_out",),
-        execution_mode="fan_out_only",
+        stage_kinds=("fan_out", "agents"),
+        execution_mode="fan_out_or_single_agent",
         variant_name="prior-art-search",
         variant_path="roles/agent-research/variants/prior-art-search.md",
         output_contract=RESEARCH_CONTRACT,
@@ -366,6 +374,7 @@ _PROMPT_LENSES: tuple[LensSpec, ...] = (
             "axis=prior-art",
             "host=agent-research",
             "mode=fan_out",
+            "mode=single_agent",
             "signal=duplicate-detection",
         ),
     ),
@@ -376,8 +385,8 @@ _PROMPT_LENSES: tuple[LensSpec, ...] = (
         description="Bias research toward exhaustive affected-surface mapping and file roles.",
         stability="stock",
         roles=("agent-research",),
-        stage_kinds=("fan_out",),
-        execution_mode="fan_out_only",
+        stage_kinds=("fan_out", "agents"),
+        execution_mode="fan_out_or_single_agent",
         variant_name="codebase-map",
         variant_path="roles/agent-research/variants/codebase-map.md",
         output_contract=RESEARCH_CONTRACT,
@@ -390,6 +399,7 @@ _PROMPT_LENSES: tuple[LensSpec, ...] = (
             "axis=scope",
             "host=agent-research",
             "mode=fan_out",
+            "mode=single_agent",
             "signal=file-role-coverage",
         ),
     ),
@@ -400,8 +410,8 @@ _PROMPT_LENSES: tuple[LensSpec, ...] = (
         description="Bias research toward regression, environmental, contract, and prior-attempt risks.",
         stability="stock",
         roles=("agent-research",),
-        stage_kinds=("fan_out",),
-        execution_mode="fan_out_only",
+        stage_kinds=("fan_out", "agents"),
+        execution_mode="fan_out_or_single_agent",
         variant_name="risk-discovery",
         variant_path="roles/agent-research/variants/risk-discovery.md",
         output_contract=RESEARCH_CONTRACT,
@@ -414,6 +424,7 @@ _PROMPT_LENSES: tuple[LensSpec, ...] = (
             "axis=risk-surface",
             "host=agent-research",
             "mode=fan_out",
+            "mode=single_agent",
             "signal=constraint-density",
         ),
     ),
@@ -424,8 +435,8 @@ _PROMPT_LENSES: tuple[LensSpec, ...] = (
         description="Bias review toward logic, invariants, state machines, and behavioral contracts.",
         stability="stock",
         roles=("agent-review",),
-        stage_kinds=("fan_out",),
-        execution_mode="fan_out_only",
+        stage_kinds=("fan_out", "agents"),
+        execution_mode="fan_out_or_single_agent",
         variant_name="correctness-rubric",
         variant_path="roles/agent-review/variants/correctness-rubric.md",
         output_contract=REVIEW_CONTRACT,
@@ -438,6 +449,7 @@ _PROMPT_LENSES: tuple[LensSpec, ...] = (
             "axis=correctness",
             "host=agent-review",
             "mode=fan_out",
+            "mode=single_agent",
             "signal=invariant-density",
         ),
     ),
@@ -448,8 +460,8 @@ _PROMPT_LENSES: tuple[LensSpec, ...] = (
         description="Bias review toward hot paths, asymptotic behavior, blocking IO, allocations, and contention.",
         stability="stock",
         roles=("agent-review",),
-        stage_kinds=("fan_out",),
-        execution_mode="fan_out_only",
+        stage_kinds=("fan_out", "agents"),
+        execution_mode="fan_out_or_single_agent",
         variant_name="performance-review",
         variant_path="roles/agent-review/variants/performance-review.md",
         output_contract=REVIEW_CONTRACT,
@@ -462,6 +474,7 @@ _PROMPT_LENSES: tuple[LensSpec, ...] = (
             "axis=performance",
             "host=agent-review",
             "mode=fan_out",
+            "mode=single_agent",
             "signal=trigger-density",
         ),
     ),
@@ -472,8 +485,8 @@ _PROMPT_LENSES: tuple[LensSpec, ...] = (
         description="Bias review toward null, empty, boundary, overflow, timezone, unicode, and concurrency edges.",
         stability="stock",
         roles=("agent-review",),
-        stage_kinds=("fan_out",),
-        execution_mode="fan_out_only",
+        stage_kinds=("fan_out", "agents"),
+        execution_mode="fan_out_or_single_agent",
         variant_name="edge-case-review",
         variant_path="roles/agent-review/variants/edge-case-review.md",
         output_contract=REVIEW_CONTRACT,
@@ -485,6 +498,7 @@ _PROMPT_LENSES: tuple[LensSpec, ...] = (
             "axis=edge-cases",
             "host=agent-review",
             "mode=fan_out",
+            "mode=single_agent",
             "signal=concrete-input-density",
         ),
     ),
@@ -765,7 +779,7 @@ def explain_lens_incompatibility(lens_id: str, *, role: str, stage_kind: str) ->
         return f"{lens_id} is compatible with {', '.join(lens.roles)}, not {role}"
     if stage_kind not in lens.stage_kinds:
         if stage_kind == "agents":
-            return f"{lens_id} is fan-out-only in v1; normal agents stages have no prompt-overlay field until Phase 5"
+            return f"{lens_id} cannot target normal agents stages for {role}"
         if stage_kind == "merge":
             return f"{lens_id} cannot target merge.agent in v1 because merge schema has no variant or lens slot"
         if stage_kind == "provider":
@@ -784,6 +798,8 @@ def validate_prompt_lens_selection(
     errors: list[str] = []
     if not lens_ids:
         errors.append("at least one lens is required")
+    if stage_kind == "agents" and len(lens_ids) > 1:
+        errors.append("lens stacking is disabled for normal agents stages; use singular lens")
     seen: set[str] = set()
     selected: list[LensSpec] = []
     for lens_id in lens_ids:
@@ -798,6 +814,8 @@ def validate_prompt_lens_selection(
         reason = explain_lens_incompatibility(lens_id, role=role, stage_kind=stage_kind)
         if reason:
             errors.append(reason)
+        if lens.variant_for_role(role) is None:
+            errors.append(f"{lens_id} has no prompt variant mapping for {role}")
         variant_file = lens.variant_file_for_role(role)
         if require_files and variant_file is not None and not variant_file.is_file():
             errors.append(f"variant file missing for {lens.lens_id}: {variant_file}")

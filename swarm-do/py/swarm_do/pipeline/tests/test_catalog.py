@@ -14,6 +14,7 @@ from swarm_do.pipeline.catalog import (
     list_route_lenses,
     pipeline_activation_error,
     pipeline_profile_for,
+    validate_prompt_lens_selection,
 )
 from swarm_do.pipeline.registry import find_pipeline, load_pipeline
 
@@ -28,7 +29,10 @@ class PipelineCatalogTests(unittest.TestCase):
         for lens in lenses.values():
             self.assertIsNotNone(lens.variant_file)
             self.assertTrue(lens.variant_file.is_file())
-            self.assertEqual(lens.execution_mode, "fan_out_only")
+            self.assertIn("fan_out", lens.stage_kinds)
+            self.assertIn("agents", lens.stage_kinds)
+            self.assertTrue(lens.supports_single_agent)
+            self.assertEqual(lens.execution_mode, "fan_out_or_single_agent")
             self.assertIn("Preserve the agent-analysis output schema", lens.output_contract.schema_rule)
 
     def test_lens_metadata_compiles_to_current_prompt_variant_fan_out_shape(self) -> None:
@@ -48,11 +52,21 @@ class PipelineCatalogTests(unittest.TestCase):
         )
 
     def test_catalog_explains_v1_prompt_lens_limitations(self) -> None:
-        agents_reason = explain_lens_incompatibility("architecture-risk", role="agent-analysis", stage_kind="agents")
+        agents_reason = explain_lens_incompatibility("architecture-risk", role="agent-writer", stage_kind="agents")
         merge_reason = explain_lens_incompatibility("architecture-risk", role="agent-analysis", stage_kind="merge")
 
-        self.assertIn("fan-out-only", agents_reason or "")
+        self.assertIn("compatible with agent-analysis", agents_reason or "")
         self.assertIn("merge schema has no variant", merge_reason or "")
+
+    def test_single_agent_lens_selection_allows_one_compatible_lens(self) -> None:
+        self.assertEqual(validate_prompt_lens_selection("agent-analysis", ["architecture-risk"], stage_kind="agents"), [])
+        errors = validate_prompt_lens_selection(
+            "agent-analysis",
+            ["architecture-risk", "api-contract"],
+            stage_kind="agents",
+            require_files=False,
+        )
+        self.assertTrue(any("stacking is disabled" in error for error in errors))
 
     def test_scanned_variants_are_enriched_by_typed_lenses(self) -> None:
         scanned = discover_prompt_variant_files()

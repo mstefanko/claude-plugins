@@ -25,11 +25,13 @@ from swarm_do.pipeline.providers import ProviderCheck, ProviderDoctorReport
 from swarm_do.pipeline.registry import find_pipeline, load_pipeline, load_preset
 from swarm_do.tui.state import (
     current_prompt_lens_ids,
+    current_stage_agent_lens_id,
     draft_add_module_stage,
     draft_set_prompt_variant_lenses,
     draft_remove_stage,
     draft_reset_fan_out_routes,
     draft_set_fan_out_branch_route,
+    draft_set_stage_agent_lens,
     draft_set_stage_agent_route,
     draft_status_line,
     draft_validation_lines,
@@ -192,7 +194,7 @@ class TuiStateTests(EnvTestCase):
         preview = pipeline_workbench_preview(pipeline)
 
         self.assertEqual([row["lens_id"] for row in rows], ["architecture-risk", "api-contract", "state-data"])
-        self.assertIn("fan_out_only", preview)
+        self.assertIn("fan_out_or_single_agent", preview)
         self.assertIn("Preserve the agent-analysis output schema", preview)
 
     def test_pipeline_workbench_preview_includes_route_and_fanout_inspector(self) -> None:
@@ -233,6 +235,26 @@ class TuiStateTests(EnvTestCase):
         self.assertIn("agent[0]: agent-analysis route=codex/gpt-5.4/high", preview)
         self.assertIn("branch[0]: route=claude/claude-opus-4-7/high", preview)
         self.assertIn("branch[1]: route=codex/gpt-5.4-mini/medium", preview)
+
+    def test_pipeline_workbench_preview_includes_single_agent_lens(self) -> None:
+        pipeline = {
+            "pipeline_version": 1,
+            "name": "single-agent-lens-preview",
+            "stages": [
+                {
+                    "id": "analysis",
+                    "agents": [{"role": "agent-analysis", "lens": "architecture-risk"}],
+                }
+            ],
+        }
+
+        rows = pipeline_lens_rows(pipeline)
+        preview = pipeline_workbench_preview(pipeline)
+
+        self.assertEqual(rows[0]["target"], "agent[0]")
+        self.assertEqual(rows[0]["variant"], "explorer-a")
+        self.assertIn("agent[0]: agent-analysis route=default resolver lens=architecture-risk variant=explorer-a", preview)
+        self.assertIn("analysis:agent[0] -> architecture-risk", preview)
 
     def test_pipeline_gallery_groups_by_intent_and_stage_inspector_focuses_selected_stage(self) -> None:
         rows = pipeline_gallery_rows()
@@ -360,6 +382,29 @@ class TuiStateTests(EnvTestCase):
         self.assertTrue(draft.undo())
         fan = next(stage for stage in draft.pipeline["stages"] if stage["id"] == "exploration")["fan_out"]
         self.assertEqual(fan["variants"], ["security-threat-model", "explorer-a"])
+
+    def test_pipeline_draft_single_agent_lens_can_be_changed_cleared_and_undone(self) -> None:
+        fork_preset_and_pipeline("balanced", "default", "single-lens-draft")
+        draft = start_pipeline_draft("single-lens-draft")
+
+        rows = stage_lens_option_rows(draft.pipeline, "analysis")
+        self.assertIn("architecture-risk", {row["lens_id"] for row in rows})
+        self.assertIsNone(current_stage_agent_lens_id(draft.pipeline, "analysis"))
+
+        draft_set_stage_agent_lens(draft, "analysis", 0, "architecture-risk")
+
+        agent = next(stage for stage in draft.pipeline["stages"] if stage["id"] == "analysis")["agents"][0]
+        self.assertEqual(agent["lens"], "architecture-risk")
+        self.assertTrue(validate_pipeline_draft(draft).ok)
+
+        with self.assertRaisesRegex(ValueError, "compatible with agent-analysis"):
+            draft_set_stage_agent_lens(draft, "writer", 0, "architecture-risk")
+
+        draft_set_stage_agent_lens(draft, "analysis", 0, None)
+        self.assertIsNone(current_stage_agent_lens_id(draft.pipeline, "analysis"))
+
+        self.assertTrue(draft.undo())
+        self.assertEqual(current_stage_agent_lens_id(draft.pipeline, "analysis"), "architecture-risk")
 
     def test_pipeline_draft_module_palette_add_remove_and_undo(self) -> None:
         fork_preset_and_pipeline("balanced", "default", "module-draft")

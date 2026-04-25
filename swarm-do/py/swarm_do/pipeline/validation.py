@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
+from .catalog import get_lens, validate_prompt_lens_selection
 from .engine import BudgetPreview, budget_preview, topological_layers
 from .paths import REPO_ROOT
 from .registry import find_pipeline, find_preset, load_pipeline, load_preset
@@ -43,7 +44,8 @@ PRESET_TOP_KEYS = {
 STAGE_KEYS = {"id", "depends_on", "agents", "fan_out", "provider", "merge", "failure_tolerance"}
 FAN_OUT_KEYS = {"role", "count", "variant", "variants", "routes"}
 MERGE_KEYS = {"strategy", "agent"}
-AGENT_KEYS = {"role", "backend", "model", "effort", "route"}
+AGENT_KEYS = {"role", "backend", "model", "effort", "route", "lens"}
+UNSUPPORTED_AGENT_KEYS = {"lenses"}
 PROVIDER_KEYS = {
     "type",
     "command",
@@ -313,11 +315,25 @@ def schema_lint_pipeline(pipeline: Mapping[str, Any]) -> list[str]:
                     if not isinstance(agent, Mapping):
                         errors.append(f"{a_path}: agent must be an object")
                         continue
-                    unknown_agent = sorted(set(agent.keys()) - AGENT_KEYS)
+                    if "lenses" in agent:
+                        errors.append(f"{a_path}.lenses is not supported; use singular lens")
+                    unknown_agent = sorted(set(agent.keys()) - AGENT_KEYS - UNSUPPORTED_AGENT_KEYS)
                     if unknown_agent:
                         errors.append(f"{a_path}: unknown keys: {', '.join(unknown_agent)}")
                     if not isinstance(agent.get("role"), str) or not agent.get("role"):
                         errors.append(f"{a_path}.role must be a non-empty string")
+                    elif "lens" in agent:
+                        lens_id = agent.get("lens")
+                        if not isinstance(lens_id, str) or not lens_id:
+                            errors.append(f"{a_path}.lens must be a non-empty string")
+                        else:
+                            for error in validate_prompt_lens_selection(
+                                agent["role"],
+                                [lens_id],
+                                stage_kind="agents",
+                                require_files=False,
+                            ):
+                                errors.append(f"{a_path}.lens: {error}")
                     override_keys = {k for k in ("backend", "model", "effort") if k in agent}
                     if override_keys and override_keys != {"backend", "model", "effort"}:
                         errors.append(f"{a_path}: backend/model/effort overrides must be supplied together")
@@ -741,6 +757,25 @@ def role_existence_errors(pipeline: Mapping[str, Any]) -> list[str]:
 def variant_existence_errors(pipeline: Mapping[str, Any]) -> list[str]:
     errors: list[str] = []
     for stage in pipeline.get("stages") or []:
+        if not isinstance(stage, Mapping):
+            continue
+        stage_id = stage.get("id", "<unknown>")
+        for idx, agent in enumerate(stage.get("agents") or []):
+            if not isinstance(agent, Mapping):
+                continue
+            role = agent.get("role")
+            lens_id = agent.get("lens")
+            if not isinstance(role, str) or not isinstance(lens_id, str):
+                continue
+            lens = get_lens(lens_id)
+            if lens is None:
+                continue
+            variant_name = lens.variant_for_role(role)
+            variant_file = lens.variant_file_for_role(role)
+            if variant_name is None or variant_file is None:
+                errors.append(f"stage {stage_id} agents[{idx}] lens {lens_id} has no prompt variant mapping for {role}")
+            elif not variant_file.is_file():
+                errors.append(f"variant file missing for stage {stage_id} agents[{idx}] lens {role}/{lens_id}: {variant_file}")
         fan = stage.get("fan_out")
         if not isinstance(fan, Mapping) or fan.get("variant") != "prompt_variants":
             continue

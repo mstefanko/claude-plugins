@@ -14,10 +14,12 @@ from swarm_do.pipeline.actions import (
     fork_preset,
     fork_preset_and_pipeline,
     reset_fan_out_routes,
+    reset_stage_agent_lens,
     reset_stage_agent_route,
     save_user_pipeline,
     set_fan_out_routes,
     set_prompt_variant_lenses,
+    set_stage_agent_lens,
     set_stage_agent_route,
     set_user_preset_pipeline,
 )
@@ -129,6 +131,7 @@ stages:
     depends_on: [research]
     agents:
       - role: agent-review
+        lens: correctness-rubric
         backend: claude
         model: claude-opus-4-7
         effort: high
@@ -184,6 +187,28 @@ stages:
         reset = load_pipeline(find_pipeline("route-edit").path)
         agent = next(stage for stage in reset["stages"] if stage["id"] == "analysis")["agents"][0]
         self.assertEqual(agent, {"role": "agent-analysis"})
+
+    def test_stage_agent_lens_can_be_set_and_reset(self) -> None:
+        fork_pipeline("default", "agent-lens-edit")
+        set_stage_agent_lens("agent-lens-edit", "analysis", 0, "architecture-risk")
+
+        edited = load_pipeline(find_pipeline("agent-lens-edit").path)
+        agent = next(stage for stage in edited["stages"] if stage["id"] == "analysis")["agents"][0]
+        self.assertEqual(agent["lens"], "architecture-risk")
+
+        reset_stage_agent_lens("agent-lens-edit", "analysis", 0)
+        reset = load_pipeline(find_pipeline("agent-lens-edit").path)
+        agent = next(stage for stage in reset["stages"] if stage["id"] == "analysis")["agents"][0]
+        self.assertNotIn("lens", agent)
+
+    def test_stage_agent_lens_rejects_incompatible_lens_before_save(self) -> None:
+        fork_pipeline("default", "bad-agent-lens-edit")
+        with self.assertRaisesRegex(ValueError, "compatible with agent-analysis"):
+            set_stage_agent_lens("bad-agent-lens-edit", "writer", 0, "architecture-risk")
+
+        saved = load_pipeline(find_pipeline("bad-agent-lens-edit").path)
+        agent = next(stage for stage in saved["stages"] if stage["id"] == "writer")["agents"][0]
+        self.assertNotIn("lens", agent)
 
     def test_fan_out_route_reset_returns_to_resolver_default_shape(self) -> None:
         pipeline = loads(

@@ -17,12 +17,14 @@ from typing import Any, Callable, Mapping
 from swarm_do.pipeline.actions import InFlightRun, in_flight_dir, load_in_flight
 from swarm_do.pipeline.catalog import (
     compile_prompt_variant_fan_out,
+    get_lens,
     get_module,
     lens_for_variant,
     list_modules,
     list_prompt_lenses,
     pipeline_activation_error,
     pipeline_profile_for,
+    validate_prompt_lens_selection,
 )
 from swarm_do.pipeline.context import current_context
 from swarm_do.pipeline.diff import diff_user_pipeline, stock_drift_for_pipeline
@@ -457,6 +459,41 @@ def draft_reset_fan_out_routes(draft: PipelineEditDraft, stage_id: str) -> None:
     fan.pop("variants", None)
 
 
+def current_stage_agent_lens_id(pipeline: Mapping[str, Any], stage_id: str, agent_index: int = 0) -> str | None:
+    stage = _stage_by_id(pipeline, stage_id)
+    if stage is None:
+        raise ValueError(f"stage not found: {stage_id}")
+    agents = stage.get("agents")
+    if not isinstance(agents, list):
+        raise ValueError(f"stage {stage_id} is not an agents stage")
+    if agent_index < 0 or agent_index >= len(agents) or not isinstance(agents[agent_index], Mapping):
+        raise ValueError(f"agent index out of range for stage {stage_id}: {agent_index}")
+    lens_id = agents[agent_index].get("lens")
+    return lens_id if isinstance(lens_id, str) and lens_id else None
+
+
+def draft_set_stage_agent_lens(
+    draft: PipelineEditDraft,
+    stage_id: str,
+    agent_index: int,
+    lens_id: str | None,
+) -> None:
+    agent = _mutable_stage_agent(draft.pipeline, stage_id, agent_index)
+    role = agent.get("role")
+    if not isinstance(role, str) or not role:
+        raise ValueError(f"agent[{agent_index}] in {stage_id} has no role")
+    if lens_id is None or not lens_id.strip():
+        draft.checkpoint(f"clear lens for {stage_id}.agents[{agent_index}]")
+        agent.pop("lens", None)
+        return
+    lens_id = lens_id.strip()
+    errors = validate_prompt_lens_selection(role, [lens_id], stage_kind="agents", require_files=True)
+    if errors:
+        raise ValueError("; ".join(errors))
+    draft.checkpoint(f"set lens for {stage_id}.agents[{agent_index}]")
+    agent["lens"] = lens_id
+
+
 def current_prompt_lens_ids(pipeline: Mapping[str, Any], stage_id: str) -> list[str]:
     stage = _stage_by_id(pipeline, stage_id)
     if stage is None:
@@ -504,14 +541,26 @@ def stage_lens_option_rows(pipeline: Mapping[str, Any], stage_id: str) -> list[d
     if stage is None:
         raise ValueError(f"stage not found: {stage_id}")
     fan = stage.get("fan_out")
-    if not isinstance(fan, Mapping):
-        raise ValueError(f"stage {stage_id} is not a fan_out stage")
-    role = fan.get("role")
-    if not isinstance(role, str) or not role:
-        raise ValueError(f"fan_out stage {stage_id} has no role")
-    selected = set(current_prompt_lens_ids(pipeline, stage_id))
+    agents = stage.get("agents")
+    stage_kind = "fan_out" if isinstance(fan, Mapping) else "agents"
+    selected: set[str]
+    if isinstance(fan, Mapping):
+        role = fan.get("role")
+        if not isinstance(role, str) or not role:
+            raise ValueError(f"fan_out stage {stage_id} has no role")
+        selected = set(current_prompt_lens_ids(pipeline, stage_id))
+    elif isinstance(agents, list):
+        if not agents or not isinstance(agents[0], Mapping):
+            raise ValueError(f"stage {stage_id} has no editable agent")
+        role = agents[0].get("role")
+        if not isinstance(role, str) or not role:
+            raise ValueError(f"agent[0] in {stage_id} has no role")
+        current = current_stage_agent_lens_id(pipeline, stage_id, 0)
+        selected = {current} if current else set()
+    else:
+        raise ValueError(f"stage {stage_id} is not an agents or fan_out stage")
     rows: list[dict[str, str]] = []
-    for lens in list_prompt_lenses(role=role, stage_kind="fan_out"):
+    for lens in list_prompt_lenses(role=role, stage_kind=stage_kind):
         contract = lens.output_contract_for_role(role)
         rows.append(
             {
@@ -521,6 +570,7 @@ def stage_lens_option_rows(pipeline: Mapping[str, Any], stage_id: str) -> list[d
                 "mode": lens.execution_mode,
                 "selected": "yes" if lens.lens_id in selected else "no",
                 "variant": lens.variant_for_role(role) or "",
+                "stage_kind": stage_kind,
                 "contract": contract.schema_rule,
                 "merge_expectation": lens.merge_expectation,
                 "conflicts": ", ".join(lens.conflicts) if lens.conflicts else "none",
@@ -757,11 +807,47 @@ def pipeline_lens_rows(pipeline: dict[str, Any]) -> list[dict[str, str]]:
     for stage in pipeline.get("stages") or []:
         if not isinstance(stage, dict):
             continue
+        agents = stage.get("agents")
+        if isinstance(agents, list):
+            for idx, agent in enumerate(agents):
+                if not isinstance(agent, Mapping):
+                    continue
+                role = str(agent.get("role") or "")
+                lens_id = agent.get("lens")
+                if not isinstance(lens_id, str) or not lens_id:
+                    continue
+                lens = get_lens(lens_id)
+                if lens is None:
+                    rows.append(
+                        {
+                            "stage": str(stage.get("id") or "<unknown>"),
+                            "target": f"agent[{idx}]",
+                            "variant": "(unknown)",
+                            "lens_id": lens_id,
+                            "label": lens_id,
+                            "mode": "single_agent",
+                            "compatibility": f"{role} agents",
+                            "contract": "unknown lens; validation will fail",
+                        }
+                    )
+                    continue
+                rows.append(
+                    {
+                        "stage": str(stage.get("id") or "<unknown>"),
+                        "target": f"agent[{idx}]",
+                        "variant": lens.variant_for_role(role) or "(unmapped)",
+                        "lens_id": lens.lens_id,
+                        "label": lens.label,
+                        "mode": "single_agent",
+                        "compatibility": f"{', '.join(lens.roles)} / agents",
+                        "contract": lens.output_contract_for_role(role).schema_rule,
+                    }
+                )
         fan = stage.get("fan_out")
         if not isinstance(fan, dict) or fan.get("variant") != "prompt_variants":
             continue
         role = str(fan.get("role") or "")
-        for variant in fan.get("variants") or []:
+        for idx, variant in enumerate(fan.get("variants") or []):
             if not isinstance(variant, str):
                 continue
             lens = lens_for_variant(role, variant)
@@ -769,6 +855,7 @@ def pipeline_lens_rows(pipeline: dict[str, Any]) -> list[dict[str, str]]:
                 rows.append(
                     {
                         "stage": str(stage.get("id") or "<unknown>"),
+                        "target": f"branch[{idx}]",
                         "variant": variant,
                         "lens_id": "(untyped)",
                         "label": variant,
@@ -781,6 +868,7 @@ def pipeline_lens_rows(pipeline: dict[str, Any]) -> list[dict[str, str]]:
             rows.append(
                 {
                     "stage": str(stage.get("id") or "<unknown>"),
+                    "target": f"branch[{idx}]",
                     "variant": variant,
                     "lens_id": lens.lens_id,
                     "label": lens.label,
@@ -818,9 +906,18 @@ def _stage_detail_lines(stage: Mapping[str, Any], *, prefix: str = "  ") -> list
             override: Any = agent.get("route")
             if override is None and {"backend", "model", "effort"} <= set(agent):
                 override = agent
+            role = str(agent.get("role") or "<missing-role>")
+            lens_id = agent.get("lens")
+            lens_text = ""
+            if isinstance(lens_id, str) and lens_id:
+                lens = get_lens(lens_id)
+                variant = lens.variant_for_role(role) if lens is not None else None
+                lens_text = f" lens={lens_id}"
+                if variant:
+                    lens_text += f" variant={variant}"
             lines.append(
-                f"{prefix}  agent[{idx}]: {agent.get('role', '<missing-role>')} "
-                f"route={_format_route(override)}"
+                f"{prefix}  agent[{idx}]: {role} "
+                f"route={_format_route(override)}{lens_text}"
             )
     fan = stage.get("fan_out")
     if isinstance(fan, Mapping):
@@ -1079,9 +1176,10 @@ def pipeline_workbench_preview(
         for row in lens_rows:
             lines.append(
                 "  - "
-                f"{row['stage']}:{row['variant']} -> {row['lens_id']} "
+                f"{row['stage']}:{row.get('target', row['variant'])} -> {row['lens_id']} "
                 f"({row['label']}; {row['mode']}; {row['compatibility']})"
             )
+            lines.append(f"    variant: {row['variant']}")
             lines.append(f"    contract: {row['contract']}")
     if pipeline_name:
         if lines:

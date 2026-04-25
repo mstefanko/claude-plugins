@@ -441,6 +441,23 @@ def reset_stage_agent_route(pipeline_name: str, stage_id: str, agent_index: int)
     return save_user_pipeline(item.name, pipeline)
 
 
+def set_stage_agent_lens(pipeline_name: str, stage_id: str, agent_index: int, lens_id: str) -> Path:
+    item, pipeline = _load_user_pipeline(pipeline_name)
+    agent = _stage_agent(pipeline, stage_id, agent_index)
+    lens_id = lens_id.strip()
+    if not lens_id:
+        raise ValueError("lens must be a non-empty string")
+    agent["lens"] = lens_id
+    return save_user_pipeline(item.name, pipeline)
+
+
+def reset_stage_agent_lens(pipeline_name: str, stage_id: str, agent_index: int) -> Path:
+    item, pipeline = _load_user_pipeline(pipeline_name)
+    agent = _stage_agent(pipeline, stage_id, agent_index)
+    agent.pop("lens", None)
+    return save_user_pipeline(item.name, pipeline)
+
+
 def set_fan_out_routes(pipeline_name: str, stage_id: str, routes: list[Mapping[str, Any] | str]) -> Path:
     item, pipeline = _load_user_pipeline(pipeline_name)
     fan = _stage_fan_out(pipeline, stage_id)

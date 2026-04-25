@@ -49,7 +49,8 @@
                 "backend": { "type": "string", "enum": ["claude", "codex"] },
                 "model": { "type": "string" },
                 "effort": { "type": "string", "enum": ["none", "low", "medium", "high", "xhigh"] },
-                "route": { "type": "string" }
+                "route": { "type": "string" },
+                "lens": { "type": "string", "minLength": 1 }
               }
             }
           },

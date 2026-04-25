@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # swarm-run — M1 manual fallback runner for the beads-centric swarm.
-# Usage: swarm-run --backend {claude|codex} --issue <id> [--role <role>] [--mode {normal|fallback|competition}] [--dry-run]
+# Usage: swarm-run --backend {claude|codex} --issue <id> [--role <role>] [--lens <lens-id>] [--mode {normal|fallback|competition}] [--dry-run]
 # Scope: only these roles — agent-writer, agent-spec-review, agent-review, agent-codex-review.
 # See the swarm-do plugin README for operator docs.
 
@@ -11,20 +11,21 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_lib/paths.sh"
 # shellcheck source=_lib/beads-preflight.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_lib/beads-preflight.sh"
 
-BACKEND=""; ISSUE=""; ROLE=""; MODE="normal"; DRY_RUN=0
+BACKEND=""; ISSUE=""; ROLE=""; LENS=""; MODE="normal"; DRY_RUN=0
 
 usage() {
   cat <<'EOF'
 swarm-run — run a single swarm role against a beads issue on the selected backend.
 
 Usage:
-  swarm-run --backend {claude|codex} --issue <id> [--role <role>] [--mode {normal|fallback|competition}] [--dry-run]
+  swarm-run --backend {claude|codex} --issue <id> [--role <role>] [--lens <lens-id>] [--mode {normal|fallback|competition}] [--dry-run]
 
 Flags:
   --backend    claude|codex (required)
   --issue      beads issue id, e.g. bd-123 (required)
   --role       one of: agent-writer, agent-spec-review, agent-review, agent-codex-review
                if omitted, inferred from the issue's assignee
+  --lens       optional single-agent prompt lens id; resolved through the typed lens catalog
   --mode       normal (default) | fallback | competition
   --dry-run    print what would happen, do not invoke backend or mutate beads
   -h, --help   show this help
@@ -38,6 +39,7 @@ Examples:
   swarm-run --backend codex --issue bd-42
   swarm-run --backend codex --issue bd-42 --mode fallback
   swarm-run --backend codex --issue bd-42 --role agent-codex-review
+  swarm-run --backend codex --issue bd-42 --role agent-review --lens correctness-rubric
   swarm-run --backend claude --issue bd-42 --dry-run
 EOF
 }
@@ -47,6 +49,7 @@ while [[ $# -gt 0 ]]; do
     --backend) BACKEND="${2:-}"; shift 2;;
     --issue)   ISSUE="${2:-}";   shift 2;;
     --role)    ROLE="${2:-}";    shift 2;;
+    --lens)    LENS="${2:-}";    shift 2;;
     --mode)    MODE="${2:-}";    shift 2;;
     --dry-run) DRY_RUN=1; shift;;
     -h|--help) usage; exit 0;;
@@ -62,6 +65,9 @@ die() { echo "swarm-run: $*" >&2; exit 1; }
 case "$BACKEND" in claude|codex) ;; *) die "--backend must be claude or codex (got: $BACKEND)";; esac
 case "$MODE"    in normal|fallback|competition) ;; *) die "--mode must be normal|fallback|competition (got: $MODE)";; esac
 [[ "$ISSUE" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$ ]] || die "--issue must be a beads id without path separators (got: $ISSUE)"
+if [[ -n "$LENS" ]]; then
+  [[ "$LENS" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || die "--lens must be a lens id without path separators (got: $LENS)"
+fi
 
 bd_preflight_or_die "swarm-run"
 
@@ -131,12 +137,35 @@ else
 fi
 [[ -n "$MODEL" && -n "$EFFORT" ]] || die "no model/effort for backend=$BACKEND role=$ROLE"
 
+_PY_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/py"
+
 # Prompt bundle.
 ROLE_DIR="$ROLES_DIR/$ROLE"
 SHARED_MD="$ROLE_DIR/shared.md"
 OVERLAY_MD="$ROLE_DIR/$BACKEND.md"
 [[ -f "$SHARED_MD"  ]] || die "missing prompt: $SHARED_MD"
 [[ -f "$OVERLAY_MD" ]] || die "missing prompt: $OVERLAY_MD"
+
+LENS_VARIANT_PATH=""
+if [[ -n "$LENS" ]]; then
+  if ! LENS_VARIANT_PATH="$(PYTHONPATH="${_PY_ROOT}:${PYTHONPATH:-}" python3 -c 'import sys
+from swarm_do.pipeline.catalog import get_lens, validate_prompt_lens_selection
+role, lens_id = sys.argv[1], sys.argv[2]
+errors = validate_prompt_lens_selection(role, [lens_id], stage_kind="agents", require_files=True)
+if errors:
+    print("; ".join(errors), file=sys.stderr)
+    raise SystemExit(1)
+lens = get_lens(lens_id)
+path = lens.variant_file_for_role(role) if lens is not None else None
+if path is None:
+    print(f"{lens_id} has no prompt variant mapping for {role}", file=sys.stderr)
+    raise SystemExit(1)
+print(path)
+' "$ROLE" "$LENS" 2>&1)"; then
+    die "$LENS_VARIANT_PATH"
+  fi
+  [[ -f "$LENS_VARIANT_PATH" ]] || die "missing prompt lens overlay: $LENS_VARIANT_PATH"
+fi
 
 # Trigger text from mode.
 case "$MODE" in
@@ -160,18 +189,20 @@ else
 fi
 
 # Assemble prompt.
-PROMPT="$(cat "$SHARED_MD"; printf '\n\n---\n\n'; cat "$OVERLAY_MD"; printf '\n\n---\n## Beads Issue: %s\n\n' "$ISSUE"
+PROMPT="$(cat "$SHARED_MD"; printf '\n\n---\n\n'; cat "$OVERLAY_MD"
+  if [[ -n "$LENS_VARIANT_PATH" ]]; then printf '\n\n---\n## Lens Overlay: %s\n\n' "$LENS"; cat "$LENS_VARIANT_PATH"; fi
+  printf '\n\n---\n## Beads Issue: %s\n\n' "$ISSUE"
   if [[ -n "$ISSUE_JSON" ]]; then printf '### Issue JSON\n```json\n%s\n```\n' "$ISSUE_JSON"; fi
   printf '\n### Dependency / Thread Context\n```\n%s\n```\n' "${DEP_CTX:-<none>}"
-  printf '\n### Run metadata\n- Role: %s\n- Backend: %s\n- Model: %s\n- Effort: %s\n- Mode: %s\n' \
-    "$ROLE" "$BACKEND" "$MODEL" "$EFFORT" "$MODE"
+  printf '\n### Run metadata\n- Role: %s\n- Lens: %s\n- Backend: %s\n- Model: %s\n- Effort: %s\n- Mode: %s\n' \
+    "$ROLE" "${LENS:-none}" "$BACKEND" "$MODEL" "$EFFORT" "$MODE"
 )"
 
-echo "swarm-run: rig=$BEADS_RIG backend=$BACKEND role=$ROLE model=$MODEL effort=$EFFORT mode=$MODE issue=$ISSUE dry_run=$DRY_RUN"
+echo "swarm-run: rig=$BEADS_RIG backend=$BACKEND role=$ROLE lens=${LENS:-none} model=$MODEL effort=$EFFORT mode=$MODE issue=$ISSUE dry_run=$DRY_RUN"
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
   echo "---- dry-run: would set BD_ACTOR=$ROLE and run: bd update $ISSUE --claim"
-  echo "---- dry-run: would invoke $BACKEND with model=$MODEL effort=$EFFORT"
+  echo "---- dry-run: would invoke $BACKEND with model=$MODEL effort=$EFFORT lens=${LENS:-none}"
   echo "---- dry-run: prompt bytes=$(printf '%s' "$PROMPT" | wc -c | tr -d ' ')"
   echo "---- dry-run: would append Backend Run note to $ISSUE (mode=$MODE trigger=$TRIGGER)"
   echo "---- dry-run: would append telemetry row to \${CLAUDE_PLUGIN_DATA}/telemetry/runs.jsonl (telemetry write skipped in dry-run)"
@@ -195,7 +226,6 @@ _swarm_random_crockford26() {
   done
   printf '%s' "$out"
 }
-_PY_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/py"
 RUN_ID="$(PYTHONPATH="${_PY_ROOT}:${PYTHONPATH:-}" python3 -c 'from swarm_do.telemetry.ids import new_ulid; print(new_ulid())' 2>/dev/null || _swarm_random_crockford26)"
 
 # ---------------------------------------------------------------------------

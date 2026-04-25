@@ -19,7 +19,7 @@ TOP_ORDER = (
     "stages",
 )
 STAGE_ORDER = ("id", "depends_on", "agents", "fan_out", "provider", "merge", "failure_tolerance")
-AGENT_ORDER = ("role", "route", "backend", "model", "effort")
+AGENT_ORDER = ("role", "lens", "route", "backend", "model", "effort")
 FAN_OUT_ORDER = ("role", "count", "variant", "variants", "routes")
 ROUTE_ORDER = ("backend", "model", "effort")
 MERGE_ORDER = ("strategy", "agent")
