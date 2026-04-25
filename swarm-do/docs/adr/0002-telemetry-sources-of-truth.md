@@ -51,8 +51,8 @@ Negative / follow-on work:
 - Phase 2 must migrate `validate` and `dump` to Python without changing
   user-visible output; phase 3 replaces the bash validator entirely.
 - Phase 5 generation pipeline is a new CI build step.
-- Phase 3 completed the full port; `bin/swarm-telemetry.legacy` has been
-  deleted and all six subcommands are now native Python.
+- Phase 3 completed the full port; the old bash telemetry implementation has
+  been deleted and all six subcommands are now native Python.
 - Phase 4 ported findings extraction: `bin/extract-phase.sh` is now a thin
   shim over `python3 -m swarm_do.telemetry.extractors`. The dispatcher
   recognises `agent-codex-review` (codex extractor) and `agent-review` /
