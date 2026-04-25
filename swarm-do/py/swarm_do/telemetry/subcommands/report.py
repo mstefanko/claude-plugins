@@ -1,6 +1,6 @@
 """`swarm-telemetry report [--since Nd] [--role R] [--bucket K]` — stratified markdown.
 
-Byte-parity port of swarm-telemetry.legacy:504-702. Emits a stratified
+Python port of the legacy report command. Emits a stratified
 markdown table (role | complexity | phase_kind | risk_tag) computed only
 WITHIN each bucket — never a global mean. This phase-9c anti-pattern guard
 is preserved verbatim ("do not aggregate across buckets").

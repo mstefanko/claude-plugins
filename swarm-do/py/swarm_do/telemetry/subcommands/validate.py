@@ -1,6 +1,6 @@
 """`swarm-telemetry validate [<ledger>]` — draft-07 validate every JSONL row.
 
-Byte-parity with legacy `_cmd_validate` + `_validate_ledger` (swarm-telemetry.legacy
+Byte-parity with legacy `_cmd_validate` + `_validate_ledger`
 lines 173-392). The legacy implementation:
   1. Emits `swarm-telemetry: validate — checking ledgers in <dir>` on stderr.
   2. Iterates ledgers in fixed order: runs, findings, outcomes, adjudications,

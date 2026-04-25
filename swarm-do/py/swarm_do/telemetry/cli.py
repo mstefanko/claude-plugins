@@ -1,7 +1,7 @@
 """swarm-telemetry Python entry point.
 
 Post-Phase-3: every subcommand runs native Python. The legacy bash
-implementation at swarm-telemetry.legacy was deleted once all six
+implementation was deleted once all six
 subcommand parity tests were green. `--test` now runs the Python test
 suite via `python3 -m unittest discover`.
 """

@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
 # extract-phase.sh — thin shim dispatching to the Python findings extractor.
 #
-# The implementation lives in swarm_do.telemetry.extractors (Phase 4). The
-# legacy bash body is preserved alongside this file as extract-phase.sh.legacy
-# for the duration of Phase 4's parity verification; it is deleted at phase
-# close.
+# The implementation lives in swarm_do.telemetry.extractors. The old bash
+# implementation was removed after parity verification completed.
 #
 # Usage (unchanged from the legacy script):
 #   extract-phase.sh <input-file> <run-id> <role> <issue-id>

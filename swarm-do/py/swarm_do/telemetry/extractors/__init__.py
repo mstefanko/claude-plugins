@@ -18,7 +18,7 @@ alongside the Phase 9b codex_review port. The dispatcher recognizes:
   agent-review, agent-code-review       -> claude_review.extract
   any other role                        -> skipped (fail-open, stderr warn)
 
-Plan ref: plans/phase-4-extractors.md workstream WS-4.
+The extractor is fail-open so reviewer telemetry never changes pipeline status.
 """
 
 from __future__ import annotations

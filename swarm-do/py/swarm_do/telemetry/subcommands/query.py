@@ -1,6 +1,6 @@
 """`swarm-telemetry query <sql>` — run SQL against in-memory SQLite.
 
-Byte-parity port of swarm-telemetry.legacy:399-497. Loads all five ledgers
+Python port of the legacy query command. Loads all ledgers
 into a `:memory:` sqlite3 connection as TEXT columns, serializing list/dict
 values to JSON. Tab-separated output on stdout: header row first, then data
 rows (None becomes empty string). SELECT-less statements (DDL/DML) exit 0

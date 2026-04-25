@@ -1,6 +1,6 @@
 """`swarm-telemetry dump <ledger>` — pretty-print a JSONL ledger as a JSON array.
 
-Byte-parity with the legacy bash `_cmd_dump` (swarm-telemetry.legacy:157-167):
+Byte-parity with the legacy bash `_cmd_dump`:
   - Missing or empty ledger file prints `[]` and exits 0 (fail-open).
   - Otherwise prints `jq -s '.' <path>` output — a 2-space-indented JSON array
     with a trailing newline. Python's `print(json.dumps(rows, indent=2))`

@@ -184,7 +184,7 @@ Roles are the personas the swarm pipeline dispatches to; this inventory is gener
 
 ## bin/swarm-telemetry
 
-Reporter and write utility for the telemetry ledgers. Read-only subcommands shipped in Phase 9c; `join-outcomes` write subcommand shipped in Phase 9d. As of Phase 3, all six subcommands (`dump`, `validate`, `query`, `report`, `sample-for-adjudication`, `join-outcomes`) are native Python — ported from legacy bash in phases 3/1–3/6. The legacy bash implementation (`bin/swarm-telemetry.legacy`) has been deleted. `bin/swarm-telemetry` is a 9-line shim that sources `bin/_lib/python-bootstrap.sh` and execs `python3 -m swarm_do.telemetry.cli "$@"`. The `--test` flag runs `python3 -m unittest discover` (not a bespoke assertion harness).
+Reporter and write utility for the telemetry ledgers. Read-only subcommands shipped in Phase 9c; `join-outcomes` write subcommand shipped in Phase 9d. As of Phase 3, all six subcommands (`dump`, `validate`, `query`, `report`, `sample-for-adjudication`, `join-outcomes`) are native Python. The old bash implementation has been deleted. `bin/swarm-telemetry` is a 9-line shim that sources `bin/_lib/python-bootstrap.sh` and execs `python3 -m swarm_do.telemetry.cli "$@"`. The `--test` flag runs `python3 -m unittest discover` (not a bespoke assertion harness).
 
 ```
 swarm-telemetry query <sql>

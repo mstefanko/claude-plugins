@@ -1,6 +1,6 @@
 """`swarm-telemetry join-outcomes` — correlate findings with post-merge actions.
 
-Byte-parity port of swarm-telemetry.legacy:1043-1578. Preserves:
+Python port of the legacy join-outcomes command. Preserves:
   - Dedup key: (finding_id, maintainer_action, followup_ref) with None -> ""
   - `gh pr list --state merged --json mergeCommit,mergedAt,number,url`
     (the analysis mandated we call `gh pr list` rather than `gh api`)

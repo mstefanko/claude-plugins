@@ -1,11 +1,9 @@
-"""Codex-reviewer findings extractor — port of extract-phase.sh.legacy.
+"""Codex-reviewer findings extractor.
 
 Reads a codex `findings.json` (list under top-level "findings") and emits
 one row per finding matching the findings.v2 schema. All parity-critical
 semantics (severity map, category_class rewrite, location parse, short
 summary leading-verb strip) come straight from the bash implementation.
-
-Plan ref: plans/phase-4-extractors.md workstream WS-2.
 
 Fail-open: every extraction attempt is wrapped in try/except; malformed
 findings are skipped with a stderr warning. The caller always receives a
@@ -27,8 +25,7 @@ from .paths import normalize_path
 
 
 # ---------------------------------------------------------------------------
-# Severity + category rewrite tables — verbatim from extract-phase.sh.legacy
-# lines 212-227.
+# Severity + category rewrite tables preserved from the original bash extractor.
 # ---------------------------------------------------------------------------
 
 _SEVERITY_MAP: Dict[str, str] = {

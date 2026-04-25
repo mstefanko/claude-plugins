@@ -109,8 +109,7 @@ def resolve_telemetry_dir() -> Path:
     """Return the directory containing ledger JSONL files.
 
     CLAUDE_PLUGIN_DATA (when set) is the plugin's writable data root;
-    ledgers live under its `telemetry/` subdirectory — same layout
-    swarm-run and bin/swarm-telemetry.legacy used. When unset, fall
+    ledgers live under its `telemetry/` subdirectory. When unset, fall
     back to the in-repo development data tree.
     """
     base = os.environ.get("CLAUDE_PLUGIN_DATA")

@@ -1,7 +1,7 @@
 """Schema loading + row validation.
 
 Phase 1 responsibility: match the legacy bash validator's semantics — parse +
-required-field check. The legacy `_validate_ledger` (swarm-telemetry.legacy
+required-field check. The legacy `_validate_ledger`
 lines 173-349) uses an embedded python heredoc to run partial draft-07
 validation (type / enum / pattern / format=date-time / minimum / maximum /
 required / additionalProperties / nested object + array).
@@ -126,7 +126,7 @@ def _parse_datetime(value: Any):
 def validate_value(value: Any, schema: Dict[str, Any], json_path: str = "$") -> List[str]:
     """Return a list of error strings matching legacy message format exactly.
 
-    Legacy port reference: swarm-telemetry.legacy:257-306 (embedded python).
+    Legacy port reference: original bash validator embedded Python.
     """
     errors: List[str] = []
 

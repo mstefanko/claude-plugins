@@ -6,8 +6,8 @@ Algorithm (pinned; do NOT change without bumping to _v2):
     payload     = f"{file_normalized}|{category_class}|{line_bucket}|{short_summary}"
     hash        = sha256(payload.encode("utf-8")).hexdigest()
 
-Parity reference: swarm-do/bin/extract-phase.sh.legacy, the block labeled
-"stable_finding_hash_v1". Legacy bash uses `shasum -a 256 | awk '{print $1}'`
+Parity reference: the original Phase 9b bash block labeled
+"stable_finding_hash_v1". That implementation used `shasum -a 256 | awk '{print $1}'`
 (or `sha256sum` on Linux). Both emit identical lowercase hex for the same
 UTF-8 byte input.
 
