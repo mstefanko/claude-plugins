@@ -4,7 +4,11 @@ Beads-backed multi-agent swarm orchestration for Claude Code. Plans execute thro
 
 ## Status
 
-Packaging Phases 0–6 complete. Phase 7 (final dogfood + M1 handoff verification) and cutover deletion of `~/.swarm/` + `~/.claude/agents/agent-*.md` originals are pending. See `~/cartledger/PLAN-swarm-plugin.md` for the migration context.
+Packaging migration is complete and `docs/plan.md` is the canonical roadmap.
+Preset/pipeline routing, telemetry ledgers, rollout status, provider doctoring,
+resume helpers, and the TUI MVP are all in the plugin. Phase 0's standalone
+Codex review harness is retained as an experiment surface only; normal dogfood
+measurement now happens through plugin presets and telemetry.
 
 ## Commands
 
@@ -96,7 +100,7 @@ swarm-do/
 │   ├── swarm-gpt                 alias → swarm-run --backend codex
 │   ├── swarm-claude              alias → swarm-run --backend claude
 │   ├── swarm-gpt-review          alias → swarm-run --backend codex --role agent-codex-review
-│   ├── codex-review-phase        Phase 0 experiment harness (not wired into /swarm-do:do)
+│   ├── codex-review-phase        Standalone Phase 0 experiment harness (not wired into /swarm-do:do)
 │   └── load-role.sh              emit <plugin>/agents/agent-<role>.md for prompt injection
 ├── roles/agent-<role>/           Prompt bundles (shared.md + claude.md + codex.md overlays)
 ├── presets/                      Stock preset TOML files
@@ -104,7 +108,8 @@ swarm-do/
 ├── schemas/{preset,pipeline}.schema.json  Preset/pipeline JSON Schema contracts
 ├── schemas/telemetry/            JSON Schema ledger definitions (runs, findings, outcomes, adjudications, run_events, observations, knowledge) — see schemas/telemetry/README.md
 ├── tests/fixtures/               Synthetic ledger data for self-test and dev (generate-synthetic-runs.sh, 66 runs, 35 findings)
-├── phase0/                       Codex cross-model review experiment artifacts
+├── phase0/                       Standalone Phase 0 experiment artifacts
+├── docs/history/                 Archived migration/spike summaries
 └── docs/provenance/              Audit trail for the claude-mem unfork
 ```
 
@@ -209,7 +214,7 @@ swarm-telemetry purge <args>
 
 `CLAUDE_PLUGIN_DATA` sets the base data directory; telemetry lives at `$CLAUDE_PLUGIN_DATA/telemetry/`. If unset, defaults to `~/.claude/plugin-data/mstefanko-plugins/swarm-do`.
 
-**Self-test:** `swarm-telemetry --test` runs `python3 -m unittest discover` against the full test suite. As of Phase 3, 52 tests run (OK) with 19 skipped: 18 parity tests gate on `LEGACY_SCRIPT.exists()` and auto-skip after deletion, plus 1 pre-existing skip.
+**Self-test:** `swarm-telemetry --test` runs `python3 -m unittest discover` against the full test suite. Add `--check-docs` to verify the generator-backed telemetry docs sections.
 
 ## bin/extract-phase.sh
 
