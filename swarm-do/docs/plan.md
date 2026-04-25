@@ -14,7 +14,7 @@ Both former files are now stubs pointing here. This file is the single source of
 - **Part 1 — Architecture & Policy** — what the swarm is and how it routes work (§1.1–§1.11)
 - **Part 2 — Rollout strategy** — Phase 0 → Phase 1 → Phase 2 → B1 dispatcher (§2.1–§2.7)
 - **Part 3 — Packaging history (archived)** — stub only; full content lives at `docs/history/packaging.md`. Not part of the runnable scope.
-- **Part 4 — Implementation phases — pending** — Phases 9/10/11 with sub-phases 9a–11g (telemetry, presets, TUI). This is what `/swarm-do:do` runs.
+- **Part 4 — Implementation phases — mostly shipped** — Phases 9/10/11 with sub-phases 9a–11g (telemetry, presets, TUI). This is what `/swarm-do:do` runs; remaining work is follow-up hardening and TUI completeness.
 - **Part 5 — Replaceability + non-goals** — layer-swap discipline, rollout state file schema, non-goals
 - **Appendix** — ADRs, schemas, backups (under `docs/adr/` once Phase 9g / 10f ship)
 
@@ -121,13 +121,14 @@ These invariants are not refactors to execute now; they are rules to enforce goi
 
 - **M1 manual fallback runner — SHIPPED.** Installed at `~/.swarm/bin/{swarm-run,swarm-claude,swarm-gpt,swarm-gpt-review}`. Role bundles at `~/.swarm/roles/agent-{writer,review,spec-review,codex-review}/{shared,claude,codex}.md`. Beads preflight hard-stop embedded in the runner. See `~/.swarm/README.md`.
 - **Phase 0 initial experiments — COMPLETE; decision: DOGFOOD IN PLUGIN.** The first harness round produced enough signal to stop isolated experimentation for now. We will learn faster by shipping opt-in Codex lanes inside `/swarm-do` and using normal plugin runs as the measurement surface. The blinded 12-15 phase cohort remains useful if later data is noisy, but it no longer blocks Phase 1.
-- **Phase 9a (append-only ledgers) — SHIPPED (2026-04-23, PR #1, merged at `ff14fc8`).** Four v1-frozen JSONSchemas under `swarm-do/schemas/telemetry/`; `bin/_lib/hash-bundle.sh` (portable sha256 over `shared.md + <backend>.md`); `bin/swarm-run` EXIT-trap appends one `runs.jsonl` row per invocation with 31 required fields, fail-open. `run_id` uses a relaxed pattern (`^[0-9A-Z_-]{1,64}$`) pending real-ULID upgrade in Phase 10a (follow-up bead `mstefanko-plugins-utu`). Two additional follow-ups filed: `mstefanko-plugins-1zv` (wire the already-computed `_diff_bytes`), `mstefanko-plugins-rgb` (`timestamp_end.type` → `["string","null"]`). Ledger ready for 9b consumers.
-- **Phase 9b (findings extractor) — SHIPPED (2026-04-23, commit `6b62467`).** `bin/extract-phase.sh` reads `agent-codex-review` findings.json and appends one `findings.jsonl` row per finding. `bin/_lib/normalize-path.sh` strips worktree prefix so main-repo and worktree paths hash identically. `findings.v2.schema.json` adds `stable_finding_hash_v1`, `duplicate_cluster_id` (always null on append), and `short_summary`; relaxes `run_id` pattern to match runs.v1. v1 schema is frozen and untouched. Claude reviewer format deferred to 9b-claude. `swarm-run` wires the extractor after the codex step with `|| true` fail-open guard.
+- **Phase 9a (append-only ledgers) — SHIPPED (2026-04-23, PR #1, merged at `ff14fc8`; follow-ups landed by 2026-04-24).** v1-frozen JSONSchemas under `swarm-do/schemas/telemetry/`; `bin/_lib/hash-bundle.sh` (portable sha256 over `shared.md + <backend>.md`); `bin/swarm-run` EXIT-trap appends one `runs.jsonl` row per invocation, fail-open. Follow-ups now landed: strict Crockford ULIDs via `swarm_do.telemetry.ids`, `diff_size_bytes` wired from the run delta, and nullable `timestamp_end` in the schema.
+- **Phase 9b (findings extractor) — SHIPPED (2026-04-23, commit `6b62467`; Claude extractor landed by 2026-04-24).** `bin/extract-phase.sh` appends one `findings.jsonl` row per reviewer finding. It handles `agent-codex-review` JSON output plus Claude-style `agent-review` / `agent-code-review` markdown, and `bin/_lib/normalize-path.sh` strips worktree prefix so main-repo and worktree paths hash identically. `findings.v2.schema.json` carries `stable_finding_hash_v1`, `duplicate_cluster_id` (always null on append), and `short_summary`. `swarm-run` wires the extractor after review roles with a fail-open guard.
 - **Phase 1 (Codex review in swarm)** — proceed as opt-in dogfood: ship a `hybrid-review` preset/pipeline with fail-open `agent-codex-review` after spec-review. Do not make it default yet.
 - **Phase 2 (Pattern 5 / 6)** — build only the manual Pattern 5 entrypoint now (`swarm compete` + competitive preset). Pattern 6 and auto-triggering remain deferred.
 - **Phase 2.5 (manual fallback)** — covered by M1; no further work here until the manual track fatigue signal fires.
 - **Phase 3 (B1 dispatcher)** — do not implement live dispatch yet. Build only the shared rollout-status state/CLI that future dispatcher shadow mode will read.
-- **Phase 10 (preset + pipeline registry) and Phase 11 (TUI) — SHIPPED on main-compatible local commit `0c8bc0f` (2026-04-24).** Keep follow-up work focused on dogfood rollout, not more TUI surface.
+- **Phase 10 (preset + pipeline registry) — SHIPPED on main-compatible local commit `0c8bc0f` (2026-04-24).** Preset/pipeline validation, stock presets, resolver invariants, telemetry context, and rollout-status CLI are usable for dogfood.
+- **Phase 11 (TUI) — MVP/PARTIAL on local commit `0c8bc0f` (2026-04-24).** The Textual app exists under `py/swarm_do/tui` with dashboard/settings/preset/pipeline/status surfaces, but it is not the full §1.8/Phase 11 spec yet. Known gaps: burn chart is still simplified from available telemetry, save/undo flow is incomplete compared with 11c, preset rename/delete UX needs more polish, and live visual verification has not been exercised as a release gate.
 - **Phase 9e (SQLite indexer) — DEFERRED.** Keep JSONL as the source of truth until real plugin usage shows query/performance pain.
 
 ## Dependency note — future Claude-side orchestration
@@ -683,7 +684,7 @@ architecture (JSONL truth + SQLite derived index).
 - `duplicate_cluster_id` — assigned by indexer post-hoc via §1.9 duplicate rule
 - `was_truncated` (bool — output cap), `was_uncertain` (bool — emitted as info/speculative)
 
-**outcomes.jsonl — append-only, joined ex-post by the nightly enricher:**
+**finding_outcomes.jsonl — append-only, joined ex-post by the manual/periodic enricher:**
 - `finding_id`, `observed_at`
 - `maintainer_action` (ignored | commented | fixed_in_same_pr | followup_issue | followup_pr | hotfix_within_14d)
 - `followup_ref` (bd-id | PR url | commit sha)
@@ -794,7 +795,7 @@ that surrounds the discrete experiments.
 │   - Scan recent PR merges                                       │
 │   - For each finding: did a hotfix touch the same file+lines    │
 │     within 14d? did a follow-up bd issue reference it?          │
-│   - Append outcomes.jsonl rows (never overwrite)                │
+│   - Append finding_outcomes.jsonl rows (never overwrite)        │
 │   - Recurrence detection: same stable_finding_hash_v1 seen      │
 │     twice = pattern, flag for attention                         │
 └─────────────────────────────────────────────────────────────────┘
@@ -816,7 +817,7 @@ that surrounds the discrete experiments.
 `${CLAUDE_PLUGIN_DATA}/telemetry/`:
 - `runs.jsonl` — schema per §1.8
 - `findings.jsonl` — schema per §1.8
-- `outcomes.jsonl` — append-only, per-finding outcome observations
+- `finding_outcomes.jsonl` — append-only, per-finding outcome observations
 - `adjudications.jsonl` — append-only, blinded-verdict rows
 
 **Derived index: SQLite** at `${CLAUDE_PLUGIN_DATA}/telemetry/index.sqlite`:
@@ -1457,7 +1458,7 @@ Policy in Part 1 defines **what** the swarm routes and **how** it measures. Part
 
 ### Fixes required in `~/.swarm/bin/codex-review-phase`
 
-1. **Remove the Claude-findings leak.** Lines 143-147 currently inject a `## Claude-side findings (for duplicate_of_claude detection)` section into the Codex prompt. Delete that block entirely. Codex must not see Claude's findings during the run — duplicate detection is the adjudicator's job, computed **after** unblinding, using the §2 match rule (same file, same defect class, line references within ±3 lines). Each Codex finding is emitted with `duplicate_of_claude: unknown` unconditionally at run time.
+1. **Remove the Claude-findings leak — CLOSED 2026-04-24.** The `## Claude-side findings (for duplicate_of_claude detection)` section has been removed from `bin/codex-review-phase`. Codex must not see Claude's findings during the run — duplicate detection is the adjudicator's job, computed **after** unblinding, using the §2 match rule (same file, same defect class, line references within ±3 lines). Each Codex finding is emitted with `duplicate_of_claude: unknown` unconditionally at run time.
 2. **Resolve Mode A honestly.** Current Mode A lists changed-file *paths* (lines 167-172) but no contents. Pick one of:
    - **Option A1 (recommended):** inline the full contents of each changed file post-diff into the prompt under `## Changed file snapshots` (bounded by a max-bytes cap — truncate with a visible marker if exceeded). Keep the name "scoped review."
    - **Option A2:** leave Mode A as path-list + diff only, and rename it **"diff-only review"** in both the plan and the script's help text so the contract matches reality. The signal interpretation is different.
@@ -1550,7 +1551,7 @@ If you cannot assemble a 12-phase cohort under these rules with ≥3 rework-buck
 ### Exit criteria for the pre-flight
 
 Before starting the cohort:
-- [ ] Claude-findings block removed from `codex-review-phase` prompt assembly.
+- [x] Claude-findings block removed from `codex-review-phase` prompt assembly.
 - [ ] Mode A option selected (A1 snapshots vs A2 diff-only rename) and implemented.
 - [ ] Codex output post-processed into a single schema-conforming object; sidecar `meta.json` with latency and cost emitted.
 - [ ] Mode B sandbox option selected (B1 workspace-write vs B2 inspection-only) and prompt language matches.
@@ -2073,10 +2074,7 @@ Implements the continuous-measurement architecture from §1.9. Ships in staged o
 
 > **What landed:** four v1-frozen schemas under `swarm-do/schemas/telemetry/{runs,findings,outcomes,adjudications}.schema.json`; `bin/_lib/hash-bundle.sh`; `bin/swarm-run` EXIT-trap append to `${CLAUDE_PLUGIN_DATA}/telemetry/runs.jsonl` with 31 required fields (unobservables typed `X | null`), fail-open guard, exit-code preserved. See `swarm-do/schemas/telemetry/README.md` for the contract.
 >
-> **Deviations from brief:**
-> - `run_id` schema pattern relaxed to `^[0-9A-Z_-]{1,64}$` — real Crockford-base32 ULID generation in pure bash is fragile; follow-up `mstefanko-plugins-utu` migrates to strict ULID in Phase 10a.
-> - `_diff_bytes` is computed but emitted as `null` — follow-up `mstefanko-plugins-1zv`.
-> - `timestamp_end.type` is `"string"` (not nullable) — runtime always assigns; follow-up `mstefanko-plugins-rgb`.
+> **Follow-up status:** the original 9a deviations are now closed. New rows use strict Crockford ULIDs, `diff_size_bytes` is emitted from the run delta, and `timestamp_end` is nullable in the schema to represent abnormal trap failures.
 >
 > **Install hook:** none. The `mkdir -p ${CLAUDE_PLUGIN_DATA}/telemetry` is lazy inside the EXIT trap (no `on_install` in `plugin.json`). If `CLAUDE_PLUGIN_DATA` is unset the trap emits a single-line stderr warning and skips the write — fail-open covers it.
 
@@ -2139,16 +2137,16 @@ Implements the continuous-measurement architecture from §1.9. Ships in staged o
 
 ### Phase 9d: Outcome-join job (complexity: moderate, kind: feature) — **SHIPPED 2026-04-23 (commit `1fc3f5e`)**
 
-**Objective:** Correlate reviewer findings with post-merge maintainer behavior (hotfix within 14d, follow-up issue, etc.) to produce `outcomes.jsonl`.
+**Objective:** Correlate reviewer findings with post-merge maintainer behavior (hotfix within 14d, follow-up issue, etc.) to produce `finding_outcomes.jsonl`.
 
 **What to implement:**
 - `swarm telemetry join-outcomes --since 30d` — scans recent merged PRs via `gh api` + local `git log`.
-- For each finding with a file+line range, check: did any commit within 14d post-merge touch the same file within ±10 lines? If yes → append `outcomes.jsonl` row with `maintainer_action: hotfix_within_14d`.
+- For each finding with a file+line range, check: did any commit within 14d post-merge touch the same file within ±10 lines? If yes → append `finding_outcomes.jsonl` row with `maintainer_action: hotfix_within_14d`.
 - Also detects beads follow-up references (`bd list --references <finding_id>`) and marks `followup_issue` / `followup_pr`.
 
 **Verify:**
 - Run against cartledger's own recent merges; spot-check that clear cases (hotfix on a known bug) are flagged correctly.
-- Idempotent re-run: invoking twice on the same 30d window produces no duplicate `outcomes.jsonl` rows.
+- Idempotent re-run: invoking twice on the same 30d window produces no duplicate `finding_outcomes.jsonl` rows.
 
 **Anti-pattern guards:**
 - Do NOT schedule via cron in 9d. Operator invokes manually first; cron waits until the output proves useful (avoids burning API quota on an unvalidated job).
@@ -2373,9 +2371,11 @@ Implements integration plan §1.10 — the "swap pipelines on the fly" architect
 - Do NOT let variants change the role contract (e.g., output schema). Variants differ in framing, not interface.
 - Do NOT create variants without a concrete framing rationale. "Explorer-a / -b / -c with identical prompts" is waste, not fan-out.
 
-## Phase 11 — TUI operator console (meta)
+## Phase 11 — TUI operator console (meta) — **MVP/PARTIAL 2026-04-24**
 
 Implements integration plan §1.8's V1 TUI. Framework: **Textual** (same stack as `tech-radar`). Ships after Phase 9a/9b (telemetry ledgers — the data source) and Phase 10 (presets/pipelines — the content it manages).
+
+**Current implementation status:** an MVP exists under `py/swarm_do/tui` and launches through `bin/swarm-tui`. Treat it as a usable operator console, not the full Phase 11 spec. The richer planned behavior still needs follow-up work: a real burn chart from token/cost telemetry, complete Ctrl-S/Ctrl-Z save and undo semantics, more deliberate preset rename/delete interactions, and live visual verification with the Textual dev loop.
 
 **Framework rationale (codified here for maintainers):**
 - Ecosystem consistency — tech-radar already ships Textual 0.80+; operators already have the Python env. Adding Go/Rust doubles the plugin's build/maintain surface.

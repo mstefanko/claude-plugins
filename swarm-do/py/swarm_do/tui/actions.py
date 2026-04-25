@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+import re
 import signal
+import subprocess
 import tempfile
 import tomllib
 from pathlib import Path
@@ -14,6 +16,9 @@ from swarm_do.pipeline.registry import find_preset, load_preset
 from swarm_do.pipeline.resolver import BACKENDS, EFFORTS, ROLE_DEFAULTS
 from swarm_do.pipeline.validation import validate_preset_mapping
 from swarm_do.tui.state import InFlightRun, in_flight_dir, load_in_flight
+
+NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+ISSUE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
 
 def atomic_write_text(path: Path, text: str) -> None:
@@ -99,6 +104,16 @@ def backends_path() -> Path:
     return resolve_data_dir() / "backends.toml"
 
 
+def validate_preset_name(name: str) -> None:
+    if not NAME_RE.fullmatch(name):
+        raise ValueError("preset name must be 1-64 chars of letters, numbers, dot, underscore, or dash")
+
+
+def validate_issue_id(issue_id: str) -> None:
+    if not ISSUE_ID_RE.fullmatch(issue_id):
+        raise ValueError("issue id must not contain path separators or whitespace")
+
+
 def set_base_route(role: str, complexity: str | None, backend: str, model: str, effort: str) -> None:
     if backend not in BACKENDS:
         raise ValueError(f"backend must be one of {sorted(BACKENDS)}")
@@ -147,6 +162,8 @@ def set_user_preset_route(preset_name: str, role: str, complexity: str | None, b
 
 
 def rename_user_preset(old: str, new: str) -> Path:
+    validate_preset_name(old)
+    validate_preset_name(new)
     item = find_preset(old)
     if item is None:
         raise ValueError(f"preset not found: {old}")
@@ -166,6 +183,7 @@ def rename_user_preset(old: str, new: str) -> Path:
 
 
 def delete_user_preset(name: str) -> None:
+    validate_preset_name(name)
     item = find_preset(name)
     if item is None:
         raise ValueError(f"preset not found: {name}")
@@ -194,12 +212,18 @@ def set_user_preset_pipeline(preset_name: str, pipeline_name: str) -> None:
 def cancel_run(run: InFlightRun) -> None:
     if run.pid is None:
         raise ValueError("lockfile has no pid")
+    command = _pid_command(run.pid)
+    if command is None:
+        raise ValueError(f"pid {run.pid} is not running")
+    if "swarm-run" not in command:
+        raise ValueError(f"refusing to cancel non-swarm-run pid {run.pid}")
     os.kill(run.pid, signal.SIGTERM)
 
 
 def request_handoff(issue_id: str, backend: str) -> Path:
     if backend not in BACKENDS:
         raise ValueError(f"backend must be one of {sorted(BACKENDS)}")
+    validate_issue_id(issue_id)
     lock = in_flight_dir() / f"bd-{issue_id}.lock"
     data: dict[str, Any] = {}
     if lock.is_file():
@@ -226,3 +250,18 @@ def find_in_flight(issue_id: str) -> InFlightRun | None:
 
 def editable_roles() -> list[str]:
     return sorted(ROLE_DEFAULTS)
+
+
+def _pid_command(pid: int) -> str | None:
+    try:
+        result = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    command = result.stdout.strip()
+    return command if result.returncode == 0 and command else None

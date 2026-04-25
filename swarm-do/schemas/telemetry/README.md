@@ -49,11 +49,12 @@ Reviewer agents emit structured findings (type errors, boundary violations, secu
 issues, etc.). Each finding references its parent run via `run_id` and carries a
 `stable_finding_hash_v1` for deduplication across runs.
 
-**Write path (Phase 9b):** `bin/extract-phase.sh` reads `agent-codex-review` findings.json
-and appends one row per finding. The extractor is fail-open (`exit 0` on any error)
-and is wired into `swarm-run` after the codex step with `|| true`. Claude reviewer
-format is undefined and deferred (9b-claude). Non-codex roles are skipped with a
-logged warning.
+**Write path (Phase 9b + 9b-claude):** `bin/extract-phase.sh` reads
+`agent-codex-review` JSON findings and Claude-style `agent-review` /
+`agent-code-review` markdown, then appends one row per finding. The extractor is
+fail-open (`exit 0` on any error) and is wired into `swarm-run` after supported
+review roles with a non-blocking guard. Unsupported roles are skipped with a logged
+warning.
 
 **Stable hash algorithm (`stable_finding_hash_v1`):**
 `sha256("{file_normalized}|{category_class}|{floor(line_start/10)}|{short_summary}")`

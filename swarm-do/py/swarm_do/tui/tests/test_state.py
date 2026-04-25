@@ -9,13 +9,21 @@ from pathlib import Path
 
 from swarm_do.pipeline.config_hash import active_config_hash
 from swarm_do.pipeline.registry import load_preset
-from swarm_do.tui.actions import set_base_route, set_user_preset_pipeline, set_user_preset_route
+from swarm_do.tui import actions as tui_actions
+from swarm_do.tui.actions import (
+    request_handoff,
+    rename_user_preset,
+    set_base_route,
+    set_user_preset_pipeline,
+    set_user_preset_route,
+)
 from swarm_do.tui.state import (
     latest_checkpoint_event,
     latest_observation,
     load_in_flight,
     load_observations,
     load_run_events,
+    InFlightRun,
     status_summary,
     token_burn_last_24h,
 )
@@ -186,6 +194,29 @@ max_wall_clock_seconds = 1800
         set_user_preset_route("user", "agent-docs", "simple", "codex", "gpt-5.4-mini", "medium")
         routing = load_preset(preset_path)["routing"]
         self.assertEqual(routing["roles.agent-docs.simple"]["backend"], "codex")
+
+    def test_preset_rename_rejects_path_traversal(self) -> None:
+        presets = self.root / "presets"
+        presets.mkdir()
+        (presets / "user.toml").write_text('name = "user"\norigin = "user"\npipeline = "default"\n', encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "preset name"):
+            rename_user_preset("user", "../escape")
+        self.assertFalse((self.root / "escape.toml").exists())
+
+    def test_handoff_rejects_path_traversal_issue_id(self) -> None:
+        with self.assertRaisesRegex(ValueError, "issue id"):
+            request_handoff("../escape", "codex")
+        self.assertFalse((self.root / "escape.lock").exists())
+
+    def test_cancel_refuses_non_swarm_run_pid(self) -> None:
+        run = InFlightRun("bd-1", "agent-writer", "claude", "opus", "high", 12345, None, "running", self.root / "in-flight" / "bd-1.lock")
+        old = tui_actions._pid_command
+        tui_actions._pid_command = lambda pid: "/usr/bin/python something-else"
+        try:
+            with self.assertRaisesRegex(ValueError, "non-swarm-run"):
+                tui_actions.cancel_run(run)
+        finally:
+            tui_actions._pid_command = old
 
 
 if __name__ == "__main__":

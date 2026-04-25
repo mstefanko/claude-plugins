@@ -9,9 +9,9 @@
 **Context references.** The phase text cites sections from the canonical plan (e.g. `§1.7`, `§1.8`, `§1.9`, `§1.10`, `Phase 9a`). When research / analysis needs that context, open `swarm-do/docs/plan.md` and read the cited section directly — do NOT inline its content into notes.
 
 **Known follow-ups against Phase 9a output** (do not duplicate — file-level only if the phase touches the same code):
-- `mstefanko-plugins-utu` — swap `run_id` approximation for real ULID (addressed in Phase 10a).
-- `mstefanko-plugins-1zv` — wire computed `_diff_bytes` into the jq row (any writer touching `bin/swarm-run` may opportunistically fix).
-- `mstefanko-plugins-rgb` — widen `runs.schema.json` `timestamp_end.type` to `["string","null"]`.
+- `mstefanko-plugins-utu` — swap `run_id` approximation for real ULID (addressed in Phase 10a; closed).
+- `mstefanko-plugins-1zv` — wire computed `_diff_bytes` into the jq row (closed).
+- `mstefanko-plugins-rgb` — widen `runs.schema.json` `timestamp_end.type` to `["string","null"]` (closed).
 
 **Deferrable.** Phase 9e (SQLite indexer) is gated: ship only once JSONL grep+jq queries feel slow. If the current dataset is well under ~5k findings, analysis may recommend deferring 9e to a later plan run — in which case mark the phase SKIPPED in notes rather than executing. Operator (the human on the other end) approves the defer before moving to 9f.
 
@@ -59,16 +59,16 @@
 
 ### Phase 9d: Outcome-join job (complexity: moderate, kind: feature)
 
-**Objective:** Correlate reviewer findings with post-merge maintainer behavior (hotfix within 14d, follow-up issue, etc.) to produce `outcomes.jsonl`.
+**Objective:** Correlate reviewer findings with post-merge maintainer behavior (hotfix within 14d, follow-up issue, etc.) to produce `finding_outcomes.jsonl`.
 
 **What to implement:**
 - `swarm telemetry join-outcomes --since 30d` — scans recent merged PRs via `gh api` + local `git log`.
-- For each finding with a file+line range, check: did any commit within 14d post-merge touch the same file within ±10 lines? If yes → append `outcomes.jsonl` row with `maintainer_action: hotfix_within_14d`.
+- For each finding with a file+line range, check: did any commit within 14d post-merge touch the same file within ±10 lines? If yes → append `finding_outcomes.jsonl` row with `maintainer_action: hotfix_within_14d`.
 - Also detects beads follow-up references (`bd list --references <finding_id>`) and marks `followup_issue` / `followup_pr`.
 
 **Verify:**
 - Run against cartledger's own recent merges; spot-check that clear cases (hotfix on a known bug) are flagged correctly.
-- Idempotent re-run: invoking twice on the same 30d window produces no duplicate `outcomes.jsonl` rows.
+- Idempotent re-run: invoking twice on the same 30d window produces no duplicate `finding_outcomes.jsonl` rows.
 
 **Anti-pattern guards:**
 - Do NOT schedule via cron in 9d. Operator invokes manually first; cron waits until the output proves useful (avoids burning API quota on an unvalidated job).

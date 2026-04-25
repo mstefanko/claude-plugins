@@ -143,12 +143,6 @@ build_prompt() {
   printf '## Phase under review\n\n'
   printf 'phase_id: %s\nmode: %s\n\n' "$PHASE_ID" "$MODE"
 
-  printf '## Claude-side findings (for duplicate_of_claude detection)\n\n'
-  printf '(Operator: paste Claude reviewer findings here by editing the\n'
-  printf 'analysis-notes file or an extra appendix before invoking this\n'
-  printf 'wrapper. If none were provided, mark every finding\n'
-  printf '`duplicate_of_claude: unknown`.)\n\n'
-
   printf '## Acceptance criteria\n\n```\n'
   cat -- "$CRITERIA_PATH"
   printf '\n```\n\n'

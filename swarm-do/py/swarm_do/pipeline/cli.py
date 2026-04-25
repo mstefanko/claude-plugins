@@ -83,6 +83,13 @@ def cmd_preset_list(args: argparse.Namespace) -> int:
 
 
 def cmd_preset_save(args: argparse.Namespace) -> int:
+    from swarm_do.tui.actions import validate_preset_name
+
+    try:
+        validate_preset_name(args.name)
+    except ValueError as exc:
+        print(f"swarm: preset save: {exc}", file=sys.stderr)
+        return 1
     existing = find_preset(args.name)
     if existing and existing.origin == "stock":
         print(
@@ -90,6 +97,9 @@ def cmd_preset_save(args: argparse.Namespace) -> int:
             f"`swarm preset save <new-name> --from {args.name}`",
             file=sys.stderr,
         )
+        return 1
+    if existing and existing.origin == "user":
+        print(f"swarm: preset save: user preset already exists: {args.name}", file=sys.stderr)
         return 1
     source = args.source
     if source == "current":

@@ -61,6 +61,7 @@ die() { echo "swarm-run: $*" >&2; exit 1; }
 
 case "$BACKEND" in claude|codex) ;; *) die "--backend must be claude or codex (got: $BACKEND)";; esac
 case "$MODE"    in normal|fallback|competition) ;; *) die "--mode must be normal|fallback|competition (got: $MODE)";; esac
+[[ "$ISSUE" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$ ]] || die "--issue must be a beads id without path separators (got: $ISSUE)"
 
 bd_preflight_or_die "swarm-run"
 
