@@ -20,6 +20,7 @@ from .actions import (
     set_user_preset_pipeline,
     validate_preset_name,
 )
+from .catalog import pipeline_activation_error
 from .diff import diff_user_pipeline, diff_user_preset, stock_drift_for_pipeline
 from .engine import graph_lines
 from .paths import current_preset_path, resolve_data_dir, user_presets_dir
@@ -60,6 +61,10 @@ def cmd_preset_load(args: argparse.Namespace) -> int:
     result, preset, pipeline, _ = validate_preset_and_pipeline(args.name, include_budget=False)
     _print_validation(result)
     if not result.ok:
+        return 1
+    activation_error = pipeline_activation_error(str(preset.get("pipeline")), pipeline)
+    if activation_error:
+        print(f"swarm: preset load: {activation_error}", file=sys.stderr)
         return 1
     _activate_preset(args.name)
     print(f"loaded preset {args.name}; budget gate will run during dry-run and run start")
@@ -307,6 +312,52 @@ def cmd_compete(args: argparse.Namespace) -> int:
         return 0
     _activate_preset(preset_name)
     print(f"loaded preset {preset_name}; run /swarm-do:do {args.plan_path} to start Pattern 5")
+    return 0
+
+
+def _optional_existing_target_path(target: list[str]) -> str | None:
+    if not target:
+        return None
+    joined = " ".join(target)
+    candidates = [joined]
+    if len(target) == 1:
+        candidates.append(target[0])
+    for candidate in candidates:
+        path = Path(candidate)
+        if path.is_file():
+            return candidate
+    return None
+
+
+def cmd_research(args: argparse.Namespace) -> int:
+    preset_name = args.preset
+    plan_path = _optional_existing_target_path(args.target)
+    result, preset, pipeline, _ = validate_preset_and_pipeline(preset_name, plan_path, include_budget=True)
+    if result.budget:
+        b = result.budget
+        print("Budget preview")
+        print(f"  phases: {b.phase_count}")
+        print(f"  agents: {b.agent_count}")
+        print(f"  estimated_tokens: {b.estimated_tokens}")
+        print(f"  estimated_cost_usd: {b.estimated_cost_usd:.4f}")
+        print(f"  estimated_wall_clock_seconds: {b.estimated_wall_clock_seconds}")
+        print(f"  fan_out_width: {b.fan_out_width}")
+        print(f"  parallelism: {b.parallelism}")
+    if pipeline:
+        print("Stage graph")
+        print("\n".join(graph_lines(pipeline)))
+    _print_validation(result)
+    if not result.ok:
+        return 1
+    activation_error = pipeline_activation_error(str(preset.get("pipeline")), pipeline)
+    if activation_error:
+        print(f"swarm: research: {activation_error}", file=sys.stderr)
+        return 1
+    if args.dry_run:
+        print(f"research preset {preset_name} is valid")
+        return 0
+    _activate_preset(preset_name)
+    print(f"loaded preset {preset_name}; run /swarm-do:research to dispatch the evidence memo profile")
     return 0
 
 
@@ -829,7 +880,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_providers_doctor)
 
     mode = sub.add_parser("mode")
-    mode.add_argument("name", choices=["claude-only", "codex-only", "balanced", "custom"])
+    mode.add_argument("name", choices=["claude-only", "codex-only", "balanced", "research", "custom"])
     mode.set_defaults(func=cmd_mode)
 
     status = sub.add_parser("status")
@@ -847,6 +898,12 @@ def _build_parser() -> argparse.ArgumentParser:
     compete.add_argument("--preset", default="competitive")
     compete.add_argument("--dry-run", action="store_true")
     compete.set_defaults(func=cmd_compete)
+
+    research = sub.add_parser("research")
+    research.add_argument("target", nargs="*", help="optional research question or existing file path for budget estimation")
+    research.add_argument("--preset", default="research")
+    research.add_argument("--dry-run", action="store_true")
+    research.set_defaults(func=cmd_research)
 
     handoff = sub.add_parser("handoff")
     handoff.add_argument("issue_id")

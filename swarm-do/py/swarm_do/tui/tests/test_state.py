@@ -38,8 +38,10 @@ from swarm_do.tui.state import (
     load_observations,
     load_run_events,
     module_palette_rows,
+    pipeline_activation_blocker,
     pipeline_gallery_rows,
     pipeline_lens_rows,
+    pipeline_profile_summary,
     pipeline_stage_rows,
     pipeline_validation_report,
     pipeline_workbench_preview,
@@ -234,6 +236,9 @@ class TuiStateTests(EnvTestCase):
         default = next(row for row in rows if row.name == "default")
         self.assertEqual(default.intent, "implement")
         self.assertEqual(default.preset, "balanced")
+        research = next(row for row in rows if row.name == "research")
+        self.assertEqual(research.intent, "research")
+        self.assertEqual(research.preset, "research")
         self.assertEqual(select_source_preset_for_pipeline("default"), "balanced")
         self.assertEqual(suggested_fork_name("default"), "default-edit")
 
@@ -244,6 +249,18 @@ class TuiStateTests(EnvTestCase):
 
         self.assertIn("kind: fan_out", inspector)
         self.assertIn("branch[0]: variant=explorer-a lens=architecture-risk", inspector)
+
+    def test_research_profile_is_runnable_while_unknown_output_only_is_preview_only(self) -> None:
+        pipeline = load_pipeline(find_pipeline("research").path)
+        self.assertIn("profile: research status=runnable command=/swarm-do:research", pipeline_profile_summary("research", pipeline))
+        self.assertIsNone(pipeline_activation_blocker("research", pipeline))
+
+        review_only = {
+            "pipeline_version": 1,
+            "name": "review-only",
+            "stages": [{"id": "review", "agents": [{"role": "agent-review"}]}],
+        }
+        self.assertIn("preview-only", pipeline_activation_blocker("review-only", review_only) or "")
 
     def test_pipeline_draft_validation_reports_invalid_without_mutating_file(self) -> None:
         fork_preset_and_pipeline("balanced", "default", "draft-invalid")

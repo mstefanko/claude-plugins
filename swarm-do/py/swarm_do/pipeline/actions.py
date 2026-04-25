@@ -14,7 +14,7 @@ import tomllib
 from pathlib import Path
 from typing import Any, Mapping
 
-from swarm_do.pipeline.catalog import compile_prompt_variant_fan_out, get_module
+from swarm_do.pipeline.catalog import compile_prompt_variant_fan_out, get_module, pipeline_activation_error
 from swarm_do.pipeline.engine import topological_layers
 from swarm_do.pipeline.paths import current_preset_path, resolve_data_dir, user_pipelines_dir, user_presets_dir
 from swarm_do.pipeline.registry import find_pipeline, find_preset, load_pipeline, load_preset, sha256_file
@@ -289,6 +289,11 @@ def set_user_preset_pipeline(preset_name: str, pipeline_name: str) -> None:
         raise ValueError(f"preset not found: {preset_name}")
     if item.origin != "user":
         raise ValueError("stock presets are read-only; fork before changing pipeline")
+    pipeline_item = find_pipeline(pipeline_name)
+    if pipeline_item is not None:
+        activation_error = pipeline_activation_error(pipeline_name, load_pipeline(pipeline_item.path))
+        if activation_error:
+            raise ValueError(activation_error)
     data = load_preset(item.path)
     data["pipeline"] = pipeline_name
     result, _ = validate_preset_mapping(data, preset_name)

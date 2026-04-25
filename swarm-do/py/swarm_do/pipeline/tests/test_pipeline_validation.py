@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import argparse
+import io
 import os
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 
+from swarm_do.pipeline.cli import cmd_research
 from swarm_do.pipeline.engine import graph_lines, stage_agent_count, topological_layers
 from swarm_do.pipeline.registry import find_pipeline, load_pipeline
 from swarm_do.pipeline.resolver import BackendResolver
@@ -48,6 +52,28 @@ class PipelineValidationTests(unittest.TestCase):
         self.assertIn("memory=False", rendered)
         result, *_ = validate_preset_and_pipeline("mco-review-lab")
         self.assertTrue(result.ok, result.errors)
+
+    def test_research_pipeline_is_output_only_fanout_profile(self) -> None:
+        item = find_pipeline("research")
+        self.assertIsNotNone(item)
+        pipeline = load_pipeline(item.path)
+        self.assertEqual(topological_layers(pipeline), [["research"]])
+        self.assertEqual(stage_agent_count(pipeline["stages"][0]), 4)
+        rendered = "\n".join(graph_lines(pipeline))
+        self.assertIn("fan_out=3 role=agent-research", rendered)
+        self.assertNotIn("agent-writer", rendered)
+        result, *_ = validate_preset_and_pipeline("research")
+        self.assertTrue(result.ok, result.errors)
+
+    def test_research_cli_dry_run_validates_profile_without_activation(self) -> None:
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cmd_research(argparse.Namespace(preset="research", target=[], dry_run=True))
+
+        self.assertEqual(code, 0)
+        rendered = stdout.getvalue()
+        self.assertIn("Budget preview", rendered)
+        self.assertIn("research preset research is valid", rendered)
 
     def test_provider_stage_is_mutually_exclusive_with_agent_stage(self) -> None:
         pipeline = loads(

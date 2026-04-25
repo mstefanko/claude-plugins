@@ -15,6 +15,7 @@ measurement now happens through plugin presets and telemetry.
 Shipped:
 
 - `/swarm-do:do <plan>` — main orchestrator. Full beads pipeline per phase.
+- `/swarm-do:research <question-or-path>` — output-only research swarm; closes with an evidence memo and no PR.
 - `/swarm-do:init-beads` — explicit, idempotent `bd init --stealth` bootstrap for a repo.
 - `/swarm-do:resume <bd-id>` — resume entrypoint keyed by the BEADS epic/run issue.
 - `bin/swarm preset ...` — preset load/save/diff/list/clear/dry-run.
@@ -25,13 +26,13 @@ Shipped:
 - `bin/swarm resume <bd-id> [--json]` — resume manifest, checkpoint lookup, and drift reporting.
 - `bin/swarm-spike [precompact|hook-context|writer-observability|all]` — operator harness for hook and live-signal proof artifacts.
 - `bin/swarm compete <plan-path>` — manual Pattern 5 setup; validates and activates the competitive preset.
+- `bin/swarm research [<question-or-path>] [--dry-run]` — validates and activates the research profile.
 - `bin/swarm-validate <preset>` — validation gates for preset + pipeline loading.
 
 Planned (packaging Phase 3 and Integration Phases 1–2):
 
 - `/swarm-do:debug <bd-id>` — agent-debug on an existing issue
 - `/swarm-do:review <target>` — review-only on code / PR / branch
-- `/swarm-do:research <question>` — ad-hoc research
 - `/swarm-do:brainstorm <topic>` — pre-plan exploration
 - `/swarm-do:compete <analysis-bd-id>` — Pattern 5 manual (gated on integration Phase 2)
 - `/swarm-do:help` — decision tree
@@ -83,7 +84,7 @@ swarm-do/
 ├── commands/                     Slash-command surface (/swarm-do:*)
 ├── hooks/                        PreCompact hook wiring + checkpoint writer
 ├── permissions/                  Role-scoped permission preset fragments
-├── skills/swarm-do/SKILL.md      Orchestrator prompt (fires on /swarm-do:do)
+├── skills/swarm-do/SKILL.md      Shared orchestrator/profile prompt notes
 ├── agents/agent-*.md             Per-role personas (15 roles)
 ├── bin/
 │   ├── _lib/
@@ -130,7 +131,7 @@ swarm pipeline lint <name-or-path>
 swarm permissions check [--role <role>] [--scope repo|user] [--path <settings.json>]
 swarm permissions install --role <role> [--dry-run] [--rollback] [--scope repo|user] [--path <settings.json>]
 swarm providers doctor [--mco] [--json]
-swarm mode claude-only|codex-only|balanced|custom
+swarm mode claude-only|codex-only|balanced|research|custom
 swarm status
 swarm resume <bd-id> [--merge] [--json]
 swarm run-state write --json-file <path|->
@@ -141,6 +142,7 @@ swarm rollout dogfood [--notes "..."]
 swarm rollout set <path> <value>
 swarm rollout history
 swarm compete <plan-path> [--dry-run]
+swarm research [<question-or-path>] [--dry-run]
 ```
 
 Active preset state lives at `${CLAUDE_PLUGIN_DATA}/current-preset.txt`. Fresh installs have no active preset; routing falls back to `backends.toml`, while the runtime uses the `default` pipeline.
@@ -154,7 +156,7 @@ Spike proof artifacts live under
 `${CLAUDE_PLUGIN_DATA}/runs/<run_id>/spikes/<spike-name>/` and include
 `metadata.json`, `stdout.txt`, `stderr.txt`, `stdin.json`, and `result.json`.
 
-Stock presets include `hybrid-review` for Phase 1 dogfooding. It keeps the default pipeline shape and adds a fail-open `agent-codex-review` lane after spec-review. `mco-review-lab` is an opt-in experimental read-only provider lane: it runs MCO's working Claude provider after writer and feeds that evidence to the normal Claude review stage. `competitive` remains the manual Pattern 5 preset for two-writer trials.
+Stock presets include `research`, an output-only fan-out profile that produces a sourced evidence memo without writer branches or a PR. `hybrid-review` keeps the default pipeline shape and adds a fail-open `agent-codex-review` lane after spec-review. `mco-review-lab` is an opt-in experimental read-only provider lane: it runs MCO's working Claude provider after writer and feeds that evidence to the normal Claude review stage. `competitive` remains the manual Pattern 5 preset for two-writer trials.
 
 `swarm providers doctor` checks the local backend commands required by the active preset's pipeline, or the `default` pipeline when no preset is active. `--mco` additionally runs `mco doctor --json` and fails closed on missing, failing, or malformed MCO output. MCO is also checked automatically when the active pipeline contains an MCO provider stage; otherwise, without `--mco`, it is reported as skipped.
 

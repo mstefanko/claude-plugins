@@ -1,0 +1,16 @@
+pipeline_version: 1
+name: research
+description: Research fan-out and synthesis memo pipeline with no implementation stages.
+parallelism: 3
+stages:
+  - id: research
+    fan_out:
+      role: agent-research
+      count: 3
+      variant: same
+    merge:
+      strategy: synthesize
+      agent: agent-research-merge
+    failure_tolerance:
+      mode: quorum
+      min_success: 2

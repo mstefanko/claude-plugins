@@ -85,6 +85,20 @@ class ModuleSpec:
         return stage
 
 
+@dataclasses.dataclass(frozen=True)
+class PipelineProfileSpec:
+    profile_id: str
+    label: str
+    description: str
+    command_name: str | None
+    terminal_behavior: str
+    output_only: bool
+    preview_only: bool
+    requires_command_profile: bool
+    pipeline_names: tuple[str, ...] = ()
+    preset_names: tuple[str, ...] = ()
+
+
 ANALYSIS_CONTRACT = OutputContract(
     sections=(
         "Assumptions",
@@ -329,6 +343,44 @@ _MODULES: tuple[ModuleSpec, ...] = (
 )
 
 
+_IMPLEMENTATION_PROFILE = PipelineProfileSpec(
+    profile_id="implementation",
+    label="Implementation",
+    description="Plan-oriented pipeline that can run through /swarm-do:do and may open writer branches and a PR.",
+    command_name="/swarm-do:do",
+    terminal_behavior="implementation handoff with writer/review/doc lanes and a consolidated PR when the run completes",
+    output_only=False,
+    preview_only=False,
+    requires_command_profile=False,
+)
+
+
+_RESEARCH_PROFILE = PipelineProfileSpec(
+    profile_id="research",
+    label="Research",
+    description="Output-only research pipeline that produces an evidence memo without writer branches or a PR.",
+    command_name="/swarm-do:research",
+    terminal_behavior="evidence memo or Beads synthesis note; no writer branch, implementation handoff, or PR",
+    output_only=True,
+    preview_only=False,
+    requires_command_profile=False,
+    pipeline_names=("research",),
+    preset_names=("research",),
+)
+
+
+_PREVIEW_ONLY_PROFILE = PipelineProfileSpec(
+    profile_id="preview-only",
+    label="Preview Only",
+    description="Output-only pipeline shape without a command/profile binding yet.",
+    command_name=None,
+    terminal_behavior="browse, fork, lint, diff, and save only",
+    output_only=True,
+    preview_only=True,
+    requires_command_profile=True,
+)
+
+
 def list_modules() -> list[ModuleSpec]:
     return sorted(_MODULES, key=lambda item: item.module_id)
 
@@ -441,3 +493,59 @@ def compile_prompt_variant_fan_out(role: str, lens_ids: list[str] | tuple[str, .
         "variant": "prompt_variants",
         "variants": variants,
     }
+
+
+def list_pipeline_profiles() -> list[PipelineProfileSpec]:
+    return [_IMPLEMENTATION_PROFILE, _RESEARCH_PROFILE, _PREVIEW_ONLY_PROFILE]
+
+
+def _pipeline_roles(pipeline: Mapping[str, Any]) -> set[str]:
+    roles: set[str] = set()
+    for stage in pipeline.get("stages") or []:
+        if not isinstance(stage, Mapping):
+            continue
+        for agent in stage.get("agents") or []:
+            if isinstance(agent, Mapping) and isinstance(agent.get("role"), str):
+                roles.add(agent["role"])
+        fan = stage.get("fan_out")
+        if isinstance(fan, Mapping) and isinstance(fan.get("role"), str):
+            roles.add(fan["role"])
+        merge = stage.get("merge")
+        if isinstance(merge, Mapping) and isinstance(merge.get("agent"), str):
+            roles.add(merge["agent"])
+    return roles
+
+
+def pipeline_has_writer(pipeline: Mapping[str, Any]) -> bool:
+    return "agent-writer" in _pipeline_roles(pipeline)
+
+
+def pipeline_is_research_only(pipeline: Mapping[str, Any]) -> bool:
+    roles = _pipeline_roles(pipeline)
+    if not roles or not roles.issubset({"agent-research", "agent-research-merge"}):
+        return False
+    for stage in pipeline.get("stages") or []:
+        if isinstance(stage, Mapping) and "provider" in stage:
+            return False
+    return True
+
+
+def pipeline_profile_for(pipeline_name: str, pipeline: Mapping[str, Any]) -> PipelineProfileSpec:
+    source = pipeline.get("forked_from") if isinstance(pipeline.get("forked_from"), str) else None
+    if pipeline_name in _RESEARCH_PROFILE.pipeline_names or source in _RESEARCH_PROFILE.pipeline_names:
+        return _RESEARCH_PROFILE
+    if pipeline_is_research_only(pipeline):
+        return _RESEARCH_PROFILE
+    if pipeline_has_writer(pipeline):
+        return _IMPLEMENTATION_PROFILE
+    return _PREVIEW_ONLY_PROFILE
+
+
+def pipeline_activation_error(pipeline_name: str, pipeline: Mapping[str, Any]) -> str | None:
+    profile = pipeline_profile_for(pipeline_name, pipeline)
+    if not profile.preview_only:
+        return None
+    return (
+        f"pipeline {pipeline_name} is preview-only until a command/profile binding exists; "
+        f"current profile={profile.profile_id}"
+    )

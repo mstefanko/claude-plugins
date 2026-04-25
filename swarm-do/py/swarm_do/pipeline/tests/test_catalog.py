@@ -9,9 +9,13 @@ from swarm_do.pipeline.catalog import (
     get_lens,
     get_module,
     list_modules,
+    list_pipeline_profiles,
     list_prompt_lenses,
     list_route_lenses,
+    pipeline_activation_error,
+    pipeline_profile_for,
 )
+from swarm_do.pipeline.registry import find_pipeline, load_pipeline
 
 
 class PipelineCatalogTests(unittest.TestCase):
@@ -61,6 +65,23 @@ class PipelineCatalogTests(unittest.TestCase):
         self.assertTrue(get_module("mco-review").experimental)
         self.assertTrue(get_module("mco-review").requires_provider_doctor)
         self.assertIn("fan-out-model-routes", {lens.lens_id for lens in list_route_lenses()})
+
+    def test_pipeline_profiles_mark_research_runnable_and_unknown_output_only_preview(self) -> None:
+        profiles = {profile.profile_id: profile for profile in list_pipeline_profiles()}
+        self.assertEqual(profiles["research"].command_name, "/swarm-do:research")
+        self.assertFalse(profiles["research"].preview_only)
+
+        research = load_pipeline(find_pipeline("research").path)
+        self.assertEqual(pipeline_profile_for("research", research).profile_id, "research")
+        self.assertIsNone(pipeline_activation_error("research", research))
+
+        preview_only = {
+            "pipeline_version": 1,
+            "name": "review-only",
+            "stages": [{"id": "review", "agents": [{"role": "agent-review"}]}],
+        }
+        self.assertEqual(pipeline_profile_for("review-only", preview_only).profile_id, "preview-only")
+        self.assertIn("preview-only", pipeline_activation_error("review-only", preview_only) or "")
 
 
 if __name__ == "__main__":

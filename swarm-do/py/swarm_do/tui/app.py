@@ -40,6 +40,8 @@ from swarm_do.tui.state import (
     load_runs,
     module_palette_rows,
     pipeline_gallery_rows,
+    pipeline_activation_blocker,
+    pipeline_profile_preset,
     pipeline_stage_rows,
     pipeline_validation_report,
     select_source_preset_for_pipeline,
@@ -849,6 +851,29 @@ if TEXTUAL_IMPORT_ERROR is None:
         def action_set_pipeline(self) -> None:
             row = self._selected_gallery_row()
             if row is None:
+                return
+            pipeline = self._current_pipeline()
+            if pipeline is None:
+                self.app.push_screen(MessageModal("Pipeline missing", row.name))
+                return
+            blocker = pipeline_activation_blocker(row.name, pipeline)
+            if blocker:
+                self.app.push_screen(MessageModal("Preview only", blocker))
+                return
+            profile_preset = pipeline_profile_preset(row.name, pipeline)
+            if profile_preset:
+                result = subprocess.run(
+                    [str(Path(__file__).resolve().parents[3] / "bin" / "swarm"), "preset", "load", profile_preset],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                if result.returncode != 0:
+                    body = result.stderr or result.stdout or f"could not load preset {profile_preset}"
+                    self.app.push_screen(MessageModal("Activation refused", body))
+                    return
+                self.query_one("#status", StatusBar).refresh_status()
+                self.app.push_screen(MessageModal("Profile activated", result.stdout.strip()))
                 return
             from swarm_do.pipeline.resolver import active_preset_name
 

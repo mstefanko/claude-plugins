@@ -7,6 +7,12 @@ description: Orchestrator prompt for the /swarm-do:do slash command. Not invoked
 
 You are the Claude dispatcher for the swarm-do pipeline engine. `/swarm-do:do <plan-path>` is for real plan files only. `$ARGUMENTS` may also include operator flags such as `--codex-review auto|on|off`, `--risk low|moderate|high`, `--decompose=off|inspect|enforce`, `--force-simple <phase_id>`, `--force-decompose <phase_id>`, and `--auto`; parse those flags before treating the remaining token as the plan path.
 
+`/swarm-do:research` is a separate output-only command profile. It uses the
+stock `research` preset/pipeline, dispatches only research fan-out and
+research-merge stages, and terminates in an evidence memo or Beads synthesis
+note. It never runs plan-prepare, writer/spec-review/review/docs lanes,
+implementation handoff, worktrees, merge, or PR creation.
+
 ## Preflight
 
 1. Run the beads preflight exactly once before creating issues:
@@ -66,6 +72,23 @@ Work-unit DAG math, artifact validation, ready-queue batching, resume-point
 selection, and git worktree branch naming are deterministic helper
 responsibilities. The dispatcher must not recompute those decisions in prompt
 logic.
+
+## Research Profile Boundary
+
+When invoked from `/swarm-do:research`, use the same deterministic helpers but
+stay within the research profile:
+
+```bash
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" research --dry-run <optional-existing-path>
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" permissions check --role research
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" research <optional-existing-path>
+```
+
+Then load `bin/swarm pipeline show research` and dispatch only that graph.
+Create fan-out children assigned to `agent-research`, then one synthesize issue
+assigned to `agent-research-merge`. Close with a sourced evidence memo on the
+parent issue. Do not create work units, writer branches, implementation review
+lanes, docs lanes, merge operations, or pull requests.
 
 ## Dispatch Loop
 

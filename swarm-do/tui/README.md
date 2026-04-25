@@ -43,6 +43,9 @@ coverage live in `actions.py`.
   in-memory draft save/discard state, route/module edit controls, and
   undo/redo. Stock pipelines remain read-only; editing starts by forking a
   pipeline and its matching preset into user-owned files.
+- The stock `research` pipeline is runnable through `/swarm-do:research`.
+  Other output-only pipeline shapes remain preview-only until they have their
+  own command/profile binding.
 
 ## Composer Flow
 
@@ -63,9 +66,12 @@ On the Pipelines screen:
 - Press `Ctrl+S` to save the current draft. The validation rail blocks hard
   validation errors before writing YAML.
 - Press `Esc` to discard the in-memory draft and return to the last saved file.
+- Press `s` on the stock `research` pipeline to activate the research profile.
+  Preview-only output graphs can still be browsed, forked, linted, and saved,
+  but activation is blocked.
 
-Activation workflow and full lens selection controls are still intentionally
-deferred to later composer slices.
+Full lens selection controls are still intentionally deferred to later composer
+slices.
 
 ## Invariant Guards
 

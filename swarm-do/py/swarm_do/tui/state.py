@@ -15,7 +15,13 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from swarm_do.pipeline.actions import InFlightRun, in_flight_dir, load_in_flight
-from swarm_do.pipeline.catalog import get_module, lens_for_variant, list_modules
+from swarm_do.pipeline.catalog import (
+    get_module,
+    lens_for_variant,
+    list_modules,
+    pipeline_activation_error,
+    pipeline_profile_for,
+)
 from swarm_do.pipeline.context import current_context
 from swarm_do.pipeline.diff import diff_user_pipeline, stock_drift_for_pipeline
 from swarm_do.pipeline.engine import graph_lines, topological_layers
@@ -75,6 +81,7 @@ PIPELINE_INTENTS: dict[str, str] = {
     "hybrid-review": "review",
     "mco-review-lab": "mco-assisted review",
     "compete": "competitive implementation",
+    "research": "research",
     "ultra-plan": "design",
 }
 PIPELINE_INTENT_ORDER = (
@@ -847,6 +854,34 @@ def draft_validation_lines(draft: PipelineEditDraft) -> list[str]:
     return lines
 
 
+def pipeline_profile_summary(pipeline_name: str, pipeline: Mapping[str, Any]) -> str:
+    profile = pipeline_profile_for(pipeline_name, pipeline)
+    status = "preview-only" if profile.preview_only else "runnable"
+    command = profile.command_name or "none"
+    return f"profile: {profile.profile_id} status={status} command={command} terminal={profile.terminal_behavior}"
+
+
+def pipeline_activation_blocker(pipeline_name: str, pipeline: Mapping[str, Any] | None = None) -> str | None:
+    if pipeline is None:
+        item = find_pipeline(pipeline_name)
+        if item is None:
+            return f"pipeline not found: {pipeline_name}"
+        pipeline = load_pipeline(item.path)
+    return pipeline_activation_error(pipeline_name, pipeline)
+
+
+def pipeline_profile_preset(pipeline_name: str, pipeline: Mapping[str, Any] | None = None) -> str | None:
+    if pipeline is None:
+        item = find_pipeline(pipeline_name)
+        if item is None:
+            return None
+        pipeline = load_pipeline(item.path)
+    profile = pipeline_profile_for(pipeline_name, pipeline)
+    if pipeline_name in profile.pipeline_names and profile.preset_names:
+        return profile.preset_names[0]
+    return None
+
+
 def _preset_for_pipeline(pipeline_name: str) -> str | None:
     for candidate in list_presets():
         try:
@@ -905,6 +940,16 @@ def pipeline_validation_report(
 ) -> str:
     preset_name = _preset_for_pipeline(pipeline_name)
     lines: list[str] = ["validation:"]
+    item = find_pipeline(pipeline_name)
+    if item is not None:
+        try:
+            pipeline_for_profile = load_pipeline(item.path)
+            lines.append("  " + pipeline_profile_summary(pipeline_name, pipeline_for_profile))
+            activation_error = pipeline_activation_blocker(pipeline_name, pipeline_for_profile)
+            if activation_error:
+                lines.append(f"  ERROR {activation_error}")
+        except Exception as exc:
+            lines.append(f"  ERROR profile unavailable: {exc}")
     if preset_name is None:
         lines.append("  full validation needs a preset that references this pipeline")
         return "\n".join(lines)

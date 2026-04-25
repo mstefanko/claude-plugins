@@ -19,6 +19,7 @@ from swarm_do.pipeline.actions import (
     set_fan_out_routes,
     set_prompt_variant_lenses,
     set_stage_agent_route,
+    set_user_preset_pipeline,
 )
 from swarm_do.pipeline.cli import cmd_preset_diff
 from swarm_do.pipeline.diff import diff_user_pipeline, stock_drift_for_pipeline
@@ -220,6 +221,41 @@ stages:
         fork_pipeline("compete", "compete-edit")
         with self.assertRaisesRegex(ValueError, "cannot combine"):
             set_prompt_variant_lenses("compete-edit", "writers", ["architecture-risk"])
+
+    def test_preview_only_output_pipeline_cannot_be_activated_on_user_preset(self) -> None:
+        presets = self.root / "presets"
+        presets.mkdir()
+        preset_path = presets / "user.toml"
+        preset_path.write_text(
+            """
+name = "user"
+pipeline = "default"
+origin = "user"
+
+[budget]
+max_agents_per_run = 20
+max_estimated_cost_usd = 5.0
+max_wall_clock_seconds = 1800
+""",
+            encoding="utf-8",
+        )
+        save_user_pipeline(
+            "review-only",
+            loads(
+                """
+pipeline_version: 1
+name: review-only
+stages:
+  - id: review
+    agents:
+      - role: agent-review
+"""
+            ),
+        )
+
+        with self.assertRaisesRegex(ValueError, "preview-only"):
+            set_user_preset_pipeline("user", "review-only")
+        self.assertEqual(load_preset(preset_path)["pipeline"], "default")
 
     def test_prompt_variant_lenses_compile_to_existing_variant_names(self) -> None:
         fork_pipeline("ultra-plan", "lens-edit")
