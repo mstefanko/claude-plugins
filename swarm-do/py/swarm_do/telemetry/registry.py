@@ -51,8 +51,11 @@ LEDGERS: Dict[str, Ledger] = {
     "runs": Ledger(
         name="runs",
         filename="runs.jsonl",
-        schema_path=_TELEMETRY_SCHEMA_DIR / "runs.schema.json",
-        fallback_order=(_TELEMETRY_SCHEMA_DIR / "runs.schema.json",),
+        schema_path=_TELEMETRY_SCHEMA_DIR / "runs.v2.schema.json",
+        fallback_order=(
+            _TELEMETRY_SCHEMA_DIR / "runs.v2.schema.json",
+            _TELEMETRY_SCHEMA_DIR / "runs.schema.json",
+        ),
     ),
     "findings": Ledger(
         name="findings",

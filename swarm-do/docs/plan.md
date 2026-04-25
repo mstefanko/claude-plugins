@@ -17,6 +17,8 @@ Both former files are now stubs pointing here. This file is the single source of
 - **Part 4 — Implementation phases — mostly shipped** — Phases 9/10/11 with sub-phases 9a–11g (telemetry, presets, TUI). This is what `/swarm-do:do` runs; remaining work is follow-up hardening and TUI completeness.
 - **Part 5 — Replaceability + non-goals** — layer-swap discipline, rollout state file schema, non-goals
 - **Appendix** — ADRs, schemas, backups (under `docs/adr/` once Phase 9g / 10f ship)
+  - `docs/adr/0004-plan-prepare-and-bounded-work-units.md` records the
+    decomposition promotion scorecard and budget-estimator follow-up.
 
 ---
 
@@ -1391,9 +1393,11 @@ Runtime boundary:
 Implement as role and pipeline contracts, not as a second workflow engine:
 
 1. Add an `agent-analysis` output mode for `bounded_work_units`:
-   `id`, `goal`, `file_scope`, `allowed_files`, `blocked_files`,
-   `dependencies`, `commands`, `expected_results`, `done_when`,
-   `risk_tags`, and `handoff_notes`.
+   `id`, `title`, `goal`, `depends_on`, `context_files`, `allowed_files`,
+   `blocked_files`, `acceptance_criteria`, `validation_commands`,
+   `expected_results`, `risk_tags`, `handoff_notes`, `beads_id`,
+   `worktree_branch`, `status`, `failure_reason`, `retry_count`, and
+   `handoff_count`.
 2. Add a `decompose-plan` pipeline stage for hard phases that emits those work
    units read-only. The first version creates a decomposition artifact, not
    parallel implementation branches.

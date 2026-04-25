@@ -11,3 +11,16 @@ origin = "stock"
 max_agents_per_run = 40
 max_estimated_cost_usd = 10.0
 max_wall_clock_seconds = 7200
+max_writer_tool_calls = 60
+max_writer_output_bytes = 60000
+max_handoffs = 1
+
+[decompose]
+mode = "off"
+
+[mem_prime]
+mode = "off"
+max_tokens = 500
+recency_days = 90
+min_relevance = 0.6
+adapter = "dispatch_file"

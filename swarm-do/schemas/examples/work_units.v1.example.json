@@ -1,0 +1,22 @@
+{
+  "bd_epic_id": null,
+  "plan_path": "plans/example.md",
+  "schema_version": 1,
+  "work_units": [
+    {
+      "acceptance_criteria": [
+        "Example unit passes"
+      ],
+      "beads_id": null,
+      "depends_on": [],
+      "files": [
+        "py/example.py"
+      ],
+      "handoff_count": 0,
+      "id": "unit-example",
+      "retry_count": 0,
+      "status": "pending",
+      "worktree_branch": null
+    }
+  ]
+}

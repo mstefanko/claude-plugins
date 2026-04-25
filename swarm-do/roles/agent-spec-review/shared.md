@@ -19,6 +19,9 @@ is agent-review's job.
 
 - Check spec compliance only. Flag only mismatches against the analysis
   contract.
+- When the issue contains a work-unit contract, review against that unit's
+  acceptance criteria and validation commands. Do not reject work merely
+  because it did not satisfy unrelated text from the original parent phase.
 - Do NOT evaluate performance, security, style, design, or test quality.
 - Do NOT run tests. Do NOT edit files.
 - If you spot a quality concern, append it to `### Forwarded to Quality Review`

@@ -23,6 +23,13 @@ def topological_work_unit_layers(artifact: Mapping[str, Any]) -> list[list[str]]
     return layers
 
 
+def unit_file_scope(unit: Mapping[str, Any]) -> list[str]:
+    """Return the v2 allowed_files scope, accepting v1 files as a legacy alias."""
+
+    value = unit.get("allowed_files", unit.get("files"))
+    return [item for item in value if isinstance(item, str)] if isinstance(value, list) else []
+
+
 def retry_state_transition(review_verdict: str, retry_count: int, *, max_retries: int = 2) -> str:
     if review_verdict == "APPROVED":
         return "approved"

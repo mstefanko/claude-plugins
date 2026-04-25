@@ -31,7 +31,7 @@ from .registry import (
     sha256_file,
 )
 from .rollout import format_status, history_lines, load_state, mark_dogfood, set_field
-from .validation import schema_lint_pipeline, validate_preset_and_pipeline
+from .validation import schema_lint_pipeline, schema_lint_work_units, validate_preset_and_pipeline
 
 
 def _ensure_current_file() -> Path:
@@ -511,6 +511,67 @@ def cmd_run_state(args: argparse.Namespace) -> int:
     return 1
 
 
+def cmd_plan(args: argparse.Namespace) -> int:
+    from .decompose import decompose_plan_phase
+    from .plan import inspect_plan, write_inspect_run
+
+    try:
+        if args.plan_command == "inspect":
+            reports = inspect_plan(args.plan_path, phase_id=args.phase)
+            payload: dict[str, Any] = {"schema_version": 1, "reports": [report.to_dict() for report in reports]}
+            if not args.no_write:
+                payload["run"] = write_inspect_run(args.plan_path, reports)
+            if args.json:
+                print(json.dumps(payload, indent=2, sort_keys=True))
+            else:
+                if "run" in payload:
+                    run = payload["run"]
+                    print(f"prepared run: {run['run_id']}")
+                    print(f"inspect: {run['inspect_path']}")
+                for report in reports:
+                    files = "unknown" if report.estimated_files is None else str(report.estimated_files)
+                    decompose = "yes" if report.requires_decomposition else "no"
+                    print(
+                        f"{report.phase_id}: {report.complexity} "
+                        f"({report.complexity_source}); files={files}; "
+                        f"bullets={report.implementation_bullets}; decompose={decompose}; {report.reason}"
+                    )
+            return 0
+        if args.plan_command == "decompose":
+            result = decompose_plan_phase(
+                args.plan_path,
+                args.phase,
+                write_to=args.write,
+                bd_epic_id=args.bd_epic_id,
+                allow_rejected=args.allow_rejected,
+            )
+            payload = {
+                "artifact": result.artifact,
+                "warnings": result.lint.warnings,
+                "errors": result.lint.errors,
+                "retry_count": result.retry_count,
+                "escalated": result.escalated,
+                "rejected_path": result.rejected_path,
+            }
+            if args.json:
+                print(json.dumps(payload, indent=2, sort_keys=True))
+            else:
+                for warning in result.lint.warnings:
+                    print(f"warning: {warning}", file=sys.stderr)
+                for error in result.lint.errors:
+                    print(f"error: {error}", file=sys.stderr)
+                if args.write:
+                    print(args.write)
+                else:
+                    print(json.dumps(result.artifact, indent=2, sort_keys=True))
+            return 0 if not result.lint.errors or args.allow_rejected else 1
+    except Exception as exc:
+        print(f"swarm: plan {args.plan_command}: {exc}", file=sys.stderr)
+        return 1
+    print("swarm: plan: missing command", file=sys.stderr)
+    return 1
+
+
 def _load_unit_state_arg(args: argparse.Namespace) -> dict[str, Any]:
     if not getattr(args, "state_json_file", None):
         return {}
@@ -523,15 +584,66 @@ def _load_unit_state_arg(args: argparse.Namespace) -> dict[str, Any]:
     return value
 
 
+def _migrate_work_units_artifact(artifact: dict[str, Any]) -> dict[str, Any]:
+    migrated = dict(artifact)
+    migrated["schema_version"] = 2
+    units = []
+    for item in artifact.get("work_units") or []:
+        if not isinstance(item, dict):
+            continue
+        unit = dict(item)
+        if "allowed_files" not in unit and "files" in unit:
+            unit["allowed_files"] = unit.pop("files")
+        unit.setdefault("title", unit.get("id", "unit"))
+        unit.setdefault("goal", "")
+        unit.setdefault("context_files", [])
+        unit.setdefault("blocked_files", [])
+        unit.setdefault("validation_commands", [])
+        unit.setdefault("expected_results", [])
+        unit.setdefault("risk_tags", [])
+        unit.setdefault("handoff_notes", "")
+        unit.setdefault("failure_reason", None)
+        units.append(unit)
+    migrated["work_units"] = units
+    return migrated
+
+
 def cmd_work_units(args: argparse.Namespace) -> int:
     from .executor import execution_batches, load_work_units, next_resume_point, ready_work_units
 
     try:
-        artifact = load_work_units(args.artifact)
-        state = _load_unit_state_arg(args)
+        if args.work_units_command == "migrate":
+            source = Path(args.artifact)
+            artifact = json.loads(source.read_text(encoding="utf-8"))
+            if not isinstance(artifact, dict):
+                raise ValueError("work-unit artifact root must be an object")
+            migrated = _migrate_work_units_artifact(artifact)
+            lint = schema_lint_work_units(migrated)
+            if lint.errors:
+                raise ValueError("migrated artifact is invalid: " + "; ".join(lint.errors))
+            text = json.dumps(migrated, indent=2, sort_keys=True) + "\n"
+            if args.in_place:
+                source.write_text(text, encoding="utf-8")
+                print(source)
+            else:
+                print(text, end="")
+            return 0
         if args.work_units_command == "lint":
+            source = Path(args.artifact)
+            value = json.loads(source.read_text(encoding="utf-8"))
+            if not isinstance(value, dict):
+                raise ValueError("work-unit artifact root must be an object")
+            lint = schema_lint_work_units(value)
+            for warning in lint.warnings:
+                print(f"warning: {warning}", file=sys.stderr)
+            for error in lint.errors:
+                print(f"error: {error}", file=sys.stderr)
+            if lint.errors:
+                return 1
             print(f"work-units OK: {args.artifact}")
             return 0
+        artifact = load_work_units(args.artifact)
+        state = _load_unit_state_arg(args)
         if args.work_units_command == "ready":
             payload: Any = {"ready": ready_work_units(artifact, state)}
         elif args.work_units_command == "batches":
@@ -703,10 +815,31 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--reason", default="end-of-unit")
     p.set_defaults(func=cmd_run_state)
 
+    plan = sub.add_parser("plan")
+    plan_sub = plan.add_subparsers(dest="plan_command")
+    p = plan_sub.add_parser("inspect")
+    p.add_argument("plan_path")
+    p.add_argument("--phase")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--no-write", action="store_true", help="skip prepared run artifact writes")
+    p.set_defaults(func=cmd_plan)
+    p = plan_sub.add_parser("decompose")
+    p.add_argument("plan_path")
+    p.add_argument("--phase", required=True)
+    p.add_argument("--write")
+    p.add_argument("--bd-epic-id")
+    p.add_argument("--allow-rejected", action="store_true")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_plan)
+
     work_units = sub.add_parser("work-units")
     work_units_sub = work_units.add_subparsers(dest="work_units_command")
     p = work_units_sub.add_parser("lint")
     p.add_argument("artifact")
+    p.set_defaults(func=cmd_work_units)
+    p = work_units_sub.add_parser("migrate")
+    p.add_argument("artifact")
+    p.add_argument("--in-place", action="store_true")
     p.set_defaults(func=cmd_work_units)
     p = work_units_sub.add_parser("ready")
     p.add_argument("artifact")

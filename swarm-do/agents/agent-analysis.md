@@ -90,6 +90,18 @@ Coupling introduced — does this make two previously independent modules harder
 ### Test Coverage Needed
 <what the writer should verify works, and what the reviewer should check>
 
+### Bounded Work Units
+When the active pipeline or issue asks for `bounded_work_units`, include a
+schema-strict `work_units.v2` JSON block. Use the canonical fields:
+`id`, `title`, `goal`, `depends_on`, `context_files`, `allowed_files`,
+`blocked_files`, `acceptance_criteria`, `validation_commands`,
+`expected_results`, `risk_tags`, `handoff_notes`, `beads_id`,
+`worktree_branch`, `status`, `failure_reason`, `retry_count`, and
+`handoff_count`.
+
+Do not use `file_scope`, `done_when`, or `commands`. Do not use `files` except
+when explicitly discussing migration from a v1 artifact.
+
 ## Status: COMPLETE | NEEDS_INPUT
 ```
 

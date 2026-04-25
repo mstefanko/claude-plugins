@@ -6,12 +6,13 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
+from .budget import evaluate_writer_budget
 from .validation import schema_lint_work_units
 from .work_units import topological_work_unit_layers
 
 
 COMPLETE_STATUSES = {"approved", "merged"}
-INCOMPLETE_STATUSES = {"pending", "running", "blocked", "failed"}
+INCOMPLETE_STATUSES = {"pending", "running", "blocked", "failed", "escalated"}
 WORKER_LOCAL_UPDATE = "child_note"
 COORDINATOR_UPDATE_KINDS = {
     "child_note",
@@ -24,7 +25,7 @@ COORDINATOR_UPDATE_KINDS = {
 
 
 def load_work_units(path: str | Path) -> dict[str, Any]:
-    """Load and fail-closed validate a persisted work_units.v1 artifact."""
+    """Load and fail-closed validate a persisted work_units artifact."""
 
     target = Path(path)
     if not target.is_file():
@@ -35,9 +36,9 @@ def load_work_units(path: str | Path) -> dict[str, Any]:
         raise ValueError(f"work-unit artifact is not valid JSON: {exc}") from exc
     if not isinstance(value, dict):
         raise ValueError("work-unit artifact root must be an object")
-    errors = schema_lint_work_units(value)
-    if errors:
-        raise ValueError("invalid work-unit artifact: " + "; ".join(errors))
+    lint = schema_lint_work_units(value)
+    if lint.errors:
+        raise ValueError("invalid work-unit artifact: " + "; ".join(lint.errors))
     topological_work_unit_layers(value)
     return value
 
@@ -95,6 +96,40 @@ def beads_update_allowed(actor: str, update_kind: str, *, owns_child_issue: bool
     if actor == "coordinator":
         return update_kind in COORDINATOR_UPDATE_KINDS
     return update_kind == WORKER_LOCAL_UPDATE and owns_child_issue
+
+
+def writer_budget_status(
+    unit: Mapping[str, Any],
+    writer_return: str,
+    *,
+    diff_size_bytes: int = 0,
+    max_writer_tool_calls: int = 60,
+    max_writer_output_bytes: int = 60_000,
+    max_handoffs: int = 1,
+    telemetry_tool_call_count: int | None = None,
+) -> dict[str, Any]:
+    """Evaluate a writer return block and return unit-state fields."""
+
+    unit_id = unit.get("id")
+    if not isinstance(unit_id, str) or not unit_id:
+        raise ValueError("unit requires id")
+    result = evaluate_writer_budget(
+        expected_work_unit_id=unit_id,
+        writer_return=writer_return,
+        diff_size_bytes=diff_size_bytes,
+        max_writer_tool_calls=max_writer_tool_calls,
+        max_writer_output_bytes=max_writer_output_bytes,
+        max_handoffs=max_handoffs,
+        telemetry_tool_call_count=telemetry_tool_call_count,
+    )
+    return {
+        "status": result.status,
+        "failure_reason": result.failure_reason,
+        "tool_call_count": result.tool_calls,
+        "output_bytes": result.output_bytes,
+        "handoff_count": result.handoff_count,
+        "warnings": result.warnings,
+    }
 
 
 def _unit_by_id(artifact: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:

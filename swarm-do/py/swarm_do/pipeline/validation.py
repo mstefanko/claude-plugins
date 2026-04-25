@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
@@ -16,7 +17,17 @@ VARIANTS = {"same", "prompt_variants", "models"}
 MERGE_STRATEGIES = {"synthesize", "vote"}
 TOLERANCE_MODES = {"strict", "quorum", "best-effort"}
 PIPELINE_TOP_KEYS = {"pipeline_version", "name", "description", "parallelism", "stages"}
-PRESET_TOP_KEYS = {"name", "description", "pipeline", "origin", "routing", "budget", "forked_from_hash"}
+PRESET_TOP_KEYS = {
+    "name",
+    "description",
+    "pipeline",
+    "origin",
+    "routing",
+    "budget",
+    "decompose",
+    "mem_prime",
+    "forked_from_hash",
+}
 STAGE_KEYS = {"id", "depends_on", "agents", "fan_out", "provider", "merge", "failure_tolerance"}
 FAN_OUT_KEYS = {"role", "count", "variant", "variants", "routes"}
 MERGE_KEYS = {"strategy", "agent"}
@@ -39,16 +50,27 @@ MCO_PROVIDERS = {"claude", "codex", "gemini", "opencode", "qwen"}
 WORK_UNIT_TOP_KEYS = {"schema_version", "plan_path", "bd_epic_id", "work_units"}
 WORK_UNIT_KEYS = {
     "id",
+    "title",
+    "goal",
     "depends_on",
     "files",
+    "context_files",
+    "allowed_files",
+    "blocked_files",
     "acceptance_criteria",
+    "validation_commands",
+    "expected_results",
+    "risk_tags",
+    "handoff_notes",
+    "mem_prime",
     "beads_id",
     "worktree_branch",
     "status",
+    "failure_reason",
     "retry_count",
     "handoff_count",
 }
-WORK_UNIT_REQUIRED_KEYS = {
+WORK_UNIT_V1_REQUIRED_KEYS = {
     "id",
     "depends_on",
     "files",
@@ -59,7 +81,40 @@ WORK_UNIT_REQUIRED_KEYS = {
     "retry_count",
     "handoff_count",
 }
-WORK_UNIT_STATUSES = {"pending", "running", "blocked", "approved", "merged", "failed"}
+WORK_UNIT_V2_REQUIRED_KEYS = {
+    "id",
+    "title",
+    "goal",
+    "depends_on",
+    "context_files",
+    "blocked_files",
+    "acceptance_criteria",
+    "validation_commands",
+    "expected_results",
+    "risk_tags",
+    "handoff_notes",
+    "beads_id",
+    "worktree_branch",
+    "status",
+    "failure_reason",
+    "retry_count",
+    "handoff_count",
+}
+WORK_UNIT_STATUSES = {"pending", "running", "blocked", "approved", "merged", "failed", "escalated"}
+WORK_UNIT_FAILURE_REASONS = {
+    None,
+    "budget_breach_tool_calls",
+    "budget_breach_output_bytes",
+    "blocked_file_violation",
+    "spec_mismatch_max",
+    "repeat_handoff",
+    "mem_prime_failure",
+    "dependency_failed",
+    "other",
+}
+DECOMPOSE_MODES = {"off", "inspect", "enforce"}
+MEM_PRIME_MODES = {"off", "hard_only", "on"}
+MEM_PRIME_ADAPTERS = {"dispatch_file", "local_sqlite"}
 
 
 @dataclass
@@ -74,6 +129,16 @@ class ValidationResult:
 
     def add(self, message: str) -> None:
         self.errors.append(message)
+
+
+@dataclass
+class LintResult:
+    errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+    @property
+    def ok(self) -> bool:
+        return not self.errors
 
 
 def _is_str_list(value: Any) -> bool:
@@ -129,6 +194,29 @@ def schema_lint_preset(preset: Mapping[str, Any]) -> list[str]:
                 errors.append(f"preset: budget.{key} must be an integer")
         if not isinstance(budget.get("max_estimated_cost_usd"), (int, float)):
             errors.append("preset: budget.max_estimated_cost_usd must be a number")
+        for key in ("max_writer_tool_calls", "max_writer_output_bytes", "max_handoffs"):
+            if key in budget and (not isinstance(budget.get(key), int) or budget.get(key) < 0):
+                errors.append(f"preset: budget.{key} must be a non-negative integer")
+    decompose = preset.get("decompose")
+    if decompose is not None:
+        if not isinstance(decompose, Mapping):
+            errors.append("preset: decompose must be a table")
+        elif decompose.get("mode") not in DECOMPOSE_MODES:
+            errors.append(f"preset: decompose.mode must be one of {sorted(DECOMPOSE_MODES)}")
+    mem_prime = preset.get("mem_prime")
+    if mem_prime is not None:
+        if not isinstance(mem_prime, Mapping):
+            errors.append("preset: mem_prime must be a table")
+        else:
+            if mem_prime.get("mode") not in MEM_PRIME_MODES:
+                errors.append(f"preset: mem_prime.mode must be one of {sorted(MEM_PRIME_MODES)}")
+            for key in ("max_tokens", "recency_days"):
+                if key in mem_prime and (not isinstance(mem_prime.get(key), int) or mem_prime.get(key) < 0):
+                    errors.append(f"preset: mem_prime.{key} must be a non-negative integer")
+            if "min_relevance" in mem_prime and not isinstance(mem_prime.get("min_relevance"), (int, float)):
+                errors.append("preset: mem_prime.min_relevance must be a number")
+            if "adapter" in mem_prime and mem_prime.get("adapter") not in MEM_PRIME_ADAPTERS:
+                errors.append(f"preset: mem_prime.adapter must be one of {sorted(MEM_PRIME_ADAPTERS)}")
     return errors
 
 
@@ -313,13 +401,20 @@ def schema_lint_pipeline(pipeline: Mapping[str, Any]) -> list[str]:
     return errors
 
 
-def schema_lint_work_units(artifact: Mapping[str, Any]) -> list[str]:
+def schema_lint_work_units(
+    artifact: Mapping[str, Any],
+    *,
+    max_writer_tool_calls: int | None = None,
+    max_writer_output_bytes: int | None = None,
+) -> LintResult:
     errors: list[str] = []
+    warnings: list[str] = []
     unknown = sorted(set(artifact.keys()) - WORK_UNIT_TOP_KEYS)
     if unknown:
         errors.append(f"work_units: unknown top-level keys: {', '.join(unknown)}")
-    if artifact.get("schema_version") != 1:
-        errors.append("work_units: schema_version must be 1")
+    schema_version = artifact.get("schema_version")
+    if schema_version not in {1, 2}:
+        errors.append("work_units: schema_version must be 1 or 2")
     for key in ("plan_path", "bd_epic_id"):
         if key in artifact and artifact[key] is not None and not isinstance(artifact[key], str):
             errors.append(f"work_units: {key} must be a string or null")
@@ -327,7 +422,7 @@ def schema_lint_work_units(artifact: Mapping[str, Any]) -> list[str]:
     units = artifact.get("work_units")
     if not isinstance(units, list) or not units:
         errors.append("work_units: work_units must be a non-empty array")
-        return errors
+        return LintResult(errors, warnings)
 
     ids: set[str] = set()
     for idx, unit in enumerate(units):
@@ -338,7 +433,10 @@ def schema_lint_work_units(artifact: Mapping[str, Any]) -> list[str]:
         unknown_unit = sorted(set(unit.keys()) - WORK_UNIT_KEYS)
         if unknown_unit:
             errors.append(f"{path}: unknown keys: {', '.join(unknown_unit)}")
-        missing = sorted(WORK_UNIT_REQUIRED_KEYS - set(unit.keys()))
+        required = WORK_UNIT_V1_REQUIRED_KEYS if schema_version == 1 else WORK_UNIT_V2_REQUIRED_KEYS
+        missing = sorted(required - set(unit.keys()))
+        if schema_version == 2 and "files" not in unit and "allowed_files" not in unit:
+            missing.append("allowed_files")
         if missing:
             errors.append(f"{path}: missing required keys: {', '.join(missing)}")
 
@@ -352,10 +450,41 @@ def schema_lint_work_units(artifact: Mapping[str, Any]) -> list[str]:
 
         if not _is_str_list(unit.get("depends_on")):
             errors.append(f"{path}.depends_on must be an array of work-unit ids")
-        if not _is_str_list(unit.get("files")):
-            errors.append(f"{path}.files must be an array of strings")
+        if schema_version == 1:
+            if not _is_str_list(unit.get("files")):
+                errors.append(f"{path}.files must be an array of strings")
+            elif "files" in unit:
+                warnings.append(
+                    "work_units: schema_version 1 uses legacy files; run `swarm work-units migrate <path> --in-place` to upgrade"
+                )
+        else:
+            has_files = "files" in unit
+            has_allowed = "allowed_files" in unit
+            if has_files and has_allowed:
+                errors.append(f"{path}: exactly one of files or allowed_files is allowed for schema_version 2")
+            elif has_files:
+                if not _is_str_list(unit.get("files")):
+                    errors.append(f"{path}.files must be an array of strings")
+                warnings.append(f"{path}.files is a legacy alias; run `swarm work-units migrate <path> --in-place`")
+            elif not _is_str_list(unit.get("allowed_files")):
+                errors.append(f"{path}.allowed_files must be an array of strings")
+            for key in ("context_files", "blocked_files", "validation_commands", "expected_results", "risk_tags"):
+                if not _is_str_list(unit.get(key)):
+                    errors.append(f"{path}.{key} must be an array of strings")
+            if not isinstance(unit.get("title"), str) or not unit.get("title"):
+                errors.append(f"{path}.title must be a non-empty string")
+            if not isinstance(unit.get("goal"), str):
+                errors.append(f"{path}.goal must be a string")
+            if not isinstance(unit.get("handoff_notes"), str):
+                errors.append(f"{path}.handoff_notes must be a string")
+            if unit.get("failure_reason") not in WORK_UNIT_FAILURE_REASONS:
+                errors.append(f"{path}.failure_reason must be one of {sorted(v for v in WORK_UNIT_FAILURE_REASONS if v is not None)} or null")
+            if "mem_prime" in unit and not isinstance(unit.get("mem_prime"), bool):
+                errors.append(f"{path}.mem_prime must be a boolean")
         if not _is_str_list(unit.get("acceptance_criteria")):
             errors.append(f"{path}.acceptance_criteria must be an array of strings")
+        elif schema_version == 2 and not unit.get("acceptance_criteria"):
+            errors.append(f"{path}.acceptance_criteria must not be empty")
         for key in ("beads_id", "worktree_branch"):
             if unit.get(key) is not None and not isinstance(unit.get(key), str):
                 errors.append(f"{path}.{key} must be a string or null")
@@ -365,6 +494,12 @@ def schema_lint_work_units(artifact: Mapping[str, Any]) -> list[str]:
             value = unit.get(key)
             if not isinstance(value, int) or value < 0:
                 errors.append(f"{path}.{key} must be a non-negative integer")
+        if schema_version == 2:
+            allowed = _unit_allowed_files(unit)
+            blocked = unit.get("blocked_files") if isinstance(unit.get("blocked_files"), list) else []
+            errors.extend(_file_scope_errors(path, allowed, blocked))
+            if _requires_observable_validation(unit) and not unit.get("validation_commands"):
+                warnings.append(f"{path}.validation_commands is empty despite observable acceptance criteria")
 
     for idx, unit in enumerate(units):
         if not isinstance(unit, Mapping):
@@ -373,6 +508,16 @@ def schema_lint_work_units(artifact: Mapping[str, Any]) -> list[str]:
             if isinstance(dep, str) and dep not in ids:
                 errors.append(f"work_units.work_units[{idx}].depends_on references unknown work unit {dep}")
 
+    if schema_version == 2 and not errors:
+        errors.extend(_parallel_overlap_errors(units))
+        from .budget import DEFAULT_MAX_WRITER_OUTPUT_BYTES, DEFAULT_MAX_WRITER_TOOL_CALLS, budget_lint_errors
+
+        max_calls = max_writer_tool_calls if max_writer_tool_calls is not None else DEFAULT_MAX_WRITER_TOOL_CALLS
+        max_bytes = max_writer_output_bytes if max_writer_output_bytes is not None else DEFAULT_MAX_WRITER_OUTPUT_BYTES
+        for unit in units:
+            if isinstance(unit, Mapping):
+                errors.extend(budget_lint_errors(unit, max_writer_tool_calls=max_calls, max_writer_output_bytes=max_bytes))
+
     if not errors:
         from .work_units import topological_work_unit_layers
 
@@ -380,7 +525,119 @@ def schema_lint_work_units(artifact: Mapping[str, Any]) -> list[str]:
             topological_work_unit_layers(artifact)
         except ValueError as exc:
             errors.append(str(exc))
+    return LintResult(errors, warnings)
+
+
+def blocked_file_violations(changed_files: list[str], blocked_files: list[str]) -> list[str]:
+    """Return changed paths that match a blocked file glob."""
+
+    violations: list[str] = []
+    for changed in changed_files:
+        if any(_glob_matches(pattern, changed) for pattern in blocked_files):
+            violations.append(changed)
+    return sorted(set(violations))
+
+
+def unit_blocked_file_violations(unit: Mapping[str, Any], changed_files: list[str]) -> list[str]:
+    blocked = unit.get("blocked_files")
+    patterns = [item for item in blocked if isinstance(item, str)] if isinstance(blocked, list) else []
+    return blocked_file_violations(changed_files, patterns)
+
+
+def _unit_allowed_files(unit: Mapping[str, Any]) -> list[str]:
+    value = unit.get("allowed_files", unit.get("files"))
+    return [item for item in value if isinstance(item, str)] if isinstance(value, list) else []
+
+
+def _file_scope_errors(path: str, allowed: list[str], blocked: list[str]) -> list[str]:
+    errors: list[str] = []
+    for pattern in allowed:
+        if _is_unbounded_glob(pattern):
+            errors.append(f"{path}.allowed_files contains unbounded glob {pattern!r}")
+    for pattern in blocked:
+        if not isinstance(pattern, str):
+            continue
+        if any(_patterns_overlap(pattern, allowed_pattern) for allowed_pattern in allowed):
+            errors.append(f"{path}.blocked_files overlaps allowed_files pattern {pattern!r}")
     return errors
+
+
+def _is_unbounded_glob(pattern: str) -> bool:
+    stripped = pattern.strip()
+    if stripped in {"*", "**", "**/*", "./**", "./**/*"}:
+        return True
+    if stripped.startswith("**"):
+        return True
+    return False
+
+
+def _parallel_overlap_errors(units: list[Any]) -> list[str]:
+    typed_units = [unit for unit in units if isinstance(unit, Mapping) and isinstance(unit.get("id"), str)]
+    ancestors = _dependency_ancestors(typed_units)
+    errors: list[str] = []
+    for idx, left in enumerate(typed_units):
+        left_id = str(left["id"])
+        for right in typed_units[idx + 1 :]:
+            right_id = str(right["id"])
+            if right_id in ancestors.get(left_id, set()) or left_id in ancestors.get(right_id, set()):
+                continue
+            overlap = _overlap_patterns(_unit_allowed_files(left), _unit_allowed_files(right))
+            if overlap:
+                errors.append(f"work_units: parallel units {left_id} and {right_id} have overlapping allowed_files: {', '.join(overlap)}")
+    return errors
+
+
+def _dependency_ancestors(units: list[Mapping[str, Any]]) -> dict[str, set[str]]:
+    deps = {
+        str(unit["id"]): {dep for dep in unit.get("depends_on", []) if isinstance(dep, str)}
+        for unit in units
+    }
+    ancestors: dict[str, set[str]] = {unit_id: set() for unit_id in deps}
+    changed = True
+    while changed:
+        changed = False
+        for unit_id, direct_deps in deps.items():
+            before = len(ancestors[unit_id])
+            ancestors[unit_id].update(direct_deps)
+            for dep in list(direct_deps):
+                ancestors[unit_id].update(ancestors.get(dep, set()))
+            changed = changed or len(ancestors[unit_id]) != before
+    return ancestors
+
+
+def _overlap_patterns(left: list[str], right: list[str]) -> list[str]:
+    overlaps: list[str] = []
+    for a in left:
+        for b in right:
+            if _patterns_overlap(a, b):
+                overlaps.append(f"{a}<->{b}")
+    return overlaps
+
+
+def _patterns_overlap(left: str, right: str) -> bool:
+    if left == right:
+        return True
+    left_prefix = _literal_prefix(left)
+    right_prefix = _literal_prefix(right)
+    if left_prefix and right_prefix and (left_prefix.startswith(right_prefix) or right_prefix.startswith(left_prefix)):
+        return True
+    return _glob_matches(left, right) or _glob_matches(right, left)
+
+
+def _literal_prefix(pattern: str) -> str:
+    specials = [idx for idx in (pattern.find("*"), pattern.find("?"), pattern.find("[")) if idx >= 0]
+    if not specials:
+        return pattern
+    return pattern[: min(specials)]
+
+
+def _glob_matches(pattern: str, path: str) -> bool:
+    return fnmatch.fnmatch(path, pattern) or fnmatch.fnmatch(Path(path).as_posix(), pattern)
+
+
+def _requires_observable_validation(unit: Mapping[str, Any]) -> bool:
+    criteria = " ".join(item for item in unit.get("acceptance_criteria", []) if isinstance(item, str)).lower()
+    return any(word in criteria for word in ("test", "command", "cli", "output", "validates", "runs", "exits", "schema"))
 
 
 def validate_preset_and_pipeline(

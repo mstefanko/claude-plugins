@@ -107,6 +107,24 @@ class ResumeTests(unittest.TestCase):
             self.assertIsNone(report.resume_from)
             self.assertEqual(resume_exit_code(report), COMPLETE)
 
+    def test_prepared_run_can_resume_from_index_without_run_event(self) -> None:
+        with isolated_data_dir() as root:
+            run_dir = root / "runs" / RUN_ID
+            run_dir.mkdir(parents=True)
+            payload = {
+                "run_id": RUN_ID,
+                "bd_epic_id": "swarm-123",
+                "status": "prepared",
+                "plan_path": "plan.md",
+            }
+            (run_dir / "run.json").write_text(json.dumps(payload), encoding="utf-8")
+            with (root / "runs" / "index.jsonl").open("w", encoding="utf-8") as f:
+                f.write(json.dumps(payload) + "\n")
+            report = build_resume_report("swarm-123")
+            self.assertEqual(report.status, "prepared")
+            self.assertEqual(report.resume_from, {"phase_id": "plan-prepare", "work_unit_id": None})
+            self.assertEqual(resume_exit_code(report), READY_TO_RESUME)
+
 
 class RunStateTests(unittest.TestCase):
     def test_active_run_write_and_checkpoint_round_trip(self) -> None:

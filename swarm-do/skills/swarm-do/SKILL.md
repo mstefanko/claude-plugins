@@ -5,7 +5,7 @@ description: Orchestrator prompt for the /swarm-do:do slash command. Not invoked
 
 # Do Plan
 
-You are the Claude dispatcher for the swarm-do pipeline engine. `/swarm-do:do <plan-path>` is for real plan files only. `$ARGUMENTS` may also include operator flags such as `--codex-review auto|on|off` and `--risk low|moderate|high`; parse those flags before treating the remaining token as the plan path.
+You are the Claude dispatcher for the swarm-do pipeline engine. `/swarm-do:do <plan-path>` is for real plan files only. `$ARGUMENTS` may also include operator flags such as `--codex-review auto|on|off`, `--risk low|moderate|high`, `--decompose=off|inspect|enforce`, `--force-simple <phase_id>`, `--force-decompose <phase_id>`, and `--auto`; parse those flags before treating the remaining token as the plan path.
 
 ## Preflight
 
@@ -92,6 +92,40 @@ does not depend solely on PreCompact firing:
 "$CLAUDE_PLUGIN_ROOT/bin/swarm" run-state checkpoint --source dispatcher-fallback --reason end-of-unit
 ```
 
+## Plan-Prepare Stage
+
+Between preflight and research, run the deterministic prepare layer:
+
+```bash
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" plan inspect <plan-path> --json
+```
+
+This writes `runs/<run_id>/inspect.v1.json`, `runs/<run_id>/run.json`, and a
+`runs/index.jsonl` row with `status="prepared"`. A prepared run is not
+executable yet; create no Beads child issues until decomposition is accepted.
+
+Use the active preset's `[decompose].mode`, overridden by
+`--decompose=off|inspect|enforce`:
+
+- `off`: continue with the legacy stage graph.
+- `inspect`: keep the inspect artifact and telemetry, but do not gate behavior.
+- `enforce`: create or load a `work_units.v2` artifact before writer/spec-review
+  issue creation.
+
+For `enforce`, simple phases synthesize one unit deterministically. Moderate and
+hard phases run `agent-decompose` against the single phase only, lint with
+`swarm work-units lint`, then continue. Hard phases and inferred
+classifications require operator acceptance unless `--auto` allows the case.
+`too_large` always halts unless the operator supplies `--force-simple` or
+manually splits the phase. If decompose output fails lint, retry once with the
+lint errors; on a second failure write `<phase>.rejected.json` and escalate.
+
+Create one epic/run issue at inspect time if Beads is available, but create no
+unit child issues before the accepted artifact exists. Child issue bodies for
+writer/spec-review contain only the unit title, goal, allowed/blocked files,
+dependency notes, acceptance criteria, validation commands, and relevant
+context pointers.
+
 1. Load the active pipeline via `bin/swarm pipeline show <name>` and follow its topological layers.
 2. For each layer, dispatch every stage in the layer in parallel.
 3. For normal `agents` stages, create one beads issue per agent with the stage ID, role, upstream stage issues, full phase text, and verification checklist.
@@ -138,7 +172,7 @@ and escalate to the operator.
 ## Work-Unit Executor Lane
 
 When the stage graph reaches the writer/spec-review implementation lane and a
-`work_units.v1` artifact is present, switch from stage-level dispatch to the
+`work_units.v1` or `work_units.v2` artifact is present, switch from stage-level dispatch to the
 work-unit executor contract for that lane:
 
 1. Load and fail-closed validate the artifact:
@@ -171,8 +205,8 @@ one child beads issue, creates the unit worktree/branch, and runs
 ```
 
 5. After writer completion, the coordinator runs deterministic validation in
-the same worktree and attaches that objective output before launching
-`agent-spec-review`.
+the same worktree, including `blocked_files` diff checks, and attaches that
+objective output before launching `agent-spec-review`.
 6. Merge only units with an `APPROVED` spec-review verdict. The coordinator
 uses the helper to check out the integration branch and merge with
 `git merge --no-ff`; workers must never merge themselves or update cross-unit
@@ -208,6 +242,20 @@ BEADS/run-event discipline:
 - Run-event counters mirror coordinator decisions; do not infer them later from
   worker notes.
 
+Writer budget enforcement is two-layer. The writer prompt receives
+`${WORK_UNIT_ID}`, `${MAX_TOOL_CALLS}`, and `${MAX_OUTPUT_BYTES}` and must
+self-handoff at 80% of either ceiling. After the writer returns, the
+coordinator parses the required final budget JSON block and records
+`unit_tool_call_count`, `unit_output_bytes`, and `unit_handoff_count`. Missing
+or mismatched blocks escalate the unit. Codex telemetry wins over self-report
+when available.
+
+If `[mem_prime].mode` enables priming, run the dispatcher-side claude-mem
+search/timeline/get_observations flow before spawning the writer and write the
+result to `runs/<run_id>/mem_prime/<unit_id>.json`. Python only renders this
+dispatcher-written artifact into the writer prompt; the writer never calls
+claude-mem itself.
+
 ## Resume Re-entry
 
 `/swarm-do:resume <bd-id>` first runs:
@@ -218,8 +266,10 @@ BEADS/run-event discipline:
 
 If the manifest is `ready`, reload the BEADS epic/thread context, inject the
 manifest into the normal dispatch loop, skip `completed_units`, and start at
-`resume_from`. If the manifest is `drift`, `not-found`, or `complete`, do not
-dispatch new work; surface the state to the operator.
+`resume_from`. If the manifest is `prepared`, reload the prepared run record and
+resume at the plan-prepare gate before creating child issues. If the manifest is
+`drift`, `not-found`, or `complete`, do not dispatch new work; surface the state
+to the operator.
 
 Never auto-merge during resume drift. `/swarm-do:resume <bd-id>` and
 `bin/swarm resume <bd-id>` default to inspect/no-merge; `--merge` is explicit

@@ -19,7 +19,7 @@ The ledger table below is generated — do not hand-edit inside the markers; run
 | observations | observations.jsonl | `swarm-do/schemas/telemetry/observations.schema.json` | 1 |
 | outcomes | outcomes.jsonl | `swarm-do/schemas/telemetry/outcomes.schema.json` | 1 |
 | run_events | run_events.jsonl | `swarm-do/schemas/telemetry/run_events.schema.json` | 1 |
-| runs | runs.jsonl | `swarm-do/schemas/telemetry/runs.schema.json` | 1 |
+| runs | runs.jsonl | `swarm-do/schemas/telemetry/runs.v2.schema.json` | 2 |
 <!-- END: generated-by swarm_do.telemetry.gen docs -->
 
 ---
@@ -36,7 +36,8 @@ usage, exit outcome, and writer/reviewer verdicts. Fields that are not yet obser
 omitted — this keeps downstream aggregations honest without requiring `COALESCE` on
 missing keys.
 
-Schema: `runs.schema.json#v1`
+Schema: `runs.v2.schema.json#v2` for decomposed/unit-aware rows, with
+`runs.schema.json#v1` retained for legacy fallback.
 
 Key fields: `run_id`, `timestamp_start`, `timestamp_end`, `backend`, `model`,
 `effort`, `role`, `prompt_bundle_hash`, `config_hash`, `preset_name`,

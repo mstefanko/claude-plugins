@@ -21,6 +21,8 @@ Parse the JSON manifest and handle `status` exactly:
 - `drift`: stop immediately and surface `drift_keys`; never merge or restart.
 - `not-found`: stop and tell the operator no run-events mapping exists for the
   BEADS id.
+- `prepared`: reload the prepared run record and resume at the plan-prepare
+  gate before creating Beads child issues.
 - `complete`: no-op; summarize the completed run and checkpoint path.
 - `ready`: reload the original BEADS epic/thread context, then resume the
   dispatcher from `resume_from.phase_id` and `resume_from.work_unit_id`.

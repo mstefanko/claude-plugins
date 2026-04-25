@@ -1,0 +1,269 @@
+"""Work-unit artifact producer for plan-prepare."""
+
+from __future__ import annotations
+
+import json
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable, Mapping
+
+from .plan import ParsedPhase, inspect_phase, parse_plan
+from .validation import LintResult, schema_lint_work_units
+
+
+AgentRunner = Callable[[ParsedPhase, Mapping[str, Any], list[str]], Mapping[str, Any]]
+
+
+@dataclass(frozen=True)
+class DecomposeResult:
+    artifact: dict[str, Any]
+    lint: LintResult
+    retry_count: int
+    escalated: bool
+    rejected_path: str | None = None
+
+
+def decompose_phase(
+    phase: ParsedPhase,
+    *,
+    plan_path: str | Path | None = None,
+    bd_epic_id: str | None = None,
+    write_to: str | Path | None = None,
+    agent_runner: AgentRunner | None = None,
+    allow_rejected: bool = False,
+    max_units: int = 8,
+) -> DecomposeResult:
+    """Produce and lint a ``work_units.v2`` artifact for one phase.
+
+    The default path is deterministic. Tests or a dispatcher shim can provide
+    ``agent_runner`` to exercise the single-retry contract for model-produced
+    artifacts.
+    """
+
+    report = inspect_phase(phase)
+    if report.complexity == "simple" or agent_runner is None:
+        artifact = synthesize_work_units(phase, plan_path=plan_path, bd_epic_id=bd_epic_id, max_units=max_units)
+        lint = schema_lint_work_units(artifact)
+        _write_if_requested(write_to, artifact)
+        return DecomposeResult(artifact, lint, 0, bool(lint.errors), None)
+
+    artifact = _normalize_agent_artifact(agent_runner(phase, report.to_dict(), []), phase, plan_path, bd_epic_id)
+    lint = schema_lint_work_units(artifact)
+    if not lint.errors:
+        _write_if_requested(write_to, artifact)
+        return DecomposeResult(artifact, lint, 0, False, None)
+
+    retry_artifact = _normalize_agent_artifact(agent_runner(phase, report.to_dict(), lint.errors), phase, plan_path, bd_epic_id)
+    retry_lint = schema_lint_work_units(retry_artifact)
+    if not retry_lint.errors:
+        _write_if_requested(write_to, retry_artifact)
+        return DecomposeResult(retry_artifact, retry_lint, 1, False, None)
+
+    rejected_path = None
+    if write_to is not None:
+        rejected = Path(write_to).with_suffix(".rejected.json")
+        rejected.parent.mkdir(parents=True, exist_ok=True)
+        rejected.write_text(json.dumps(retry_artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        rejected_path = str(rejected)
+        if allow_rejected:
+            _write_if_requested(write_to, retry_artifact)
+    return DecomposeResult(retry_artifact, retry_lint, 1, True, rejected_path)
+
+
+def decompose_plan_phase(
+    plan_path: str | Path,
+    phase_id: str,
+    *,
+    write_to: str | Path | None = None,
+    bd_epic_id: str | None = None,
+    allow_rejected: bool = False,
+) -> DecomposeResult:
+    phases = [phase for phase in parse_plan(plan_path) if phase.phase_id == phase_id]
+    if not phases:
+        raise ValueError(f"phase not found: {phase_id}")
+    return decompose_phase(
+        phases[0],
+        plan_path=plan_path,
+        bd_epic_id=bd_epic_id,
+        write_to=write_to,
+        allow_rejected=allow_rejected,
+    )
+
+
+def synthesize_work_units(
+    phase: ParsedPhase,
+    *,
+    plan_path: str | Path | None = None,
+    bd_epic_id: str | None = None,
+    max_units: int = 8,
+) -> dict[str, Any]:
+    report = inspect_phase(phase)
+    files = report.file_paths or ["."]
+    if report.complexity == "simple":
+        groups = [files]
+    else:
+        groups = _file_groups(files, max_units=max_units)
+    units = []
+    for idx, group in enumerate(groups, 1):
+        unit_id = _unit_id(phase.phase_id, idx, len(groups))
+        units.append(_unit(unit_id, phase, group, idx, len(groups), depends_on=[] if idx == 1 else [units[idx - 2]["id"]]))
+    return {
+        "schema_version": 2,
+        "plan_path": str(plan_path) if plan_path is not None else None,
+        "bd_epic_id": bd_epic_id,
+        "work_units": units,
+    }
+
+
+def _unit(unit_id: str, phase: ParsedPhase, files: list[str], idx: int, total: int, *, depends_on: list[str]) -> dict[str, Any]:
+    title_suffix = "" if total == 1 else f" ({idx}/{total})"
+    return {
+        "id": unit_id,
+        "title": f"{phase.title}{title_suffix}",
+        "goal": _goal(phase, files, idx, total),
+        "depends_on": depends_on,
+        "context_files": _context_files(phase, files),
+        "allowed_files": files,
+        "blocked_files": [],
+        "acceptance_criteria": _acceptance_criteria(phase),
+        "validation_commands": _validation_commands(phase),
+        "expected_results": ["commands exit 0 or produce the documented approval output"],
+        "risk_tags": _risk_tags(phase),
+        "handoff_notes": "",
+        "beads_id": None,
+        "worktree_branch": None,
+        "status": "pending",
+        "failure_reason": None,
+        "retry_count": 0,
+        "handoff_count": 0,
+    }
+
+
+def _normalize_agent_artifact(
+    artifact: Mapping[str, Any],
+    phase: ParsedPhase,
+    plan_path: str | Path | None,
+    bd_epic_id: str | None,
+) -> dict[str, Any]:
+    value = dict(artifact)
+    value.setdefault("schema_version", 2)
+    value.setdefault("plan_path", str(plan_path) if plan_path is not None else None)
+    value.setdefault("bd_epic_id", bd_epic_id)
+    units = value.get("work_units")
+    if not isinstance(units, list):
+        value["work_units"] = []
+        return value
+    normalized = []
+    for idx, unit_value in enumerate(units, 1):
+        if not isinstance(unit_value, Mapping):
+            continue
+        unit = dict(unit_value)
+        unit.setdefault("id", _unit_id(phase.phase_id, idx, len(units)))
+        unit.setdefault("title", str(unit["id"]))
+        unit.setdefault("goal", phase.title)
+        unit.setdefault("depends_on", [])
+        unit.setdefault("context_files", [])
+        if "allowed_files" not in unit and "files" not in unit:
+            unit["allowed_files"] = inspect_phase(phase).file_paths or ["."]
+        unit.setdefault("blocked_files", [])
+        unit.setdefault("acceptance_criteria", _acceptance_criteria(phase))
+        unit.setdefault("validation_commands", [])
+        unit.setdefault("expected_results", [])
+        unit.setdefault("risk_tags", [])
+        unit.setdefault("handoff_notes", "")
+        unit.setdefault("beads_id", None)
+        unit.setdefault("worktree_branch", None)
+        unit.setdefault("status", "pending")
+        unit.setdefault("failure_reason", None)
+        unit.setdefault("retry_count", 0)
+        unit.setdefault("handoff_count", 0)
+        normalized.append(unit)
+    value["work_units"] = normalized
+    return value
+
+
+def _file_groups(files: list[str], *, max_units: int) -> list[list[str]]:
+    if len(files) <= 1:
+        return [files]
+    groups: dict[str, list[str]] = {}
+    for path in files:
+        prefix = path.split("/", 1)[0] if "/" in path else "."
+        groups.setdefault(prefix, []).append(path)
+    values = list(groups.values())
+    if len(values) > max_units:
+        chunked: list[list[str]] = []
+        for idx in range(max_units):
+            chunked.append([])
+        for idx, path in enumerate(files):
+            chunked[idx % max_units].append(path)
+        values = [group for group in chunked if group]
+    return values
+
+
+def _unit_id(phase_id: str, idx: int, total: int) -> str:
+    stem = re.sub(r"[^a-z0-9-]+", "-", phase_id.lower()).strip("-") or "phase"
+    return f"unit-{stem}" if total == 1 else f"unit-{stem}-{idx}"
+
+
+def _goal(phase: ParsedPhase, files: list[str], idx: int, total: int) -> str:
+    if total == 1:
+        return f"Implement phase {phase.phase_id}: {phase.title}."
+    return f"Implement phase {phase.phase_id} slice {idx}/{total} for {', '.join(files)}."
+
+
+def _context_files(phase: ParsedPhase, files: list[str]) -> list[str]:
+    context = [path for path in phase.referenced_files if path not in files]
+    return context[:8]
+
+
+def _acceptance_criteria(phase: ParsedPhase) -> list[str]:
+    lines = []
+    capture = False
+    for line in phase.text.splitlines():
+        lower = line.lower().strip()
+        if lower.startswith("**acceptance criteria") or lower.startswith("acceptance criteria"):
+            capture = True
+            continue
+        if capture and line.startswith("### "):
+            break
+        if capture and re.match(r"\s*[-*+]\s+", line):
+            lines.append(re.sub(r"^\s*[-*+]\s+", "", line).strip())
+    if lines:
+        return lines
+    return [f"Phase {phase.phase_id} objective is implemented for the allowed file scope."]
+
+
+def _validation_commands(phase: ParsedPhase) -> list[str]:
+    commands: list[str] = []
+    capture = False
+    for line in phase.text.splitlines():
+        stripped = line.strip()
+        lower = stripped.lower()
+        if lower.startswith("**validation commands") or lower.startswith("validation commands"):
+            capture = True
+            continue
+        if capture and (lower.startswith("**expected results") or lower.startswith("expected results")):
+            break
+        if capture and stripped.startswith("### "):
+            break
+        if capture and stripped and not stripped.startswith("```"):
+            commands.append(stripped.strip("-*` "))
+    return [command for command in commands if command and not command.lower().startswith("expected results")][:8]
+
+
+def _risk_tags(phase: ParsedPhase) -> list[str]:
+    lower = phase.text.lower()
+    tags = []
+    for keyword in ("security", "migration", "parser", "schema", "telemetry", "dispatcher", "budget"):
+        if keyword in lower:
+            tags.append(keyword)
+    return tags
+
+
+def _write_if_requested(path: str | Path | None, artifact: Mapping[str, Any]) -> None:
+    if path is None:
+        return
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")

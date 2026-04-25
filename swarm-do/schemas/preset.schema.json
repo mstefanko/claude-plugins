@@ -31,7 +31,30 @@
       "properties": {
         "max_agents_per_run": { "type": "integer", "minimum": 1 },
         "max_estimated_cost_usd": { "type": "number", "minimum": 0 },
-        "max_wall_clock_seconds": { "type": "integer", "minimum": 1 }
+        "max_wall_clock_seconds": { "type": "integer", "minimum": 1 },
+        "max_writer_tool_calls": { "type": "integer", "minimum": 0 },
+        "max_writer_output_bytes": { "type": "integer", "minimum": 0 },
+        "max_handoffs": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "decompose": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": { "type": "string", "enum": ["off", "inspect", "enforce"] }
+      }
+    },
+    "mem_prime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": { "type": "string", "enum": ["off", "hard_only", "on"] },
+        "max_tokens": { "type": "integer", "minimum": 0 },
+        "recency_days": { "type": "integer", "minimum": 0 },
+        "min_relevance": { "type": "number", "minimum": 0 },
+        "adapter": { "type": "string", "enum": ["dispatch_file", "local_sqlite"] }
       }
     }
   }

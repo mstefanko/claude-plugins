@@ -19,6 +19,7 @@ NOT_FOUND = 4
 
 READY = "ready"
 STATUS_COMPLETE = "complete"
+STATUS_PREPARED = "prepared"
 DRIFT = "drift"
 STATUS_NOT_FOUND = "not-found"
 
@@ -57,8 +58,11 @@ def build_resume_report(bd_epic_id: str) -> ResumeReport:
     run_event_path = _run_event_path()
     rows = _run_event_rows(run_event_path)
     latest_event = _latest_event_for_epic(rows, bd_epic_id)
-    run_id = latest_event.get("run_id") if latest_event else None
+    index_row = _latest_index_for_epic(bd_epic_id) if latest_event is None else None
+    run_id = latest_event.get("run_id") if latest_event else index_row.get("run_id") if index_row else None
     checkpoint = _checkpoint_for_run(run_id) if isinstance(run_id, str) else None
+    if checkpoint is None and isinstance(run_id, str):
+        checkpoint = _run_json_for_run(run_id)
     checkpoint_data = _load_json(checkpoint) if checkpoint else {}
     drift = _checkpoint_drift(bd_epic_id, checkpoint_data, latest_event)
     completed = _completed_units(checkpoint_data, rows, run_id)
@@ -72,6 +76,8 @@ def build_resume_report(bd_epic_id: str) -> ResumeReport:
     elif _is_complete(checkpoint_data, latest_event):
         status = STATUS_COMPLETE
         resume_from = None
+    elif checkpoint_data.get("status") == STATUS_PREPARED:
+        status = STATUS_PREPARED
     else:
         status = READY
 
@@ -106,6 +112,8 @@ def format_resume_report(report: ResumeReport, *, merge: bool = False) -> str:
         lines.extend(f"    - {key}" for key in report.drift_keys)
     elif report.status == READY:
         lines.append("  action: restart orchestration from resume_from")
+    elif report.status == STATUS_PREPARED:
+        lines.append("  action: resume at plan-prepare gate before child issue creation")
     elif report.status == STATUS_COMPLETE:
         lines.append("  action: no-op; run is already complete")
     else:
@@ -114,7 +122,7 @@ def format_resume_report(report: ResumeReport, *, merge: bool = False) -> str:
 
 
 def resume_exit_code(report: ResumeReport) -> int:
-    if report.status == READY:
+    if report.status in {READY, STATUS_PREPARED}:
         return READY_TO_RESUME
     if report.status == STATUS_COMPLETE:
         return COMPLETE
@@ -155,6 +163,29 @@ def _checkpoint_for_run(run_id: str | None) -> Path | None:
         return None
     path = resolve_data_dir() / "runs" / run_id / "checkpoint.v1.json"
     return path if path.is_file() else None
+
+
+def _run_json_for_run(run_id: str | None) -> Path | None:
+    if not run_id:
+        return None
+    path = resolve_data_dir() / "runs" / run_id / "run.json"
+    return path if path.is_file() else None
+
+
+def _latest_index_for_epic(bd_epic_id: str) -> dict[str, Any] | None:
+    path = resolve_data_dir() / "runs" / "index.jsonl"
+    if not path.is_file():
+        return None
+    latest: dict[str, Any] | None = None
+    with path.open("r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, dict) and value.get("bd_epic_id") == bd_epic_id and isinstance(value.get("run_id"), str):
+                latest = value
+    return latest
 
 
 def _load_json(path: Path | None) -> dict[str, Any]:
@@ -211,6 +242,9 @@ def _completed_units(checkpoint: dict[str, Any], rows: list[dict[str, Any]], run
 
 
 def _resume_from(checkpoint: dict[str, Any], latest_event: dict[str, Any] | None) -> dict[str, str | None] | None:
+    if checkpoint.get("status") == STATUS_PREPARED:
+        phase = checkpoint.get("phase_id")
+        return {"phase_id": phase if isinstance(phase, str) else "plan-prepare", "work_unit_id": None}
     phase_id = checkpoint.get("phase_id")
     if not isinstance(phase_id, str):
         phase_id = latest_event.get("phase_id") if latest_event and isinstance(latest_event.get("phase_id"), str) else None
@@ -223,6 +257,8 @@ def _resume_from(checkpoint: dict[str, Any], latest_event: dict[str, Any] | None
 
 
 def _is_complete(checkpoint: dict[str, Any], latest_event: dict[str, Any] | None) -> bool:
+    if checkpoint.get("status") == STATUS_PREPARED:
+        return False
     if checkpoint.get("status") == STATUS_COMPLETE:
         return True
     if latest_event and latest_event.get("event_type") == "resume_completed" and latest_event.get("reason") == STATUS_COMPLETE:

@@ -1,0 +1,41 @@
+{
+  "bd_epic_id": null,
+  "plan_path": "plans/example.md",
+  "schema_version": 2,
+  "work_units": [
+    {
+      "acceptance_criteria": [
+        "Example unit passes"
+      ],
+      "allowed_files": [
+        "py/example.py"
+      ],
+      "beads_id": null,
+      "blocked_files": [
+        "py/example_secret.py"
+      ],
+      "context_files": [
+        "docs/example.md"
+      ],
+      "depends_on": [],
+      "expected_results": [
+        "pytest exits 0"
+      ],
+      "failure_reason": null,
+      "goal": "Implement the example work-unit contract.",
+      "handoff_count": 0,
+      "handoff_notes": "",
+      "id": "unit-example",
+      "retry_count": 0,
+      "risk_tags": [
+        "schema"
+      ],
+      "status": "pending",
+      "title": "Example unit",
+      "validation_commands": [
+        "pytest py/example/tests"
+      ],
+      "worktree_branch": null
+    }
+  ]
+}

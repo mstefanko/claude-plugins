@@ -18,10 +18,15 @@ slot per issue at a time.
 ## Scope
 
 - Implement the work breakdown from the analysis notes attached to this issue.
+- When the issue contains a work-unit contract, edit only `allowed_files`.
+  Treat `context_files` as read-only references and never edit `blocked_files`.
+  If the allowed scope is wrong, return `NEEDS_CONTEXT`; do not broaden scope.
 - If something not in the work breakdown is needed, do NOT expand scope. Note
   it under `### Deviations from Plan` or `### Concerns for Follow-up` and
   surface it to the orchestrator as a candidate new issue.
 - Do not re-open design decisions the analysis already settled.
+
+${PRIOR_CONTEXT}
 
 ## Sequencing & ownership
 
@@ -70,6 +75,14 @@ tests_run:
 After writing that note, return `## Status: NEEDS_CONTEXT`. Do not continue
 editing after the sentinel; the orchestrator will start a fresh writer with the
 progress note and remaining acceptance criteria.
+
+When budget ceilings are provided, they are hard contract values:
+`max_writer_tool_calls=${MAX_TOOL_CALLS}`,
+`max_writer_output_bytes=${MAX_OUTPUT_BYTES}`, and
+`work_unit_id=${WORK_UNIT_ID}`. After every tool call, estimate your tool-call
+count and output bytes. If either crosses 80% of the ceiling, your next message
+must be `HANDOFF_REQUESTED` with a brief progress note. Do not make additional
+tool calls before handing off.
 
 ## Grounding rules (non-negotiable)
 
@@ -140,6 +153,11 @@ acceptable. If any step cannot run, the correct status is `BLOCKED` or
 
 ### Blocker
 <if BLOCKED>
+
+### Writer Budget
+```json
+{"work_unit_id":"${WORK_UNIT_ID}","tool_calls":0,"output_bytes":0,"handoff":false,"handoff_count":0,"summary":"..."}
+```
 
 ## Status: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT
 ```

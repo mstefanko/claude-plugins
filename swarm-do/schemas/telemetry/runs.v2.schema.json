@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/07/schema#",
+  "$id": "https://mstefanko-plugins/swarm-do/telemetry/runs.schema.json#v2",
+  "title": "swarm-do telemetry run record v2",
+  "description": "v2 accepts the v1 run row shape and adds optional per-work-unit decomposition, budget, and mem-prime attribution fields.",
+  "type": "object",
+  "required": [
+    "run_id",
+    "timestamp_start",
+    "timestamp_end",
+    "backend",
+    "model",
+    "effort",
+    "prompt_bundle_hash",
+    "config_hash",
+    "role",
+    "phase_kind",
+    "phase_complexity",
+    "risk_tags",
+    "issue_id",
+    "preset_name",
+    "pipeline_name",
+    "pipeline_hash",
+    "repo",
+    "base_sha",
+    "head_sha",
+    "diff_size_bytes",
+    "input_tokens",
+    "cached_input_tokens",
+    "output_tokens",
+    "estimated_cost_usd",
+    "wall_clock_seconds",
+    "tool_call_count",
+    "cap_hit",
+    "budget_breach",
+    "schema_ok",
+    "exit_code",
+    "setting_source",
+    "writer_status",
+    "review_verdict",
+    "last_429_at"
+  ],
+  "properties": {
+    "work_unit_id": { "type": ["string", "null"] },
+    "decompose_complexity": {
+      "type": ["string", "null"],
+      "enum": ["simple", "moderate", "hard", "too_large", null]
+    },
+    "decompose_source": {
+      "type": ["string", "null"],
+      "enum": ["explicit", "inferred", "operator", null]
+    },
+    "unit_tool_call_count": { "type": ["integer", "null"], "minimum": 0 },
+    "unit_output_bytes": { "type": ["integer", "null"], "minimum": 0 },
+    "unit_handoff_count": { "type": ["integer", "null"], "minimum": 0 },
+    "unit_retry_count": { "type": ["integer", "null"], "minimum": 0 },
+    "unit_needs_context_count": { "type": ["integer", "null"], "minimum": 0 },
+    "blocked_file_violation": { "type": ["boolean", "null"] },
+    "budget_breach_kind": {
+      "type": ["string", "null"],
+      "enum": ["budget_breach_tool_calls", "budget_breach_output_bytes", null]
+    },
+    "unit_spec_review_verdict": { "type": ["string", "null"] },
+    "mem_prime_attempted": { "type": ["boolean", "null"] },
+    "mem_prime_axis": {
+      "type": ["string", "null"],
+      "enum": ["topic", "file", "none", null]
+    },
+    "mem_prime_obs_types": {
+      "type": ["array", "null"],
+      "items": { "type": "string" }
+    },
+    "mem_prime_hit_count": { "type": ["integer", "null"], "minimum": 0 },
+    "mem_prime_title_only": { "type": ["boolean", "null"] },
+    "mem_prime_tokens": { "type": ["integer", "null"], "minimum": 0 },
+    "mem_prime_skipped_reason": {
+      "type": ["string", "null"],
+      "enum": ["no_project", "no_match", "preset_off", "unit_override", null]
+    }
+  }
+}
