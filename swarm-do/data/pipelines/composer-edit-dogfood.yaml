@@ -1,0 +1,38 @@
+pipeline_version: 1
+name: composer-edit-dogfood
+description: "Default research-analysis-clarify-writer-review-docs swarm pipeline."
+origin: user
+forked_from: default
+forked_from_hash: "sha256:9f0b3f14a22464b3adb0b7d215e92780a7a6c60dc83ff14d508143075521dd3b"
+generated_by: "swarm-do pipeline composer"
+stages:
+  - id: research
+    agents:
+      - role: agent-research
+  - id: analysis
+    depends_on: [research]
+    agents:
+      - role: agent-analysis
+        backend: codex
+        model: gpt-5.4
+        effort: high
+  - id: clarify
+    depends_on: [research]
+    agents:
+      - role: agent-clarify
+  - id: writer
+    depends_on: [analysis, clarify]
+    agents:
+      - role: agent-writer
+  - id: spec-review
+    depends_on: [writer]
+    agents:
+      - role: agent-spec-review
+  - id: review
+    depends_on: [spec-review]
+    agents:
+      - role: agent-review
+  - id: docs
+    depends_on: [spec-review]
+    agents:
+      - role: agent-docs

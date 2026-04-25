@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import argparse
+import io
 import os
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 
 from swarm_do.pipeline.actions import (
@@ -17,6 +20,7 @@ from swarm_do.pipeline.actions import (
     set_prompt_variant_lenses,
     set_stage_agent_route,
 )
+from swarm_do.pipeline.cli import cmd_preset_diff
 from swarm_do.pipeline.diff import diff_user_pipeline, stock_drift_for_pipeline
 from swarm_do.pipeline.registry import find_pipeline, find_preset, load_pipeline, load_preset
 from swarm_do.pipeline.render_yaml import render_pipeline_yaml
@@ -244,6 +248,19 @@ stages:
         self.assertFalse(drift.drifted)
         self.assertTrue(diff.has_changes)
         self.assertIn("forked_from", diff.text())
+
+    def test_preset_diff_cli_uses_recorded_source_for_renamed_fork(self) -> None:
+        fork_preset_and_pipeline("balanced", "default", "renamed-balanced")
+
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cmd_preset_diff(argparse.Namespace(name="renamed-balanced"))
+
+        self.assertEqual(code, 0)
+        text = stdout.getvalue()
+        self.assertIn("--- stock/balanced", text)
+        self.assertIn("+++ user/renamed-balanced", text)
+        self.assertNotIn("no stock preset with the same name", text)
 
 
 if __name__ == "__main__":

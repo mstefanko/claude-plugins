@@ -1,0 +1,30 @@
+name = "lens-spike-dogfood"
+description = "Three planning explorers plus critique merge before implementation."
+pipeline = "lens-spike-dogfood"
+origin = "user"
+forked_from = "ultra-plan"
+forked_from_hash = "sha256:2ebfad51a757214cb3907a6aa74bfcaf02ff2af0d2a0995e7da8d065fa1baf01"
+generated_by = "swarm-do pipeline composer"
+
+[routing]
+"roles.agent-analysis-judge" = { backend = "claude", model = "claude-opus-4-7", effort = "high" }
+"roles.agent-analysis.hard" = { backend = "claude", model = "claude-opus-4-7", effort = "xhigh" }
+"roles.agent-writer.hard" = { backend = "claude", model = "claude-opus-4-7", effort = "high" }
+
+[budget]
+max_agents_per_run = 120
+max_estimated_cost_usd = 35.0
+max_wall_clock_seconds = 21600
+max_writer_tool_calls = 60
+max_writer_output_bytes = 60000
+max_handoffs = 1
+
+[decompose]
+mode = "off"
+
+[mem_prime]
+mode = "off"
+adapter = "dispatch_file"
+max_tokens = 500
+recency_days = 90
+min_relevance = 0.6

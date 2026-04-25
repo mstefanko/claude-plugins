@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import difflib
 import json
 import shutil
 import sys
@@ -21,7 +20,7 @@ from .actions import (
     set_user_preset_pipeline,
     validate_preset_name,
 )
-from .diff import diff_user_pipeline, stock_drift_for_pipeline
+from .diff import diff_user_pipeline, diff_user_preset, stock_drift_for_pipeline
 from .engine import graph_lines
 from .paths import current_preset_path, resolve_data_dir, user_presets_dir
 from .registry import (
@@ -135,21 +134,22 @@ def cmd_preset_save(args: argparse.Namespace) -> int:
 
 
 def cmd_preset_diff(args: argparse.Namespace) -> int:
-    item = find_preset(args.name)
-    if item is None:
+    try:
+        diff = diff_user_preset(args.name)
+    except ValueError:
+        item = find_preset(args.name)
+        if item and item.origin == "stock":
+            print(f"stock preset {args.name}: no user fork to diff")
+            return 0
         print(f"swarm: preset diff: preset not found: {args.name}", file=sys.stderr)
         return 1
-    if item.origin == "stock":
-        print(f"stock preset {args.name}: no user fork to diff")
+    if not diff.source_name:
+        print(f"user preset {args.name}: no recorded stock source")
         return 0
-    stock_path = next((candidate.path for candidate in list_presets() if candidate.name == args.name and candidate.origin == "stock"), None)
-    if not stock_path:
-        print(f"user preset {args.name}: no stock preset with the same name")
+    if not diff.has_changes:
+        print(f"user preset {args.name}: no diff against {diff.source_name}")
         return 0
-    left = stock_path.read_text(encoding="utf-8").splitlines()
-    right = item.path.read_text(encoding="utf-8").splitlines()
-    for line in difflib.unified_diff(left, right, fromfile=f"stock/{args.name}", tofile=f"user/{args.name}", lineterm=""):
-        print(line)
+    print(diff.text())
     return 0
 
 

@@ -18,12 +18,29 @@ else:  # pragma: no cover - UI smoke-tested through the wrapper in operator use.
     TEXTUAL_IMPORT_ERROR = None
 
 from swarm_do.pipeline.config_hash import active_config_hash
-from swarm_do.pipeline.registry import find_preset, list_pipelines, list_presets, load_pipeline, load_preset
+from swarm_do.pipeline.registry import find_pipeline, find_preset, list_presets, load_pipeline, load_preset
 from swarm_do.pipeline.resolver import BACKENDS, EFFORTS, BackendResolver, ROLE_DEFAULTS, active_preset_name
-from swarm_do.pipeline.validation import schema_lint_pipeline, validate_preset_and_pipeline
+from swarm_do.pipeline.validation import schema_lint_pipeline
 from swarm_do.pipeline import actions
 from swarm_do.pipeline.actions import load_in_flight
-from swarm_do.tui.state import load_runs, pipeline_workbench_preview, status_summary, token_burn_last_24h
+from swarm_do.tui.state import (
+    PipelineEditDraft,
+    PipelineGalleryRow,
+    StageRow,
+    draft_status_line,
+    draft_validation_lines,
+    load_runs,
+    pipeline_gallery_rows,
+    pipeline_stage_rows,
+    pipeline_validation_report,
+    select_source_preset_for_pipeline,
+    stage_inspector_text,
+    start_pipeline_draft,
+    status_summary,
+    suggested_fork_name,
+    token_burn_last_24h,
+    validate_pipeline_draft,
+)
 
 
 if TEXTUAL_IMPORT_ERROR is None:
@@ -76,6 +93,31 @@ if TEXTUAL_IMPORT_ERROR is None:
             model = self.query_one("#model", Input).value.strip()
             effort = str(self.query_one("#effort", Select).value)
             self.dismiss((backend, model, effort))
+
+
+    class ForkPipelineModal(ModalScreen[str | None]):
+        def __init__(self, source_pipeline: str, source_preset: str | None, suggested_name: str):
+            super().__init__()
+            self.source_pipeline = source_pipeline
+            self.source_preset = source_preset
+            self.suggested_name = suggested_name
+
+        def compose(self) -> ComposeResult:
+            preset = self.source_preset or "none"
+            with Container(id="modal"):
+                yield Label("Fork Pipeline", classes="modal-title")
+                yield Static(f"source pipeline: {self.source_pipeline}\nsource preset: {preset}")
+                yield Input(value=self.suggested_name, placeholder="new user preset/pipeline name", id="fork-name")
+                with Horizontal(classes="buttons"):
+                    yield Button("Fork", id="fork", variant="primary")
+                    yield Button("Cancel", id="cancel")
+
+        def on_button_pressed(self, event: Button.Pressed) -> None:
+            event.stop()
+            if event.button.id == "cancel":
+                self.dismiss(None)
+                return
+            self.dismiss(self.query_one("#fork-name", Input).value.strip())
 
 
     class DashboardScreen(Screen):
@@ -309,63 +351,208 @@ if TEXTUAL_IMPORT_ERROR is None:
 
 
     class PipelinesScreen(Screen):
-        BINDINGS = [("l", "lint_pipeline", "Lint"), ("v", "validate_pipeline", "Validate"), ("s", "set_pipeline", "Set")]
+        BINDINGS = [
+            ("enter", "begin_edit", "Edit"),
+            ("f", "begin_edit", "Fork/Edit"),
+            ("ctrl+s", "save_draft", "Save"),
+            ("escape", "discard_draft", "Discard"),
+            ("l", "lint_pipeline", "Lint"),
+            ("v", "validate_pipeline", "Validate"),
+            ("s", "set_pipeline", "Set"),
+        ]
+
+        def __init__(self) -> None:
+            super().__init__()
+            self._gallery_rows: list[PipelineGalleryRow] = []
+            self._stage_rows: list[StageRow] = []
+            self._selected_pipeline_name: str | None = None
+            self._draft: PipelineEditDraft | None = None
 
         def compose(self) -> ComposeResult:
             yield Header()
-            with Horizontal():
-                yield ListView(id="pipelines")
-                yield Static("", id="preview")
+            with Vertical(id="pipeline-workbench"):
+                with Horizontal(id="pipeline-main"):
+                    yield ListView(id="pipeline-gallery")
+                    yield ListView(id="stage-rows")
+                    yield Static("", id="stage-inspector")
+                yield Static("", id="validation-rail")
             yield StatusBar(id="status")
             yield Footer()
 
         def on_mount(self) -> None:
             self.refresh_pipelines()
 
-        def _items(self) -> list[Any]:
-            return list_pipelines()
-
-        def _selected(self) -> Any | None:
-            items = self._items()
-            if not items:
+        def _selected_gallery_row(self) -> PipelineGalleryRow | None:
+            if self._selected_pipeline_name:
+                for row in self._gallery_rows:
+                    if row.name == self._selected_pipeline_name:
+                        return row
+            if not self._gallery_rows:
                 return None
-            index = self.query_one("#pipelines", ListView).index or 0
-            return items[min(max(index, 0), len(items) - 1)]
+            index = self.query_one("#pipeline-gallery", ListView).index or 0
+            row = self._gallery_rows[min(max(index, 0), len(self._gallery_rows) - 1)]
+            self._selected_pipeline_name = row.name
+            return row
+
+        def _selected_stage_row(self) -> StageRow | None:
+            if not self._stage_rows:
+                return None
+            index = self.query_one("#stage-rows", ListView).index or 0
+            return self._stage_rows[min(max(index, 0), len(self._stage_rows) - 1)]
+
+        def _current_pipeline(self) -> dict[str, Any] | None:
+            row = self._selected_gallery_row()
+            if row is None:
+                return None
+            if self._draft is not None and self._draft.pipeline_name == row.name:
+                return self._draft.pipeline
+            item = find_pipeline(row.name)
+            if item is None:
+                return None
+            return load_pipeline(item.path)
 
         def refresh_pipelines(self) -> None:
-            view = self.query_one("#pipelines", ListView)
+            self._gallery_rows = pipeline_gallery_rows()
+            view = self.query_one("#pipeline-gallery", ListView)
             view.clear()
-            for item in self._items():
-                view.append(ListItem(Label(f"{item.name} [{item.origin}]")))
-            self.preview_selected()
+            for row in self._gallery_rows:
+                view.append(ListItem(Label(row.label)))
+            if self._selected_pipeline_name is None and self._gallery_rows:
+                self._selected_pipeline_name = self._gallery_rows[0].name
+            self.refresh_stages()
             self.query_one("#status", StatusBar).refresh_status()
 
-        def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
-            self.preview_selected()
-
-        def preview_selected(self) -> None:
-            item = self._selected()
-            if item is None:
-                self.query_one("#preview", Static).update("No pipelines found.")
+        def refresh_stages(self) -> None:
+            pipeline = self._current_pipeline()
+            view = self.query_one("#stage-rows", ListView)
+            view.clear()
+            if pipeline is None:
+                self._stage_rows = []
+                self.query_one("#stage-inspector", Static).update("No pipeline selected.")
+                self.query_one("#validation-rail", Static).update("validation: n/a")
                 return
-            pipeline = load_pipeline(item.path)
-            self.query_one("#preview", Static).update(pipeline_workbench_preview(pipeline))
+            self._stage_rows = pipeline_stage_rows(pipeline)
+            for row in self._stage_rows:
+                view.append(ListItem(Label(row.label)))
+            self.refresh_stage_inspector()
+            self.refresh_validation_rail()
+
+        def refresh_stage_inspector(self) -> None:
+            pipeline = self._current_pipeline()
+            stage = self._selected_stage_row()
+            if pipeline is None:
+                body = "No pipeline selected."
+            else:
+                body = stage_inspector_text(pipeline, stage.stage_id if stage else None)
+            self.query_one("#stage-inspector", Static).update(body)
+
+        def refresh_validation_rail(self) -> None:
+            row = self._selected_gallery_row()
+            if row is None:
+                self.query_one("#validation-rail", Static).update("validation: n/a")
+                return
+            if self._draft is not None and self._draft.pipeline_name == row.name:
+                lines = draft_validation_lines(self._draft)
+            else:
+                lines = [draft_status_line(None), pipeline_validation_report(row.name)]
+            self.query_one("#validation-rail", Static).update("\n".join(lines))
+
+        def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
+            if event.list_view.id == "pipeline-gallery":
+                index = event.list_view.index or 0
+                if self._gallery_rows:
+                    self._selected_pipeline_name = self._gallery_rows[min(max(index, 0), len(self._gallery_rows) - 1)].name
+                self.refresh_stages()
+                return
+            if event.list_view.id == "stage-rows":
+                self.refresh_stage_inspector()
+
+        def action_begin_edit(self) -> None:
+            row = self._selected_gallery_row()
+            if row is None:
+                return
+            item = find_pipeline(row.name)
+            if item is None:
+                self.app.push_screen(MessageModal("Pipeline missing", row.name))
+                return
+            if item.origin == "user":
+                try:
+                    self._draft = start_pipeline_draft(item.name, preset_name=row.preset)
+                except Exception as exc:
+                    self.app.push_screen(MessageModal("Draft refused", str(exc)))
+                    return
+                self.refresh_stages()
+                self.app.push_screen(MessageModal("Draft ready", f"Editing {item.name} in memory. Save writes after validation."))
+                return
+
+            source_preset = select_source_preset_for_pipeline(item.name)
+            suggested = suggested_fork_name(item.name)
+
+            def fork_done(new_name: str | None) -> None:
+                if not new_name:
+                    return
+                try:
+                    if source_preset:
+                        actions.fork_preset_and_pipeline(source_preset, item.name, new_name)
+                    else:
+                        actions.fork_pipeline(item.name, new_name)
+                    self._draft = start_pipeline_draft(new_name)
+                    self._selected_pipeline_name = new_name
+                except Exception as exc:
+                    self.app.push_screen(MessageModal("Fork refused", str(exc)))
+                    return
+                self.refresh_pipelines()
+                self.app.push_screen(MessageModal("Fork ready", f"{new_name} is user-owned and open as an in-memory draft."))
+
+            self.app.push_screen(ForkPipelineModal(item.name, source_preset, suggested), fork_done)
+
+        def action_save_draft(self) -> None:
+            if self._draft is None:
+                self.app.push_screen(MessageModal("No draft", "Open or fork a user pipeline before saving."))
+                return
+            result = validate_pipeline_draft(self._draft)
+            if result.errors:
+                self._draft.mark_invalid("; ".join(result.errors))
+                self.refresh_validation_rail()
+                self.app.push_screen(MessageModal("Save blocked", "\n".join(result.errors)))
+                return
+            try:
+                actions.save_user_pipeline(self._draft.pipeline_name, self._draft.pipeline)
+            except Exception as exc:
+                self.app.push_screen(MessageModal("Save failed", str(exc)))
+                return
+            self._draft.mark_saved()
+            self.refresh_pipelines()
+            self.app.push_screen(MessageModal("Saved", f"{self._draft.pipeline_name}.yaml passed validation and was written."))
+
+        def action_discard_draft(self) -> None:
+            if self._draft is None:
+                return
+            name = self._draft.pipeline_name
+            self._draft = None
+            self.refresh_stages()
+            self.app.push_screen(MessageModal("Draft discarded", f"Closed in-memory edits for {name}."))
 
         def action_lint_pipeline(self) -> None:
-            item = self._selected()
-            if not item:
+            row = self._selected_gallery_row()
+            pipeline = self._current_pipeline()
+            if row is None or pipeline is None:
                 return
-            errors = schema_lint_pipeline(load_pipeline(item.path))
-            self.app.push_screen(MessageModal(f"Lint: {item.name}", "\n".join(errors) if errors else "pipeline OK"))
+            errors = schema_lint_pipeline(pipeline)
+            self.app.push_screen(MessageModal(f"Lint: {row.name}", "\n".join(errors) if errors else "pipeline OK"))
 
         def action_validate_pipeline(self) -> None:
-            item = self._selected()
-            if not item:
+            row = self._selected_gallery_row()
+            if row is None:
+                return
+            if self._draft is not None and self._draft.pipeline_name == row.name:
+                body = "\n".join(draft_validation_lines(self._draft))
+                self.app.push_screen(MessageModal(f"Validate draft: {row.name}", body))
                 return
             preset = None
             for candidate in list_presets():
                 try:
-                    if load_preset(candidate.path).get("pipeline") == item.name:
+                    if load_preset(candidate.path).get("pipeline") == row.name:
                         preset = candidate
                         break
                 except Exception:
@@ -373,13 +560,12 @@ if TEXTUAL_IMPORT_ERROR is None:
             if preset is None:
                 self.app.push_screen(MessageModal("Validate", "Full validation needs a preset that references this pipeline."))
                 return
-            result, *_ = validate_preset_and_pipeline(preset.name, include_budget=True)
-            body = "\n".join(result.errors or ["validation OK"])
+            body = pipeline_validation_report(row.name, include_provider_doctor=True)
             self.app.push_screen(MessageModal(f"Validate: {preset.name}", body))
 
         def action_set_pipeline(self) -> None:
-            item = self._selected()
-            if not item:
+            row = self._selected_gallery_row()
+            if row is None:
                 return
             from swarm_do.pipeline.resolver import active_preset_name
 
@@ -388,7 +574,7 @@ if TEXTUAL_IMPORT_ERROR is None:
                 self.app.push_screen(MessageModal("No user preset", "Activate or fork a user preset before changing pipelines."))
                 return
             try:
-                actions.set_user_preset_pipeline(preset, item.name)
+                actions.set_user_preset_pipeline(preset, row.name)
             except Exception as exc:
                 self.app.push_screen(MessageModal("Pipeline refused", str(exc)))
                 return

@@ -132,6 +132,18 @@ def _required_stage_providers(pipeline: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(sorted(providers))
 
 
+def _required_mco_providers(pipeline: Mapping[str, Any]) -> tuple[str, ...]:
+    providers: set[str] = set()
+    for stage in pipeline.get("stages") or []:
+        provider = stage.get("provider")
+        if not isinstance(provider, Mapping) or provider.get("type") != "mco":
+            continue
+        for name in provider.get("providers") or []:
+            if isinstance(name, str) and name:
+                providers.add(name)
+    return tuple(sorted(providers))
+
+
 def _local_backend_checks(
     backends: tuple[str, ...],
     which: Callable[[str], str | None],
@@ -157,6 +169,7 @@ def _mco_check(
     timeout_seconds: int,
     which: Callable[[str], str | None],
     runner: Callable[..., subprocess.CompletedProcess[str]],
+    required_provider_names: tuple[str, ...] = (),
 ) -> ProviderCheck:
     path = which("mco")
     if not requested:
@@ -196,12 +209,45 @@ def _mco_check(
             f"mco doctor failed with exit code {completed.returncode}",
             {"exit_code": completed.returncode, "payload": payload, "stderr": stderr},
         )
+    not_ready = _not_ready_mco_providers(payload, required_provider_names)
+    if not_ready:
+        return ProviderCheck(
+            "provider:mco",
+            "error",
+            "selected MCO provider(s) not ready: " + ", ".join(not_ready),
+            {"path": path, "payload": payload, "selected_providers": required_provider_names},
+        )
     return ProviderCheck(
         "provider:mco",
         "ok",
         "mco doctor --json completed",
         {"path": path, "payload": payload},
     )
+
+
+def _not_ready_mco_providers(payload: Any, required_provider_names: tuple[str, ...]) -> list[str]:
+    if not required_provider_names:
+        return []
+    rows = payload.get("providers") if isinstance(payload, Mapping) else None
+    if not isinstance(rows, (Mapping, list)):
+        return list(required_provider_names)
+    not_ready: list[str] = []
+    for name in required_provider_names:
+        row: Any
+        if isinstance(rows, Mapping):
+            row = rows.get(name)
+        else:
+            row = next((item for item in rows if isinstance(item, Mapping) and item.get("name") == name), None)
+        if not isinstance(row, Mapping):
+            not_ready.append(f"{name}=missing")
+            continue
+        ready = row.get("ready")
+        status = row.get("status")
+        if ready is True or status == "ok":
+            continue
+        reason = row.get("reason") or status or "not_ready"
+        not_ready.append(f"{name}={reason}")
+    return not_ready
 
 
 def provider_doctor(
@@ -216,16 +262,26 @@ def provider_doctor(
     checks: list[ProviderCheck] = []
     required: tuple[str, ...] = ()
     required_providers: tuple[str, ...] = ()
+    required_mco_providers: tuple[str, ...] = ()
     if load_error:
         checks.append(load_error)
     elif pipeline is not None:
         try:
             required = _required_backends(pipeline, active, preset_data)
             required_providers = _required_stage_providers(pipeline)
+            required_mco_providers = _required_mco_providers(pipeline)
             checks.extend(_local_backend_checks(required, which))
         except Exception as exc:
             checks.append(ProviderCheck("backend-resolution", "error", f"backend resolution failed: {exc}"))
-    checks.append(_mco_check(run_mco or "mco" in required_providers, mco_timeout_seconds, which, runner))
+    checks.append(
+        _mco_check(
+            run_mco or "mco" in required_providers,
+            mco_timeout_seconds,
+            which,
+            runner,
+            required_mco_providers,
+        )
+    )
     checks.sort(key=lambda check: (STATUS_ORDER.get(check.status, 99), check.name))
     return ProviderDoctorReport(active, pipeline_name, required, required_providers, tuple(checks))
 

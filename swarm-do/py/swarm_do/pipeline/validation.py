@@ -689,18 +689,32 @@ def validate_preset_mapping(
     plan_path: str | None = None,
     include_budget: bool = False,
 ) -> tuple[ValidationResult, dict[str, Any]]:
-    result = ValidationResult()
-    result.errors.extend(schema_lint_preset(preset))
-
     pipeline_item = find_pipeline(str(preset.get("pipeline", "")))
     if pipeline_item is None:
+        result = ValidationResult()
+        result.errors.extend(schema_lint_preset(preset))
         result.add(f"pipeline not found: {preset.get('pipeline')}")
         return result, {}
     try:
         pipeline = load_pipeline(pipeline_item.path)
     except Exception as exc:
+        result = ValidationResult()
+        result.errors.extend(schema_lint_preset(preset))
         result.add(f"pipeline parse failed: {exc}")
         return result, {}
+    result = validate_preset_pipeline_mappings(preset, pipeline, preset_name, plan_path, include_budget)
+    return result, pipeline
+
+
+def validate_preset_pipeline_mappings(
+    preset: Mapping[str, Any],
+    pipeline: Mapping[str, Any],
+    preset_name: str | None = None,
+    plan_path: str | None = None,
+    include_budget: bool = False,
+) -> ValidationResult:
+    result = ValidationResult()
+    result.errors.extend(schema_lint_preset(preset))
     result.errors.extend(schema_lint_pipeline(pipeline))
     result.errors.extend(role_existence_errors(pipeline))
     result.errors.extend(variant_existence_errors(pipeline))
@@ -717,7 +731,7 @@ def validate_preset_mapping(
             result.errors.extend(result.budget.exceeds)
         except Exception as exc:
             result.add(f"budget preview failed: {exc}")
-    return result, pipeline
+    return result
 
 
 def role_existence_errors(pipeline: Mapping[str, Any]) -> list[str]:

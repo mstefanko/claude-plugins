@@ -7,18 +7,32 @@ without installing the optional TUI stack.
 from __future__ import annotations
 
 import dataclasses
+import copy
 import json
 import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Mapping
 
 from swarm_do.pipeline.actions import InFlightRun, in_flight_dir, load_in_flight
 from swarm_do.pipeline.catalog import lens_for_variant
 from swarm_do.pipeline.context import current_context
-from swarm_do.pipeline.engine import graph_lines
+from swarm_do.pipeline.diff import diff_user_pipeline, stock_drift_for_pipeline
+from swarm_do.pipeline.engine import graph_lines, topological_layers
 from swarm_do.pipeline.paths import resolve_data_dir
+from swarm_do.pipeline.providers import ProviderDoctorReport, provider_doctor
+from swarm_do.pipeline.registry import find_pipeline, list_pipelines, list_presets, load_pipeline, load_preset
 from swarm_do.pipeline.resolver import active_preset_name
+from swarm_do.pipeline.validation import (
+    ValidationResult,
+    invariant_errors,
+    role_existence_errors,
+    route_resolution_errors,
+    schema_lint_pipeline,
+    validate_preset_and_pipeline,
+    validate_preset_pipeline_mappings,
+    variant_existence_errors,
+)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -53,6 +67,200 @@ class StatusSummary:
                 f"{self.latest_observation.get('source') or 'n/a'}"
             )
         return rendered
+
+
+PIPELINE_INTENTS: dict[str, str] = {
+    "default": "implement",
+    "lightweight": "implement",
+    "hybrid-review": "review",
+    "mco-review-lab": "mco-assisted review",
+    "compete": "competitive implementation",
+    "ultra-plan": "design",
+}
+PIPELINE_INTENT_ORDER = (
+    "implement",
+    "design",
+    "research",
+    "review",
+    "competitive implementation",
+    "mco-assisted review",
+    "custom",
+)
+
+
+@dataclasses.dataclass(frozen=True)
+class PipelineGalleryRow:
+    intent: str
+    name: str
+    origin: str
+    preset: str | None
+    description: str
+
+    @property
+    def label(self) -> str:
+        preset = f" preset={self.preset}" if self.preset else ""
+        return f"{self.intent}: {self.name} [{self.origin}]{preset}"
+
+
+@dataclasses.dataclass(frozen=True)
+class StageRow:
+    layer: int
+    stage_id: str
+    kind: str
+    summary: str
+    depends_on: tuple[str, ...]
+
+    @property
+    def label(self) -> str:
+        deps = ",".join(self.depends_on) if self.depends_on else "-"
+        return f"L{self.layer} {self.stage_id} [{self.kind}] deps={deps} {self.summary}"
+
+
+@dataclasses.dataclass
+class PipelineEditDraft:
+    pipeline_name: str
+    preset_name: str | None
+    origin: str
+    pipeline: dict[str, Any]
+    original_pipeline: dict[str, Any]
+    status: str = "saved"
+    message: str = "draft ready"
+
+    @property
+    def dirty(self) -> bool:
+        return self.pipeline != self.original_pipeline
+
+    def mark_saved(self) -> None:
+        self.original_pipeline = copy.deepcopy(self.pipeline)
+        self.status = "saved"
+        self.message = "saved"
+
+    def mark_invalid(self, message: str) -> None:
+        self.status = "invalid"
+        self.message = message
+
+
+def pipeline_intent(name: str, pipeline: Mapping[str, Any]) -> str:
+    source = pipeline.get("forked_from") if isinstance(pipeline.get("forked_from"), str) else None
+    return PIPELINE_INTENTS.get(name) or (PIPELINE_INTENTS.get(source) if source else None) or "custom"
+
+
+def pipeline_gallery_rows() -> list[PipelineGalleryRow]:
+    rows: list[PipelineGalleryRow] = []
+    for item in list_pipelines():
+        try:
+            pipeline = load_pipeline(item.path)
+        except Exception as exc:
+            rows.append(PipelineGalleryRow("custom", item.name, item.origin, None, f"unreadable: {exc}"))
+            continue
+        rows.append(
+            PipelineGalleryRow(
+                intent=pipeline_intent(item.name, pipeline),
+                name=item.name,
+                origin=item.origin,
+                preset=_preset_for_pipeline(item.name),
+                description=str(pipeline.get("description") or ""),
+            )
+        )
+    order = {intent: idx for idx, intent in enumerate(PIPELINE_INTENT_ORDER)}
+    origin_order = {"stock": 0, "experiment": 1, "user": 2, "path": 3}
+    return sorted(rows, key=lambda row: (order.get(row.intent, 99), row.intent, origin_order.get(row.origin, 9), row.name))
+
+
+def _stage_kind(stage: Mapping[str, Any]) -> str:
+    if "fan_out" in stage:
+        return "fan_out"
+    if "provider" in stage:
+        return "provider"
+    return "agents"
+
+
+def _stage_summary(stage: Mapping[str, Any]) -> str:
+    if isinstance(stage.get("fan_out"), Mapping):
+        fan = stage["fan_out"]
+        return f"{fan.get('role')} x{fan.get('count')} {fan.get('variant')}"
+    if isinstance(stage.get("provider"), Mapping):
+        provider = stage["provider"]
+        return f"{provider.get('type')} {provider.get('command')} {provider.get('providers')}"
+    roles = [str(agent.get("role") or "<missing-role>") for agent in stage.get("agents") or [] if isinstance(agent, Mapping)]
+    return ", ".join(roles) if roles else "no agents"
+
+
+def pipeline_stage_rows(pipeline: Mapping[str, Any]) -> list[StageRow]:
+    stages = [stage for stage in pipeline.get("stages") or [] if isinstance(stage, Mapping)]
+    stage_by_id = {str(stage.get("id")): stage for stage in stages if isinstance(stage.get("id"), str)}
+    try:
+        ordered = [
+            (layer_no, stage_id)
+            for layer_no, layer in enumerate(topological_layers(pipeline), 1)
+            for stage_id in layer
+        ]
+    except Exception:
+        ordered = [(idx + 1, str(stage.get("id") or f"<stage-{idx}>")) for idx, stage in enumerate(stages)]
+
+    rows: list[StageRow] = []
+    for layer_no, stage_id in ordered:
+        stage = stage_by_id.get(stage_id)
+        if stage is None:
+            continue
+        deps = tuple(str(dep) for dep in (stage.get("depends_on") or []))
+        rows.append(StageRow(layer_no, stage_id, _stage_kind(stage), _stage_summary(stage), deps))
+    return rows
+
+
+def _stage_by_id(pipeline: Mapping[str, Any], stage_id: str) -> Mapping[str, Any] | None:
+    for stage in pipeline.get("stages") or []:
+        if isinstance(stage, Mapping) and stage.get("id") == stage_id:
+            return stage
+    return None
+
+
+def select_source_preset_for_pipeline(pipeline_name: str) -> str | None:
+    active = active_preset_name()
+    if active:
+        for candidate in list_presets():
+            if candidate.name != active:
+                continue
+            try:
+                if load_preset(candidate.path).get("pipeline") == pipeline_name:
+                    return candidate.name
+            except Exception:
+                pass
+    same_named = next((candidate for candidate in list_presets() if candidate.name == pipeline_name), None)
+    if same_named is not None:
+        try:
+            if load_preset(same_named.path).get("pipeline") == pipeline_name:
+                return same_named.name
+        except Exception:
+            pass
+    return _preset_for_pipeline(pipeline_name)
+
+
+def suggested_fork_name(source_name: str, *, suffix: str = "edit") -> str:
+    base = f"{source_name}-{suffix}"
+    if find_pipeline(base) is None and not any(candidate.name == base for candidate in list_presets()):
+        return base
+    idx = 2
+    while True:
+        candidate = f"{base}-{idx}"
+        if find_pipeline(candidate) is None and not any(item.name == candidate for item in list_presets()):
+            return candidate
+        idx += 1
+
+
+def start_pipeline_draft(pipeline_name: str, *, preset_name: str | None = None) -> PipelineEditDraft:
+    item = find_pipeline(pipeline_name)
+    if item is None:
+        raise ValueError(f"pipeline not found: {pipeline_name}")
+    pipeline = load_pipeline(item.path)
+    selected_preset = preset_name if preset_name is not None else _preset_for_pipeline(pipeline_name)
+    return PipelineEditDraft(
+        pipeline_name=item.name,
+        preset_name=selected_preset,
+        origin=item.origin,
+        pipeline=copy.deepcopy(pipeline),
+        original_pipeline=copy.deepcopy(pipeline),
+    )
 
 
 def telemetry_dir(data_dir: Path | None = None) -> Path:
@@ -235,11 +443,249 @@ def pipeline_lens_rows(pipeline: dict[str, Any]) -> list[dict[str, str]]:
     return rows
 
 
-def pipeline_workbench_preview(pipeline: dict[str, Any]) -> str:
-    lines = graph_lines(pipeline)
+def _format_route(route: Any) -> str:
+    if isinstance(route, str):
+        return f"named:{route}"
+    if not isinstance(route, Mapping):
+        return "default resolver"
+    if {"backend", "model", "effort"} <= set(route):
+        return f"{route['backend']}/{route['model']}/{route['effort']}"
+    return str(dict(route))
+
+
+def _stage_detail_lines(stage: Mapping[str, Any], *, prefix: str = "  ") -> list[str]:
+    stage_id = str(stage.get("id") or "<unknown>")
+    tolerance = stage.get("failure_tolerance")
+    tolerance_mode = tolerance.get("mode", "strict") if isinstance(tolerance, Mapping) else "strict"
+    lines = [f"{prefix}- {stage_id} tolerance={tolerance_mode}"]
+    deps = stage.get("depends_on") or []
+    if deps:
+        lines.append(f"{prefix}  depends_on: {', '.join(str(dep) for dep in deps)}")
+    agents = stage.get("agents")
+    if isinstance(agents, list):
+        for idx, agent in enumerate(agents):
+            if not isinstance(agent, Mapping):
+                continue
+            override: Any = agent.get("route")
+            if override is None and {"backend", "model", "effort"} <= set(agent):
+                override = agent
+            lines.append(
+                f"{prefix}  agent[{idx}]: {agent.get('role', '<missing-role>')} "
+                f"route={_format_route(override)}"
+            )
+    fan = stage.get("fan_out")
+    if isinstance(fan, Mapping):
+        lines.append(
+            f"{prefix}  fan_out: role={fan.get('role')} count={fan.get('count')} "
+            f"variant={fan.get('variant')}"
+        )
+        if fan.get("variant") == "models":
+            for idx, route in enumerate(fan.get("routes") or []):
+                lines.append(f"{prefix}  branch[{idx}]: route={_format_route(route)}")
+        elif fan.get("variant") == "prompt_variants":
+            role = str(fan.get("role") or "")
+            for idx, variant in enumerate(fan.get("variants") or []):
+                lens = lens_for_variant(role, variant) if isinstance(variant, str) else None
+                lens_id = lens.lens_id if lens else "(untyped)"
+                lines.append(f"{prefix}  branch[{idx}]: variant={variant} lens={lens_id}")
+    provider = stage.get("provider")
+    if isinstance(provider, Mapping):
+        lines.append(
+            f"{prefix}  provider: type={provider.get('type')} command={provider.get('command')} "
+            f"providers={provider.get('providers')}"
+        )
+        lines.append(
+            f"{prefix}  provider-config: mode={provider.get('mode', 'review')} "
+            f"output={provider.get('output', 'findings')} memory={provider.get('memory', False)} "
+            f"timeout_seconds={provider.get('timeout_seconds')}"
+        )
+    merge = stage.get("merge")
+    if isinstance(merge, Mapping):
+        lines.append(f"{prefix}  merge: {merge.get('strategy')}:{merge.get('agent')}")
+    return lines
+
+
+def pipeline_inspector_lines(pipeline: dict[str, Any]) -> list[str]:
+    lines: list[str] = []
+    for stage in pipeline.get("stages") or []:
+        if not isinstance(stage, dict):
+            continue
+        lines.extend(_stage_detail_lines(stage))
+    return lines
+
+
+def stage_inspector_text(pipeline: Mapping[str, Any], stage_id: str | None) -> str:
+    if not stage_id:
+        return "Select a stage."
+    stage = _stage_by_id(pipeline, stage_id)
+    if stage is None:
+        return f"Stage not found: {stage_id}"
+    lines = [
+        f"stage: {stage_id}",
+        f"kind: {_stage_kind(stage)}",
+        f"summary: {_stage_summary(stage)}",
+        "",
+        "details:",
+    ]
+    lines.extend(_stage_detail_lines(stage))
+    return "\n".join(lines)
+
+
+def validate_pipeline_draft(draft: PipelineEditDraft, *, plan_path: str | None = None, include_budget: bool = True) -> ValidationResult:
+    if draft.preset_name:
+        preset_item = next((item for item in list_presets() if item.name == draft.preset_name), None)
+        if preset_item is None:
+            result = ValidationResult()
+            result.add(f"preset not found: {draft.preset_name}")
+            return result
+        preset = load_preset(preset_item.path)
+        preset = copy.deepcopy(preset)
+        preset["pipeline"] = draft.pipeline_name
+        return validate_preset_pipeline_mappings(preset, draft.pipeline, draft.preset_name, plan_path, include_budget)
+
+    result = ValidationResult()
+    result.errors.extend(schema_lint_pipeline(draft.pipeline))
+    result.errors.extend(role_existence_errors(draft.pipeline))
+    result.errors.extend(variant_existence_errors(draft.pipeline))
+    result.errors.extend(route_resolution_errors(draft.pipeline, None, None))
+    result.errors.extend(invariant_errors(draft.pipeline, None, None))
+    try:
+        topological_layers(draft.pipeline)
+    except ValueError as exc:
+        result.add(str(exc))
+    return result
+
+
+def draft_status_line(draft: PipelineEditDraft | None) -> str:
+    if draft is None:
+        return "draft: none"
+    state = "dirty" if draft.dirty else draft.status
+    return f"draft: {state} pipeline={draft.pipeline_name} preset={draft.preset_name or 'none'} message={draft.message}"
+
+
+def draft_validation_lines(draft: PipelineEditDraft) -> list[str]:
+    result = validate_pipeline_draft(draft)
+    lines = [draft_status_line(draft), "validation:"]
+    if result.errors:
+        lines.extend(f"  ERROR {error}" for error in result.errors)
+        lines.append("  save blocked")
+    else:
+        lines.append("  OK structural validation")
+    lines.extend(f"  WARN {warning}" for warning in result.warnings)
+    if result.budget is not None:
+        b = result.budget
+        lines.append(
+            f"  budget: agents={b.agent_count} cost=${b.estimated_cost_usd:.4f} "
+            f"wall={b.estimated_wall_clock_seconds}s fan_out_width={b.fan_out_width}"
+        )
+    return lines
+
+
+def _preset_for_pipeline(pipeline_name: str) -> str | None:
+    for candidate in list_presets():
+        try:
+            if load_preset(candidate.path).get("pipeline") == pipeline_name:
+                return candidate.name
+        except Exception:
+            continue
+    return None
+
+
+def _pipeline_has_provider(pipeline_name: str, provider_name: str) -> bool:
+    item = find_pipeline(pipeline_name)
+    if item is None:
+        return False
+    try:
+        pipeline = load_pipeline(item.path)
+    except Exception:
+        return False
+    for stage in pipeline.get("stages") or []:
+        provider = stage.get("provider") if isinstance(stage, Mapping) else None
+        if isinstance(provider, Mapping) and provider.get("type") == provider_name:
+            return True
+    return False
+
+
+def pipeline_diff_lines(pipeline_name: str, *, max_lines: int = 12) -> list[str]:
+    item = find_pipeline(pipeline_name)
+    if item is None:
+        return [f"diff: pipeline not found: {pipeline_name}"]
+    if item.origin != "user":
+        return [f"diff: stock pipeline {pipeline_name}; no user fork diff"]
+    try:
+        diff = diff_user_pipeline(pipeline_name)
+        drift = stock_drift_for_pipeline(pipeline_name)
+    except ValueError as exc:
+        return [f"diff: {exc}"]
+    lines = [f"source={diff.source_name or 'none'} changed={str(diff.has_changes).lower()}"]
+    if drift.tracked:
+        status = "drifted" if drift.drifted else "source unchanged"
+        lines.append(f"drift: {status}")
+    else:
+        lines.append("drift: no tracked stock hash")
+    if diff.has_changes:
+        lines.extend(f"  {line}" for line in diff.lines[:max_lines])
+        if len(diff.lines) > max_lines:
+            lines.append(f"  ... {len(diff.lines) - max_lines} more diff lines")
+    return lines
+
+
+def pipeline_validation_report(
+    pipeline_name: str,
+    *,
+    plan_path: str | None = None,
+    include_provider_doctor: bool = False,
+    provider_doctor_fn: Callable[..., ProviderDoctorReport] = provider_doctor,
+) -> str:
+    preset_name = _preset_for_pipeline(pipeline_name)
+    lines: list[str] = ["validation:"]
+    if preset_name is None:
+        lines.append("  full validation needs a preset that references this pipeline")
+        return "\n".join(lines)
+    result, *_ = validate_preset_and_pipeline(preset_name, plan_path, include_budget=True)
+    if result.errors:
+        lines.extend(f"  ERROR {error}" for error in result.errors)
+    else:
+        lines.append("  OK structural validation")
+    lines.extend(f"  WARN {warning}" for warning in result.warnings)
+    if result.budget is not None:
+        b = result.budget
+        lines.append(
+            f"  budget: agents={b.agent_count} cost=${b.estimated_cost_usd:.4f} "
+            f"wall={b.estimated_wall_clock_seconds}s fan_out_width={b.fan_out_width}"
+        )
+    if _pipeline_has_provider(pipeline_name, "mco"):
+        if include_provider_doctor:
+            report = provider_doctor_fn(preset_name=preset_name, run_mco=True)
+            status = "OK" if report.ok else "ERROR"
+            lines.append(f"  provider doctor: {status} required={', '.join(report.required_providers) or 'none'}")
+            for check in report.checks:
+                lines.append(f"    {check.status.upper()} {check.name}: {check.detail}")
+        else:
+            lines.append("  provider doctor: required for mco (run Validate for readiness)")
+    return "\n".join(lines)
+
+
+def pipeline_workbench_preview(
+    pipeline: dict[str, Any],
+    *,
+    pipeline_name: str | None = None,
+    include_validation: bool = False,
+) -> str:
+    lines: list[str] = []
+    if pipeline_name and include_validation:
+        lines.append(pipeline_validation_report(pipeline_name))
+    inspector = pipeline_inspector_lines(pipeline)
+    if inspector:
+        if lines:
+            lines.append("")
+        lines.append("inspector:")
+        lines.extend(inspector)
     lens_rows = pipeline_lens_rows(pipeline)
     if lens_rows:
-        lines.extend(["", "lenses:"])
+        if lines:
+            lines.append("")
+        lines.append("lenses:")
         for row in lens_rows:
             lines.append(
                 "  - "
@@ -247,4 +693,13 @@ def pipeline_workbench_preview(pipeline: dict[str, Any]) -> str:
                 f"({row['label']}; {row['mode']}; {row['compatibility']})"
             )
             lines.append(f"    contract: {row['contract']}")
+    if pipeline_name:
+        if lines:
+            lines.append("")
+        lines.append("diff:")
+        lines.extend("  " + line for line in pipeline_diff_lines(pipeline_name))
+    if lines:
+        lines.append("")
+    lines.append("graph:")
+    lines.extend(graph_lines(pipeline))
     return "\n".join(lines)

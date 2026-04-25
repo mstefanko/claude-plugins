@@ -90,6 +90,41 @@ class ProviderDoctorTests(unittest.TestCase):
         self.assertEqual(mco.status, "ok")
         self.assertEqual(mco.data["payload"]["providers"][0]["name"], "codex")
 
+    def test_mco_stage_fails_when_selected_provider_is_not_ready(self) -> None:
+        def which(cmd: str) -> str | None:
+            return f"/bin/{cmd}" if cmd in {"claude", "mco"} else None
+
+        def runner(*args, **kwargs):
+            return subprocess.CompletedProcess(
+                args=args[0],
+                returncode=0,
+                stdout=json.dumps(
+                    {
+                        "overall_ok": False,
+                        "providers": {
+                            "claude": {"ready": False, "reason": "auth_check_failed"},
+                            "codex": {"ready": True, "reason": "ok"},
+                        },
+                    }
+                ),
+                stderr="",
+            )
+
+        old = os.environ.get("CLAUDE_PLUGIN_DATA")
+        with tempfile.TemporaryDirectory() as td:
+            data = Path(td)
+            (data / "current-preset.txt").write_text("mco-review-lab\n", encoding="utf-8")
+            os.environ["CLAUDE_PLUGIN_DATA"] = td
+            try:
+                report = provider_doctor(which=which, runner=runner)
+            finally:
+                _restore_env("CLAUDE_PLUGIN_DATA", old)
+
+        self.assertFalse(report.ok)
+        mco = next(check for check in report.checks if check.name == "provider:mco")
+        self.assertEqual(mco.status, "error")
+        self.assertIn("claude=auth_check_failed", mco.detail)
+
     def test_mco_malformed_json_fails_closed(self) -> None:
         def which(cmd: str) -> str | None:
             return f"/bin/{cmd}" if cmd in {"claude", "mco"} else None

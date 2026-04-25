@@ -1,0 +1,44 @@
+pipeline_version: 1
+name: lens-spike-dogfood
+description: "Three prompt-variant planning explorers merged before writer."
+origin: user
+forked_from: ultra-plan
+forked_from_hash: "sha256:7895044a47259a61cfa80311b8f7f18f78986e0978fe6fbb0f21673206b4351b"
+generated_by: "swarm-do pipeline composer"
+stages:
+  - id: research
+    agents:
+      - role: agent-research
+  - id: exploration
+    depends_on: [research]
+    fan_out:
+      role: agent-analysis
+      count: 3
+      variant: prompt_variants
+      variants: [explorer-a, explorer-b, explorer-c]
+    merge:
+      strategy: synthesize
+      agent: agent-analysis-judge
+    failure_tolerance:
+      mode: quorum
+      min_success: 2
+  - id: clarify
+    depends_on: [research]
+    agents:
+      - role: agent-clarify
+  - id: writer
+    depends_on: [exploration, clarify]
+    agents:
+      - role: agent-writer
+  - id: spec-review
+    depends_on: [writer]
+    agents:
+      - role: agent-spec-review
+  - id: review
+    depends_on: [spec-review]
+    agents:
+      - role: agent-review
+  - id: docs
+    depends_on: [spec-review]
+    agents:
+      - role: agent-docs

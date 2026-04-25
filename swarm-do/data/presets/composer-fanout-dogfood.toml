@@ -1,0 +1,29 @@
+name = "composer-fanout-dogfood"
+description = "Competitive two-writer pipeline with Claude judge."
+pipeline = "composer-fanout-dogfood"
+origin = "user"
+forked_from = "competitive"
+forked_from_hash = "sha256:60c71aee8a219a4fd502a85daf9071af15e83135e77ad082707bc1730414da89"
+generated_by = "swarm-do pipeline composer"
+
+[routing]
+"roles.agent-analysis" = { backend = "claude", model = "claude-opus-4-7", effort = "xhigh" }
+"roles.agent-writer-judge" = { backend = "claude", model = "claude-opus-4-7", effort = "high" }
+
+[budget]
+max_agents_per_run = 120
+max_estimated_cost_usd = 40.0
+max_wall_clock_seconds = 21600
+max_writer_tool_calls = 60
+max_writer_output_bytes = 60000
+max_handoffs = 1
+
+[decompose]
+mode = "off"
+
+[mem_prime]
+mode = "off"
+adapter = "dispatch_file"
+max_tokens = 500
+recency_days = 90
+min_relevance = 0.6

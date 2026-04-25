@@ -1,0 +1,52 @@
+pipeline_version: 1
+name: composer-fanout-dogfood
+description: "Pattern 5 competitive writer fan-out with a judge merge."
+origin: user
+forked_from: compete
+forked_from_hash: "sha256:4ac3f66f553da236b9decd1e7ca3cce4b1cd3adfa62a502c051efc855bf7de73"
+generated_by: "swarm-do pipeline composer"
+stages:
+  - id: research
+    agents:
+      - role: agent-research
+  - id: analysis
+    depends_on: [research]
+    agents:
+      - role: agent-analysis
+  - id: clarify
+    depends_on: [research]
+    agents:
+      - role: agent-clarify
+  - id: writers
+    depends_on: [analysis, clarify]
+    fan_out:
+      role: agent-writer
+      count: 3
+      variant: models
+      routes:
+        - backend: claude
+          model: claude-opus-4-7
+          effort: high
+        - backend: codex
+          model: gpt-5.4
+          effort: xhigh
+        - backend: codex
+          model: gpt-5.4-mini
+          effort: medium
+    merge:
+      strategy: synthesize
+      agent: agent-writer-judge
+    failure_tolerance:
+      mode: strict
+  - id: spec-review
+    depends_on: [writers]
+    agents:
+      - role: agent-spec-review
+  - id: review
+    depends_on: [spec-review]
+    agents:
+      - role: agent-review
+  - id: docs
+    depends_on: [spec-review]
+    agents:
+      - role: agent-docs

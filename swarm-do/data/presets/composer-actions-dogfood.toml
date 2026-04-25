@@ -1,0 +1,31 @@
+name = "composer-actions-dogfood"
+description = "Default pipeline with measured low-risk Codex promotions available for A/B use."
+pipeline = "composer-actions-dogfood"
+origin = "user"
+forked_from = "balanced"
+forked_from_hash = "sha256:4ff7f5bc818b9019f35c5e6e010e04ae120c556b8f9dc6526b93a35d639c27e8"
+generated_by = "swarm-do pipeline composer"
+
+[routing]
+"roles.agent-clarify" = { backend = "codex", model = "gpt-5.4-mini", effort = "medium" }
+"roles.agent-docs" = { backend = "codex", model = "gpt-5.4-mini", effort = "medium" }
+"roles.agent-spec-review" = { backend = "codex", model = "gpt-5.4-mini", effort = "medium" }
+"roles.agent-writer.simple" = { backend = "codex", model = "gpt-5.4-mini", effort = "medium" }
+
+[budget]
+max_agents_per_run = 80
+max_estimated_cost_usd = 20.0
+max_wall_clock_seconds = 14400
+max_writer_tool_calls = 60
+max_writer_output_bytes = 60000
+max_handoffs = 1
+
+[decompose]
+mode = "off"
+
+[mem_prime]
+mode = "off"
+adapter = "dispatch_file"
+max_tokens = 500
+recency_days = 90
+min_relevance = 0.6

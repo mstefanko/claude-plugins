@@ -10,24 +10,37 @@ from pathlib import Path
 from swarm_do.pipeline import actions as pipeline_actions
 from swarm_do.pipeline.actions import (
     InFlightRun,
+    add_pipeline_stage_from_module,
+    fork_preset_and_pipeline,
     load_in_flight,
     request_handoff,
     rename_user_preset,
     set_base_route,
+    set_stage_agent_route,
     set_user_preset_pipeline,
     set_user_preset_route,
 )
 from swarm_do.pipeline.config_hash import active_config_hash
-from swarm_do.pipeline.registry import load_preset
+from swarm_do.pipeline.providers import ProviderCheck, ProviderDoctorReport
+from swarm_do.pipeline.registry import find_pipeline, load_pipeline, load_preset
 from swarm_do.tui.state import (
+    draft_validation_lines,
     latest_checkpoint_event,
     latest_observation,
     load_observations,
     load_run_events,
+    pipeline_gallery_rows,
     pipeline_lens_rows,
+    pipeline_stage_rows,
+    pipeline_validation_report,
     pipeline_workbench_preview,
+    select_source_preset_for_pipeline,
+    stage_inspector_text,
+    start_pipeline_draft,
     status_summary,
+    suggested_fork_name,
     token_burn_last_24h,
+    validate_pipeline_draft,
 )
 
 
@@ -167,6 +180,114 @@ class TuiStateTests(EnvTestCase):
         self.assertEqual([row["lens_id"] for row in rows], ["architecture-risk", "api-contract", "state-data"])
         self.assertIn("fan_out_only", preview)
         self.assertIn("Preserve the agent-analysis output schema", preview)
+
+    def test_pipeline_workbench_preview_includes_route_and_fanout_inspector(self) -> None:
+        pipeline = {
+            "pipeline_version": 1,
+            "name": "route-preview",
+            "stages": [
+                {
+                    "id": "analysis",
+                    "agents": [
+                        {
+                            "role": "agent-analysis",
+                            "backend": "codex",
+                            "model": "gpt-5.4",
+                            "effort": "high",
+                        }
+                    ],
+                },
+                {
+                    "id": "writers",
+                    "depends_on": ["analysis"],
+                    "fan_out": {
+                        "role": "agent-writer",
+                        "count": 2,
+                        "variant": "models",
+                        "routes": [
+                            {"backend": "claude", "model": "claude-opus-4-7", "effort": "high"},
+                            {"backend": "codex", "model": "gpt-5.4-mini", "effort": "medium"},
+                        ],
+                    },
+                    "merge": {"strategy": "synthesize", "agent": "agent-writer-judge"},
+                },
+            ],
+        }
+
+        preview = pipeline_workbench_preview(pipeline)
+
+        self.assertIn("agent[0]: agent-analysis route=codex/gpt-5.4/high", preview)
+        self.assertIn("branch[0]: route=claude/claude-opus-4-7/high", preview)
+        self.assertIn("branch[1]: route=codex/gpt-5.4-mini/medium", preview)
+
+    def test_pipeline_gallery_groups_by_intent_and_stage_inspector_focuses_selected_stage(self) -> None:
+        rows = pipeline_gallery_rows()
+        default = next(row for row in rows if row.name == "default")
+        self.assertEqual(default.intent, "implement")
+        self.assertEqual(default.preset, "balanced")
+        self.assertEqual(select_source_preset_for_pipeline("default"), "balanced")
+        self.assertEqual(suggested_fork_name("default"), "default-edit")
+
+        pipeline = load_pipeline(find_pipeline("ultra-plan").path)
+        stage_rows = pipeline_stage_rows(pipeline)
+        self.assertEqual(stage_rows[0].stage_id, "research")
+        inspector = stage_inspector_text(pipeline, "exploration")
+
+        self.assertIn("kind: fan_out", inspector)
+        self.assertIn("branch[0]: variant=explorer-a lens=architecture-risk", inspector)
+
+    def test_pipeline_draft_validation_reports_invalid_without_mutating_file(self) -> None:
+        fork_preset_and_pipeline("balanced", "default", "draft-invalid")
+        item = find_pipeline("draft-invalid")
+        before = item.path.read_text(encoding="utf-8")
+        draft = start_pipeline_draft("draft-invalid")
+        draft.pipeline["stages"][0]["depends_on"] = ["missing-stage"]
+
+        result = validate_pipeline_draft(draft)
+        rail = "\n".join(draft_validation_lines(draft))
+
+        self.assertFalse(result.ok)
+        self.assertIn("depends_on references unknown stage missing-stage", rail)
+        self.assertIn("save blocked", rail)
+        self.assertEqual(item.path.read_text(encoding="utf-8"), before)
+
+    def test_pipeline_workbench_preview_includes_validation_and_diff_for_user_fork(self) -> None:
+        fork_preset_and_pipeline("balanced", "default", "ui-preview")
+        set_stage_agent_route("ui-preview", "analysis", 0, backend="codex", model="gpt-5.4", effort="high")
+        pipeline = load_pipeline(find_pipeline("ui-preview").path)
+
+        preview = pipeline_workbench_preview(pipeline, pipeline_name="ui-preview", include_validation=True)
+
+        self.assertIn("source=default changed=true", preview)
+        self.assertIn("drift: source unchanged", preview)
+        self.assertIn("validation:", preview)
+        self.assertIn("OK structural validation", preview)
+        self.assertIn("agent[0]: agent-analysis route=codex/gpt-5.4/high", preview)
+
+    def test_pipeline_validation_report_includes_mco_doctor_blocker(self) -> None:
+        fork_preset_and_pipeline("balanced", "default", "mco-ui-preview")
+        add_pipeline_stage_from_module("mco-ui-preview", "mco-review", stage_id="mco-review-ui")
+
+        def fake_doctor(**kwargs) -> ProviderDoctorReport:
+            return ProviderDoctorReport(
+                active_preset="mco-ui-preview",
+                pipeline_name="mco-ui-preview",
+                required_backends=("claude", "codex"),
+                required_providers=("mco",),
+                checks=(
+                    ProviderCheck("backend:claude", "ok", "claude found"),
+                    ProviderCheck("provider:mco", "error", "selected MCO provider(s) not ready: claude=auth_check_failed"),
+                ),
+            )
+
+        report = pipeline_validation_report(
+            "mco-ui-preview",
+            include_provider_doctor=True,
+            provider_doctor_fn=fake_doctor,
+        )
+
+        self.assertIn("provider doctor: ERROR required=mco", report)
+        self.assertIn("ERROR provider:mco: selected MCO provider(s) not ready", report)
 
 
 class TuiActionTests(EnvTestCase):

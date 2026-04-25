@@ -15,13 +15,37 @@ DataTable {
     height: 1fr;
 }
 
-ListView {
+#pipeline-workbench {
+    height: 1fr;
+}
+
+#pipeline-main {
+    height: 2fr;
+}
+
+#pipeline-gallery {
+    width: 36;
+    border: solid $primary;
+}
+
+#presets {
     width: 34;
     border: solid $primary;
 }
 
-#preview {
+#stage-rows {
+    width: 50;
+    border: solid $primary;
+}
+
+#preview, #stage-inspector {
     width: 1fr;
+    border: solid $primary;
+    padding: 1;
+}
+
+#validation-rail {
+    height: 10;
     border: solid $primary;
     padding: 1;
 }
