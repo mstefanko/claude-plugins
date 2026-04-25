@@ -1,0 +1,27 @@
+# Local operator state.
+data/current-preset.txt
+data/telemetry/
+data/runs/
+data/in-flight/
+data/tui/.venv/
+
+# Scratch review outputs.
+codex-review-*.json
+
+# Python/runtime caches.
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Common local logs and temporary files.
+*.log
+*.tmp
+*.temp
+*.swp
+*.swo
+.DS_Store
