@@ -11,7 +11,19 @@ try:  # Optional dependency installed by bin/swarm-tui.
     from textual.app import App, ComposeResult
     from textual.containers import Container, Horizontal, Vertical
     from textual.screen import ModalScreen, Screen
-    from textual.widgets import Button, DataTable, Footer, Header, Input, Label, ListItem, ListView, Select, Static
+    from textual.widgets import (
+        Button,
+        Checkbox,
+        DataTable,
+        Footer,
+        Header,
+        Input,
+        Label,
+        ListItem,
+        ListView,
+        Select,
+        Static,
+    )
 except Exception as exc:  # pragma: no cover - exercised when Textual is absent.
     TEXTUAL_IMPORT_ERROR: Exception | None = exc
 else:  # pragma: no cover - UI smoke-tested through the wrapper in operator use.
@@ -28,6 +40,7 @@ from swarm_do.tui.state import (
     PipelineGalleryRow,
     StageRow,
     current_prompt_lens_ids,
+    current_mco_provider_config,
     current_stage_agent_lens_id,
     draft_add_module_stage,
     draft_remove_stage,
@@ -35,6 +48,7 @@ from swarm_do.tui.state import (
     draft_reset_stage_agent_route,
     draft_set_prompt_variant_lenses,
     draft_set_fan_out_branch_route,
+    draft_set_mco_provider_config,
     draft_set_stage_agent_lens,
     draft_set_stage_agent_route,
     draft_status_line,
@@ -42,9 +56,11 @@ from swarm_do.tui.state import (
     effective_fan_out_branch_route,
     effective_stage_agent_route,
     load_runs,
+    MCO_PROVIDER_ORDER,
     module_palette_rows,
     pipeline_gallery_rows,
     pipeline_activation_blocker,
+    pipeline_has_mco_provider,
     pipeline_profile_preset,
     pipeline_stage_rows,
     pipeline_validation_report,
@@ -214,6 +230,53 @@ if TEXTUAL_IMPORT_ERROR is None:
                     self.query_one("#stage-id", Input).value = row["suggested_stage_id"]
                     self.query_one("#module-detail", Static).update(row["detail"])
                     break
+
+
+    class McoConfigModal(ModalScreen[tuple[list[str], str, str, str] | None]):
+        def __init__(self, stage_id: str, config: dict[str, Any]):
+            super().__init__()
+            self.stage_id = stage_id
+            self.config = config
+
+        def compose(self) -> ComposeResult:
+            selected = set(self.config.get("providers") or ["claude"])
+            timeout = str(self.config.get("timeout_seconds") or 1800)
+            mode = str(self.config.get("failure_tolerance_mode") or "best-effort")
+            min_success = self.config.get("min_success")
+            with Container(id="modal"):
+                yield Label(f"{self.stage_id} MCO", classes="modal-title")
+                yield Static("experimental read-only evidence")
+                for provider in MCO_PROVIDER_ORDER:
+                    yield Checkbox(provider, value=provider in selected, id=f"mco-provider-{provider}")
+                yield Input(value=timeout, placeholder="timeout seconds", id="mco-timeout")
+                yield Select(
+                    [(label, label) for label in ("best-effort", "strict", "quorum")],
+                    value=mode if mode in {"best-effort", "strict", "quorum"} else "best-effort",
+                    id="mco-tolerance",
+                )
+                yield Input(value=str(min_success or ""), placeholder="min_success for quorum", id="mco-min-success")
+                with Horizontal(classes="buttons"):
+                    yield Button("Save", id="save", variant="primary")
+                    yield Button("Cancel", id="cancel")
+
+        def on_button_pressed(self, event: Button.Pressed) -> None:
+            event.stop()
+            if event.button.id == "cancel":
+                self.dismiss(None)
+                return
+            providers = [
+                provider
+                for provider in MCO_PROVIDER_ORDER
+                if self.query_one(f"#mco-provider-{provider}", Checkbox).value
+            ]
+            self.dismiss(
+                (
+                    providers,
+                    self.query_one("#mco-timeout", Input).value.strip(),
+                    str(self.query_one("#mco-tolerance", Select).value),
+                    self.query_one("#mco-min-success", Input).value.strip(),
+                )
+            )
 
 
     class LensModal(ModalScreen[list[str] | None]):
@@ -495,6 +558,8 @@ if TEXTUAL_IMPORT_ERROR is None:
             ("r", "edit_stage_route", "Route"),
             ("b", "edit_branch_route", "Branch"),
             ("n", "edit_lenses", "Lens"),
+            ("o", "edit_mco", "MCO"),
+            ("d", "provider_doctor", "Doctor"),
             ("m", "add_module", "Module"),
             ("delete", "remove_stage", "Remove"),
             ("ctrl+r", "reset_selected_route", "Reset route"),
@@ -822,6 +887,58 @@ if TEXTUAL_IMPORT_ERROR is None:
                 self.refresh_stages()
 
             self.app.push_screen(LensModal(stage.stage_id, role, rows, current_ids), done)
+
+        def action_edit_mco(self) -> None:
+            draft = self._draft_for_selected()
+            stage = self._selected_stage_row()
+            if draft is None or stage is None:
+                return
+            mapping = self._selected_stage_mapping()
+            provider = mapping.get("provider") if isinstance(mapping, dict) else None
+            if not isinstance(provider, dict) or provider.get("type") != "mco":
+                self.app.push_screen(MessageModal("MCO config", "Select an MCO provider stage."))
+                return
+            try:
+                config = current_mco_provider_config(draft.pipeline, stage.stage_id)
+            except Exception as exc:
+                self.app.push_screen(MessageModal("MCO unavailable", str(exc)))
+                return
+
+            def done(value: tuple[list[str], str, str, str] | None) -> None:
+                if value is None:
+                    return
+                providers, timeout_text, tolerance_mode, min_success_text = value
+                try:
+                    timeout_seconds = int(timeout_text)
+                    min_success = int(min_success_text) if min_success_text else None
+                    draft_set_mco_provider_config(
+                        draft,
+                        stage.stage_id,
+                        providers=providers,
+                        timeout_seconds=timeout_seconds,
+                        failure_tolerance_mode=tolerance_mode,
+                        min_success=min_success,
+                    )
+                except Exception as exc:
+                    self.app.push_screen(MessageModal("MCO config refused", str(exc)))
+                    return
+                self.refresh_stages()
+
+            self.app.push_screen(McoConfigModal(stage.stage_id, config), done)
+
+        def action_provider_doctor(self) -> None:
+            row = self._selected_gallery_row()
+            pipeline = self._current_pipeline()
+            if row is None or pipeline is None:
+                return
+            if not pipeline_has_mco_provider(pipeline):
+                self.app.push_screen(MessageModal("Provider doctor", "The selected pipeline has no MCO provider stage."))
+                return
+            if self._draft is not None and self._draft.pipeline_name == row.name and self._draft.dirty:
+                self.app.push_screen(MessageModal("Provider doctor", "Save the draft before running provider doctor."))
+                return
+            body = pipeline_validation_report(row.name, include_provider_doctor=True)
+            self.app.push_screen(MessageModal(f"Provider doctor: {row.name}", body))
 
         def action_reset_selected_route(self) -> None:
             draft = self._draft_for_selected()

@@ -34,6 +34,9 @@ from swarm_do.pipeline.providers import ProviderDoctorReport, provider_doctor
 from swarm_do.pipeline.registry import find_pipeline, list_pipelines, list_presets, load_pipeline, load_preset
 from swarm_do.pipeline.resolver import BACKENDS, EFFORTS, BackendResolver, active_preset_name
 from swarm_do.pipeline.validation import (
+    MCO_PROVIDER_ORDER,
+    MCO_PROVIDERS,
+    TOLERANCE_MODES,
     ValidationResult,
     invariant_errors,
     role_existence_errors,
@@ -333,6 +336,14 @@ def _mutable_stage_fan_out(pipeline: dict[str, Any], stage_id: str) -> dict[str,
     return fan
 
 
+def _mutable_mco_provider_stage(pipeline: dict[str, Any], stage_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    stage = _mutable_stage_by_id(pipeline, stage_id)
+    provider = stage.get("provider")
+    if not isinstance(provider, dict) or provider.get("type") != "mco":
+        raise ValueError(f"stage {stage_id} is not an MCO provider stage")
+    return stage, provider
+
+
 def _validate_route_parts(backend: str, model: str, effort: str) -> dict[str, str]:
     backend = backend.strip()
     model = model.strip()
@@ -457,6 +468,95 @@ def draft_reset_fan_out_routes(draft: PipelineEditDraft, stage_id: str) -> None:
     fan["variant"] = "same"
     fan.pop("routes", None)
     fan.pop("variants", None)
+
+
+def current_mco_provider_config(pipeline: Mapping[str, Any], stage_id: str) -> dict[str, Any]:
+    stage = _stage_by_id(pipeline, stage_id)
+    if stage is None:
+        raise ValueError(f"stage not found: {stage_id}")
+    provider = stage.get("provider")
+    if not isinstance(provider, Mapping) or provider.get("type") != "mco":
+        raise ValueError(f"stage {stage_id} is not an MCO provider stage")
+    tolerance = stage.get("failure_tolerance")
+    tolerance_mode = tolerance.get("mode", "best-effort") if isinstance(tolerance, Mapping) else "best-effort"
+    min_success = tolerance.get("min_success") if isinstance(tolerance, Mapping) else None
+    providers = [
+        str(name)
+        for name in (provider.get("providers") or [])
+        if isinstance(name, str) and name in MCO_PROVIDERS
+    ]
+    return {
+        "providers": providers or ["claude"],
+        "timeout_seconds": (
+            provider.get("timeout_seconds")
+            if isinstance(provider.get("timeout_seconds"), int)
+            else 1800
+        ),
+        "failure_tolerance_mode": tolerance_mode if tolerance_mode in TOLERANCE_MODES else "best-effort",
+        "min_success": min_success if isinstance(min_success, int) else None,
+    }
+
+
+def draft_set_mco_provider_config(
+    draft: PipelineEditDraft,
+    stage_id: str,
+    *,
+    providers: list[str],
+    timeout_seconds: int,
+    failure_tolerance_mode: str = "best-effort",
+    min_success: int | None = None,
+) -> None:
+    stage, provider = _mutable_mco_provider_stage(draft.pipeline, stage_id)
+    normalized = _normalize_mco_providers(providers)
+    timeout = _validate_mco_timeout(timeout_seconds)
+    tolerance = _provider_failure_tolerance(
+        failure_tolerance_mode,
+        min_success,
+        branch_count=len(normalized),
+    )
+    draft.checkpoint(f"set MCO provider config for {stage_id}")
+    provider["type"] = "mco"
+    provider["command"] = "review"
+    provider["providers"] = normalized
+    provider["mode"] = "review"
+    provider["strict_contract"] = True
+    provider["output"] = "findings"
+    provider["memory"] = False
+    provider["timeout_seconds"] = timeout
+    stage["failure_tolerance"] = tolerance
+
+
+def _normalize_mco_providers(providers: list[str]) -> list[str]:
+    if not isinstance(providers, list):
+        raise ValueError("providers must be a list")
+    selected: list[str] = []
+    for provider in providers:
+        if not isinstance(provider, str) or not provider.strip():
+            raise ValueError("providers must contain non-empty provider names")
+        name = provider.strip()
+        if name not in MCO_PROVIDERS:
+            raise ValueError(f"unsupported MCO provider: {name}")
+        if name not in selected:
+            selected.append(name)
+    if not (1 <= len(selected) <= 5):
+        raise ValueError("MCO providers must contain 1..5 unique provider names")
+    return [name for name in MCO_PROVIDER_ORDER if name in selected]
+
+
+def _validate_mco_timeout(timeout_seconds: int) -> int:
+    if not isinstance(timeout_seconds, int) or not (1 <= timeout_seconds <= 86400):
+        raise ValueError("timeout_seconds must be an integer from 1 to 86400")
+    return timeout_seconds
+
+
+def _provider_failure_tolerance(mode: str, min_success: int | None, *, branch_count: int) -> dict[str, int | str]:
+    if mode not in TOLERANCE_MODES:
+        raise ValueError(f"failure_tolerance mode must be one of {sorted(TOLERANCE_MODES)}")
+    if mode != "quorum":
+        return {"mode": mode}
+    if not isinstance(min_success, int) or not (1 <= min_success <= branch_count):
+        raise ValueError("min_success must be 1..provider count for quorum")
+    return {"mode": mode, "min_success": min_success}
 
 
 def current_stage_agent_lens_id(pipeline: Mapping[str, Any], stage_id: str, agent_index: int = 0) -> str | None:
@@ -880,6 +980,56 @@ def pipeline_lens_rows(pipeline: dict[str, Any]) -> list[dict[str, str]]:
     return rows
 
 
+def latest_mco_provider_artifact(stage_id: str, data_dir: Path | None = None) -> Path | None:
+    runs_dir = (data_dir or resolve_data_dir()) / "runs"
+    if not runs_dir.is_dir():
+        return None
+    candidates = [
+        path
+        for path in runs_dir.glob(f"*/stages/{stage_id}/provider-findings.json")
+        if path.is_file()
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: path.stat().st_mtime)
+
+
+def mco_provider_result_preview(stage_id: str, data_dir: Path | None = None) -> list[str]:
+    artifact = latest_mco_provider_artifact(stage_id, data_dir)
+    if artifact is None:
+        return []
+    try:
+        payload = json.loads(artifact.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return [f"provider-result: unreadable {artifact} ({exc})"]
+    if not isinstance(payload, Mapping):
+        return [f"provider-result: invalid root {artifact}"]
+    findings = payload.get("findings")
+    errors = payload.get("provider_errors")
+    selected = payload.get("selected_providers")
+    findings_count = len(findings) if isinstance(findings, list) else 0
+    error_rows = errors if isinstance(errors, list) else []
+    selected_text = ", ".join(str(item) for item in selected) if isinstance(selected, list) else "n/a"
+    lines = [
+        f"provider-result: {artifact}",
+        (
+            f"  status={payload.get('status', 'unknown')} "
+            f"provider_count={payload.get('provider_count', 'n/a')} "
+            f"selected={selected_text} findings={findings_count} errors={len(error_rows)}"
+        ),
+    ]
+    for idx, item in enumerate(error_rows[:3]):
+        if not isinstance(item, Mapping):
+            continue
+        provider = item.get("provider") or "unknown"
+        error_class = item.get("provider_error_class") or item.get("error_class") or "error"
+        message = item.get("message") or item.get("detail") or ""
+        lines.append(f"  error[{idx}]: {provider}:{error_class} {message}".rstrip())
+    if len(error_rows) > 3:
+        lines.append(f"  ... {len(error_rows) - 3} more provider error(s)")
+    return lines
+
+
 def _format_route(route: Any) -> str:
     if isinstance(route, str):
         return f"named:{route}"
@@ -940,11 +1090,18 @@ def _stage_detail_lines(stage: Mapping[str, Any], *, prefix: str = "  ") -> list
             f"{prefix}  provider: type={provider.get('type')} command={provider.get('command')} "
             f"providers={provider.get('providers')}"
         )
+        if provider.get("type") == "mco":
+            lines.append(
+                f"{prefix}  provider-boundary: experimental read-only evidence; "
+                "no merge, approval, memory, or repo writes"
+            )
         lines.append(
             f"{prefix}  provider-config: mode={provider.get('mode', 'review')} "
             f"output={provider.get('output', 'findings')} memory={provider.get('memory', False)} "
             f"timeout_seconds={provider.get('timeout_seconds')}"
         )
+        if provider.get("type") == "mco":
+            lines.extend(f"{prefix}  {line}" for line in mco_provider_result_preview(stage_id))
     merge = stage.get("merge")
     if isinstance(merge, Mapping):
         lines.append(f"{prefix}  merge: {merge.get('strategy')}:{merge.get('agent')}")
@@ -1044,6 +1201,14 @@ def pipeline_activation_blocker(pipeline_name: str, pipeline: Mapping[str, Any] 
             return f"pipeline not found: {pipeline_name}"
         pipeline = load_pipeline(item.path)
     return pipeline_activation_error(pipeline_name, pipeline)
+
+
+def pipeline_has_mco_provider(pipeline: Mapping[str, Any]) -> bool:
+    for stage in pipeline.get("stages") or []:
+        provider = stage.get("provider") if isinstance(stage, Mapping) else None
+        if isinstance(provider, Mapping) and provider.get("type") == "mco":
+            return True
+    return False
 
 
 def pipeline_profile_preset(pipeline_name: str, pipeline: Mapping[str, Any] | None = None) -> str | None:

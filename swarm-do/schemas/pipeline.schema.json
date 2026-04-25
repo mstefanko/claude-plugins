@@ -89,7 +89,7 @@
             "required": ["type", "command", "providers", "timeout_seconds"],
             "properties": {
               "type": { "type": "string", "enum": ["mco"] },
-              "command": { "type": "string", "enum": ["review", "run"] },
+              "command": { "type": "string", "enum": ["review"] },
               "providers": {
                 "type": "array",
                 "minItems": 1,

@@ -57,10 +57,11 @@ PROVIDER_KEYS = {
     "timeout_seconds",
 }
 PROVIDER_TYPES = {"mco"}
-PROVIDER_COMMANDS = {"review", "run"}
+PROVIDER_COMMANDS = {"review"}
 PROVIDER_MODES = {"review", "debate", "divide"}
 PROVIDER_OUTPUTS = {"findings"}
-MCO_PROVIDERS = {"claude", "codex", "gemini", "opencode", "qwen"}
+MCO_PROVIDER_ORDER = ("claude", "codex", "gemini", "opencode", "qwen")
+MCO_PROVIDERS = set(MCO_PROVIDER_ORDER)
 WORK_UNIT_TOP_KEYS = {"schema_version", "plan_path", "bd_epic_id", "work_units"}
 WORK_UNIT_KEYS = {
     "id",

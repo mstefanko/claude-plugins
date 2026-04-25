@@ -15,6 +15,7 @@ from swarm_do.pipeline.actions import (
     load_in_flight,
     request_handoff,
     rename_user_preset,
+    set_mco_provider_config,
     set_base_route,
     set_stage_agent_route,
     set_user_preset_pipeline,
@@ -25,8 +26,10 @@ from swarm_do.pipeline.providers import ProviderCheck, ProviderDoctorReport
 from swarm_do.pipeline.registry import find_pipeline, load_pipeline, load_preset
 from swarm_do.tui.state import (
     current_prompt_lens_ids,
+    current_mco_provider_config,
     current_stage_agent_lens_id,
     draft_add_module_stage,
+    draft_set_mco_provider_config,
     draft_set_prompt_variant_lenses,
     draft_remove_stage,
     draft_reset_fan_out_routes,
@@ -42,6 +45,7 @@ from swarm_do.tui.state import (
     load_observations,
     load_run_events,
     module_palette_rows,
+    mco_provider_result_preview,
     pipeline_activation_blocker,
     pipeline_gallery_rows,
     pipeline_lens_rows,
@@ -424,6 +428,76 @@ class TuiStateTests(EnvTestCase):
         self.assertTrue(draft.undo())
         self.assertTrue(any(stage["id"] == "codex-review-ui" for stage in draft.pipeline["stages"]))
 
+    def test_pipeline_draft_mco_config_edits_are_validated_and_undoable(self) -> None:
+        fork_preset_and_pipeline("mco-review-lab", "mco-review-lab", "mco-draft")
+        draft = start_pipeline_draft("mco-draft")
+
+        config = current_mco_provider_config(draft.pipeline, "mco-review")
+        self.assertEqual(config["providers"], ["claude"])
+        self.assertEqual(config["failure_tolerance_mode"], "best-effort")
+
+        draft_set_mco_provider_config(
+            draft,
+            "mco-review",
+            providers=["codex", "claude", "codex"],
+            timeout_seconds=900,
+            failure_tolerance_mode="quorum",
+            min_success=2,
+        )
+
+        stage = next(stage for stage in draft.pipeline["stages"] if stage["id"] == "mco-review")
+        self.assertEqual(stage["provider"]["providers"], ["claude", "codex"])
+        self.assertEqual(stage["provider"]["command"], "review")
+        self.assertFalse(stage["provider"]["memory"])
+        self.assertEqual(stage["provider"]["timeout_seconds"], 900)
+        self.assertEqual(stage["failure_tolerance"], {"mode": "quorum", "min_success": 2})
+        self.assertTrue(validate_pipeline_draft(draft).ok)
+
+        with self.assertRaisesRegex(ValueError, "unsupported MCO provider"):
+            draft_set_mco_provider_config(
+                draft,
+                "mco-review",
+                providers=["not-real"],
+                timeout_seconds=900,
+            )
+        with self.assertRaisesRegex(ValueError, "timeout_seconds"):
+            draft_set_mco_provider_config(
+                draft,
+                "mco-review",
+                providers=["claude"],
+                timeout_seconds=0,
+            )
+
+        self.assertTrue(draft.undo())
+        self.assertEqual(current_mco_provider_config(draft.pipeline, "mco-review")["providers"], ["claude"])
+
+    def test_mco_provider_result_preview_summarizes_prior_artifact(self) -> None:
+        artifact_dir = self.root / "runs" / "run-1" / "stages" / "mco-review"
+        artifact_dir.mkdir(parents=True)
+        (artifact_dir / "provider-findings.json").write_text(
+            json.dumps(
+                {
+                    "status": "partial",
+                    "provider_count": 2,
+                    "selected_providers": ["claude", "codex"],
+                    "provider_errors": [
+                        {
+                            "provider": "codex",
+                            "provider_error_class": "auth",
+                            "message": "missing token",
+                        }
+                    ],
+                    "findings": [{"summary": "one"}, {"summary": "two"}],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        preview = "\n".join(mco_provider_result_preview("mco-review"))
+
+        self.assertIn("status=partial provider_count=2 selected=claude, codex findings=2 errors=1", preview)
+        self.assertIn("error[0]: codex:auth missing token", preview)
+
     def test_pipeline_workbench_preview_includes_validation_and_diff_for_user_fork(self) -> None:
         fork_preset_and_pipeline("balanced", "default", "ui-preview")
         set_stage_agent_route("ui-preview", "analysis", 0, backend="codex", model="gpt-5.4", effort="high")
@@ -515,6 +589,30 @@ max_wall_clock_seconds = 1800
         set_user_preset_route("user", "agent-docs", "simple", "codex", "gpt-5.4-mini", "medium")
         routing = load_preset(preset_path)["routing"]
         self.assertEqual(routing["roles.agent-docs.simple"]["backend"], "codex")
+
+    def test_saved_mco_provider_config_preserves_read_only_boundaries(self) -> None:
+        fork_preset_and_pipeline("mco-review-lab", "mco-review-lab", "mco-action")
+
+        set_mco_provider_config(
+            "mco-action",
+            "mco-review",
+            providers=["gemini", "claude"],
+            timeout_seconds=1200,
+            failure_tolerance_mode="strict",
+        )
+
+        stage = next(
+            stage
+            for stage in load_pipeline(find_pipeline("mco-action").path)["stages"]
+            if stage["id"] == "mco-review"
+        )
+        self.assertEqual(stage["provider"]["providers"], ["claude", "gemini"])
+        self.assertEqual(stage["provider"]["command"], "review")
+        self.assertEqual(stage["provider"]["mode"], "review")
+        self.assertTrue(stage["provider"]["strict_contract"])
+        self.assertEqual(stage["provider"]["output"], "findings")
+        self.assertFalse(stage["provider"]["memory"])
+        self.assertEqual(stage["failure_tolerance"], {"mode": "strict"})
 
     def test_preset_rename_rejects_path_traversal(self) -> None:
         presets = self.root / "presets"

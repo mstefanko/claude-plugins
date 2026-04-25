@@ -21,6 +21,9 @@ from swarm_do.pipeline.registry import find_pipeline, find_preset, load_pipeline
 from swarm_do.pipeline.render_yaml import render_pipeline_yaml
 from swarm_do.pipeline.resolver import BACKENDS, EFFORTS, ROLE_DEFAULTS
 from swarm_do.pipeline.validation import (
+    MCO_PROVIDER_ORDER,
+    MCO_PROVIDERS,
+    TOLERANCE_MODES,
     invariant_errors,
     role_existence_errors,
     route_resolution_errors,
@@ -541,6 +544,36 @@ def remove_pipeline_stage(pipeline_name: str, stage_id: str) -> Path:
     return save_user_pipeline(item.name, pipeline)
 
 
+def set_mco_provider_config(
+    pipeline_name: str,
+    stage_id: str,
+    *,
+    providers: list[str],
+    timeout_seconds: int,
+    failure_tolerance_mode: str = "best-effort",
+    min_success: int | None = None,
+) -> Path:
+    item, pipeline = _load_user_pipeline(pipeline_name)
+    stage = _stage_by_id(pipeline, stage_id)
+    provider = stage.get("provider")
+    if not isinstance(provider, dict) or provider.get("type") != "mco":
+        raise ValueError(f"stage {stage_id} is not an MCO provider stage")
+    provider["type"] = "mco"
+    provider["command"] = "review"
+    provider["mode"] = "review"
+    provider["strict_contract"] = True
+    provider["output"] = "findings"
+    provider["memory"] = False
+    provider["providers"] = _normalize_mco_providers(providers)
+    provider["timeout_seconds"] = _validate_mco_timeout(timeout_seconds)
+    stage["failure_tolerance"] = _provider_failure_tolerance(
+        failure_tolerance_mode,
+        min_success,
+        branch_count=len(provider["providers"]),
+    )
+    return save_user_pipeline(item.name, pipeline)
+
+
 def _pipeline_errors(
     pipeline: Mapping[str, Any],
     *,
@@ -607,6 +640,39 @@ def _validate_route_values(route: Mapping[str, Any], path: str) -> None:
         raise ValueError(f"{path}.model must be a non-empty string")
     if route.get("effort") not in EFFORTS:
         raise ValueError(f"{path}.effort must be one of {sorted(EFFORTS)}")
+
+
+def _normalize_mco_providers(providers: list[str]) -> list[str]:
+    if not isinstance(providers, list):
+        raise ValueError("providers must be a list")
+    normalized: list[str] = []
+    for provider in providers:
+        if not isinstance(provider, str) or not provider.strip():
+            raise ValueError("providers must contain non-empty provider names")
+        name = provider.strip()
+        if name not in MCO_PROVIDERS:
+            raise ValueError(f"unsupported MCO provider: {name}")
+        if name not in normalized:
+            normalized.append(name)
+    if not (1 <= len(normalized) <= 5):
+        raise ValueError("MCO providers must contain 1..5 unique provider names")
+    return [name for name in MCO_PROVIDER_ORDER if name in normalized]
+
+
+def _validate_mco_timeout(timeout_seconds: int) -> int:
+    if not isinstance(timeout_seconds, int) or not (1 <= timeout_seconds <= 86400):
+        raise ValueError("timeout_seconds must be an integer from 1 to 86400")
+    return timeout_seconds
+
+
+def _provider_failure_tolerance(mode: str, min_success: int | None, *, branch_count: int) -> dict[str, int | str]:
+    if mode not in TOLERANCE_MODES:
+        raise ValueError(f"failure_tolerance mode must be one of {sorted(TOLERANCE_MODES)}")
+    if mode != "quorum":
+        return {"mode": mode}
+    if not isinstance(min_success, int) or not (1 <= min_success <= branch_count):
+        raise ValueError("min_success must be 1..provider count for quorum")
+    return {"mode": mode, "min_success": min_success}
 
 
 def cancel_run(run: InFlightRun) -> None:

@@ -41,8 +41,9 @@ coverage live in `actions.py`.
 - Pipelines open a Phase 2B composer shell: intent-sorted gallery, selectable
   stage rows, focused stage inspector, validation rail, fork-first edit dialog,
   in-memory draft save/discard state, route/module edit controls, and
-  undo/redo. Stock pipelines remain read-only; editing starts by forking a
-  pipeline and its matching preset into user-owned files.
+  undo/redo. MCO provider stages are visibly experimental and read-only.
+  Stock pipelines remain read-only; editing starts by forking a pipeline and
+  its matching preset into user-owned files.
 - The stock `research` pipeline is runnable through `/swarm-do:research`.
   Other output-only pipeline shapes remain preview-only until they have their
   own command/profile binding.
@@ -62,6 +63,11 @@ On the Pipelines screen:
   lists each lens id, category, execution mode, output-contract rule, merge
   expectation, and safety note. Lens edits stay in the in-memory draft until
   validation passes and `Ctrl+S` writes the YAML.
+- Press `o` on an MCO provider stage to edit selected providers, timeout, and
+  failure tolerance. The editor preserves `command=review`, `memory=false`,
+  `output=findings`, and strict-contract read-only boundaries.
+- Press `d` on an MCO-bearing pipeline to run provider doctor and view local
+  provider readiness before activation.
 - Press `m` to add a catalog module to the draft, or `Delete` to remove the
   selected stage when nothing still depends on it.
 - Press `Ctrl+R` to reset a selected stage route or fan-out routes to resolver
@@ -77,6 +83,12 @@ On the Pipelines screen:
 Prompt lenses can now target fan-out branches or one normal agents-stage entry.
 Normal agents stages accept only singular `lens`; synthesize merge agents still
 have no prompt-overlay field.
+
+MCO result previews appear in the stage inspector when a prior
+`${CLAUDE_PLUGIN_DATA}/runs/<run-id>/stages/<stage-id>/provider-findings.json`
+artifact exists. The preview shows status, provider count, selected providers,
+provider errors, and finding count; provider output remains evidence for
+downstream Claude-backed stages, not an automatic quality gate decision.
 
 ## Invariant Guards
 
