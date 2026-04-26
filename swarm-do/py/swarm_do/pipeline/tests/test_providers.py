@@ -166,6 +166,41 @@ class ProviderDoctorTests(unittest.TestCase):
         self.assertIn("provider-review:claude", rendered)
         self.assertIn("selected: claude, codex", rendered)
 
+    def test_review_doctor_json_reports_exact_review_cli_flags(self) -> None:
+        def which(cmd: str) -> str | None:
+            return f"/bin/{cmd}" if cmd in {"claude", "codex"} else None
+
+        def runner(args, **kwargs):
+            if args == ["claude", "--help"]:
+                stdout = "Usage: claude -p --permission-mode --output-format --json-schema"
+            elif args == ["codex", "exec", "--help"]:
+                stdout = "Usage: codex exec --json --sandbox --output-schema --output-last-message"
+            elif args == ["claude", "--version"]:
+                stdout = "claude 1.0"
+            elif args == ["codex", "--version"]:
+                stdout = "codex 1.0"
+            else:
+                stdout = ""
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout=stdout, stderr="")
+
+        old_data = os.environ.get("CLAUDE_PLUGIN_DATA")
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["CLAUDE_PLUGIN_DATA"] = td
+            try:
+                report = provider_doctor(run_review=True, which=which, runner=runner)
+            finally:
+                _restore_env("CLAUDE_PLUGIN_DATA", old_data)
+
+        payload = report.as_dict()
+        self.assertEqual(payload["review_schema_flags"]["claude"], ["-p", "--json-schema", "--output-format"])
+        self.assertEqual(payload["review_read_only_flags"]["claude"], ["--permission-mode"])
+        self.assertEqual(payload["review_schema_flags"]["codex"], ["--json", "--output-schema", "--output-last-message"])
+        self.assertEqual(payload["review_read_only_flags"]["codex"], ["--sandbox"])
+        self.assertEqual(payload["review_schema_modes"]["codex"], "native")
+        self.assertEqual(payload["review_read_only_modes"]["codex"], "flag-detected")
+        self.assertEqual(payload["review_missing_schema_flags"]["codex"], [])
+        self.assertEqual(payload["selected_review_providers"], [])
+
     def test_review_and_mco_doctor_contracts_can_be_combined(self) -> None:
         def which(cmd: str) -> str | None:
             return f"/bin/{cmd}" if cmd in {"claude", "mco"} else None

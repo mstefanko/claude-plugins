@@ -546,154 +546,196 @@ TUI follow-up:
 
 ## Implementation Work Breakdown
 
-0. **Phase 0 gates before coding**
-   - Reserve `docs/adr/0005-internal-provider-review-runner.md` with
-     `Status: Proposed` and `Intended to supersede: ADR 0003` before
-     implementation docs begin. Do not mark ADR 0003 fully superseded until the
-     internal runner passes its Phase 0 gates and becomes the preferred
-     provider-review path.
-   - Prove Claude eligibility with a doctor flag probe for structured output and
-     read-only mode plus a local write-denial fixture, not broad research. The
-     fixture must demonstrate that create, edit, and delete attempts are denied.
-     Block Claude shim eligibility until this is green.
-   - Prototype non-spend auth probing for Claude and Codex. Doctor must be able
-     to distinguish installed, authenticated, and launchable states without a
-     full review run, or record that the provider only supports an explicit,
-     bounded spend probe.
-   - Empirically validate secondary consensus clustering before it affects
-     stock/default confidence. Until that data exists, only exact hash matches
-     may produce stock `confirmed` confidence; secondary clusters stay
-     `needs-verification`.
-   - Add a Codex CLI-drift test for the exact
-     `codex exec --json --sandbox read-only --output-schema` command builder.
-   - Land the fake-shim fixture harness used by runner, doctor, DSL validation,
-     and downstream evidence tests. The minimum end-to-end fake-shim scenarios
-     are no eligible providers, selection off, partial provider failure,
-     malformed output, timeout, no findings, and duplicate findings across two
-     providers.
-   - Lock the side-by-side schema decision: v1 MCO remains unchanged, v2
-     provider-review lives beside it.
-   - Define raw sidecar retention, redaction, and manifest policy before the
-     runner merge, not merely before stock default enablement.
-   - Inventory `agent-codex-review` consumers before any retirement work.
+Updated on 2026-04-26. The first implementation pass has landed the
+skipped-by-default internal provider-review path. The remaining work is now
+mostly about proving real Claude/Codex eligibility, turning on real shims, and
+calibrating whether this can replace any older lanes.
 
-1. **Plan and ADR refresh**
-   - Add this plan.
-   - Add ADR 0005 stating that internal provider review is intended to supersede
-     MCO as the preferred path, while MCO remains a comparison spike.
-   - Add explicit MCO retirement criteria and mark ADR 0003 superseded by
-     ADR 0005 when `swarm-review` becomes the preferred stage.
+### Completed Slices
 
-2. **Emission schema**
-   - Create `schemas/provider_review/`.
-   - Add `schemas/provider_review/review_emission.v1.schema.json`.
-   - Add `schemas/telemetry/provider_findings.v2.schema.json`.
-   - Add schema tests for minimal valid finding, no-findings result, and invalid
-     model-owned swarm fields.
-   - Add compatibility tests proving existing MCO v1 fixtures still validate.
+- **Plan and ADR:** `docs/adr/0005-internal-provider-review-runner.md` exists
+  with `Status: Proposed`; ADR 0003 now scopes MCO to the experimental
+  comparison path until formal supersession.
+- **Side-by-side schemas:** `schemas/provider_review/review_emission.v1.schema.json`
+  and `schemas/telemetry/provider_findings.v2.schema.json` exist; MCO v1 remains
+  unchanged.
+- **Resolver and policy:** `ReviewProviderResolver` resolves known shims in a
+  deterministic order, reuses `BackendResolver` for Claude/Codex routes, parses
+  `[review_providers]` policy, and supports fake shims for deterministic tests.
+- **Fake-shim runner:** `bin/swarm-provider-review` can select fake providers,
+  run them in parallel, write raw sidecars plus `provider-review.manifest.json`,
+  and emit a normalized `provider-findings.json` artifact.
+- **Normalizer:** Provider emissions are validated, normalized to
+  `provider-findings.v2-draft`, deduped by exact stable hash, conservatively
+  clustered by anchored location/category, and scored without promoting
+  secondary clusters to `confirmed`.
+- **Doctor contract:** `bin/swarm providers doctor --review` reports internal
+  review-provider diagnostics while preserving the MCO passthrough contract and
+  combined `--review --mco` behavior.
+- **Exact flag diagnostics:** Doctor and resolver now record detected and
+  missing schema/read-only flags for real Claude/Codex command surfaces. Real
+  providers still remain ineligible until write-denial and readiness probes are
+  green.
+- **Pipeline DSL:** `provider.type = "swarm-review"` supports `selection:
+  auto|explicit|off`; stock pipelines reject hardcoded provider lists; graph,
+  budget, validation, editing, and action helpers understand both `swarm-review`
+  and `mco`.
+- **Stock wiring:** `default`, `lightweight`, `ultra-plan`, and `review` include
+  skipped-by-default `swarm-review` stages; `mco-review-lab` remains the
+  experimental comparison preset.
+- **Orchestrator instructions:** `skills/swarmdaddy/SKILL.md` documents separate
+  dispatch helpers for `swarm-review` and `mco` provider stages and keeps
+  provider output evidence-only.
+- **Packaging audit:** `.claude-plugin/plugin.json` does not enumerate `bin/`
+  helpers, so adding `bin/swarm-provider-review` required no manifest entry.
+- **Docs and TUI:** README, telemetry README, and the TUI state/app helpers are
+  provider-review aware, including configured versus selected provider preview.
 
-3. **Provider resolver**
-   - Add `ReviewProviderResolver`.
-   - Reuse `BackendResolver` for Claude and Codex route selection.
-   - Add config parsing for optional `[review_providers]` in
-     `${CLAUDE_PLUGIN_DATA}/backends.toml` and preset-scoped policy overrides.
-   - Add unit tests for auto, explicit include/exclude, disabled providers, and
-     deterministic ordering.
+### Remaining Phases
 
-4. **Shim command builders**
-   - Start only after the Phase 0 eligibility and CLI-drift gates are green.
-   - Add Claude and Codex shim classes.
-   - Capture version, command, schema mode, read-only mode, and meta.
-   - Add tests that assert exact command argv and fail closed on missing flags.
-   - Add a Claude read-only proof test before marking the Claude shim eligible;
-     if `--permission-mode plan` is insufficient, add explicit tool restrictions
-     and test that write attempts are rejected.
+**Phase R1: Eligibility Probe Model**
 
-5. **Runner**
-   - Add `bin/swarm-provider-review`.
-   - Run selected providers in parallel with per-provider timeout.
-   - Store raw sidecars and a manifest under the Phase 0 retention/redaction
-     policy.
-   - Validate native schema output before normalization.
-   - Parser fallback is allowed only behind explicit experiment-mode selection,
-     doctor diagnostics, and confidence caps. It is not eligible for stock
-     automatic provider review in v1.
+- Add a small internal probe result shape for installed/configured/schema/read-
+  only/auth readiness, reused by doctor and eventual shim execution.
+- Keep the current top-level doctor contract stable while adding probe detail
+  under provider rows.
+- Add fixtures for installed-but-route-mismatch, missing flags, unsupported
+  schema mode, and disabled-by-policy.
+- Definition of done: `swarm providers doctor --review --json` can explain why
+  each real shim is not eligible without launching a full review.
 
-6. **Normalizer**
-   - Normalize provider findings into side-by-side provider-findings v2 draft.
-   - Reuse `stable_finding_hash_v1`.
-   - Group exact duplicate hashes first, then apply the anchored secondary
-     consensus key for same-location/same-category reports with divergent
-     summaries. Merge `detected_by`, compute provider count, consensus score,
-     and consensus level.
-   - Add fixtures for all-success, partial failure, malformed output, no
-     findings, no eligible providers, and duplicate consensus.
-   - Keep MCO v1 fixtures and tests intact; add v2 fixtures instead of rewriting
-     v1 expected payloads.
+**Phase R2: Codex Read-Only And CLI-Drift Gate**
 
-7. **Doctor**
-   - Extend provider doctor with the `--review` flag and review-provider checks.
-   - Keep current MCO passthrough for the lab path.
-   - Preserve current MCO JSON/text contract and add tests for review-only and
-     combined `--review --mco` output.
+- Add a Codex write-denial fixture against a temporary repo using the exact
+  planned command shape:
+  `codex exec --json --sandbox read-only --output-schema --output-last-message`.
+- Prove create, edit, and delete attempts are denied or fail closed.
+- Add a bounded structured-output smoke fixture if the local CLI can run it
+  without an unbounded review.
+- Definition of done: Codex may become eligible only when command flags,
+  schema output, sandbox write denial, and readiness probing all pass.
 
-8. **Pipeline DSL**
-   - Add `provider.type = "swarm-review"`.
-   - Add `selection = "auto"` and optional `providers` only for
-     `selection: explicit` in user or experiment pipelines.
-   - Update JSON schema, manual validation, graph rendering, stage-agent count,
-     budget preview, quorum semantics, and pipeline tests for auto-selection.
-   - Update `py/swarm_do/pipeline/editing.py`,
-     `py/swarm_do/pipeline/actions.py`, and
-     `py/swarm_do/pipeline/providers.py` MCO-only guards.
-   - Add stock-pipeline validation rejecting hardcoded `providers` lists for
-     `swarm-review`.
+**Phase R3: Claude Read-Only Gate**
 
-9. **Orchestrator dispatch**
-   - Update `skills/swarmdaddy/SKILL.md` so MCO and internal provider stages use
-     different helpers.
-   - Dispatch `bin/swarm-provider-review` with stage id, run id, issue id, repo,
-     prompt file, output directory, timeout, and selection policy.
-   - Pass the normalized summary and artifact path to downstream review exactly
-     like the MCO evidence path, without allowing provider output to mutate
-     Beads outside the provider-stage issue.
-   - Audit `.claude-plugin/plugin.json` and marketplace packaging assumptions for
-     the new binary. The current manifest does not enumerate `bin/` helpers, so
-     record whether this is a no-op or add the required manifest metadata if the
-     packaging surface changes.
+- Add a Claude write-denial fixture using the planned native-schema command:
+  `claude -p --permission-mode plan --output-format json --json-schema`.
+- If `--permission-mode plan` is insufficient, add explicit
+  `--tools`/`--disallowedTools` restrictions before eligibility.
+- Keep Claude schema-capable but not read-only-confirmed until the fixture proves
+  create, edit, and delete denial.
+- Definition of done: Claude eligibility is blocked or enabled by a local proof,
+  not by installed CLI presence.
 
-10. **Stock pipeline wiring**
-   - Add provider-review to stock review-capable pipelines after runner tests
-     pass.
-   - Remove the need for a separate opt-in MCO review preset for normal use.
-   - Keep `mco-review-lab` marked experiment for comparison only.
-   - Do not retire `agent-codex-review` until the consumer inventory and parity
-     criteria above are satisfied.
+**Phase R4: Non-Spend Readiness Probes**
 
-11. **Docs and UI**
-    - Update README provider requirements and CLI reference.
-    - Update telemetry README for provider-findings v2 draft.
-    - Update TUI state labels from MCO-specific to provider-review-specific.
+- Prototype the lowest-cost Claude and Codex installed/authenticated/launchable
+  probes.
+- If no true non-spend probe exists, document the bounded-spend fallback and
+  require an explicit opt-in before doctor runs it.
+- Add doctor rows that distinguish missing binary, route mismatch, not
+  authenticated, launch unavailable, and spend-probe-required.
+- Definition of done: doctor can distinguish local setup failures from provider
+  review failures before a real review run starts.
+
+**Phase R5: Real Codex Shim Execution**
+
+- Implement the Codex execution path behind the R2/R4 gates.
+- Store stdout/stderr/last-message/meta sidecars using the existing manifest and
+  redaction policy.
+- Validate native schema output before normalization; malformed output becomes a
+  provider error, not a stage crash.
+- Definition of done: an explicit Codex provider-review run can produce ok,
+  partial, malformed-output, timeout, and no-findings artifacts.
+
+**Phase R6: Real Claude Shim Execution**
+
+- Implement Claude execution behind the R3/R4 gates.
+- Keep parser fallback disabled for stock automatic selection; allow it only for
+  explicit experiment mode or doctor diagnostics if implemented.
+- Add captured native-schema fixtures for no findings, one finding, malformed
+  output, and timeout.
+- Definition of done: Claude can run as a real eligible shim only after the
+  local read-only proof is green.
+
+**Phase R7: Runtime Selection And Failure Semantics**
+
+- Enforce `min_success` against schema-valid provider outputs, not launched
+  providers.
+- Record whether stages skipped, ran, partially succeeded, or failed because too
+  few providers were selected.
+- Make budget/dry-run estimates use doctor cache data when available and
+  otherwise show an upper-bound warning.
+- Definition of done: stage artifacts and previews explain configured,
+  selected, launched, schema-valid, and minimum-success counts.
+
+**Phase R8: Downstream Evidence Summary**
+
+- Add a deterministic provider-evidence summary helper for downstream review
+  prompts.
+- Include artifact path, status, selected providers, provider_count, top
+  findings, and provider errors while avoiding raw provider text.
+- Keep provider results from mutating Beads outside the provider-stage issue.
+- Definition of done: downstream Claude review receives bounded provider
+  evidence consistently for MCO v1 and swarm-review v2 artifacts.
+
+**Phase R9: Consensus Calibration**
+
+- Capture real Claude/Codex native-schema outputs for representative review
+  cases.
+- Measure false merges and false splits for the secondary anchored cluster key.
+- Keep secondary clusters at `needs-verification` until the calibration supports
+  any promotion policy.
+- Definition of done: the confidence policy for secondary clusters is backed by
+  measured samples or explicitly kept conservative.
+
+**Phase R10: Stock Enablement Decision**
+
+- Decide whether stock automatic review may run one eligible provider or should
+  skip until at least two providers are eligible.
+- Run the stock pipelines with real shims enabled only after R2-R8 are green.
+- Update ADR 0005 status and ADR 0003 supersession language only after the
+  preferred path is validated.
+- Definition of done: stock provider review is either promoted with documented
+  gates or remains skipped-by-default with clear operator messaging.
+
+**Phase R11: Codex Lane Retirement Inventory**
+
+- Inventory all `agent-codex-review` consumers before replacing or retiring that
+  lane.
+- Preserve blocking-issues semantics, timeout/discard behavior, telemetry
+  extraction, and hybrid-review UX before any replacement.
+- Definition of done: a written inventory and parity checklist exists before
+  any code removes or rewires `agent-codex-review`.
+
+**Phase R12: Parser Fallback Experiment**
+
+- Keep parser fallback out of stock automatic review.
+- If needed, add explicit experiment-mode parsing with confidence caps,
+  diagnostics, and fixtures.
+- Definition of done: fallback output never silently looks equivalent to native
+  schema output.
 
 ## Test Matrix
 
-- `python -m unittest py.swarm_do.pipeline.tests.test_provider_review`
-- `python -m unittest py.swarm_do.pipeline.tests.test_providers`
-- `python -m unittest py.swarm_do.pipeline.tests.test_pipeline_validation`
-- `python -m unittest py.swarm_do.pipeline.tests.test_pipeline_actions`
-- `python -m unittest py.swarm_do.telemetry.tests.test_extractors_hashing`
-- schema tests for `schemas/provider_review/review_emission.v1.schema.json`
-- schema tests for side-by-side provider-findings v1/v2 compatibility
-- fixture tests for Codex native schema output
-- fixture tests for Claude native schema output
-- fixture tests for parser fallback confidence caps
-- fixture tests for duplicate consensus across Claude and Codex
-- fake-shim end-to-end tests for no eligible providers, selection off, partial
-  provider failure, malformed output, timeout, and duplicate anchored findings
-- CLI drift tests for current `codex exec` and `claude -p` flags
-- write-denial tests proving eligible provider shims cannot modify repo files
-- doctor contract tests for current MCO-only, review-only, and combined
-  `--review --mco` output
+Current passing focused suites:
+
+- `PYTHONPATH=py python3 -m unittest py.swarm_do.pipeline.tests.test_provider_review`
+- `PYTHONPATH=py python3 -m unittest py.swarm_do.pipeline.tests.test_providers`
+- `PYTHONPATH=py python3 -m unittest py.swarm_do.pipeline.tests.test_pipeline_validation`
+- `PYTHONPATH=py python3 -m unittest py.swarm_do.pipeline.tests.test_pipeline_actions`
+- `PYTHONPATH=py python3 -m unittest py.swarm_do.tui.tests.test_state`
+- `PYTHONPATH=py python3 -m unittest discover -s py`
+
+Validation still needed for future phases:
+
+- Real Codex CLI drift and write-denial tests.
+- Real Claude CLI drift and write-denial tests.
+- Non-spend or bounded-spend readiness probe tests.
+- Native-schema fixture tests for real Codex output.
+- Native-schema fixture tests for real Claude output.
+- Parser fallback confidence-cap tests if fallback mode is implemented.
+- Duplicate consensus tests using captured real Claude/Codex outputs.
+- End-to-end provider evidence summary tests for downstream review prompts.
 
 ## Risks
 
@@ -727,19 +769,19 @@ stores raw sidecars; it is not optional future research.
 
 | Topic | Decision | Timing |
 | --- | --- | --- |
-| Claude read-only flags | Validate locally with the write-denial fixture, not broad research. The installed CLI exposes `--permission-mode plan`, `--json-schema`, `--tools`, and `--disallowedTools`; eligibility still requires proving prompts cannot create, edit, or delete repo files. | Pre-implementation Phase 0 gate before Claude can be marked `read-only-confirmed` or eligible. |
-| Non-spend auth probing for Claude/Codex | Yes, this needs small prototype research. Doctor should distinguish installed, authenticated, and launchable without running a full review. Prefer native no-op/status probes; if a probe may spend tokens, make it explicit and bounded. | Pre-implementation Phase 0 gate before finalizing real doctor/provider probes; fake shims can land first. |
-| Consensus clustering quality | Yes, this needs empirical research before secondary clusters affect stock/default confidence. v1 can still implement exact-hash grouping and a conservative anchored key, but real Claude/Codex outputs must be sampled for false merge and false split rates before promotion. | Pre-implementation Phase 0 gate before promoting secondary-cluster `confirmed` confidence in stock/default behavior. |
-| Parser-fallback default policy | No more research is needed for v1 policy. Parser fallback is off for stock automatic provider review and allowed only for doctor diagnostics or explicit experiment-mode runs, with confidence caps. | Resolved for v1; revisit only after real native-schema and fallback data is collected. |
-| Provider artifact retention/redaction | A concrete policy decision is required before the runner writes raw sidecars, but this should be handled as a Phase 0 design gate rather than open-ended research. Use the minimum policy in the artifact contract above. | Phase 0 gate before runner merge. |
-| End-to-end fake-shim tests | Not research. These are mandatory implementation fixtures for no eligible providers, selection off, partial failure, malformed output, timeout, no findings, and duplicate findings. | Phase 0 harness plus runner/normalizer tests. |
+| Claude read-only flags | Validate locally with the write-denial fixture, not broad research. The installed CLI exposes `--permission-mode plan`, `--json-schema`, `--tools`, and `--disallowedTools`; eligibility still requires proving prompts cannot create, edit, or delete files. | Pending Phase R3 before Claude can be marked `read-only-confirmed` or eligible. |
+| Codex read-only and CLI drift | Exact command-builder tests and flag diagnostics are in place. Eligibility still requires a local write-denial fixture plus readiness probing. | Pending Phase R2 before Codex can be marked eligible. |
+| Non-spend auth probing for Claude/Codex | Yes, this needs small prototype research. Doctor should distinguish installed, authenticated, and launchable without running a full review. Prefer native no-op/status probes; if a probe may spend tokens, make it explicit and bounded. | Pending Phase R4 before finalizing real doctor/provider probes. |
+| Consensus clustering quality | Exact-hash consensus and conservative secondary clustering are implemented. Real Claude/Codex outputs must still be sampled for false merge and false split rates before secondary clusters affect stock/default confidence. | Pending Phase R9 before promoting secondary-cluster `confirmed` confidence. |
+| Parser-fallback default policy | No more research is needed for v1 policy. Parser fallback is off for stock automatic provider review and allowed only for doctor diagnostics or explicit experiment-mode runs, with confidence caps. | Resolved for v1; optional Phase R12 only if fallback is implemented. |
+| Provider artifact retention/redaction | Minimum policy is implemented in the manifest: raw sidecars are sensitive local run artifacts, retained or purged with the run directory, and excluded from telemetry. | Complete for fake-shim runner; revisit before stock real-shim enablement. |
+| End-to-end fake-shim tests | Fake-shim runner and normalizer tests cover no eligible providers, selection off, partial provider failure, malformed output, timeout, no findings, and duplicate findings. | Complete for current fake-shim harness. |
 
-Remaining research after the v1 runner is usable:
+Remaining research after the fake-shim v1 runner:
 
 - Re-measure the secondary consensus key as provider behavior changes.
 - Revisit parser fallback only if native schema support proves too brittle.
-- Tune non-spend auth probes as provider CLIs add or remove status surfaces; the
-  initial probe shape is still a pre-implementation gate.
+- Tune non-spend auth probes as provider CLIs add or remove status surfaces.
 
 ## Resolved Decisions
 
@@ -754,8 +796,9 @@ Remaining research after the v1 runner is usable:
   provider-review path.
 - `swarm providers doctor --review` is a new flag on the existing doctor
   subcommand; `--mco` and `--mco-timeout-seconds` remain for the lab path.
-- Fake-shim integration fixtures, Claude read-only proof, Codex CLI-drift proof,
-  and raw sidecar policy are Phase 0 merge gates, not future research.
+- Fake-shim integration fixtures and the minimum raw sidecar policy are landed.
+- Claude read-only proof, Codex write-denial proof, and non-spend readiness
+  probing remain real-shim eligibility gates, not future nice-to-haves.
 - Parser fallback is not enabled for stock automatic provider review in v1. It
   is limited to doctor diagnostics or explicit experiment-mode runs until real
   data justifies promotion.

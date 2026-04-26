@@ -69,12 +69,32 @@ class ProviderDoctorReport:
                     "selected_review_providers": list(selection.selected_providers) if selection else [],
                     "skipped_review_providers": [status.as_dict() for status in selection.skipped_providers] if selection else [],
                     "review_schema_flags": {
-                        status.provider_id: status.schema_mode for status in selection.provider_statuses
+                        status.provider_id: list(status.schema_flags) for status in selection.provider_statuses
                     }
                     if selection
                     else {},
                     "review_read_only_flags": {
+                        status.provider_id: list(status.read_only_flags) for status in selection.provider_statuses
+                    }
+                    if selection
+                    else {},
+                    "review_schema_modes": {
+                        status.provider_id: status.schema_mode for status in selection.provider_statuses
+                    }
+                    if selection
+                    else {},
+                    "review_read_only_modes": {
                         status.provider_id: status.read_only_mode for status in selection.provider_statuses
+                    }
+                    if selection
+                    else {},
+                    "review_missing_schema_flags": {
+                        status.provider_id: list(status.missing_schema_flags) for status in selection.provider_statuses
+                    }
+                    if selection
+                    else {},
+                    "review_missing_read_only_flags": {
+                        status.provider_id: list(status.missing_read_only_flags) for status in selection.provider_statuses
                     }
                     if selection
                     else {},

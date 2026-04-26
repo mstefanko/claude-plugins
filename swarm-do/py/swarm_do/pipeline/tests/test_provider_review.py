@@ -102,15 +102,146 @@ class ProviderReviewTests(unittest.TestCase):
             last_message_file=Path("/last.json"),
             route=route,
         )
-        self.assertEqual(codex[:5], ["codex", "exec", "--json", "--sandbox", "read-only"])
-        self.assertIn("--output-schema", codex)
-        self.assertIn("--output-last-message", codex)
-        self.assertEqual(codex[-1], "Review")
+        self.assertEqual(
+            codex,
+            [
+                "codex",
+                "exec",
+                "--json",
+                "--sandbox",
+                "read-only",
+                "-C",
+                "/repo",
+                "--output-schema",
+                "/schema.json",
+                "--output-last-message",
+                "/last.json",
+                "-m",
+                "gpt-5.4",
+                "-c",
+                'model_reasoning_effort="high"',
+                "Review",
+            ],
+        )
 
         claude = build_claude_review_command(claude_bin="claude", prompt="Review", schema_json='{"type":"object"}')
-        self.assertEqual(claude[:4], ["claude", "-p", "--permission-mode", "plan"])
-        self.assertIn("--json-schema", claude)
-        self.assertEqual(claude[-1], "Review")
+        self.assertEqual(
+            claude,
+            [
+                "claude",
+                "-p",
+                "--permission-mode",
+                "plan",
+                "--output-format",
+                "json",
+                "--json-schema",
+                '{"type":"object"}',
+                "Review",
+            ],
+        )
+
+    def test_real_resolver_reports_exact_detected_cli_flags_but_stays_ineligible(self) -> None:
+        def which(cmd: str) -> str | None:
+            return f"/bin/{cmd}" if cmd in {"claude", "codex"} else None
+
+        def runner(args, **kwargs):
+            if args == ["claude", "--help"]:
+                stdout = "Usage: claude -p --permission-mode --output-format --json-schema"
+            elif args == ["codex", "exec", "--help"]:
+                stdout = "Usage: codex exec --json --sandbox --output-schema --output-last-message"
+            elif args == ["claude", "--version"]:
+                stdout = "claude 1.0"
+            elif args == ["codex", "--version"]:
+                stdout = "codex 1.0"
+            else:
+                stdout = ""
+            return argparse.Namespace(args=args, returncode=0, stdout=stdout, stderr="")
+
+        old_data = os.environ.get("CLAUDE_PLUGIN_DATA")
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["CLAUDE_PLUGIN_DATA"] = td
+            try:
+                statuses = ReviewProviderResolver(which=which, runner=runner).statuses()
+            finally:
+                if old_data is None:
+                    os.environ.pop("CLAUDE_PLUGIN_DATA", None)
+                else:
+                    os.environ["CLAUDE_PLUGIN_DATA"] = old_data
+
+        by_id = {status.provider_id: status for status in statuses}
+        self.assertEqual(by_id["claude"].schema_flags, ("-p", "--json-schema", "--output-format"))
+        self.assertEqual(by_id["claude"].read_only_flags, ("--permission-mode",))
+        self.assertEqual(by_id["codex"].schema_flags, ("--json", "--output-schema", "--output-last-message"))
+        self.assertEqual(by_id["codex"].read_only_flags, ("--sandbox",))
+        self.assertEqual(by_id["codex"].schema_mode, "native")
+        self.assertEqual(by_id["codex"].read_only_mode, "flag-detected")
+        self.assertFalse(by_id["codex"].eligible)
+        self.assertIn("Phase 0 write-denial proof not complete", by_id["codex"].reason)
+
+    def test_real_resolver_fails_command_surface_closed_when_required_flag_is_missing(self) -> None:
+        def which(cmd: str) -> str | None:
+            return f"/bin/{cmd}" if cmd == "codex" else None
+
+        def runner(args, **kwargs):
+            if args == ["codex", "exec", "--help"]:
+                stdout = "Usage: codex exec --sandbox --output-schema --output-last-message"
+            elif args == ["codex", "--version"]:
+                stdout = "codex 1.0"
+            else:
+                stdout = ""
+            return argparse.Namespace(args=args, returncode=0, stdout=stdout, stderr="")
+
+        old_data = os.environ.get("CLAUDE_PLUGIN_DATA")
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["CLAUDE_PLUGIN_DATA"] = td
+            try:
+                codex = next(
+                    status
+                    for status in ReviewProviderResolver(which=which, runner=runner).statuses()
+                    if status.provider_id == "codex"
+                )
+            finally:
+                if old_data is None:
+                    os.environ.pop("CLAUDE_PLUGIN_DATA", None)
+                else:
+                    os.environ["CLAUDE_PLUGIN_DATA"] = old_data
+
+        self.assertEqual(codex.schema_mode, "unavailable")
+        self.assertEqual(codex.missing_schema_flags, ("--json",))
+        self.assertIn("structured-output flags not detected: --json", codex.reason)
+        self.assertFalse(codex.eligible)
+
+    def test_real_resolver_does_not_count_cli_flag_substrings_as_detected(self) -> None:
+        def which(cmd: str) -> str | None:
+            return f"/bin/{cmd}" if cmd == "claude" else None
+
+        def runner(args, **kwargs):
+            if args == ["claude", "--help"]:
+                stdout = "Usage: claude --permission-mode --output-format --json-schema"
+            elif args == ["claude", "--version"]:
+                stdout = "claude 1.0"
+            else:
+                stdout = ""
+            return argparse.Namespace(args=args, returncode=0, stdout=stdout, stderr="")
+
+        old_data = os.environ.get("CLAUDE_PLUGIN_DATA")
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["CLAUDE_PLUGIN_DATA"] = td
+            try:
+                claude = next(
+                    status
+                    for status in ReviewProviderResolver(which=which, runner=runner).statuses()
+                    if status.provider_id == "claude"
+                )
+            finally:
+                if old_data is None:
+                    os.environ.pop("CLAUDE_PLUGIN_DATA", None)
+                else:
+                    os.environ["CLAUDE_PLUGIN_DATA"] = old_data
+
+        self.assertEqual(claude.schema_flags, ("--json-schema", "--output-format"))
+        self.assertEqual(claude.missing_schema_flags, ("-p",))
+        self.assertEqual(claude.schema_mode, "unavailable")
 
     def test_fake_resolver_selects_deterministically(self) -> None:
         resolver = ReviewProviderResolver(fake_providers=("codex", "claude"))

@@ -52,6 +52,7 @@ _SEVERITY_MAP = {
 _CATEGORY_REWRITES = {"types": "types_or_null", "null": "types_or_null"}
 _LEADING_VERB_RE = re.compile(r"^[A-Z][a-z]*[a-z] ")
 _SAFE_PROVIDER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+_HELP_FLAG_RE = re.compile(r"(?<![A-Za-z0-9_-])--?[A-Za-z0-9][A-Za-z0-9-]*(?![A-Za-z0-9_-])")
 
 
 class ProviderReviewError(ValueError):
@@ -93,6 +94,10 @@ class ReviewProviderStatus:
     cli_version: str | None = None
     schema_mode: str = "unavailable"
     read_only_mode: str = "unavailable"
+    schema_flags: tuple[str, ...] = ()
+    read_only_flags: tuple[str, ...] = ()
+    missing_schema_flags: tuple[str, ...] = ()
+    missing_read_only_flags: tuple[str, ...] = ()
     fake: bool = False
 
     def as_dict(self) -> dict[str, Any]:
@@ -103,6 +108,10 @@ class ReviewProviderStatus:
             "eligible": self.eligible,
             "schema_mode": self.schema_mode,
             "read_only_mode": self.read_only_mode,
+            "schema_flags": list(self.schema_flags),
+            "read_only_flags": list(self.read_only_flags),
+            "missing_schema_flags": list(self.missing_schema_flags),
+            "missing_read_only_flags": list(self.missing_read_only_flags),
             "fake": self.fake,
         }
         if self.route is not None:
@@ -197,6 +206,11 @@ def parse_provider_csv(raw: str | None) -> tuple[str, ...]:
         if not _SAFE_PROVIDER_RE.fullmatch(provider_id):
             raise ProviderReviewError(f"invalid provider id: {provider_id!r}")
     return providers
+
+
+def _detected_required_flags(help_text: str, required_flags: Sequence[str]) -> tuple[str, ...]:
+    tokens = set(_HELP_FLAG_RE.findall(help_text))
+    return tuple(flag for flag in required_flags if flag in tokens)
 
 
 def _as_str_tuple(value: Any) -> tuple[str, ...]:
@@ -355,7 +369,7 @@ class ReviewProviderResolver:
                 provider_id="claude",
                 role="agent-review",
                 executable_name="claude",
-                required_schema_flags=("--json-schema", "--output-format"),
+                required_schema_flags=("-p", "--json-schema", "--output-format"),
                 required_read_only_flags=("--permission-mode",),
             )
         if provider_id == "codex":
@@ -363,7 +377,7 @@ class ReviewProviderResolver:
                 provider_id="codex",
                 role="agent-codex-review",
                 executable_name="codex",
-                required_schema_flags=("--output-schema", "--output-last-message"),
+                required_schema_flags=("--json", "--output-schema", "--output-last-message"),
                 required_read_only_flags=("--sandbox",),
             )
         if provider_id == "gemini":
@@ -409,15 +423,19 @@ class ReviewProviderResolver:
             )
         help_text = self._help_text(executable_name)
         version = self._version_text(executable_name)
-        schema_ok = all(flag in help_text for flag in required_schema_flags)
-        read_only_ok = all(flag in help_text for flag in required_read_only_flags)
+        schema_flags = _detected_required_flags(help_text, required_schema_flags)
+        read_only_flags = _detected_required_flags(help_text, required_read_only_flags)
+        missing_schema_flags = tuple(flag for flag in required_schema_flags if flag not in schema_flags)
+        missing_read_only_flags = tuple(flag for flag in required_read_only_flags if flag not in read_only_flags)
+        schema_ok = not missing_schema_flags
+        read_only_ok = not missing_read_only_flags
         schema_mode = "native" if schema_ok else "unavailable"
         read_only_mode = "flag-detected" if read_only_ok else "unavailable"
         reason_parts: list[str] = []
-        if not schema_ok:
-            reason_parts.append("structured-output flags not detected")
-        if not read_only_ok:
-            reason_parts.append("read-only flags not detected")
+        if missing_schema_flags:
+            reason_parts.append("structured-output flags not detected: " + ", ".join(missing_schema_flags))
+        if missing_read_only_flags:
+            reason_parts.append("read-only flags not detected: " + ", ".join(missing_read_only_flags))
         reason_parts.append("Phase 0 write-denial proof not complete")
         return ReviewProviderStatus(
             provider_id,
@@ -429,6 +447,10 @@ class ReviewProviderResolver:
             cli_version=version,
             schema_mode=schema_mode,
             read_only_mode=read_only_mode,
+            schema_flags=schema_flags,
+            read_only_flags=read_only_flags,
+            missing_schema_flags=missing_schema_flags,
+            missing_read_only_flags=missing_read_only_flags,
         )
 
     def _help_text(self, executable_name: str) -> str:
