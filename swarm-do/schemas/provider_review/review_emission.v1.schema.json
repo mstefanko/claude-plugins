@@ -11,7 +11,17 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["severity", "category", "summary", "confidence"],
+        "required": [
+          "severity",
+          "category",
+          "summary",
+          "file_path",
+          "line_start",
+          "line_end",
+          "confidence",
+          "evidence",
+          "recommendation"
+        ],
         "additionalProperties": false,
         "properties": {
           "severity": {

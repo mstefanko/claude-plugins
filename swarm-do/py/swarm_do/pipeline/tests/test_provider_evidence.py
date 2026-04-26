@@ -121,6 +121,8 @@ class ProviderEvidenceTests(unittest.TestCase):
                 "line_start": idx + 1,
                 "line_end": idx + 1,
                 "confidence": 0.7,
+                "evidence": None,
+                "recommendation": None,
             }
             for idx in range(7)
         ]

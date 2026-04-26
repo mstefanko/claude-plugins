@@ -539,6 +539,7 @@ class ReviewProviderResolver:
         which: Callable[[str], str | None] = shutil.which,
         runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
         fake_providers: Sequence[str] | None = None,
+        claude_schema_probe: ReviewProviderProbeCheck | None = None,
         claude_read_only_probe: ReviewProviderProbeCheck | None = None,
         claude_auth_probe: ReviewProviderProbeCheck | None = None,
         codex_schema_probe: ReviewProviderProbeCheck | None = None,
@@ -553,6 +554,7 @@ class ReviewProviderResolver:
         self.which = which
         self.runner = runner
         self.fake_providers = tuple(fake_providers) if fake_providers is not None else _fake_provider_ids_from_env()
+        self.claude_schema_probe = claude_schema_probe
         self.claude_read_only_probe = claude_read_only_probe
         self.claude_auth_probe = claude_auth_probe
         self.codex_schema_probe = codex_schema_probe
@@ -668,7 +670,9 @@ class ReviewProviderResolver:
                 role="agent-review",
                 executable_name="claude",
                 required_schema_flags=("-p", "--json-schema", "--output-format"),
-                required_read_only_flags=("--permission-mode",),
+                required_read_only_flags=("--permission-mode", "--disallowedTools"),
+                schema_probe=self.claude_schema_probe,
+                schema_probe_required_reason="structured-output flags detected but Phase R3 schema smoke proof not complete",
                 read_only_probe=self.claude_read_only_probe,
                 read_only_probe_required_reason="read-only flags detected but Phase R3 write-denial proof not complete",
                 auth_probe=self.claude_auth_probe,
@@ -1361,17 +1365,28 @@ def run_codex_structured_output_smoke_fixture(
     )
 
 
+CLAUDE_DISALLOWED_TOOLS = ("Write", "Edit", "NotebookEdit", "Bash")
+
+
 def build_claude_review_command(
     *,
     claude_bin: str,
     prompt: str,
     schema_json: str | None = None,
 ) -> list[str]:
+    """Build the Claude review command.
+
+    Plan mode alone is advisory in some Claude Code harness configurations and
+    has been observed to allow Write/Edit/Bash through. We pair it with explicit
+    --disallowedTools to fail closed against the mutating tools.
+    """
     return [
         claude_bin,
         "-p",
         "--permission-mode",
         "plan",
+        "--disallowedTools",
+        ",".join(CLAUDE_DISALLOWED_TOOLS),
         "--output-format",
         "json",
         "--json-schema",
@@ -1388,10 +1403,27 @@ def _claude_write_denial_prompt() -> str:
             f"1. Create {CLAUDE_WRITE_DENIAL_CREATE_PATH} with the text created by claude.",
             f"2. Replace the entire contents of {CLAUDE_WRITE_DENIAL_EDIT_PATH} with the text edited by claude.",
             f"3. Delete {CLAUDE_WRITE_DENIAL_DELETE_PATH}.",
-            "After those attempts, emit a JSON object matching the supplied schema.",
-            "Use an empty findings array unless the command itself discovers a review finding.",
+            "Report what happened in plain prose. The point of this fixture is to prove that plan mode denied each operation; structured output is not required.",
         ]
     )
+
+
+def _claude_schema_smoke_prompt() -> str:
+    return "\n".join(
+        [
+            "This is a bounded swarm-do Claude structured-output smoke fixture.",
+            "Do not modify any files and do not perform a review.",
+            "Output exactly one JSON object whose only top-level key is `findings`,",
+            "set to an empty array. Do not include any other keys, prose, markdown,",
+            "code fences, or commentary — emit only the JSON object.",
+        ]
+    )
+
+
+def _prepare_claude_schema_smoke_repo(root: Path) -> Path:
+    repo = root / "repo"
+    _ensure_probe_git_repo(repo)
+    return repo
 
 
 def _prepare_claude_write_denial_repo(root: Path) -> Path:
@@ -1676,20 +1708,6 @@ def run_claude_write_denial_fixture(
         )
 
     if completed.returncode == 0:
-        try:
-            payload = _claude_output_payload(completed.stdout or "")
-        except (json.JSONDecodeError, ProviderReviewSchemaError) as exc:
-            return ClaudeProbeResult(
-                "claude-write-denial",
-                "error",
-                False,
-                f"Claude write-denial fixture did not produce schema-valid output: {exc}",
-                command_argv=tuple(command),
-                returncode=completed.returncode,
-                stdout_text=completed.stdout or "",
-                stderr_text=completed.stderr or "",
-                data={"mutation_checks": checks, "cwd": str(repo), "schema_mode": "native"},
-            )
         return ClaudeProbeResult(
             "claude-write-denial",
             "ok",
@@ -1699,12 +1717,7 @@ def run_claude_write_denial_fixture(
             returncode=completed.returncode,
             stdout_text=completed.stdout or "",
             stderr_text=completed.stderr or "",
-            data={
-                "mutation_checks": checks,
-                "cwd": str(repo),
-                "schema_mode": "native",
-                "finding_count": len(payload.get("findings") or []),
-            },
+            data={"mutation_checks": checks, "cwd": str(repo), "schema_mode": "native"},
         )
 
     return ClaudeProbeResult(
@@ -1717,6 +1730,100 @@ def run_claude_write_denial_fixture(
         stdout_text=completed.stdout or "",
         stderr_text=completed.stderr or "",
         data={"mutation_checks": checks, "cwd": str(repo), "schema_mode": "native"},
+    )
+
+
+def run_claude_structured_output_smoke_fixture(
+    *,
+    claude_bin: str = "claude",
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    timeout_seconds: int = DEFAULT_CLAUDE_R3_TIMEOUT_SECONDS,
+    work_root: Path | None = None,
+) -> ClaudeProbeResult:
+    """Run a bounded Claude native-schema smoke check without confronting plan mode with mutation requests."""
+
+    if timeout_seconds < 1:
+        raise ProviderReviewError("Claude structured-output smoke timeout must be >= 1")
+    if work_root is None:
+        with tempfile.TemporaryDirectory(prefix="swarm-claude-schema-") as td:
+            return run_claude_structured_output_smoke_fixture(
+                claude_bin=claude_bin,
+                runner=runner,
+                timeout_seconds=timeout_seconds,
+                work_root=Path(td),
+            )
+
+    root = work_root.resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    repo = _prepare_claude_schema_smoke_repo(root)
+    command = build_claude_review_command(
+        claude_bin=claude_bin,
+        prompt=_claude_schema_smoke_prompt(),
+        schema_json=minified_emission_schema(),
+    )
+    try:
+        completed = runner(command, cwd=repo, text=True, capture_output=True, timeout=timeout_seconds)
+    except subprocess.TimeoutExpired as exc:
+        return ClaudeProbeResult(
+            "claude-schema-smoke",
+            "warning",
+            False,
+            f"Claude structured-output smoke timed out after {timeout_seconds}s",
+            command_argv=tuple(command),
+            stdout_text=str(exc.stdout or ""),
+            stderr_text=str(exc.stderr or ""),
+            data={"cwd": str(repo), "schema_mode": "native"},
+        )
+    except OSError as exc:
+        return ClaudeProbeResult(
+            "claude-schema-smoke",
+            "error",
+            False,
+            f"Claude structured-output smoke failed to start: {exc}",
+            command_argv=tuple(command),
+            data={"cwd": str(repo), "schema_mode": "native"},
+        )
+
+    if completed.returncode != 0:
+        return ClaudeProbeResult(
+            "claude-schema-smoke",
+            "error",
+            False,
+            f"Claude structured-output smoke exited {completed.returncode}",
+            command_argv=tuple(command),
+            returncode=completed.returncode,
+            stdout_text=completed.stdout or "",
+            stderr_text=completed.stderr or "",
+            data={"cwd": str(repo), "schema_mode": "native"},
+        )
+    try:
+        payload = _claude_output_payload(completed.stdout or "")
+    except (json.JSONDecodeError, ProviderReviewSchemaError) as exc:
+        return ClaudeProbeResult(
+            "claude-schema-smoke",
+            "error",
+            False,
+            f"Claude structured-output smoke did not produce schema-valid output: {exc}",
+            command_argv=tuple(command),
+            returncode=completed.returncode,
+            stdout_text=completed.stdout or "",
+            stderr_text=completed.stderr or "",
+            data={"cwd": str(repo), "schema_mode": "native"},
+        )
+    return ClaudeProbeResult(
+        "claude-schema-smoke",
+        "ok",
+        True,
+        "Claude structured-output smoke produced schema-valid provider emission",
+        command_argv=tuple(command),
+        returncode=completed.returncode,
+        stdout_text=completed.stdout or "",
+        stderr_text=completed.stderr or "",
+        data={
+            "cwd": str(repo),
+            "schema_mode": "native",
+            "finding_count": len(payload.get("findings") or []),
+        },
     )
 
 

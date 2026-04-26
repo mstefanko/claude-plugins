@@ -173,7 +173,7 @@ class ProviderDoctorTests(unittest.TestCase):
 
         def runner(args, **kwargs):
             if args == ["claude", "--help"]:
-                stdout = "Usage: claude -p --permission-mode --output-format --json-schema"
+                stdout = "Usage: claude -p --permission-mode --disallowedTools --output-format --json-schema"
             elif args == ["codex", "exec", "--help"]:
                 stdout = "Usage: codex exec --json --sandbox --output-schema --output-last-message"
             elif args == ["claude", "--version"]:
@@ -198,7 +198,7 @@ class ProviderDoctorTests(unittest.TestCase):
 
         payload = report.as_dict()
         self.assertEqual(payload["review_schema_flags"]["claude"], ["-p", "--json-schema", "--output-format"])
-        self.assertEqual(payload["review_read_only_flags"]["claude"], ["--permission-mode"])
+        self.assertEqual(payload["review_read_only_flags"]["claude"], ["--permission-mode", "--disallowedTools"])
         self.assertEqual(payload["review_schema_flags"]["codex"], ["--json", "--output-schema", "--output-last-message"])
         self.assertEqual(payload["review_read_only_flags"]["codex"], ["--sandbox"])
         self.assertEqual(payload["review_schema_modes"]["codex"], "native")
@@ -219,7 +219,7 @@ class ProviderDoctorTests(unittest.TestCase):
 
         def runner(args, **kwargs):
             if args == ["claude", "--help"]:
-                stdout = "Usage: claude -p --permission-mode --output-format --json-schema"
+                stdout = "Usage: claude -p --permission-mode --disallowedTools --output-format --json-schema"
                 return subprocess.CompletedProcess(args=args, returncode=0, stdout=stdout, stderr="")
             if args == ["codex", "exec", "--help"]:
                 stdout = "Usage: codex exec --json --sandbox --output-schema --output-last-message"

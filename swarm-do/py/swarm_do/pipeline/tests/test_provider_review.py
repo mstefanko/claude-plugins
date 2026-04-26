@@ -35,6 +35,7 @@ from swarm_do.pipeline.provider_review import (
     normalize_provider_review_results,
     parse_provider_review_fallback_text,
     run_claude_auth_status_probe,
+    run_claude_structured_output_smoke_fixture,
     run_claude_write_denial_fixture,
     run_codex_auth_status_probe,
     run_codex_structured_output_smoke_fixture,
@@ -563,6 +564,8 @@ class ProviderReviewTests(unittest.TestCase):
                 "-p",
                 "--permission-mode",
                 "plan",
+                "--disallowedTools",
+                "Write,Edit,NotebookEdit,Bash",
                 "--output-format",
                 "json",
                 "--json-schema",
@@ -589,8 +592,9 @@ class ProviderReviewTests(unittest.TestCase):
         self.assertTrue(result.ready, result.reason)
         self.assertEqual(result.status, "ok")
         command = captured[0][0]
-        self.assertEqual(command[:5], ["/bin/claude", "-p", "--permission-mode", "plan", "--output-format"])
+        self.assertEqual(command[:6], ["/bin/claude", "-p", "--permission-mode", "plan", "--disallowedTools", "Write,Edit,NotebookEdit,Bash"])
         self.assertIn("--json-schema", command)
+        self.assertIn("--output-format", command)
         self.assertIsNotNone(captured[0][1])
         self.assertEqual(result.data["mutation_checks"], {"create_denied": True, "edit_denied": True, "delete_denied": True})
 
@@ -615,12 +619,19 @@ class ProviderReviewTests(unittest.TestCase):
         self.assertIn("allowed repo mutations", result.reason)
         self.assertEqual(result.data["mutation_checks"], {"create_denied": False, "edit_denied": False, "delete_denied": False})
 
-    def test_claude_write_denial_fixture_validates_schema_when_command_succeeds(self) -> None:
+    def test_claude_write_denial_fixture_passes_when_stdout_is_prose(self) -> None:
+        """Plan mode commonly responds with refusal prose rather than schema JSON.
+
+        The write-denial fixture must prove that mutations were denied — not that
+        the model emitted schema-valid output. Schema emission is the separate
+        smoke fixture's job.
+        """
+
         def runner(args, **kwargs):
             return subprocess.CompletedProcess(
                 args=args,
                 returncode=0,
-                stdout=json.dumps({"result": json.dumps({"findings": []})}),
+                stdout='{"result": "I cannot perform the filesystem operations requested..."}',
                 stderr="",
             )
 
@@ -634,8 +645,59 @@ class ProviderReviewTests(unittest.TestCase):
 
         self.assertTrue(result.ready, result.reason)
         self.assertEqual(result.status, "ok")
+        self.assertEqual(result.data["mutation_checks"], {"create_denied": True, "edit_denied": True, "delete_denied": True})
+        self.assertNotIn("finding_count", result.data)
+
+    def test_claude_structured_output_smoke_fixture_validates_schema_when_command_succeeds(self) -> None:
+        captured: list[tuple[list[str], Path | None]] = []
+
+        def runner(args, **kwargs):
+            captured.append((list(args), kwargs.get("cwd")))
+            return subprocess.CompletedProcess(
+                args=args,
+                returncode=0,
+                stdout=json.dumps({"result": json.dumps({"findings": []})}),
+                stderr="",
+            )
+
+        with tempfile.TemporaryDirectory() as td:
+            result = run_claude_structured_output_smoke_fixture(
+                claude_bin="/bin/claude",
+                runner=runner,
+                timeout_seconds=5,
+                work_root=Path(td),
+            )
+
+        self.assertTrue(result.ready, result.reason)
+        self.assertEqual(result.status, "ok")
         self.assertEqual(result.data["schema_mode"], "native")
         self.assertEqual(result.data["finding_count"], 0)
+        command = captured[0][0]
+        self.assertEqual(command[:6], ["/bin/claude", "-p", "--permission-mode", "plan", "--disallowedTools", "Write,Edit,NotebookEdit,Bash"])
+        self.assertIn("--json-schema", command)
+        self.assertIn("--output-format", command)
+        self.assertIsNotNone(captured[0][1])
+
+    def test_claude_structured_output_smoke_fixture_fails_when_output_is_not_schema_valid(self) -> None:
+        def runner(args, **kwargs):
+            return subprocess.CompletedProcess(
+                args=args,
+                returncode=0,
+                stdout='{"result": "I cannot follow the schema — explanation prose only"}',
+                stderr="",
+            )
+
+        with tempfile.TemporaryDirectory() as td:
+            result = run_claude_structured_output_smoke_fixture(
+                claude_bin="/bin/claude",
+                runner=runner,
+                timeout_seconds=5,
+                work_root=Path(td),
+            )
+
+        self.assertFalse(result.ready)
+        self.assertEqual(result.status, "error")
+        self.assertIn("did not produce schema-valid output", result.reason)
 
     def test_codex_write_denial_fixture_uses_exact_read_only_command_and_passes_fail_closed(self) -> None:
         captured: list[list[str]] = []
@@ -726,8 +788,10 @@ class ProviderReviewTests(unittest.TestCase):
         timeout = int(os.environ.get("SWARM_CLAUDE_R3_TIMEOUT_SECONDS", str(DEFAULT_CLAUDE_R3_TIMEOUT_SECONDS)))
         claude_bin = os.environ.get("SWARM_CLAUDE_BIN", "claude")
 
+        schema_result = run_claude_structured_output_smoke_fixture(claude_bin=claude_bin, timeout_seconds=timeout)
         read_only_result = run_claude_write_denial_fixture(claude_bin=claude_bin, timeout_seconds=timeout)
 
+        self.assertTrue(schema_result.ready, schema_result.as_probe_check().as_dict())
         self.assertTrue(read_only_result.ready, read_only_result.as_probe_check().as_dict())
 
     def test_r4_auth_status_probes_distinguish_authenticated_and_not_authenticated(self) -> None:
@@ -781,7 +845,7 @@ class ProviderReviewTests(unittest.TestCase):
 
         def runner(args, **kwargs):
             if args == ["claude", "--help"]:
-                stdout = "Usage: claude -p --permission-mode --output-format --json-schema"
+                stdout = "Usage: claude -p --permission-mode --disallowedTools --output-format --json-schema"
             elif args == ["codex", "exec", "--help"]:
                 stdout = "Usage: codex exec --json --sandbox --output-schema --output-last-message"
             elif args == ["claude", "--version"]:
@@ -810,7 +874,7 @@ class ProviderReviewTests(unittest.TestCase):
 
         by_id = {status.provider_id: status for status in statuses}
         self.assertEqual(by_id["claude"].schema_flags, ("-p", "--json-schema", "--output-format"))
-        self.assertEqual(by_id["claude"].read_only_flags, ("--permission-mode",))
+        self.assertEqual(by_id["claude"].read_only_flags, ("--permission-mode", "--disallowedTools"))
         self.assertEqual(by_id["codex"].schema_flags, ("--json", "--output-schema", "--output-last-message"))
         self.assertEqual(by_id["codex"].read_only_flags, ("--sandbox",))
         self.assertEqual(by_id["codex"].schema_mode, "native")
@@ -930,7 +994,7 @@ class ProviderReviewTests(unittest.TestCase):
 
         def runner(args, **kwargs):
             if args == ["claude", "--help"]:
-                stdout = "Usage: claude -p --permission-mode --output-format --json-schema"
+                stdout = "Usage: claude -p --permission-mode --disallowedTools --output-format --json-schema"
             elif args == ["claude", "--version"]:
                 stdout = "claude 1.0"
             elif args == ["claude", "auth", "status", "--json"]:
@@ -949,6 +1013,11 @@ class ProviderReviewTests(unittest.TestCase):
                     for status in ReviewProviderResolver(
                         which=which,
                         runner=runner,
+                        claude_schema_probe=ReviewProviderProbeCheck(
+                            "ok",
+                            True,
+                            "Claude structured-output smoke produced schema-valid provider emission",
+                        ),
                         claude_read_only_probe=ReviewProviderProbeCheck(
                             "ok",
                             True,
@@ -1185,6 +1254,8 @@ enabled = false
             "line_start": 42,
             "line_end": 42,
             "confidence": 0.9,
+            "evidence": None,
+            "recommendation": None,
         }
         second = {
             **first,
@@ -1223,6 +1294,8 @@ enabled = false
                 "line_start": idx + 1,
                 "line_end": idx + 1,
                 "confidence": 0.9,
+                "evidence": None,
+                "recommendation": None,
             }
             for idx, severity in enumerate(("info", "low", "medium", "high", "critical", "high", "medium"))
         ]
@@ -1295,6 +1368,8 @@ enabled = false
             "line_start": 42,
             "line_end": 42,
             "confidence": 0.9,
+            "evidence": None,
+            "recommendation": None,
         }
         same_anchor_second = {
             **same_anchor_first,
@@ -1308,6 +1383,8 @@ enabled = false
             "line_start": 10,
             "line_end": 10,
             "confidence": 0.8,
+            "evidence": None,
+            "recommendation": None,
         }
         split_anchor_second = {
             **split_anchor_first,
@@ -1458,6 +1535,8 @@ enabled = false
                                 "line_start": 10,
                                 "line_end": 10,
                                 "confidence": 0.7,
+                                "evidence": None,
+                                "recommendation": None,
                             }
                         ]
                     }
@@ -1505,6 +1584,8 @@ enabled = false
                 "line_start": idx + 1,
                 "line_end": idx + 1,
                 "confidence": 0.9,
+                "evidence": None,
+                "recommendation": None,
             }
             for idx, severity in enumerate(
                 ("info", "low", "medium", "high", "critical", "high", "medium", "low", "info", "critical", "high", "medium")
@@ -1555,6 +1636,8 @@ enabled = false
                 "line_start": idx + 1,
                 "line_end": idx + 1,
                 "confidence": 0.7,
+                "evidence": None,
+                "recommendation": None,
             }
             for idx in range(3)
         ]
@@ -1728,7 +1811,7 @@ enabled = false
 
         def runner(args, **kwargs):
             if args == ["claude", "--help"]:
-                return subprocess.CompletedProcess(args=args, returncode=0, stdout="-p --permission-mode --output-format --json-schema", stderr="")
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="-p --permission-mode --disallowedTools --output-format --json-schema", stderr="")
             if args == ["codex", "exec", "--help"]:
                 return subprocess.CompletedProcess(args=args, returncode=0, stdout="--json --sandbox --output-schema --output-last-message", stderr="")
             if args == ["claude", "--version"]:
@@ -1749,6 +1832,7 @@ enabled = false
             return ReviewProviderResolver(
                 which=which,
                 runner=runner,
+                claude_schema_probe=ReviewProviderProbeCheck("ok", True, "Claude schema proof green"),
                 claude_read_only_probe=ReviewProviderProbeCheck("ok", True, "Claude read-only proof green"),
                 codex_schema_probe=ReviewProviderProbeCheck("ok", True, "Codex schema proof green"),
                 codex_read_only_probe=ReviewProviderProbeCheck("ok", True, "Codex read-only proof green"),
@@ -1787,7 +1871,7 @@ enabled = false
 
         def runner(args, **kwargs):
             if args == ["claude", "--help"]:
-                return subprocess.CompletedProcess(args=args, returncode=0, stdout="-p --permission-mode --output-format --json-schema", stderr="")
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="-p --permission-mode --disallowedTools --output-format --json-schema", stderr="")
             if args == ["claude", "--version"]:
                 return subprocess.CompletedProcess(args=args, returncode=0, stdout="claude 1.0", stderr="")
             if args == ["claude", "auth", "status", "--json"]:
@@ -1805,6 +1889,7 @@ enabled = false
             return ReviewProviderResolver(
                 which=which,
                 runner=runner,
+                claude_schema_probe=ReviewProviderProbeCheck("ok", True, "Claude schema proof green"),
                 claude_read_only_probe=ReviewProviderProbeCheck("ok", True, "Claude read-only proof green"),
             )
 
@@ -1820,7 +1905,8 @@ enabled = false
         self.assertEqual(artifact["provider_count"], 1)
         self.assertEqual(artifact["findings"][0]["detected_by"], ["claude"])
         self.assertEqual(artifact["findings"][0]["summary"], "Rejects valid output")
-        self.assertEqual(sidecars["claude"]["meta"]["command_argv"][:5], ["/bin/claude", "-p", "--permission-mode", "plan", "--output-format"])
+        self.assertEqual(sidecars["claude"]["meta"]["command_argv"][:6], ["/bin/claude", "-p", "--permission-mode", "plan", "--disallowedTools", "Write,Edit,NotebookEdit,Bash"])
+        self.assertIn("--output-format", sidecars["claude"]["meta"]["command_argv"])
         schema_arg_index = sidecars["claude"]["meta"]["command_argv"].index("--json-schema")
         self.assertEqual(sidecars["claude"]["meta"]["command_argv"][schema_arg_index + 1], "<redacted>")
 
@@ -1830,7 +1916,7 @@ enabled = false
 
         def runner(args, **kwargs):
             if args == ["claude", "--help"]:
-                return subprocess.CompletedProcess(args=args, returncode=0, stdout="-p --permission-mode --output-format --json-schema", stderr="")
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="-p --permission-mode --disallowedTools --output-format --json-schema", stderr="")
             if args == ["claude", "--version"]:
                 return subprocess.CompletedProcess(args=args, returncode=0, stdout="claude 1.0", stderr="")
             if args == ["claude", "auth", "status", "--json"]:
@@ -1843,6 +1929,7 @@ enabled = false
             return ReviewProviderResolver(
                 which=which,
                 runner=runner,
+                claude_schema_probe=ReviewProviderProbeCheck("ok", True, "Claude schema proof green"),
                 claude_read_only_probe=ReviewProviderProbeCheck("ok", True, "Claude read-only proof green"),
             )
 
@@ -1865,7 +1952,7 @@ enabled = false
 
         def runner(args, **kwargs):
             if args == ["claude", "--help"]:
-                return subprocess.CompletedProcess(args=args, returncode=0, stdout="-p --permission-mode --output-format --json-schema", stderr="")
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="-p --permission-mode --disallowedTools --output-format --json-schema", stderr="")
             if args == ["codex", "exec", "--help"]:
                 return subprocess.CompletedProcess(args=args, returncode=0, stdout="--json --sandbox --output-schema --output-last-message", stderr="")
             if args == ["claude", "--version"]:
@@ -1889,6 +1976,7 @@ enabled = false
             return ReviewProviderResolver(
                 which=which,
                 runner=runner,
+                claude_schema_probe=ReviewProviderProbeCheck("ok", True, "Claude schema proof green"),
                 claude_read_only_probe=ReviewProviderProbeCheck("ok", True, "Claude read-only proof green"),
                 codex_schema_probe=ReviewProviderProbeCheck("ok", True, "Codex schema proof green"),
                 codex_read_only_probe=ReviewProviderProbeCheck("ok", True, "Codex read-only proof green"),
