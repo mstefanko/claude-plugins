@@ -53,6 +53,10 @@ from swarm_do.tui.state import (
     provider_result_preview,
     pipeline_activation_blocker,
     pipeline_gallery_rows,
+    pipeline_graph_lines,
+    pipeline_graph_model,
+    pipeline_graph_overlay,
+    pipeline_graph_legend_lines,
     pipeline_lens_rows,
     pipeline_has_provider_stage,
     pipeline_profile_summary,
@@ -284,6 +288,96 @@ class TuiStateTests(EnvTestCase):
 
         self.assertIn("kind: fan_out", inspector)
         self.assertIn("branch[0]: variant=explorer-a lens=architecture-risk", inspector)
+
+    def test_pipeline_graph_model_captures_default_dag_semantics(self) -> None:
+        pipeline = load_pipeline(find_pipeline("default").path)
+        model = pipeline_graph_model(pipeline)
+        nodes = {node.stage_id: node for node in model.nodes}
+
+        self.assertEqual(model.layers[0], ("research",))
+        self.assertEqual(nodes["writer"].depends_on, ("analysis", "clarify"))
+        self.assertEqual(nodes["research"].outgoing, ("analysis", "clarify"))
+        self.assertEqual(nodes["provider-review"].shape, "provider")
+        self.assertEqual(nodes["provider-review"].provider_type, "swarm-review")
+        self.assertEqual(nodes["review"].shape, "terminal")
+        self.assertEqual(nodes["review"].depends_on, ("spec-review", "provider-review"))
+
+    def test_pipeline_graph_model_captures_fan_out_and_merge_semantics(self) -> None:
+        ultra = load_pipeline(find_pipeline("ultra-plan").path)
+        compete = load_pipeline(find_pipeline("compete").path)
+
+        ultra_node = {node.stage_id: node for node in pipeline_graph_model(ultra).nodes}["exploration"]
+        compete_node = {node.stage_id: node for node in pipeline_graph_model(compete).nodes}["writers"]
+
+        self.assertEqual(ultra_node.shape, "fan_out")
+        self.assertEqual(ultra_node.fan_out_count, 3)
+        self.assertEqual(ultra_node.fan_out_variant, "prompt_variants")
+        self.assertEqual(ultra_node.merge_agent, "agent-analysis-judge")
+        self.assertEqual(compete_node.fan_out_count, 2)
+        self.assertEqual(compete_node.fan_out_variant, "models")
+        self.assertEqual(compete_node.merge_agent, "agent-writer-judge")
+
+    def test_pipeline_graph_renderer_marks_joins_selection_provider_and_fan_out(self) -> None:
+        default = load_pipeline(find_pipeline("default").path)
+        overlay = pipeline_graph_overlay(
+            selected_stage_id="writer",
+            stage_statuses={"provider-review": "queued"},
+            dirty_stage_ids={"analysis"},
+            critical_stage_ids={"writer"},
+        )
+        rendered = "\n".join(pipeline_graph_lines(pipeline_graph_model(default), overlay, width=120))
+
+        self.assertIn("┌ research ┐ ├──▶ ┌ analysis ┐ !dirty", rendered)
+        self.assertIn("┌ analysis ┐ !dirty ──▶ >┌ writer ┐< !critical (join: analysis + clarify)", rendered)
+        self.assertIn("╭ provider-review ╮ [queued]", rendered)
+        self.assertIn("╔ review ╗", rendered)
+
+        ultra = load_pipeline(find_pipeline("ultra-plan").path)
+        linear = "\n".join(pipeline_graph_lines(pipeline_graph_model(ultra), linear=True, ascii_only=True))
+        self.assertIn("[[exploration x3]] [fan_out] depends_on=research fan_out=3 variant=prompt_variants", linear)
+        self.assertIn("merge=agent-analysis-judge", linear)
+
+    def test_pipeline_graph_renderer_has_narrow_linear_and_compact_fallbacks(self) -> None:
+        pipeline = load_pipeline(find_pipeline("default").path)
+        model = pipeline_graph_model(pipeline)
+
+        narrow = "\n".join(pipeline_graph_lines(model, width=64))
+        self.assertIn("(join: analysis + clarify)", narrow)
+        self.assertIn("(join: spec-review + provider-review)", narrow)
+
+        linear = "\n".join(pipeline_graph_lines(model, width=36))
+        self.assertIn("1. ┌ research ┐ [agents]", linear)
+        self.assertIn("depends_on=spec-review,provider-review", linear)
+
+        compact = pipeline_graph_lines(model, width=90, compact=True)
+        self.assertLessEqual(len(compact), len(model.layers))
+        self.assertTrue(any("L3:" in line and "writer" in line for line in compact))
+
+    def test_pipeline_graph_model_falls_back_for_cyclic_graphs(self) -> None:
+        pipeline = {
+            "name": "cycle-preview",
+            "stages": [
+                {"id": "a", "depends_on": ["b"], "agents": [{"role": "agent-analysis"}]},
+                {"id": "b", "depends_on": ["a"], "agents": [{"role": "agent-review"}]},
+            ],
+        }
+
+        model = pipeline_graph_model(pipeline)
+        rendered = "\n".join(pipeline_graph_lines(model, linear=True))
+
+        self.assertIn("cycle detected", " ".join(model.warnings))
+        self.assertEqual(model.layers, (("a",), ("b",)))
+        self.assertIn("ERROR cycle detected among stages: a, b", rendered)
+        self.assertIn("a", rendered)
+        self.assertIn("b", rendered)
+
+    def test_pipeline_graph_legend_is_shape_first(self) -> None:
+        pipeline = load_pipeline(find_pipeline("default").path)
+        legend = "\n".join(pipeline_graph_legend_lines(pipeline_graph_model(pipeline)))
+
+        self.assertIn("┌ stage ┐ agents", legend)
+        self.assertIn("╭ stage ╮ provider/evidence", legend)
+        self.assertIn("╔ stage ╗ terminal answer/docs", legend)
 
     def test_output_profiles_are_runnable_while_unknown_output_only_is_preview_only(self) -> None:
         for name in ("brainstorm", "research", "design", "review"):

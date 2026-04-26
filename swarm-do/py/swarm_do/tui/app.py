@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import re
 from pathlib import Path
 from typing import Any
 
 try:  # Optional dependency installed by bin/swarm-tui.
     from rich.text import Text
-    from textual.app import App, ComposeResult
+    from textual.app import App, ComposeResult, SystemCommand
+    from textual.binding import Binding
     from textual.containers import Container, Horizontal, Vertical
     from textual.screen import ModalScreen, Screen
     from textual.widgets import (
@@ -59,9 +61,15 @@ from swarm_do.tui.state import (
     effective_fan_out_branch_route,
     effective_stage_agent_route,
     load_runs,
+    load_run_events,
+    load_observations,
     module_palette_rows,
     pipeline_gallery_rows,
     pipeline_activation_blocker,
+    pipeline_graph_lines,
+    pipeline_graph_model,
+    pipeline_graph_overlay,
+    pipeline_graph_legend_lines,
     pipeline_has_provider_stage,
     pipeline_profile_preset,
     pipeline_stage_rows,
@@ -100,6 +108,66 @@ if TEXTUAL_IMPORT_ERROR is None:
     class StatusBar(Static):
         def refresh_status(self) -> None:
             self.update(status_summary().render())
+
+
+    class AppChrome(Static):
+        def __init__(self, section: str, **kwargs: Any):
+            super().__init__("", **kwargs)
+            self.section = section
+
+        def on_mount(self) -> None:
+            self.refresh_chrome()
+
+        def refresh_chrome(self) -> None:
+            summary = status_summary()
+            validation = _validation_badge(summary.pipeline)
+            cost = f"${summary.cost_today:.4f}" if summary.cost_today is not None else "n/a"
+            nav = _nav_line(self.section)
+            context = (
+                f"current={self.section}  preset={summary.preset}  pipeline={summary.pipeline}  "
+                f"runs_today={summary.runs_today}  cost_today={cost}  validation={validation}"
+            )
+            extra = ""
+            screen_context = getattr(self.screen, "chrome_context", None)
+            if callable(screen_context):
+                extra = screen_context()
+            self.update(nav + "\n" + (context if not extra else context + "  " + extra))
+
+
+    def _nav_line(active: str) -> str:
+        sections = (
+            ("1", "Dashboard"),
+            ("2", "Runs"),
+            ("3", "Pipelines"),
+            ("4", "Presets"),
+            ("5", "Settings"),
+        )
+        rendered = []
+        for key, label in sections:
+            token = f"{key} {label}"
+            rendered.append(f"[{token}]" if label == active else token)
+        return "SwarmDaddy  " + "  ".join(rendered) + "  ^p Commands  ? Help"
+
+
+    def _validation_badge(pipeline_name: str) -> str:
+        try:
+            report = pipeline_validation_report(pipeline_name)
+        except Exception:
+            return "unknown"
+        if "\n  ERROR " in report:
+            return "ERROR"
+        if "\n  WARN " in report:
+            return "WARN"
+        if "OK structural validation" in report:
+            return "OK"
+        return "n/a"
+
+
+    def _refresh_chrome(screen: Screen) -> None:
+        try:
+            screen.query_one(AppChrome).refresh_chrome()
+        except Exception:
+            pass
 
 
     class MessageModal(ModalScreen[None]):
@@ -398,12 +466,20 @@ if TEXTUAL_IMPORT_ERROR is None:
             ("o", "open_issue", "Open issue"),
             ("c", "cancel", "Cancel"),
         ]
+        HELP = (
+            "Dashboard\n\n"
+            "Global: 1 Dashboard, 2 Runs, 3 Pipelines, 4 Presets, 5 Settings, Ctrl+P Commands, q Quit.\n"
+            "Local: f request handoff, o open selected Beads issue, c cancel selected in-flight run."
+        )
 
         def compose(self) -> ComposeResult:
             yield Header()
+            yield AppChrome("Dashboard", id="app-chrome")
             with Vertical():
-                yield Static(swarmdaddy_logo(), id="logo")
-                yield Static("", id="banner")
+                with Horizontal(id="dashboard-top"):
+                    yield Static("", id="profile-summary")
+                    yield Static("", id="event-strip")
+                yield Static("", id="dashboard-graph")
                 yield DataTable(id="inflight")
                 yield Static("", id="burn")
             yield StatusBar(id="status")
@@ -416,13 +492,16 @@ if TEXTUAL_IMPORT_ERROR is None:
 
         def refresh_dashboard(self) -> None:
             summary = status_summary()
-            self.query_one("#banner", Static).update(f"Preset: {summary.preset} | Pipeline: {summary.pipeline}")
+            self.query_one("#profile-summary", Static).update(_dashboard_profile_text(summary))
+            self.query_one("#event-strip", Static).update(_dashboard_event_text())
+            self.query_one("#dashboard-graph", Static).update(_dashboard_graph_text(summary.pipeline))
             table = self.query_one("#inflight", DataTable)
             table.clear(columns=True)
             table.add_columns("issue", "role", "backend", "model", "effort", "pid", "status")
-            for run in load_in_flight():
+            in_flight = load_in_flight()
+            for run in in_flight:
                 table.add_row(run.issue_id, run.role, run.backend, run.model, run.effort, run.display_pid, run.status)
-            if not load_in_flight():
+            if not in_flight:
                 table.add_row("none", "no in-flight runs", "", "", "", "", "")
             burns = token_burn_last_24h(load_runs())
             if not burns:
@@ -431,6 +510,7 @@ if TEXTUAL_IMPORT_ERROR is None:
                 burn_text = " | ".join(f"{backend}={value if value is not None else 'n/a'}" for backend, value in burns.items())
             self.query_one("#burn", Static).update(burn_text)
             self.query_one("#status", StatusBar).refresh_status()
+            _refresh_chrome(self)
 
         def _selected_issue(self) -> str | None:
             runs = load_in_flight()
@@ -468,12 +548,66 @@ if TEXTUAL_IMPORT_ERROR is None:
             self.app.push_screen(MessageModal("Cancel sent", f"Sent SIGTERM to {issue}."))
 
 
+    def _dashboard_profile_text(summary: Any) -> str:
+        lines = [
+            "Active Profile",
+            f"preset={summary.preset}  pipeline={summary.pipeline}",
+            f"runs_today={summary.runs_today}  validation={_validation_badge(summary.pipeline)}",
+        ]
+        report_lines = pipeline_validation_report(summary.pipeline).splitlines()
+        for line in report_lines:
+            stripped = line.strip()
+            if stripped.startswith(("OK ", "WARN ", "ERROR ", "budget:", "provider doctor:")):
+                lines.append(stripped)
+            if len(lines) >= 7:
+                break
+        return "\n".join(lines)
+
+
+    def _dashboard_event_text() -> str:
+        lines = ["Active Runs / Event Log"]
+        in_flight = load_in_flight()
+        if in_flight:
+            for run in in_flight[:4]:
+                lines.append(f"{run.issue_id} {run.role} {run.status}")
+        else:
+            lines.append("no in-flight runs")
+        events = load_run_events()[-3:]
+        observations = load_observations()[-3:]
+        for row in events:
+            lines.append(f"event {row.get('event_type', 'unknown')} {row.get('phase_id') or row.get('run_id') or ''}".rstrip())
+        for row in observations:
+            lines.append(f"obs {row.get('event_type', 'unknown')} {row.get('source') or ''}".rstrip())
+        return "\n".join(lines[:8])
+
+
+    def _dashboard_graph_text(pipeline_name: str) -> str:
+        item = find_pipeline(pipeline_name) or find_pipeline("default")
+        if item is None:
+            return "Active Pipeline Graph\nno active pipeline found; press 3 to open Pipelines"
+        try:
+            pipeline = load_pipeline(item.path)
+            model = pipeline_graph_model(pipeline)
+            lines = pipeline_graph_lines(model, width=100, compact=True)
+        except Exception as exc:
+            return f"Active Pipeline Graph\nERROR {exc}"
+        return "Active Pipeline Graph\n" + "\n".join(lines)
+
+
     class SettingsScreen(Screen):
         BINDINGS = [("enter", "edit_route", "Edit route"), ("ctrl+s", "save_hint", "Save"), ("ctrl+z", "refresh_settings", "Undo")]
+        HELP = (
+            "Settings\n\n"
+            "Global: 1 Dashboard, 2 Runs, 3 Pipelines, 4 Presets, 5 Settings, Ctrl+P Commands, q Quit.\n"
+            "Local: Enter edit selected route, Ctrl+S save hint, Ctrl+Z refresh."
+        )
 
         def compose(self) -> ComposeResult:
             yield Header()
+            yield AppChrome("Settings", id="app-chrome")
+            yield Static("Effective Role Routes", id="settings-title")
             yield Static("Editing: backends.toml (base)", id="target")
+            yield Static("", id="settings-warning")
             yield DataTable(id="settings")
             yield Static("", id="hash")
             yield StatusBar(id="status")
@@ -487,15 +621,23 @@ if TEXTUAL_IMPORT_ERROR is None:
             table.clear(columns=True)
             table.cursor_type = "cell"
             table.add_columns("role", "simple", "moderate", "hard")
+            if hasattr(table, "fixed_rows"):
+                table.fixed_rows = 1
+            if hasattr(table, "fixed_columns"):
+                table.fixed_columns = 1
             active = active_preset_name()
             item = find_preset(active) if active else None
             if item is None:
-                target = "Editing: backends.toml (base)"
+                target = "active preset=custom origin=base editing=base routes"
+                warning = ""
             elif item.origin == "stock":
-                target = f"Stock preset active: {item.name} - fork before editing routes"
+                target = f"active preset={item.name} origin=stock editing=read-only fork required"
+                warning = "WARN stock preset active; fork before editing effective routes"
             else:
-                target = f"Editing: {item.name}.toml (routing)"
+                target = f"active preset={item.name} origin={item.origin} editing=user preset routes"
+                warning = ""
             self.query_one("#target", Static).update(target)
+            self.query_one("#settings-warning", Static).update(warning)
             resolver = BackendResolver(preset_name="current")
             for role in sorted(ROLE_DEFAULTS):
                 cells = [role]
@@ -508,6 +650,7 @@ if TEXTUAL_IMPORT_ERROR is None:
                 table.add_row(*cells)
             self.query_one("#hash", Static).update(f"config_hash={active_config_hash()}")
             self.query_one("#status", StatusBar).refresh_status()
+            _refresh_chrome(self)
 
         def action_refresh_settings(self) -> None:
             self.refresh_settings()
@@ -546,10 +689,16 @@ if TEXTUAL_IMPORT_ERROR is None:
 
 
     class PresetsScreen(Screen):
-        BINDINGS = [("l", "load_preset", "Load"), ("d", "diff_preset", "Diff"), ("x", "delete_preset", "Delete")]
+        BINDINGS = [("l", "load_preset", "Load"), ("v", "diff_preset", "View diff"), ("x", "delete_preset", "Delete")]
+        HELP = (
+            "Presets\n\n"
+            "Global: 1 Dashboard, 2 Runs, 3 Pipelines, 4 Presets, 5 Settings, Ctrl+P Commands, q Quit.\n"
+            "Local: l load selected preset, v view diff, x delete user preset."
+        )
 
         def compose(self) -> ComposeResult:
             yield Header()
+            yield AppChrome("Presets", id="app-chrome")
             with Horizontal():
                 yield ListView(id="presets")
                 yield Static("", id="preview")
@@ -572,10 +721,13 @@ if TEXTUAL_IMPORT_ERROR is None:
         def refresh_presets(self) -> None:
             view = self.query_one("#presets", ListView)
             view.clear()
+            active = active_preset_name()
             for item in self._items():
-                view.append(ListItem(Label(f"{item.name} [{item.origin}]")))
+                marker = "*" if active == item.name else " "
+                view.append(ListItem(Label(f"{marker} {item.name} [{item.origin}]")))
             self.preview_selected()
             self.query_one("#status", StatusBar).refresh_status()
+            _refresh_chrome(self)
 
         def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
             self.preview_selected()
@@ -597,6 +749,7 @@ if TEXTUAL_IMPORT_ERROR is None:
             if item:
                 subprocess.run([str(Path(__file__).resolve().parents[3] / "bin" / "swarm"), "preset", "load", item.name], check=False)
                 self.query_one("#status", StatusBar).refresh_status()
+                _refresh_chrome(self)
 
         def action_diff_preset(self) -> None:
             item = self._selected()
@@ -631,8 +784,10 @@ if TEXTUAL_IMPORT_ERROR is None:
             ("b", "edit_branch_route", "Branch"),
             ("n", "edit_lenses", "Lens"),
             ("o", "edit_provider", "Provider"),
-            ("d", "provider_doctor", "Doctor"),
+            ("ctrl+d", "provider_doctor", "Doctor"),
             ("m", "add_module", "Module"),
+            ("t", "show_stage_table", "Stages"),
+            ("y", "copy_graph", "Copy graph"),
             ("delete", "remove_stage", "Remove"),
             ("ctrl+r", "reset_selected_route", "Reset route"),
             ("ctrl+z", "undo_draft", "Undo"),
@@ -641,22 +796,31 @@ if TEXTUAL_IMPORT_ERROR is None:
             ("escape", "discard_draft", "Discard"),
             ("l", "lint_pipeline", "Lint"),
             ("v", "validate_pipeline", "Validate"),
-            ("s", "set_pipeline", "Set"),
+            ("a", "activate_pipeline", "Activate"),
         ]
+        HELP = (
+            "Pipelines\n\n"
+            "Global: 1 Dashboard, 2 Runs, 3 Pipelines, 4 Presets, 5 Settings, Ctrl+P Commands, q Quit.\n"
+            "Local: Enter/f fork or edit, r route, b branch, n lens, o provider, Ctrl+D doctor, "
+            "m module, t stages, y copy graph, v validate, a activate, Ctrl+S save, Esc discard."
+        )
 
         def __init__(self) -> None:
             super().__init__()
             self._gallery_rows: list[PipelineGalleryRow] = []
             self._stage_rows: list[StageRow] = []
+            self._graph_stage_ids: list[str | None] = []
             self._selected_pipeline_name: str | None = None
+            self._selected_stage_id: str | None = None
             self._draft: PipelineEditDraft | None = None
 
         def compose(self) -> ComposeResult:
             yield Header()
+            yield AppChrome("Pipelines", id="app-chrome")
             with Vertical(id="pipeline-workbench"):
                 with Horizontal(id="pipeline-main"):
                     yield ListView(id="pipeline-gallery")
-                    yield ListView(id="stage-rows")
+                    yield ListView(id="pipeline-graph")
                     yield Static("", id="stage-inspector")
                 yield Static("", id="validation-rail")
             yield StatusBar(id="status")
@@ -664,6 +828,13 @@ if TEXTUAL_IMPORT_ERROR is None:
 
         def on_mount(self) -> None:
             self.refresh_pipelines()
+            self.set_focus(self.query_one("#pipeline-graph", ListView))
+
+        def chrome_context(self) -> str:
+            if self._draft is None:
+                return "draft=none"
+            state = "dirty" if self._draft.dirty else self._draft.status
+            return f"draft={state}:{self._draft.pipeline_name}"
 
         def _selected_gallery_row(self) -> PipelineGalleryRow | None:
             if self._selected_pipeline_name:
@@ -680,8 +851,12 @@ if TEXTUAL_IMPORT_ERROR is None:
         def _selected_stage_row(self) -> StageRow | None:
             if not self._stage_rows:
                 return None
-            index = self.query_one("#stage-rows", ListView).index or 0
-            return self._stage_rows[min(max(index, 0), len(self._stage_rows) - 1)]
+            if self._selected_stage_id:
+                for row in self._stage_rows:
+                    if row.stage_id == self._selected_stage_id:
+                        return row
+            self._selected_stage_id = self._stage_rows[0].stage_id
+            return self._stage_rows[0]
 
         def _current_pipeline(self) -> dict[str, Any] | None:
             row = self._selected_gallery_row()
@@ -701,24 +876,90 @@ if TEXTUAL_IMPORT_ERROR is None:
             for row in self._gallery_rows:
                 view.append(ListItem(Label(row.label)))
             if self._selected_pipeline_name is None and self._gallery_rows:
-                self._selected_pipeline_name = self._gallery_rows[0].name
+                active_pipeline = status_summary().pipeline
+                self._selected_pipeline_name = (
+                    active_pipeline
+                    if any(row.name == active_pipeline for row in self._gallery_rows)
+                    else self._gallery_rows[0].name
+                )
+            if self._selected_pipeline_name is not None:
+                selected_index = next(
+                    (idx for idx, row in enumerate(self._gallery_rows) if row.name == self._selected_pipeline_name),
+                    0,
+                )
+                view.index = selected_index
             self.refresh_stages()
             self.query_one("#status", StatusBar).refresh_status()
+            _refresh_chrome(self)
 
         def refresh_stages(self) -> None:
             pipeline = self._current_pipeline()
-            view = self.query_one("#stage-rows", ListView)
+            view = self.query_one("#pipeline-graph", ListView)
             view.clear()
             if pipeline is None:
                 self._stage_rows = []
+                self._graph_stage_ids = []
+                self._selected_stage_id = None
+                view.append(ListItem(Label("No pipeline selected.")))
                 self.query_one("#stage-inspector", Static).update("No pipeline selected.")
                 self.query_one("#validation-rail", Static).update("validation: n/a")
+                _refresh_chrome(self)
                 return
             self._stage_rows = pipeline_stage_rows(pipeline)
-            for row in self._stage_rows:
-                view.append(ListItem(Label(row.label)))
+            valid_stage_ids = {row.stage_id for row in self._stage_rows}
+            if self._selected_stage_id not in valid_stage_ids:
+                self._selected_stage_id = self._stage_rows[0].stage_id if self._stage_rows else None
+            self.refresh_graph()
             self.refresh_stage_inspector()
             self.refresh_validation_rail()
+            _refresh_chrome(self)
+
+        def refresh_graph(self) -> None:
+            pipeline = self._current_pipeline()
+            view = self.query_one("#pipeline-graph", ListView)
+            view.clear()
+            self._graph_stage_ids = []
+            if pipeline is None:
+                view.append(ListItem(Label("No pipeline selected.")))
+                self._graph_stage_ids.append(None)
+                return
+            try:
+                model = pipeline_graph_model(pipeline)
+                overlay = pipeline_graph_overlay(
+                    selected_stage_id=self._selected_stage_id,
+                    dirty_stage_ids=self._dirty_stage_ids(),
+                )
+                lines = pipeline_graph_lines(model, overlay, width=112)
+                lines.extend(pipeline_graph_legend_lines(model)[:4])
+            except Exception as exc:
+                lines = [f"ERROR graph unavailable: {exc}"]
+                model = None
+            for line in lines:
+                view.append(ListItem(Label(line)))
+                self._graph_stage_ids.append(_graph_line_stage_id(line, model) if model is not None else None)
+            selected_index = next(
+                (idx for idx, stage_id in enumerate(self._graph_stage_ids) if stage_id == self._selected_stage_id),
+                0,
+            )
+            if self._graph_stage_ids:
+                view.index = selected_index
+
+        def _dirty_stage_ids(self) -> frozenset[str]:
+            if self._draft is None:
+                return frozenset()
+            original = {
+                str(stage.get("id")): stage
+                for stage in self._draft.original_pipeline.get("stages") or []
+                if isinstance(stage, dict) and stage.get("id")
+            }
+            changed = set()
+            for stage in self._draft.pipeline.get("stages") or []:
+                if not isinstance(stage, dict) or not stage.get("id"):
+                    continue
+                stage_id = str(stage["id"])
+                if original.get(stage_id) != stage:
+                    changed.add(stage_id)
+            return frozenset(changed)
 
         def refresh_stage_inspector(self) -> None:
             pipeline = self._current_pipeline()
@@ -739,15 +980,23 @@ if TEXTUAL_IMPORT_ERROR is None:
             else:
                 lines = [draft_status_line(None), pipeline_validation_report(row.name)]
             self.query_one("#validation-rail", Static).update("\n".join(lines))
+            _refresh_chrome(self)
 
         def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
             if event.list_view.id == "pipeline-gallery":
                 index = event.list_view.index or 0
                 if self._gallery_rows:
                     self._selected_pipeline_name = self._gallery_rows[min(max(index, 0), len(self._gallery_rows) - 1)].name
+                    self._selected_stage_id = None
                 self.refresh_stages()
                 return
-            if event.list_view.id == "stage-rows":
+            if event.list_view.id == "pipeline-graph":
+                index = event.list_view.index or 0
+                if 0 <= index < len(self._graph_stage_ids):
+                    stage_id = self._graph_stage_ids[index]
+                    if stage_id and stage_id != self._selected_stage_id:
+                        self._selected_stage_id = stage_id
+                        self.refresh_graph()
                 self.refresh_stage_inspector()
 
         def _draft_for_selected(self) -> PipelineEditDraft | None:
@@ -1052,6 +1301,30 @@ if TEXTUAL_IMPORT_ERROR is None:
             body = pipeline_validation_report(row.name, include_provider_doctor=True)
             self.app.push_screen(MessageModal(f"Provider doctor: {row.name}", body))
 
+        def action_show_stage_table(self) -> None:
+            if not self._stage_rows:
+                self.app.push_screen(MessageModal("Stages", "No stages for the selected pipeline."))
+                return
+            body = "\n".join(row.label for row in self._stage_rows)
+            self.app.push_screen(MessageModal("Stages", body))
+
+        def action_copy_graph(self) -> None:
+            pipeline = self._current_pipeline()
+            if pipeline is None:
+                return
+            model = pipeline_graph_model(pipeline)
+            overlay = pipeline_graph_overlay(
+                selected_stage_id=self._selected_stage_id,
+                dirty_stage_ids=self._dirty_stage_ids(),
+            )
+            text = "\n".join(pipeline_graph_lines(model, overlay, width=112))
+            copier = getattr(self.app, "copy_to_clipboard", None)
+            if callable(copier):
+                copier(text)
+                self.app.push_screen(MessageModal("Graph copied", "Copied the current graph as plain text."))
+            else:
+                self.app.push_screen(MessageModal("Graph", text))
+
         def action_reset_selected_route(self) -> None:
             draft = self._draft_for_selected()
             stage = self._selected_stage_row()
@@ -1187,7 +1460,7 @@ if TEXTUAL_IMPORT_ERROR is None:
             body = pipeline_validation_report(row.name, include_provider_doctor=True)
             self.app.push_screen(MessageModal(f"Validate: {preset.name}", body))
 
-        def action_set_pipeline(self) -> None:
+        def action_activate_pipeline(self) -> None:
             row = self._selected_gallery_row()
             if row is None:
                 return
@@ -1212,6 +1485,7 @@ if TEXTUAL_IMPORT_ERROR is None:
                     self.app.push_screen(MessageModal("Activation refused", body))
                     return
                 self.query_one("#status", StatusBar).refresh_status()
+                _refresh_chrome(self)
                 self.app.push_screen(MessageModal("Profile activated", result.stdout.strip()))
                 return
             from swarm_do.pipeline.resolver import active_preset_name
@@ -1226,17 +1500,44 @@ if TEXTUAL_IMPORT_ERROR is None:
                 self.app.push_screen(MessageModal("Pipeline refused", str(exc)))
                 return
             self.query_one("#status", StatusBar).refresh_status()
+            _refresh_chrome(self)
+
+        def action_set_pipeline(self) -> None:
+            self.action_activate_pipeline()
+
+
+    def _graph_line_stage_id(line: str, model: Any) -> str | None:
+        if model is None:
+            return None
+        nodes = list(getattr(model, "nodes", ()))
+        tail = line.rsplit("▶", 1)[-1].rsplit("-->", 1)[-1]
+        tail_matches = [node.stage_id for node in nodes if _line_has_stage_id(tail, node.stage_id)]
+        if len(tail_matches) == 1:
+            return tail_matches[0]
+        matches = [node.stage_id for node in nodes if _line_has_stage_id(line, node.stage_id)]
+        if len(matches) == 1:
+            return matches[0]
+        if matches:
+            return sorted(matches, key=line.find)[0]
+        return None
+
+
+    def _line_has_stage_id(line: str, stage_id: str) -> bool:
+        pattern = rf"(?<![A-Za-z0-9_-]){re.escape(stage_id)}(?![A-Za-z0-9_-])"
+        return re.search(pattern, line) is not None
 
 
     class SwarmTui(App):
         CSS_PATH = "app.tcss"
         TITLE = "SwarmDaddy"
         BINDINGS = [
-            ("d", "dashboard", "Dashboard"),
-            ("s", "settings", "Settings"),
-            ("p", "presets", "Presets"),
-            ("i", "pipelines", "Pipelines"),
-            ("q", "quit", "Quit"),
+            Binding("1", "dashboard", "Dashboard"),
+            Binding("2", "runs", "Runs"),
+            Binding("3", "pipelines", "Pipelines"),
+            Binding("4", "presets", "Presets"),
+            Binding("5", "settings", "Settings"),
+            Binding("question_mark", "help_current", "Help", key_display="?"),
+            Binding("q", "quit", "Quit"),
         ]
 
         def on_mount(self) -> None:
@@ -1249,6 +1550,9 @@ if TEXTUAL_IMPORT_ERROR is None:
         def action_dashboard(self) -> None:
             self.switch_screen("dashboard")
 
+        def action_runs(self) -> None:
+            self.switch_screen("dashboard")
+
         def action_settings(self) -> None:
             self.switch_screen("settings")
 
@@ -1257,6 +1561,38 @@ if TEXTUAL_IMPORT_ERROR is None:
 
         def action_pipelines(self) -> None:
             self.switch_screen("pipelines")
+
+        def action_help_current(self) -> None:
+            screen = self.screen
+            body = getattr(screen, "HELP", None)
+            if not body:
+                body = (
+                    "SwarmDaddy\n\n"
+                    "Global: 1 Dashboard, 2 Runs, 3 Pipelines, 4 Presets, 5 Settings, "
+                    "Ctrl+P Commands, q Quit."
+                )
+            self.push_screen(MessageModal("Help", body))
+
+        def get_system_commands(self, screen: Screen) -> Any:
+            yield from super().get_system_commands(screen)
+            yield SystemCommand("Go to Dashboard", "Open the operator dashboard", self.action_dashboard)
+            yield SystemCommand("Go to Runs", "Open the dashboard runs table", self.action_runs)
+            yield SystemCommand("Go to Pipelines", "Open the graph-first pipeline workbench", self.action_pipelines)
+            yield SystemCommand("Go to Presets", "Open preset browser", self.action_presets)
+            yield SystemCommand("Go to Settings", "Open effective role routes", self.action_settings)
+            yield SystemCommand("Show Help", "Show contextual help for the current screen", self.action_help_current)
+            if isinstance(screen, PipelinesScreen):
+                yield SystemCommand("Validate Selected Pipeline", "Validate the selected pipeline", screen.action_validate_pipeline)
+                yield SystemCommand("Fork/Edit Selected Pipeline", "Fork or edit the selected pipeline", screen.action_begin_edit)
+                yield SystemCommand("Save Pipeline Draft", "Save the current in-memory pipeline draft", screen.action_save_draft)
+                yield SystemCommand("Discard Pipeline Draft", "Discard the current in-memory pipeline draft", screen.action_discard_draft)
+                yield SystemCommand("Copy Pipeline Graph", "Copy the selected pipeline graph as text", screen.action_copy_graph)
+                yield SystemCommand("Run Provider Doctor", "Check provider readiness for this pipeline", screen.action_provider_doctor)
+            if isinstance(screen, SettingsScreen):
+                yield SystemCommand("Edit selected route", "Edit the selected effective role route", screen.action_edit_route)
+            if isinstance(screen, PresetsScreen):
+                yield SystemCommand("Load selected preset", "Activate the selected preset", screen.action_load_preset)
+                yield SystemCommand("View selected preset diff", "Open the selected preset diff", screen.action_diff_preset)
 
 
 def main(argv: list[str] | None = None) -> int:

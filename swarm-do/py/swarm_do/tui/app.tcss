@@ -11,7 +11,30 @@ Vertical {
     height: 6;
 }
 
-#banner, #target, #hash, #burn {
+AppChrome {
+    height: 2;
+    background: $panel;
+    color: $text;
+    padding: 0 1;
+}
+
+#dashboard-top {
+    height: 8;
+}
+
+#profile-summary, #event-strip {
+    width: 1fr;
+    border: solid $primary;
+    padding: 1;
+}
+
+#dashboard-graph {
+    height: 8;
+    border: solid $primary;
+    padding: 1;
+}
+
+#banner, #target, #hash, #burn, #settings-title, #settings-warning {
     padding: 0 1;
     height: 1;
 }
@@ -38,13 +61,13 @@ DataTable {
     border: solid $primary;
 }
 
-#stage-rows {
-    width: 50;
+#pipeline-graph {
+    width: 2fr;
     border: solid $primary;
 }
 
 #preview, #stage-inspector {
-    width: 1fr;
+    width: 42;
     border: solid $primary;
     padding: 1;
 }

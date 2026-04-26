@@ -42,7 +42,7 @@ from swarm_do.pipeline.editing import (
     validate_provider_review_max_parallel as _validate_provider_review_max_parallel,
     validate_provider_review_selection as _validate_provider_review_selection,
 )
-from swarm_do.pipeline.engine import graph_lines, topological_layers
+from swarm_do.pipeline.engine import topological_layers
 from swarm_do.pipeline.paths import resolve_data_dir
 from swarm_do.pipeline.providers import ProviderDoctorReport, provider_doctor
 from swarm_do.pipeline.registry import find_pipeline, list_pipelines, list_presets, load_pipeline, load_preset, sha256_file
@@ -146,6 +146,49 @@ class StageRow:
     def label(self) -> str:
         deps = ",".join(self.depends_on) if self.depends_on else "-"
         return f"L{self.layer} {self.stage_id} [{self.kind}] deps={deps} {self.summary}"
+
+
+@dataclasses.dataclass(frozen=True)
+class PipelineGraphNode:
+    stage_id: str
+    layer: int
+    kind: str
+    lane: str
+    shape: str
+    title: str
+    subtitle: str
+    depends_on: tuple[str, ...]
+    outgoing: tuple[str, ...]
+    fan_out_count: int | None
+    fan_out_variant: str | None
+    merge_agent: str | None
+    provider_type: str | None
+    tolerance: str | None
+    warnings: tuple[str, ...]
+
+
+@dataclasses.dataclass(frozen=True)
+class PipelineGraphEdge:
+    source: str
+    target: str
+
+
+@dataclasses.dataclass(frozen=True)
+class PipelineGraphModel:
+    nodes: tuple[PipelineGraphNode, ...]
+    edges: tuple[PipelineGraphEdge, ...]
+    layers: tuple[tuple[str, ...], ...]
+    pipeline_name: str | None = None
+    warnings: tuple[str, ...] = ()
+
+
+@dataclasses.dataclass(frozen=True)
+class PipelineGraphOverlay:
+    selected_stage_id: str | None
+    stage_statuses: Mapping[str, str]
+    dirty_stage_ids: frozenset[str]
+    critical_stage_ids: frozenset[str]
+    highlighted_stage_ids: frozenset[str]
 
 
 @dataclasses.dataclass
@@ -278,6 +321,483 @@ def pipeline_stage_rows(pipeline: Mapping[str, Any]) -> list[StageRow]:
         deps = tuple(str(dep) for dep in (stage.get("depends_on") or []))
         rows.append(StageRow(layer_no, stage_id, _stage_kind(stage), _stage_summary(stage), deps))
     return rows
+
+
+def pipeline_graph_overlay(
+    *,
+    selected_stage_id: str | None = None,
+    stage_statuses: Mapping[str, str] | None = None,
+    dirty_stage_ids: frozenset[str] | set[str] | tuple[str, ...] | list[str] | None = None,
+    critical_stage_ids: frozenset[str] | set[str] | tuple[str, ...] | list[str] | None = None,
+    highlighted_stage_ids: frozenset[str] | set[str] | tuple[str, ...] | list[str] | None = None,
+) -> PipelineGraphOverlay:
+    return PipelineGraphOverlay(
+        selected_stage_id=selected_stage_id,
+        stage_statuses=dict(stage_statuses or {}),
+        dirty_stage_ids=frozenset(dirty_stage_ids or ()),
+        critical_stage_ids=frozenset(critical_stage_ids or ()),
+        highlighted_stage_ids=frozenset(highlighted_stage_ids or ()),
+    )
+
+
+def pipeline_graph_model(pipeline: Mapping[str, Any]) -> PipelineGraphModel:
+    stages = [stage for stage in pipeline.get("stages") or [] if isinstance(stage, Mapping)]
+    stage_by_id: dict[str, Mapping[str, Any]] = {}
+    stage_ids: list[str] = []
+    model_warnings: list[str] = []
+    node_warnings: dict[str, list[str]] = {}
+
+    for idx, stage in enumerate(stages):
+        raw_id = stage.get("id")
+        stage_id = raw_id if isinstance(raw_id, str) and raw_id else f"<stage-{idx + 1}>"
+        if stage_id in stage_by_id:
+            model_warnings.append(f"duplicate stage id: {stage_id}")
+            node_warnings.setdefault(stage_id, []).append("duplicate stage id")
+            continue
+        stage_by_id[stage_id] = stage
+        stage_ids.append(stage_id)
+        if stage_id != raw_id:
+            node_warnings.setdefault(stage_id, []).append("stage id is missing or invalid")
+
+    known_ids = set(stage_ids)
+    deps_by_id: dict[str, tuple[str, ...]] = {}
+    edges: list[PipelineGraphEdge] = []
+    for stage_id in stage_ids:
+        stage = stage_by_id[stage_id]
+        deps = tuple(str(dep) for dep in (stage.get("depends_on") or []))
+        deps_by_id[stage_id] = deps
+        for dep in deps:
+            if dep in known_ids:
+                edges.append(PipelineGraphEdge(dep, stage_id))
+            else:
+                node_warnings.setdefault(stage_id, []).append(f"depends_on references unknown stage {dep}")
+
+    lane_by_id = {stage_id: _graph_lane(stage_by_id[stage_id]) for stage_id in stage_ids}
+    try:
+        raw_layers = topological_layers({"stages": [stage_by_id[stage_id] for stage_id in stage_ids]})
+        layers = _reorder_graph_layers(raw_layers, deps_by_id, lane_by_id)
+    except Exception as exc:
+        model_warnings.append(str(exc))
+        layers = tuple((stage_id,) for stage_id in stage_ids)
+
+    layer_for_id = {
+        stage_id: layer_index
+        for layer_index, layer in enumerate(layers, 1)
+        for stage_id in layer
+    }
+    order_for_id = {
+        stage_id: (layer_index, node_index)
+        for layer_index, layer in enumerate(layers, 1)
+        for node_index, stage_id in enumerate(layer)
+    }
+    outgoing_by_id: dict[str, list[str]] = {stage_id: [] for stage_id in stage_ids}
+    for edge in edges:
+        outgoing_by_id.setdefault(edge.source, []).append(edge.target)
+    for targets in outgoing_by_id.values():
+        targets.sort(key=lambda target: order_for_id.get(target, (999, 999, target)))
+
+    nodes: list[PipelineGraphNode] = []
+    for stage_id in stage_ids:
+        stage = stage_by_id[stage_id]
+        fan = stage.get("fan_out") if isinstance(stage.get("fan_out"), Mapping) else None
+        provider = stage.get("provider") if isinstance(stage.get("provider"), Mapping) else None
+        merge = stage.get("merge") if isinstance(stage.get("merge"), Mapping) else None
+        tolerance = stage.get("failure_tolerance")
+        tolerance_mode = tolerance.get("mode") if isinstance(tolerance, Mapping) else None
+        fan_count = fan.get("count") if isinstance(fan, Mapping) else None
+        if fan is not None and not isinstance(fan_count, int):
+            node_warnings.setdefault(stage_id, []).append("fan_out count is missing or invalid")
+            fan_count = None
+        nodes.append(
+            PipelineGraphNode(
+                stage_id=stage_id,
+                layer=layer_for_id.get(stage_id, 0),
+                kind=_stage_kind(stage),
+                lane=_graph_lane(stage),
+                shape=_graph_shape(stage),
+                title=stage_id,
+                subtitle=_graph_subtitle(stage),
+                depends_on=deps_by_id.get(stage_id, ()),
+                outgoing=tuple(outgoing_by_id.get(stage_id, ())),
+                fan_out_count=fan_count,
+                fan_out_variant=(
+                    str(fan.get("variant"))
+                    if isinstance(fan, Mapping) and fan.get("variant") is not None
+                    else None
+                ),
+                merge_agent=(
+                    str(merge.get("agent"))
+                    if isinstance(merge, Mapping) and merge.get("agent") is not None
+                    else None
+                ),
+                provider_type=(
+                    str(provider.get("type"))
+                    if isinstance(provider, Mapping) and provider.get("type") is not None
+                    else None
+                ),
+                tolerance=str(tolerance_mode) if tolerance_mode is not None else None,
+                warnings=tuple(node_warnings.get(stage_id, ())),
+            )
+        )
+
+    return PipelineGraphModel(
+        nodes=tuple(sorted(nodes, key=lambda node: order_for_id.get(node.stage_id, (999, 999, node.stage_id)))),
+        edges=tuple(edges),
+        layers=layers,
+        pipeline_name=str(pipeline.get("name")) if pipeline.get("name") is not None else None,
+        warnings=tuple(model_warnings),
+    )
+
+
+def pipeline_graph_lines(
+    model: PipelineGraphModel,
+    overlay: PipelineGraphOverlay | None = None,
+    *,
+    width: int | None = None,
+    compact: bool = False,
+    linear: bool = False,
+    ascii_only: bool = False,
+) -> list[str]:
+    overlay = overlay or pipeline_graph_overlay()
+    key = (
+        _graph_model_fingerprint(model),
+        _graph_overlay_fingerprint(overlay),
+        width,
+        compact,
+        linear,
+        ascii_only,
+    )
+    cached = _GRAPH_RENDER_CACHE.get(key)
+    if cached is not None:
+        return list(cached)
+
+    if linear or (width is not None and width < 42):
+        lines = _linear_graph_lines(model, overlay, ascii_only=ascii_only)
+    elif compact:
+        lines = _compact_graph_lines(model, overlay, width=width, ascii_only=ascii_only)
+    elif width is not None and width < 88:
+        lines = _narrow_graph_lines(model, overlay, ascii_only=ascii_only)
+    else:
+        lines = _wide_graph_lines(model, overlay, ascii_only=ascii_only)
+        if width is not None and any(len(line) > width for line in lines):
+            lines = _narrow_graph_lines(model, overlay, ascii_only=ascii_only)
+
+    if len(_GRAPH_RENDER_CACHE) > 128:
+        _GRAPH_RENDER_CACHE.clear()
+    _GRAPH_RENDER_CACHE[key] = tuple(lines)
+    return lines
+
+
+def pipeline_graph_legend_lines(model: PipelineGraphModel, *, ascii_only: bool = False) -> list[str]:
+    shapes = {node.shape for node in model.nodes}
+    if not shapes:
+        return ["legend: empty graph"]
+    lines = ["legend:"]
+    if "agent" in shapes:
+        lines.append("  [stage] agents" if ascii_only else "  ┌ stage ┐ agents")
+    if "fan_out" in shapes:
+        lines.append("  [[stage xN]] fan-out + merge" if ascii_only else "  ╔ stage xN ╗ fan-out + merge")
+    if "provider" in shapes:
+        lines.append("  (stage) provider/evidence" if ascii_only else "  ╭ stage ╮ provider/evidence")
+    if "terminal" in shapes:
+        lines.append("  [[stage]] terminal answer/docs" if ascii_only else "  ╔ stage ╗ terminal answer/docs")
+    lines.append("  >stage< selected  !dirty changed draft  !critical longest path  [status] live")
+    return lines
+
+
+_GRAPH_RENDER_CACHE: dict[tuple[Any, ...], tuple[str, ...]] = {}
+_GRAPH_LANE_ORDER = {"agents": 0, "fan-out": 1, "provider": 2, "terminal": 3}
+
+
+def _graph_lane(stage: Mapping[str, Any]) -> str:
+    if "provider" in stage:
+        return "provider"
+    if "fan_out" in stage:
+        return "fan-out"
+    roles = [
+        str(agent.get("role") or "")
+        for agent in (stage.get("agents") or [])
+        if isinstance(agent, Mapping)
+    ]
+    if any(role in {"agent-review", "agent-docs"} for role in roles):
+        return "terminal"
+    return "agents"
+
+
+def _graph_shape(stage: Mapping[str, Any]) -> str:
+    lane = _graph_lane(stage)
+    if lane == "provider":
+        return "provider"
+    if lane == "fan-out":
+        return "fan_out"
+    if lane == "terminal":
+        return "terminal"
+    return "agent"
+
+
+def _graph_subtitle(stage: Mapping[str, Any]) -> str:
+    summary = _stage_summary(stage)
+    if len(summary) <= 72:
+        return summary
+    return summary[:69].rstrip() + "..."
+
+
+def _reorder_graph_layers(
+    raw_layers: list[list[str]],
+    deps_by_id: Mapping[str, tuple[str, ...]],
+    lane_by_id: Mapping[str, str],
+) -> tuple[tuple[str, ...], ...]:
+    ordered_layers: list[tuple[str, ...]] = []
+    positions: dict[str, tuple[int, int]] = {}
+    for layer_index, layer in enumerate(raw_layers, 1):
+        if layer_index == 1:
+            ordered = sorted(layer)
+        else:
+            scored: list[tuple[float, int, str]] = []
+            for stage_id in layer:
+                deps = [positions[dep][1] for dep in deps_by_id.get(stage_id, ()) if dep in positions]
+                barycenter = sum(deps) / len(deps) if deps else 999.0
+                scored.append((barycenter, _GRAPH_LANE_ORDER.get(lane_by_id.get(stage_id, ""), 9), stage_id))
+            ordered = [stage_id for _score, _lane, stage_id in sorted(scored)]
+        for node_index, stage_id in enumerate(ordered):
+            positions[stage_id] = (layer_index, node_index)
+        ordered_layers.append(tuple(ordered))
+    return tuple(ordered_layers)
+
+def _graph_model_fingerprint(model: PipelineGraphModel) -> tuple[Any, ...]:
+    nodes = tuple(
+        (
+            node.stage_id,
+            node.layer,
+            node.kind,
+            node.lane,
+            node.shape,
+            node.title,
+            node.subtitle,
+            node.depends_on,
+            node.outgoing,
+            node.fan_out_count,
+            node.fan_out_variant,
+            node.merge_agent,
+            node.provider_type,
+            node.tolerance,
+            node.warnings,
+        )
+        for node in model.nodes
+    )
+    return (model.pipeline_name, nodes, tuple((edge.source, edge.target) for edge in model.edges), model.layers, model.warnings)
+
+
+def _graph_overlay_fingerprint(overlay: PipelineGraphOverlay) -> tuple[Any, ...]:
+    return (
+        overlay.selected_stage_id,
+        tuple(sorted((str(key), str(value)) for key, value in overlay.stage_statuses.items())),
+        tuple(sorted(overlay.dirty_stage_ids)),
+        tuple(sorted(overlay.critical_stage_ids)),
+        tuple(sorted(overlay.highlighted_stage_ids)),
+    )
+
+
+def _node_by_id(model: PipelineGraphModel) -> dict[str, PipelineGraphNode]:
+    return {node.stage_id: node for node in model.nodes}
+
+
+def _render_node(
+    node: PipelineGraphNode,
+    overlay: PipelineGraphOverlay,
+    *,
+    ascii_only: bool,
+    compact: bool = False,
+) -> str:
+    label = node.title
+    if node.fan_out_count is not None:
+        label += f" x{node.fan_out_count}"
+        if node.fan_out_variant and not compact:
+            label += f" {node.fan_out_variant}"
+    elif node.provider_type and not compact:
+        label += f" ({node.provider_type})"
+    if node.merge_agent and not compact:
+        label += f" merge:{node.merge_agent}"
+
+    if ascii_only:
+        if node.shape == "provider":
+            rendered = f"({label})"
+        elif node.shape in {"fan_out", "terminal"}:
+            rendered = f"[[{label}]]"
+        else:
+            rendered = f"[{label}]"
+    elif node.shape == "provider":
+        rendered = f"╭ {label} ╮"
+    elif node.shape in {"fan_out", "terminal"}:
+        rendered = f"╔ {label} ╗"
+    else:
+        rendered = f"┌ {label} ┐"
+
+    if overlay.selected_stage_id == node.stage_id:
+        rendered = f">{rendered}<"
+    badges: list[str] = []
+    status = overlay.stage_statuses.get(node.stage_id)
+    if status:
+        badges.append(f"[{status}]")
+    if node.stage_id in overlay.dirty_stage_ids:
+        badges.append("!dirty")
+    if node.stage_id in overlay.critical_stage_ids:
+        badges.append("!critical")
+    if node.stage_id in overlay.highlighted_stage_ids:
+        badges.append("*highlight")
+    if node.warnings:
+        badges.append("!warn")
+    if badges:
+        rendered += " " + " ".join(badges)
+    return rendered
+
+
+def _join_label(node: PipelineGraphNode, *, first: bool = True) -> str:
+    deps = [dep for dep in node.depends_on if dep]
+    if len(deps) < 2:
+        return ""
+    if first:
+        return f" (join: {' + '.join(deps)})"
+    return " (join)"
+
+
+def _warning_lines(model: PipelineGraphModel) -> list[str]:
+    lines = [f"ERROR {warning}" for warning in model.warnings]
+    for node in model.nodes:
+        lines.extend(f"WARN {node.stage_id}: {warning}" for warning in node.warnings)
+    return lines
+
+
+def _linear_graph_lines(
+    model: PipelineGraphModel,
+    overlay: PipelineGraphOverlay,
+    *,
+    ascii_only: bool,
+) -> list[str]:
+    lines = _warning_lines(model)
+    if not model.nodes:
+        return lines + ["graph: empty"]
+    for index, node in enumerate(model.nodes, 1):
+        parts = [f"{index}. {_render_node(node, overlay, ascii_only=ascii_only, compact=True)} [{node.kind}]"]
+        if node.depends_on:
+            parts.append(f"depends_on={','.join(node.depends_on)}")
+        if node.fan_out_count is not None:
+            parts.append(f"fan_out={node.fan_out_count}")
+        if node.fan_out_variant:
+            parts.append(f"variant={node.fan_out_variant}")
+        if node.merge_agent:
+            parts.append(f"merge={node.merge_agent}")
+        if node.provider_type:
+            parts.append(f"provider={node.provider_type}")
+        if node.tolerance:
+            parts.append(f"tolerance={node.tolerance}")
+        lines.append(" ".join(parts))
+    return lines
+
+
+def _compact_graph_lines(
+    model: PipelineGraphModel,
+    overlay: PipelineGraphOverlay,
+    *,
+    width: int | None,
+    ascii_only: bool,
+) -> list[str]:
+    node_by_id = _node_by_id(model)
+    lines = _warning_lines(model)
+    if not model.nodes:
+        return lines + ["graph: empty"]
+    for layer_index, layer in enumerate(model.layers, 1):
+        nodes = [node_by_id[stage_id] for stage_id in layer if stage_id in node_by_id]
+        rendered_nodes = [
+            _render_node(node, overlay, ascii_only=ascii_only, compact=True) + _join_label(node)
+            for node in nodes
+        ]
+        line = f"L{layer_index}: " + "  ".join(rendered_nodes)
+        if width is not None and len(line) > width:
+            compact_nodes = [node.stage_id + _join_label(node) for node in nodes]
+            line = f"L{layer_index}: " + " | ".join(compact_nodes)
+        lines.append(line)
+    return lines
+
+
+def _wide_graph_lines(
+    model: PipelineGraphModel,
+    overlay: PipelineGraphOverlay,
+    *,
+    ascii_only: bool,
+) -> list[str]:
+    node_by_id = _node_by_id(model)
+    lines = _warning_lines(model)
+    if not model.nodes:
+        return lines + ["graph: empty"]
+
+    lines.append("Layers:")
+    for layer_index, layer in enumerate(model.layers, 1):
+        rendered = [
+            _render_node(node_by_id[stage_id], overlay, ascii_only=ascii_only, compact=True)
+            for stage_id in layer
+            if stage_id in node_by_id
+        ]
+        lines.append(f"  L{layer_index}: " + "  ".join(rendered))
+
+    lines.append("Edges:")
+    arrow = "-->" if ascii_only else "──▶"
+    branch = "+-->" if ascii_only else "├──▶"
+    last_branch = "`-->" if ascii_only else "└──▶"
+    for node in model.nodes:
+        targets = [node_by_id[target] for target in node.outgoing if target in node_by_id]
+        for target_index, target in enumerate(targets):
+            connector = arrow if len(targets) == 1 else (last_branch if target_index == len(targets) - 1 else branch)
+            source = _render_node(node, overlay, ascii_only=ascii_only, compact=True)
+            rendered_target = _render_node(target, overlay, ascii_only=ascii_only, compact=True)
+            first_join = target.depends_on and target.depends_on[0] == node.stage_id
+            lines.append(f"  {source} {connector} {rendered_target}{_join_label(target, first=bool(first_join))}")
+    return lines
+
+
+def _narrow_graph_lines(
+    model: PipelineGraphModel,
+    overlay: PipelineGraphOverlay,
+    *,
+    ascii_only: bool,
+) -> list[str]:
+    node_by_id = _node_by_id(model)
+    lines = _warning_lines(model)
+    if not model.nodes:
+        return lines + ["graph: empty"]
+    roots = [node for node in model.nodes if not any(dep in node_by_id for dep in node.depends_on)]
+    if not roots:
+        roots = list(model.nodes[:1])
+    expanded: set[str] = set()
+    for root_index, root in enumerate(roots):
+        if root_index:
+            lines.append("")
+        lines.extend(_narrow_node_lines(root, node_by_id, overlay, expanded, "", ascii_only=ascii_only))
+    return lines
+
+
+def _narrow_node_lines(
+    node: PipelineGraphNode,
+    node_by_id: Mapping[str, PipelineGraphNode],
+    overlay: PipelineGraphOverlay,
+    expanded: set[str],
+    prefix: str,
+    *,
+    ascii_only: bool,
+) -> list[str]:
+    lines = [prefix + _render_node(node, overlay, ascii_only=ascii_only, compact=True) + _join_label(node)]
+    if node.stage_id in expanded:
+        return lines
+    expanded.add(node.stage_id)
+    children = [node_by_id[stage_id] for stage_id in node.outgoing if stage_id in node_by_id]
+    for index, child in enumerate(children):
+        is_last = index == len(children) - 1
+        edge = "`--> " if ascii_only and is_last else "+--> " if ascii_only else "└──▶ " if is_last else "├──▶ "
+        child_prefix = prefix + ("    " if is_last else "│   ")
+        child_lines = _narrow_node_lines(child, node_by_id, overlay, expanded, child_prefix, ascii_only=ascii_only)
+        child_lines[0] = prefix + edge + child_lines[0].lstrip()
+        lines.extend(child_lines)
+    return lines
 
 
 def select_source_preset_for_pipeline(pipeline_name: str) -> str | None:
@@ -1447,5 +1967,6 @@ def pipeline_workbench_preview(
     if lines:
         lines.append("")
     lines.append("graph:")
-    lines.extend(graph_lines(pipeline))
+    model = pipeline_graph_model(pipeline)
+    lines.extend(pipeline_graph_lines(model, width=100))
     return "\n".join(lines)

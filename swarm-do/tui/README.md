@@ -47,18 +47,20 @@ it does not initialize Beads.
 
 ## What You Can Manage
 
-- **Dashboard:** active preset/pipeline, in-flight runs, recent burn telemetry,
-  latest checkpoint/observation, Beads issue open, handoff request, and cancel
-  for running `swarm-run` processes.
-- **Settings:** effective role routes and editable base/user-preset route
-  overrides. Stock presets remain read-only; fork first before editing their
-  routes.
+- **Dashboard:** active preset/pipeline, validation summary, compact active
+  pipeline graph, in-flight runs, recent burn telemetry, latest
+  checkpoint/observation, Beads issue open, handoff request, and cancel for
+  running `swarm-run` processes.
+- **Settings:** framed effective role routes and editable base/user-preset
+  route overrides. Stock presets remain read-only; fork first before editing
+  their routes.
 - **Presets:** stock and user preset browsing, loading, diff preview, and user
   preset deletion.
-- **Pipelines:** intent-sorted pipeline gallery, stage topology, stage
-  inspector, validation rail, fork-first editing, modules, routes, fan-out
-  branch routes, prompt lenses, provider-review settings, MCO settings, lint,
-  validation, provider doctor, and profile activation.
+- **Pipelines:** intent-sorted pipeline gallery, graph-first execution
+  workbench, synchronized stage inspector, validation rail, fork-first editing,
+  modules, routes, fan-out branch routes, prompt lenses, provider-review
+  settings, MCO settings, lint, validation, provider doctor, graph copy, and
+  profile activation.
 
 The TUI writes user-owned configuration under `${CLAUDE_PLUGIN_DATA}/presets/`
 and `${CLAUDE_PLUGIN_DATA}/pipelines/`. It does not edit stock files in place.
@@ -69,10 +71,13 @@ Top-level keys:
 
 | Key | Screen |
 |-----|--------|
-| `d` | Dashboard |
-| `s` | Settings |
-| `p` | Presets |
-| `i` | Pipelines |
+| `1` | Dashboard |
+| `2` | Runs table on Dashboard |
+| `3` | Pipelines |
+| `4` | Presets |
+| `5` | Settings |
+| `Ctrl+P` | Command palette |
+| `?` | Contextual help |
 | `q` | Quit |
 
 ## Dev Loop
@@ -90,19 +95,20 @@ coverage live in `actions.py`.
 
 ## Screens
 
-- Dashboard reads `telemetry/runs.jsonl` and `in-flight/*.lock`. Press `o` to
-  open the selected Beads issue, `f` to request a Codex handoff, and `c` to
-  cancel a selected running `swarm-run`.
+- Dashboard reads `telemetry/runs.jsonl`, `telemetry/run_events.jsonl`,
+  `telemetry/observations.jsonl`, and `in-flight/*.lock`. Press `o` to open the
+  selected Beads issue, `f` to request a Codex handoff, and `c` to cancel a
+  selected running `swarm-run`.
 - Settings edits `${CLAUDE_PLUGIN_DATA}/backends.toml` or user-preset route
   overrides through invariant-checked helpers. Press `Enter` on a route to edit
   it.
 - Presets browse stock and user presets; stock presets are read-only. Press `l`
-  to load, `d` to diff, and `x` to delete user presets.
-- Pipelines open a composer workbench: intent-sorted gallery, selectable
-  stage rows, focused stage inspector, validation rail, fork-first edit dialog,
-  in-memory draft save/discard state, route/module edit controls, and
-  undo/redo. Provider-review stages are visibly read-only and may skip when no
-  shim is eligible; MCO remains the experimental comparison path.
+  to load, `v` to view diff, and `x` to delete user presets.
+- Pipelines open a graph-first composer workbench: intent-sorted gallery,
+  selectable execution graph, focused stage inspector, validation rail,
+  fork-first edit dialog, in-memory draft save/discard state, route/module edit
+  controls, and undo/redo. Provider-review stages are visibly read-only and may
+  skip when no shim is eligible; MCO remains the experimental comparison path.
   Stock pipelines remain read-only; editing starts by forking a pipeline and
   its matching preset into user-owned files.
 - The stock `brainstorm`, `research`, `design`, and `review` pipelines are
@@ -113,22 +119,24 @@ coverage live in `actions.py`.
 
 On the Pipelines screen:
 
-- Select a pipeline in the left gallery, then select a stage row to inspect the
-  read-only stage details.
+- Select a pipeline in the left gallery, then select a graph node or edge row
+  to inspect the read-only stage details.
 - Press `f` or `Enter` to begin editing. Stock pipelines open a fork dialog with
   a generated collision-free name; user pipelines open an in-memory draft.
 - Press `r` on an agents stage to override the first agent route in the draft.
 - Press `b` on a model fan-out stage to edit a branch route. Prompt-variant
   fan-outs stay lens-only and cannot be mixed with per-branch model routes.
-- Press `n` on a fan-out or normal agents stage to apply compatible prompt lenses. The modal
-  lists each lens id, category, execution mode, output-contract rule, merge
-  expectation, and safety note. Lens edits stay in the in-memory draft until
-  validation passes and `Ctrl+S` writes the YAML.
+- Press `n` on a fan-out or normal agents stage to apply compatible prompt
+  lenses. The modal lists each lens id, category, execution mode,
+  output-contract rule, merge expectation, and safety note. Lens edits stay in
+  the in-memory draft until validation passes and `Ctrl+S` writes the YAML.
 - Press `o` on a provider-review stage to edit selected providers or selection
   mode, timeout, and failure tolerance. The editor preserves `command=review`,
   `memory=false`, `output=findings`, and read-only boundaries.
-- Press `d` on a provider-bearing pipeline to run provider doctor and view local
-  provider readiness before activation.
+- Press `Ctrl+D` on a provider-bearing pipeline to run provider doctor and view
+  local provider readiness before activation.
+- Press `t` to open the secondary topological stage list.
+- Press `y` to copy the current graph as plain text.
 - Press `m` to add a catalog module to the draft, or `Delete` to remove the
   selected stage when nothing still depends on it.
 - Press `Ctrl+R` to reset a selected stage route or fan-out routes to resolver
@@ -137,7 +145,7 @@ On the Pipelines screen:
 - Press `Ctrl+S` to save the current draft. The validation rail blocks hard
   validation errors before writing YAML.
 - Press `Esc` to discard the in-memory draft and return to the last saved file.
-- Press `s` on the stock `research` pipeline to activate the research profile.
+- Press `a` on the stock `research` pipeline to activate the research profile.
   Preview-only output graphs can still be browsed, forked, linted, and saved,
   but activation is blocked.
 
