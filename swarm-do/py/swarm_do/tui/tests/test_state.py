@@ -52,11 +52,14 @@ from swarm_do.tui.state import (
     mco_provider_result_preview,
     provider_result_preview,
     pipeline_activation_blocker,
+    pipeline_critical_stage_ids,
     pipeline_gallery_rows,
     pipeline_graph_lines,
+    pipeline_graph_move,
     pipeline_graph_model,
     pipeline_graph_overlay,
     pipeline_graph_legend_lines,
+    pipeline_live_stage_statuses,
     pipeline_lens_rows,
     pipeline_has_provider_stage,
     pipeline_profile_summary,
@@ -352,6 +355,58 @@ class TuiStateTests(EnvTestCase):
         compact = pipeline_graph_lines(model, width=90, compact=True)
         self.assertLessEqual(len(compact), len(model.layers))
         self.assertTrue(any("L3:" in line and "writer" in line for line in compact))
+
+    def test_pipeline_graph_v2_helpers_move_and_map_live_statuses(self) -> None:
+        pipeline = load_pipeline(find_pipeline("default").path)
+        model = pipeline_graph_model(pipeline)
+
+        self.assertEqual(pipeline_graph_move(model, "research", "right"), "analysis")
+        self.assertEqual(pipeline_graph_move(model, "analysis", "down"), "clarify")
+        self.assertEqual(pipeline_graph_move(model, "writer", "left"), "analysis")
+        self.assertEqual(pipeline_graph_move(model, "review", "right"), "review")
+
+        statuses = pipeline_live_stage_statuses(
+            model,
+            in_flight_runs=[
+                InFlightRun(
+                    issue_id="bd-1",
+                    role="agent-writer",
+                    backend="codex",
+                    model="gpt-5.4",
+                    effort="high",
+                    pid=123,
+                    started_at=None,
+                    status="running",
+                    path=self.root / "in-flight" / "bd-1.lock",
+                )
+            ],
+            run_events=[{"phase_id": "provider-review", "event_type": "checkpoint_written"}],
+            observations=[{"phase_id": "agent-review", "event_type": "writer_exit"}],
+        )
+
+        self.assertEqual(statuses["writer"], "running")
+        self.assertEqual(statuses["provider-review"], "checkpoint-written")
+        self.assertEqual(statuses["review"], "done")
+
+    def test_pipeline_graph_v2_critical_path_and_inspector_overlay(self) -> None:
+        pipeline = load_pipeline(find_pipeline("default").path)
+        model = pipeline_graph_model(pipeline)
+        critical = pipeline_critical_stage_ids(model)
+
+        self.assertIn("research", critical)
+        self.assertIn("writer", critical)
+        self.assertIn("review", critical)
+
+        overlay = pipeline_graph_overlay(
+            selected_stage_id="writer",
+            stage_statuses={"writer": "running"},
+            dirty_stage_ids={"writer"},
+            critical_stage_ids=critical,
+        )
+        inspector = stage_inspector_text(pipeline, "writer", overlay)
+
+        self.assertIn("live status: running", inspector)
+        self.assertIn("markers: changed draft, critical path", inspector)
 
     def test_pipeline_graph_model_falls_back_for_cyclic_graphs(self) -> None:
         pipeline = {

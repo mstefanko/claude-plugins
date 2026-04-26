@@ -49,6 +49,14 @@ class TuiAppTests(unittest.TestCase):
             "review",
         )
 
+    def test_graph_click_mapping_uses_horizontal_position(self) -> None:
+        pipeline = load_pipeline(find_pipeline("default").path)
+        model = pipeline_graph_model(pipeline)
+        line = "  ┌ research ┐ ├──▶ ┌ analysis ┐ ──▶ ┌ writer ┐"
+
+        self.assertEqual(tui_app._graph_click_stage_id(line, model, line.index("analysis")), "analysis")
+        self.assertEqual(tui_app._graph_click_stage_id(line, model, line.index("writer")), "writer")
+
 
 if __name__ == "__main__":
     unittest.main()

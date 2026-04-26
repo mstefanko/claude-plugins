@@ -10,6 +10,7 @@ import dataclasses
 import copy
 import json
 import os
+import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -505,6 +506,119 @@ def pipeline_graph_legend_lines(model: PipelineGraphModel, *, ascii_only: bool =
     return lines
 
 
+def pipeline_graph_stage_ids(model: PipelineGraphModel) -> tuple[str, ...]:
+    return tuple(node.stage_id for node in model.nodes)
+
+
+def pipeline_graph_move(
+    model: PipelineGraphModel,
+    selected_stage_id: str | None,
+    direction: str,
+) -> str | None:
+    """Return the stage selected by moving through the graph in one direction."""
+
+    if not model.nodes:
+        return None
+    positions = _graph_stage_positions(model)
+    node_by_id = _node_by_id(model)
+    if selected_stage_id not in positions:
+        return model.nodes[0].stage_id
+
+    layer_index, node_index = positions[selected_stage_id]
+    layer = model.layers[layer_index]
+    if direction == "up":
+        return layer[max(0, node_index - 1)]
+    if direction == "down":
+        return layer[min(len(layer) - 1, node_index + 1)]
+
+    if direction not in {"left", "right"}:
+        return selected_stage_id
+
+    target_layer_index = layer_index + (-1 if direction == "left" else 1)
+    if target_layer_index < 0 or target_layer_index >= len(model.layers):
+        return selected_stage_id
+    target_layer = tuple(stage_id for stage_id in model.layers[target_layer_index] if stage_id in positions)
+    if not target_layer:
+        return selected_stage_id
+
+    selected_node = node_by_id[selected_stage_id]
+    connected_ids = selected_node.depends_on if direction == "left" else selected_node.outgoing
+    connected = [stage_id for stage_id in connected_ids if stage_id in target_layer]
+    candidates = connected or list(target_layer)
+    return min(candidates, key=lambda stage_id: abs(positions[stage_id][1] - node_index))
+
+
+def pipeline_critical_stage_ids(
+    model: PipelineGraphModel,
+    stage_weights: Mapping[str, int | float] | None = None,
+) -> frozenset[str]:
+    """Select a deterministic longest dependency path through the pipeline DAG."""
+
+    if not model.nodes:
+        return frozenset()
+    weights = stage_weights or {}
+    node_by_id = _node_by_id(model)
+    ordered = sorted(model.nodes, key=lambda node: _graph_stage_positions(model).get(node.stage_id, (999, 999)))
+    scores: dict[str, float] = {}
+    previous: dict[str, str | None] = {}
+
+    for node in ordered:
+        dep_scores = [
+            (scores[dep], dep)
+            for dep in node.depends_on
+            if dep in scores
+        ]
+        dep_score, dep_id = max(dep_scores, default=(0.0, None), key=lambda item: (item[0], item[1] or ""))
+        raw_weight = weights.get(node.stage_id, 1)
+        weight = float(raw_weight) if isinstance(raw_weight, (int, float)) else 1.0
+        scores[node.stage_id] = dep_score + max(1.0, weight)
+        previous[node.stage_id] = dep_id
+
+    end = max(
+        (node.stage_id for node in ordered if node.stage_id in node_by_id),
+        key=lambda stage_id: (scores.get(stage_id, 0.0), stage_id),
+    )
+    path: list[str] = []
+    while end:
+        path.append(end)
+        end = previous.get(end)
+    return frozenset(reversed(path))
+
+
+def pipeline_live_stage_statuses(
+    model: PipelineGraphModel,
+    *,
+    in_flight_runs: list[Any] | tuple[Any, ...] = (),
+    run_events: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...] = (),
+    observations: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...] = (),
+) -> dict[str, str]:
+    statuses: dict[str, str] = {}
+    aliases = _graph_stage_aliases(model)
+
+    for row in reversed(run_events):
+        stage_id = _stage_id_for_alias(aliases, row.get("phase_id"))
+        if stage_id:
+            event_type = str(row.get("event_type") or "event")
+            statuses.setdefault(stage_id, event_type.replace("_", "-"))
+
+    for row in reversed(observations):
+        stage_id = _stage_id_for_alias(aliases, row.get("phase_id"))
+        if not stage_id:
+            continue
+        event_type = str(row.get("event_type") or "observation")
+        status = "done" if event_type.endswith("_exit") else event_type.replace("_", "-")
+        statuses.setdefault(stage_id, status)
+
+    for run in in_flight_runs:
+        stage_id = _stage_id_for_alias(aliases, getattr(run, "role", None))
+        if not stage_id:
+            continue
+        status = str(getattr(run, "status", None) or "running").replace("_", "-")
+        statuses[stage_id] = status
+
+    return statuses
+
+
 _GRAPH_RENDER_CACHE: dict[tuple[Any, ...], tuple[str, ...]] = {}
 _GRAPH_LANE_ORDER = {"agents": 0, "fan-out": 1, "provider": 2, "terminal": 3}
 
@@ -600,6 +714,36 @@ def _graph_overlay_fingerprint(overlay: PipelineGraphOverlay) -> tuple[Any, ...]
 
 def _node_by_id(model: PipelineGraphModel) -> dict[str, PipelineGraphNode]:
     return {node.stage_id: node for node in model.nodes}
+
+
+def _graph_stage_positions(model: PipelineGraphModel) -> dict[str, tuple[int, int]]:
+    return {
+        stage_id: (layer_index, node_index)
+        for layer_index, layer in enumerate(model.layers)
+        for node_index, stage_id in enumerate(layer)
+    }
+
+
+def _graph_stage_aliases(model: PipelineGraphModel) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    for node in model.nodes:
+        normalized = _normalize_stage_alias(node.stage_id)
+        aliases[normalized] = node.stage_id
+        aliases[_normalize_stage_alias(f"agent-{node.stage_id}")] = node.stage_id
+        for role in re.findall(r"\bagent-[A-Za-z0-9._-]+", node.subtitle):
+            aliases[_normalize_stage_alias(role)] = node.stage_id
+            aliases[_normalize_stage_alias(role.removeprefix("agent-"))] = node.stage_id
+    return aliases
+
+
+def _normalize_stage_alias(value: str) -> str:
+    return value.strip().lower().replace("_", "-")
+
+
+def _stage_id_for_alias(aliases: Mapping[str, str], value: Any) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    return aliases.get(_normalize_stage_alias(value))
 
 
 def _render_node(
@@ -1701,7 +1845,11 @@ def pipeline_inspector_lines(pipeline: dict[str, Any]) -> list[str]:
     return lines
 
 
-def stage_inspector_text(pipeline: Mapping[str, Any], stage_id: str | None) -> str:
+def stage_inspector_text(
+    pipeline: Mapping[str, Any],
+    stage_id: str | None,
+    overlay: PipelineGraphOverlay | None = None,
+) -> str:
     if not stage_id:
         return "Select a stage."
     stage = _stage_by_id(pipeline, stage_id)
@@ -1714,6 +1862,20 @@ def stage_inspector_text(pipeline: Mapping[str, Any], stage_id: str | None) -> s
         "",
         "details:",
     ]
+    if overlay is not None:
+        status = overlay.stage_statuses.get(stage_id)
+        if status:
+            lines.insert(3, f"live status: {status}")
+        markers = []
+        if stage_id in overlay.dirty_stage_ids:
+            markers.append("changed draft")
+        if stage_id in overlay.critical_stage_ids:
+            markers.append("critical path")
+        if stage_id in overlay.highlighted_stage_ids:
+            markers.append("highlighted")
+        if markers:
+            insert_at = 4 if status else 3
+            lines.insert(insert_at, "markers: " + ", ".join(markers))
     lines.extend(_stage_detail_lines(stage))
     return "\n".join(lines)
 

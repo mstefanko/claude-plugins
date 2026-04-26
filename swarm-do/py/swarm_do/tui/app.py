@@ -10,9 +10,11 @@ from typing import Any
 
 try:  # Optional dependency installed by bin/swarm-tui.
     from rich.text import Text
+    from textual import events
     from textual.app import App, ComposeResult, SystemCommand
     from textual.binding import Binding
     from textual.containers import Container, Horizontal, Vertical
+    from textual.reactive import reactive
     from textual.screen import ModalScreen, Screen
     from textual.widgets import (
         Button,
@@ -66,10 +68,13 @@ from swarm_do.tui.state import (
     module_palette_rows,
     pipeline_gallery_rows,
     pipeline_activation_blocker,
+    pipeline_critical_stage_ids,
     pipeline_graph_lines,
+    pipeline_graph_move,
     pipeline_graph_model,
     pipeline_graph_overlay,
     pipeline_graph_legend_lines,
+    pipeline_live_stage_statuses,
     pipeline_has_provider_stage,
     pipeline_profile_preset,
     pipeline_stage_rows,
@@ -132,6 +137,88 @@ if TEXTUAL_IMPORT_ERROR is None:
             if callable(screen_context):
                 extra = screen_context()
             self.update(nav + "\n" + (context if not extra else context + "  " + extra))
+
+
+    class StageInspectorView(Static):
+        can_focus = True
+
+
+    class PipelineGraphView(Static):
+        can_focus = True
+        BINDINGS = [
+            Binding("left", "select_left", "Prev layer", show=False),
+            Binding("right", "select_right", "Next layer", show=False),
+            Binding("up", "select_up", "Prev stage", show=False),
+            Binding("down", "select_down", "Next stage", show=False),
+            Binding("enter", "open_selected", "Edit", show=False),
+            Binding("y", "copy_graph", "Copy", show=False),
+        ]
+
+        def __init__(self, **kwargs: Any):
+            super().__init__("", **kwargs)
+            self.model: Any | None = None
+            self.overlay = pipeline_graph_overlay()
+            self.lines: list[str] = []
+
+        def set_message(self, message: str) -> None:
+            self.model = None
+            self.overlay = pipeline_graph_overlay()
+            self.lines = message.splitlines() or [message]
+            self.update(message)
+
+        def set_graph(self, model: Any, overlay: Any, lines: list[str]) -> None:
+            self.model = model
+            self.overlay = overlay
+            self.lines = lines
+            self.update("\n".join(lines))
+
+        def _select(self, stage_id: str | None) -> None:
+            if not stage_id:
+                return
+            handler = getattr(self.screen, "select_graph_stage", None)
+            if callable(handler):
+                handler(stage_id)
+
+        def _move(self, direction: str) -> None:
+            if self.model is None:
+                return
+            stage_id = pipeline_graph_move(self.model, self.overlay.selected_stage_id, direction)
+            self._select(stage_id)
+
+        def action_select_left(self) -> None:
+            self._move("left")
+
+        def action_select_right(self) -> None:
+            self._move("right")
+
+        def action_select_up(self) -> None:
+            self._move("up")
+
+        def action_select_down(self) -> None:
+            self._move("down")
+
+        def action_open_selected(self) -> None:
+            handler = getattr(self.screen, "action_begin_edit", None)
+            if callable(handler):
+                handler()
+
+        def action_copy_graph(self) -> None:
+            handler = getattr(self.screen, "action_copy_graph", None)
+            if callable(handler):
+                handler()
+
+        def on_click(self, event: events.Click) -> None:
+            self.focus()
+            if self.model is None:
+                return
+            y = int(getattr(event, "y", -1)) + int(getattr(self, "scroll_y", 0) or 0)
+            if y < 0 or y >= len(self.lines):
+                return
+            x = int(getattr(event, "x", 0)) + int(getattr(self, "scroll_x", 0) or 0)
+            stage_id = _graph_click_stage_id(self.lines[y], self.model, x)
+            if stage_id:
+                event.stop()
+                self._select(stage_id)
 
 
     def _nav_line(active: str) -> str:
@@ -588,7 +675,16 @@ if TEXTUAL_IMPORT_ERROR is None:
         try:
             pipeline = load_pipeline(item.path)
             model = pipeline_graph_model(pipeline)
-            lines = pipeline_graph_lines(model, width=100, compact=True)
+            overlay = pipeline_graph_overlay(
+                stage_statuses=pipeline_live_stage_statuses(
+                    model,
+                    in_flight_runs=load_in_flight(),
+                    run_events=load_run_events()[-12:],
+                    observations=load_observations()[-12:],
+                ),
+                critical_stage_ids=pipeline_critical_stage_ids(model),
+            )
+            lines = pipeline_graph_lines(model, overlay, width=100, compact=True)
         except Exception as exc:
             return f"Active Pipeline Graph\nERROR {exc}"
         return "Active Pipeline Graph\n" + "\n".join(lines)
@@ -777,16 +873,18 @@ if TEXTUAL_IMPORT_ERROR is None:
 
 
     class PipelinesScreen(Screen):
+        selected_stage_id = reactive(None)
         BINDINGS = [
             ("enter", "begin_edit", "Edit"),
             ("f", "begin_edit", "Fork/Edit"),
+            ("g", "focus_graph", "Graph"),
             ("r", "edit_stage_route", "Route"),
             ("b", "edit_branch_route", "Branch"),
             ("n", "edit_lenses", "Lens"),
             ("o", "edit_provider", "Provider"),
             ("ctrl+d", "provider_doctor", "Doctor"),
             ("m", "add_module", "Module"),
-            ("t", "show_stage_table", "Stages"),
+            ("t", "focus_stage_details", "Details"),
             ("y", "copy_graph", "Copy graph"),
             ("delete", "remove_stage", "Remove"),
             ("ctrl+r", "reset_selected_route", "Reset route"),
@@ -801,17 +899,18 @@ if TEXTUAL_IMPORT_ERROR is None:
         HELP = (
             "Pipelines\n\n"
             "Global: 1 Dashboard, 2 Runs, 3 Pipelines, 4 Presets, 5 Settings, Ctrl+P Commands, q Quit.\n"
-            "Local: Enter/f fork or edit, r route, b branch, n lens, o provider, Ctrl+D doctor, "
-            "m module, t stages, y copy graph, v validate, a activate, Ctrl+S save, Esc discard."
+            "Graph: g focus graph, arrows move selection, Enter/f fork or edit selected stage, y copy graph.\n"
+            "Local: r route, b branch, n lens, o provider, Ctrl+D doctor, m module, "
+            "t details, v validate, a activate, Ctrl+S save, Esc discard."
         )
 
         def __init__(self) -> None:
             super().__init__()
             self._gallery_rows: list[PipelineGalleryRow] = []
             self._stage_rows: list[StageRow] = []
-            self._graph_stage_ids: list[str | None] = []
+            self._graph_model: Any | None = None
+            self._graph_overlay = pipeline_graph_overlay()
             self._selected_pipeline_name: str | None = None
-            self._selected_stage_id: str | None = None
             self._draft: PipelineEditDraft | None = None
 
         def compose(self) -> ComposeResult:
@@ -820,15 +919,15 @@ if TEXTUAL_IMPORT_ERROR is None:
             with Vertical(id="pipeline-workbench"):
                 with Horizontal(id="pipeline-main"):
                     yield ListView(id="pipeline-gallery")
-                    yield ListView(id="pipeline-graph")
-                    yield Static("", id="stage-inspector")
+                    yield PipelineGraphView(id="pipeline-graph")
+                    yield StageInspectorView("", id="stage-inspector")
                 yield Static("", id="validation-rail")
             yield StatusBar(id="status")
             yield Footer()
 
         def on_mount(self) -> None:
             self.refresh_pipelines()
-            self.set_focus(self.query_one("#pipeline-graph", ListView))
+            self.set_focus(self.query_one("#pipeline-graph", PipelineGraphView))
 
         def chrome_context(self) -> str:
             if self._draft is None:
@@ -851,11 +950,11 @@ if TEXTUAL_IMPORT_ERROR is None:
         def _selected_stage_row(self) -> StageRow | None:
             if not self._stage_rows:
                 return None
-            if self._selected_stage_id:
+            if self.selected_stage_id:
                 for row in self._stage_rows:
-                    if row.stage_id == self._selected_stage_id:
+                    if row.stage_id == self.selected_stage_id:
                         return row
-            self._selected_stage_id = self._stage_rows[0].stage_id
+            self.selected_stage_id = self._stage_rows[0].stage_id
             return self._stage_rows[0]
 
         def _current_pipeline(self) -> dict[str, Any] | None:
@@ -894,55 +993,67 @@ if TEXTUAL_IMPORT_ERROR is None:
 
         def refresh_stages(self) -> None:
             pipeline = self._current_pipeline()
-            view = self.query_one("#pipeline-graph", ListView)
-            view.clear()
+            view = self.query_one("#pipeline-graph", PipelineGraphView)
             if pipeline is None:
                 self._stage_rows = []
-                self._graph_stage_ids = []
-                self._selected_stage_id = None
-                view.append(ListItem(Label("No pipeline selected.")))
-                self.query_one("#stage-inspector", Static).update("No pipeline selected.")
+                self._graph_model = None
+                self._graph_overlay = pipeline_graph_overlay()
+                self.selected_stage_id = None
+                view.set_message("No pipeline selected.")
+                self.query_one("#stage-inspector", StageInspectorView).update("No pipeline selected.")
                 self.query_one("#validation-rail", Static).update("validation: n/a")
                 _refresh_chrome(self)
                 return
             self._stage_rows = pipeline_stage_rows(pipeline)
             valid_stage_ids = {row.stage_id for row in self._stage_rows}
-            if self._selected_stage_id not in valid_stage_ids:
-                self._selected_stage_id = self._stage_rows[0].stage_id if self._stage_rows else None
+            if self.selected_stage_id not in valid_stage_ids:
+                self.selected_stage_id = self._stage_rows[0].stage_id if self._stage_rows else None
             self.refresh_graph()
             self.refresh_stage_inspector()
             self.refresh_validation_rail()
             _refresh_chrome(self)
 
+        def _graph_render_width(self) -> int:
+            try:
+                width = self.query_one("#pipeline-graph", PipelineGraphView).size.width
+            except Exception:
+                width = 0
+            return width if width and width >= 42 else 112
+
+        def _overlay_for_model(self, model: Any) -> Any:
+            return pipeline_graph_overlay(
+                selected_stage_id=self.selected_stage_id,
+                stage_statuses=pipeline_live_stage_statuses(
+                    model,
+                    in_flight_runs=load_in_flight(),
+                    run_events=load_run_events()[-12:],
+                    observations=load_observations()[-12:],
+                ),
+                dirty_stage_ids=self._dirty_stage_ids(),
+                critical_stage_ids=pipeline_critical_stage_ids(model),
+            )
+
         def refresh_graph(self) -> None:
             pipeline = self._current_pipeline()
-            view = self.query_one("#pipeline-graph", ListView)
-            view.clear()
-            self._graph_stage_ids = []
+            view = self.query_one("#pipeline-graph", PipelineGraphView)
             if pipeline is None:
-                view.append(ListItem(Label("No pipeline selected.")))
-                self._graph_stage_ids.append(None)
+                self._graph_model = None
+                self._graph_overlay = pipeline_graph_overlay()
+                view.set_message("No pipeline selected.")
                 return
             try:
                 model = pipeline_graph_model(pipeline)
-                overlay = pipeline_graph_overlay(
-                    selected_stage_id=self._selected_stage_id,
-                    dirty_stage_ids=self._dirty_stage_ids(),
-                )
-                lines = pipeline_graph_lines(model, overlay, width=112)
+                overlay = self._overlay_for_model(model)
+                lines = pipeline_graph_lines(model, overlay, width=self._graph_render_width())
                 lines.extend(pipeline_graph_legend_lines(model)[:4])
             except Exception as exc:
-                lines = [f"ERROR graph unavailable: {exc}"]
-                model = None
-            for line in lines:
-                view.append(ListItem(Label(line)))
-                self._graph_stage_ids.append(_graph_line_stage_id(line, model) if model is not None else None)
-            selected_index = next(
-                (idx for idx, stage_id in enumerate(self._graph_stage_ids) if stage_id == self._selected_stage_id),
-                0,
-            )
-            if self._graph_stage_ids:
-                view.index = selected_index
+                self._graph_model = None
+                self._graph_overlay = pipeline_graph_overlay()
+                view.set_message(f"ERROR graph unavailable: {exc}")
+                return
+            self._graph_model = model
+            self._graph_overlay = overlay
+            view.set_graph(model, overlay, lines)
 
         def _dirty_stage_ids(self) -> frozenset[str]:
             if self._draft is None:
@@ -967,8 +1078,8 @@ if TEXTUAL_IMPORT_ERROR is None:
             if pipeline is None:
                 body = "No pipeline selected."
             else:
-                body = stage_inspector_text(pipeline, stage.stage_id if stage else None)
-            self.query_one("#stage-inspector", Static).update(body)
+                body = stage_inspector_text(pipeline, stage.stage_id if stage else None, self._graph_overlay)
+            self.query_one("#stage-inspector", StageInspectorView).update(body)
 
         def refresh_validation_rail(self) -> None:
             row = self._selected_gallery_row()
@@ -987,17 +1098,25 @@ if TEXTUAL_IMPORT_ERROR is None:
                 index = event.list_view.index or 0
                 if self._gallery_rows:
                     self._selected_pipeline_name = self._gallery_rows[min(max(index, 0), len(self._gallery_rows) - 1)].name
-                    self._selected_stage_id = None
+                    self.selected_stage_id = None
                 self.refresh_stages()
                 return
-            if event.list_view.id == "pipeline-graph":
-                index = event.list_view.index or 0
-                if 0 <= index < len(self._graph_stage_ids):
-                    stage_id = self._graph_stage_ids[index]
-                    if stage_id and stage_id != self._selected_stage_id:
-                        self._selected_stage_id = stage_id
-                        self.refresh_graph()
-                self.refresh_stage_inspector()
+
+        def select_graph_stage(self, stage_id: str) -> None:
+            if stage_id == self.selected_stage_id:
+                return
+            valid_stage_ids = {row.stage_id for row in self._stage_rows}
+            if stage_id not in valid_stage_ids:
+                return
+            self.selected_stage_id = stage_id
+            self.refresh_graph()
+            self.refresh_stage_inspector()
+
+        def action_focus_graph(self) -> None:
+            self.set_focus(self.query_one("#pipeline-graph", PipelineGraphView))
+
+        def action_focus_stage_details(self) -> None:
+            self.set_focus(self.query_one("#stage-inspector", StageInspectorView))
 
         def _draft_for_selected(self) -> PipelineEditDraft | None:
             row = self._selected_gallery_row()
@@ -1313,11 +1432,8 @@ if TEXTUAL_IMPORT_ERROR is None:
             if pipeline is None:
                 return
             model = pipeline_graph_model(pipeline)
-            overlay = pipeline_graph_overlay(
-                selected_stage_id=self._selected_stage_id,
-                dirty_stage_ids=self._dirty_stage_ids(),
-            )
-            text = "\n".join(pipeline_graph_lines(model, overlay, width=112))
+            overlay = self._overlay_for_model(model)
+            text = "\n".join(pipeline_graph_lines(model, overlay, width=self._graph_render_width()))
             copier = getattr(self.app, "copy_to_clipboard", None)
             if callable(copier):
                 copier(text)
@@ -1522,9 +1638,29 @@ if TEXTUAL_IMPORT_ERROR is None:
         return None
 
 
+    def _graph_click_stage_id(line: str, model: Any, x: int) -> str | None:
+        if model is None:
+            return None
+        matches = []
+        for node in getattr(model, "nodes", ()):
+            match = _line_stage_id_match(line, node.stage_id)
+            if match is None:
+                continue
+            if match.start() <= x <= match.end():
+                return node.stage_id
+            matches.append((abs(match.start() - x), match.start(), node.stage_id))
+        if matches:
+            return min(matches)[2]
+        return None
+
+
     def _line_has_stage_id(line: str, stage_id: str) -> bool:
+        return _line_stage_id_match(line, stage_id) is not None
+
+
+    def _line_stage_id_match(line: str, stage_id: str) -> re.Match[str] | None:
         pattern = rf"(?<![A-Za-z0-9_-]){re.escape(stage_id)}(?![A-Za-z0-9_-])"
-        return re.search(pattern, line) is not None
+        return re.search(pattern, line)
 
 
     class SwarmTui(App):
@@ -1582,6 +1718,9 @@ if TEXTUAL_IMPORT_ERROR is None:
             yield SystemCommand("Go to Settings", "Open effective role routes", self.action_settings)
             yield SystemCommand("Show Help", "Show contextual help for the current screen", self.action_help_current)
             if isinstance(screen, PipelinesScreen):
+                yield SystemCommand("Focus Pipeline Graph", "Move keyboard focus to the graph", screen.action_focus_graph)
+                yield SystemCommand("Focus Stage Details", "Move keyboard focus to the selected stage details", screen.action_focus_stage_details)
+                yield SystemCommand("Show Stage Table", "Show the selected pipeline stages as rows", screen.action_show_stage_table)
                 yield SystemCommand("Validate Selected Pipeline", "Validate the selected pipeline", screen.action_validate_pipeline)
                 yield SystemCommand("Fork/Edit Selected Pipeline", "Fork or edit the selected pipeline", screen.action_begin_edit)
                 yield SystemCommand("Save Pipeline Draft", "Save the current in-memory pipeline draft", screen.action_save_draft)

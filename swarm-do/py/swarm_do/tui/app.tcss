@@ -64,12 +64,20 @@ DataTable {
 #pipeline-graph {
     width: 2fr;
     border: solid $primary;
+    padding: 1;
+    overflow-x: auto;
+    overflow-y: auto;
 }
 
 #preview, #stage-inspector {
     width: 42;
     border: solid $primary;
     padding: 1;
+    overflow-y: auto;
+}
+
+#pipeline-graph:focus, #stage-inspector:focus {
+    border: heavy $accent;
 }
 
 #validation-rail {
