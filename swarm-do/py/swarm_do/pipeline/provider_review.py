@@ -35,6 +35,7 @@ from .resolver import BackendResolver, Route
 
 
 SCHEMA_VERSION = "provider-findings.v2-draft"
+FULL_FINDINGS_SCHEMA_VERSION = "provider-findings.full.v1"
 CONSENSUS_POLICY_VERSION = "provider-review.consensus-policy.v1"
 CONSENSUS_CALIBRATION_SAMPLE_SCHEMA_VERSION = "provider-review.consensus-calibration.samples.v1"
 CONSENSUS_CALIBRATION_REPORT_SCHEMA_VERSION = "provider-review.consensus-calibration.v1"
@@ -1819,10 +1820,6 @@ def _normalized_finding_sort_key(finding: Mapping[str, Any]) -> tuple[int, float
     )
 
 
-def _cap_normalized_findings(findings: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
-    return sorted(findings, key=_normalized_finding_sort_key)[:MAX_NORMALIZED_FINDINGS]
-
-
 def normalize_provider_review_results(
     results: Sequence[ProviderRunResult],
     *,
@@ -1836,7 +1833,7 @@ def normalize_provider_review_results(
     min_success: int = DEFAULT_MIN_SUCCESS,
     selection_result: str | None = None,
     timestamp: str | None = None,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     if min_success < 1:
         raise ProviderReviewError("min_success must be >= 1")
     ts = timestamp or _iso_utc_now()
@@ -1947,7 +1944,8 @@ def normalize_provider_review_results(
                 "recommendation": representative["recommendation"],
             }
         )
-    findings = _cap_normalized_findings(findings)
+    findings_full = sorted(findings, key=_normalized_finding_sort_key)
+    findings = findings_full[:MAX_NORMALIZED_FINDINGS]
 
     status, status_reason = _provider_review_status(
         selected_count=len(selected_providers),
@@ -1980,7 +1978,7 @@ def normalize_provider_review_results(
         "manifest_path": manifest_path,
         "provider_errors": provider_errors,
         "findings": findings,
-    }
+    }, findings_full
 
 
 def _provider_review_status(
@@ -2218,7 +2216,7 @@ def skipped_result(
     min_success: int = DEFAULT_MIN_SUCCESS,
     selection_result: str | None = None,
 ) -> dict[str, Any]:
-    return normalize_provider_review_results(
+    artifact, _findings_full = normalize_provider_review_results(
         [],
         run_id=run_id,
         issue_id=issue_id,
@@ -2230,6 +2228,7 @@ def skipped_result(
         min_success=min_success,
         selection_result=selection_result,
     )
+    return artifact
 
 
 def _safe_provider_dir(provider_id: str) -> str:
@@ -2244,6 +2243,55 @@ def _write_json(path: Path, payload: Any) -> None:
 def _write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
+
+
+def _full_findings_manifest_block(
+    path: Path,
+    *,
+    displayed_count: int,
+    truncated_count: int,
+) -> dict[str, Any]:
+    return {
+        "path": str(path),
+        "schema_version": FULL_FINDINGS_SCHEMA_VERSION,
+        "display_cap": MAX_NORMALIZED_FINDINGS,
+        "displayed_count": displayed_count,
+        "truncated_count": truncated_count,
+        "total_findings": displayed_count + truncated_count,
+    }
+
+
+def _write_full_findings_sidecar(
+    *,
+    output_dir: Path,
+    artifact: Mapping[str, Any],
+    findings_full: Sequence[Mapping[str, Any]],
+    displayed_count: int,
+    truncated_count: int,
+) -> Path:
+    # Local audit artifact only; see docs/provider-review-mco-pattern-adoption-plan.md.
+    path = output_dir / "provider-findings.full.json"
+    sidecar = {
+        "schema_version": FULL_FINDINGS_SCHEMA_VERSION,
+        "provider": "swarm-review",
+        "run_id": artifact["run_id"],
+        "issue_id": artifact["issue_id"],
+        "stage_id": artifact["stage_id"],
+        "configured_providers": artifact["configured_providers"],
+        "selected_providers": artifact["selected_providers"],
+        "schema_valid_providers": artifact["schema_valid_providers"],
+        "provider_count": artifact["provider_count"],
+        "min_success": artifact["min_success"],
+        "selection_result": artifact["selection_result"],
+        "source_artifact_path": artifact["source_artifact_path"],
+        "manifest_path": artifact["manifest_path"],
+        "display_cap": MAX_NORMALIZED_FINDINGS,
+        "displayed_count": displayed_count,
+        "truncated_count": truncated_count,
+        "findings": list(findings_full),
+    }
+    _write_json(path, sidecar)
+    return path
 
 
 def _redacted_argv(argv: Sequence[str]) -> list[str]:
@@ -2898,7 +2946,9 @@ def write_manifest(
     timeout_seconds: int,
     command_argv: Sequence[str],
     allow_parser_fallback: bool = False,
+    full_findings: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    # Manifest v1 is unversioned-additive; readers must treat new fields as optional.
     manifest = {
         "schema_version": "provider-review.manifest.v1",
         "prompt_path": str(prompt_file),
@@ -2915,6 +2965,7 @@ def write_manifest(
             "confidence_cap": PARSER_FALLBACK_CONFIDENCE_CAP,
         },
         "raw_sidecars": str(output_dir / "providers"),
+        "full_findings": dict(full_findings) if full_findings is not None else None,
         "retention": {
             "class": "local-run-artifact-sensitive",
             "policy": "retained or purged with the run artifact directory; not promoted to telemetry",
@@ -3011,7 +3062,7 @@ def run_stage(args: argparse.Namespace) -> int:
             max_parallel=selection.policy.max_parallel,
             allow_parser_fallback=allow_parser_fallback,
         )
-    artifact = normalize_provider_review_results(
+    artifact, findings_full = normalize_provider_review_results(
         results,
         run_id=args.run_id,
         issue_id=args.issue_id,
@@ -3022,6 +3073,29 @@ def run_stage(args: argparse.Namespace) -> int:
         manifest_path=str(manifest_path),
         min_success=selection.policy.min_success,
         selection_result=selection.selection_result,
+    )
+    displayed_count = min(len(findings_full), MAX_NORMALIZED_FINDINGS)
+    truncated_count = max(0, len(findings_full) - displayed_count)
+    full_findings_path = _write_full_findings_sidecar(
+        output_dir=output_dir,
+        artifact=artifact,
+        findings_full=findings_full,
+        displayed_count=displayed_count,
+        truncated_count=truncated_count,
+    )
+    write_manifest(
+        path=manifest_path,
+        selection=selection,
+        prompt_file=prompt_file,
+        output_dir=output_dir,
+        timeout_seconds=args.timeout_seconds,
+        command_argv=sys.argv,
+        allow_parser_fallback=allow_parser_fallback,
+        full_findings=_full_findings_manifest_block(
+            full_findings_path,
+            displayed_count=displayed_count,
+            truncated_count=truncated_count,
+        ),
     )
     validate_provider_findings_v2_artifact(artifact)
     _write_json(result_path, artifact)

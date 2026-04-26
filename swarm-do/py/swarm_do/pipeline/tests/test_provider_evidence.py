@@ -15,7 +15,7 @@ FIXTURE_DIR = Path(__file__).parent / "fixtures"
 
 class ProviderEvidenceTests(unittest.TestCase):
     def test_summarizes_swarm_review_without_raw_evidence_text(self) -> None:
-        artifact = normalize_provider_review_results(
+        artifact, _findings_full = normalize_provider_review_results(
             [
                 ProviderRunResult(
                     "claude",
@@ -51,7 +51,8 @@ class ProviderEvidenceTests(unittest.TestCase):
             timestamp="2026-04-25T00:00:00Z",
         )
 
-        summary = provider_evidence_summary(artifact, artifact_path="/tmp/provider-findings.json")
+        with tempfile.TemporaryDirectory() as td:
+            summary = provider_evidence_summary(artifact, artifact_path=str(Path(td) / "provider-findings.json"))
 
         self.assertIn("Provider Review Evidence", summary)
         self.assertIn("status: swarm-review partial", summary)
@@ -62,6 +63,86 @@ class ProviderEvidenceTests(unittest.TestCase):
         self.assertIn("codex timeout", summary)
         self.assertNotIn("raw provider evidence snippet", summary)
         self.assertNotIn("Preserve valid outputs", summary)
+
+    def test_reports_truncation_from_manifest(self) -> None:
+        findings = [
+            {
+                "severity": "high",
+                "category": "logic",
+                "summary": f"Finding {idx}",
+                "file_path": f"pkg/file_{idx}.py",
+                "line_start": idx + 1,
+                "line_end": idx + 1,
+                "confidence": 0.8,
+                "evidence": "raw provider evidence snippet should not be echoed",
+            }
+            for idx in range(12)
+        ]
+        artifact, _findings_full = normalize_provider_review_results(
+            [ProviderRunResult("claude", {"findings": findings}, "{}\n", "")],
+            run_id="RUN_PROVIDER",
+            issue_id="issue-1",
+            stage_id="provider-review",
+            configured_providers=("claude",),
+            selected_providers=("claude",),
+            source_artifact_path="/tmp/provider-findings.json",
+            manifest_path="/tmp/provider-review.manifest.json",
+            timestamp="2026-04-25T00:00:00Z",
+        )
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            artifact_path = root / "provider-findings.json"
+            artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+            (root / "provider-review.manifest.json").write_text(
+                json.dumps(
+                    {
+                        "full_findings": {
+                            "displayed_count": 5,
+                            "total_findings": 12,
+                            "truncated_count": 7,
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            summary = provider_evidence_summary_from_file(artifact_path)
+
+        self.assertIn("5 shown of 12 normalized (7 truncated)", summary)
+        self.assertNotIn("raw provider evidence snippet", summary)
+
+    def test_falls_back_when_manifest_missing(self) -> None:
+        findings = [
+            {
+                "severity": "medium",
+                "category": "test",
+                "summary": f"Finding {idx}",
+                "file_path": f"pkg/file_{idx}.py",
+                "line_start": idx + 1,
+                "line_end": idx + 1,
+                "confidence": 0.7,
+            }
+            for idx in range(7)
+        ]
+        artifact, _findings_full = normalize_provider_review_results(
+            [ProviderRunResult("claude", {"findings": findings}, "{}\n", "")],
+            run_id="RUN_PROVIDER",
+            issue_id="issue-1",
+            stage_id="provider-review",
+            configured_providers=("claude",),
+            selected_providers=("claude",),
+            source_artifact_path="/tmp/provider-findings.json",
+            manifest_path="/tmp/provider-review.manifest.json",
+            timestamp="2026-04-25T00:00:00Z",
+        )
+
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "provider-findings.json"
+            path.write_text(json.dumps(artifact), encoding="utf-8")
+            summary = provider_evidence_summary_from_file(path)
+
+        self.assertIn("- findings: 5 shown of 5", summary)
+        self.assertNotIn("normalized", summary)
 
     def test_summarizes_mco_v1_artifact_from_file(self) -> None:
         payload = json.loads((FIXTURE_DIR / "mco_review_success.json").read_text(encoding="utf-8"))

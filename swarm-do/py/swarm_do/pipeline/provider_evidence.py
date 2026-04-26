@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -99,7 +100,14 @@ def provider_evidence_summary(
     findings = [item for item in artifact.get("findings") or [] if isinstance(item, Mapping)]
     sorted_findings = sorted(findings, key=_finding_sort_key)
     shown_findings = sorted_findings[:max_findings]
-    lines.append(f"- findings: {len(shown_findings)} shown of {len(findings)}")
+    manifest_counts = _manifest_full_findings_counts(artifact_path)
+    if manifest_counts is None:
+        lines.append(f"- findings: {len(shown_findings)} shown of {len(findings)}")
+    else:
+        displayed_count, total_findings, truncated_count = manifest_counts
+        lines.append(
+            f"- findings: {displayed_count} shown of {total_findings} normalized ({truncated_count} truncated)"
+        )
     for finding in shown_findings:
         lines.append("  - " + _finding_line(finding))
 
@@ -123,6 +131,32 @@ def _finding_sort_key(finding: Mapping[str, Any]) -> tuple[int, float, str, str,
         _text(finding.get("summary"), "").lower(),
         _int_or_zero(finding.get("line_start")),
     )
+
+
+def _manifest_full_findings_counts(artifact_path: str | None) -> tuple[int, int, int] | None:
+    if not artifact_path:
+        return None
+    manifest_path = Path(artifact_path).parent / "provider-review.manifest.json"
+    if not manifest_path.is_file():
+        return None
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"provider evidence: cannot read manifest {manifest_path}: {exc}", file=sys.stderr)
+        return None
+    if not isinstance(payload, Mapping):
+        return None
+    full_findings = payload.get("full_findings")
+    if not isinstance(full_findings, Mapping):
+        return None
+    displayed_count = _int_or_none(full_findings.get("displayed_count"))
+    total_findings = _int_or_none(full_findings.get("total_findings"))
+    truncated_count = _int_or_none(full_findings.get("truncated_count"))
+    if displayed_count is None or total_findings is None:
+        return None
+    if truncated_count is None:
+        truncated_count = max(0, total_findings - displayed_count)
+    return displayed_count, total_findings, truncated_count
 
 
 def _finding_line(finding: Mapping[str, Any]) -> str:
@@ -189,3 +223,7 @@ def _int_text(value: Any) -> str:
 
 def _int_or_zero(value: Any) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def _int_or_none(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None

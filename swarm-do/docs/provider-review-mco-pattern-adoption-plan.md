@@ -280,17 +280,18 @@ inside `FakePopen.__init__` or in a helper — same as today.
 
 ### Phase B — Full Normalized Findings Sidecar
 
-**Status:** ready to implement after Phase A. Not blocked by R2/R3 local proof
-runs.
+**Status:** implemented. Adds a run-local `provider-findings.full.json`
+sidecar while keeping the schema-validated v2 artifact capped at
+`MAX_NORMALIZED_FINDINGS`.
 
 **Touched files / functions:**
 
 | File | Symbols |
 | --- | --- |
-| `py/swarm_do/pipeline/provider_review.py` | new `_full_normalized_findings_artifact(...)`; refactor `normalize_provider_review_results` (line 1807) to compute the full row set first and the capped subset second; new constant `FULL_FINDINGS_SCHEMA_VERSION = "provider-findings.full.v1"`; manifest write update in `write_manifest` (line 2707); new return type so `run_stage` can write the full sidecar |
+| `py/swarm_do/pipeline/provider_review.py` | new `_write_full_findings_sidecar(...)`; refactor `normalize_provider_review_results` to compute the full row set first and the capped subset second; new constant `FULL_FINDINGS_SCHEMA_VERSION = "provider-findings.full.v1"`; manifest write update in `write_manifest`; new return type so `run_stage` can write the full sidecar |
 | `py/swarm_do/pipeline/provider_evidence.py` | extend `provider_evidence_summary` (line 33) to read truncation counts from a sibling `provider-review.manifest.json` when present; existing artifact-only behavior remains the fallback |
 | `py/swarm_do/pipeline/tests/test_provider_review.py` | new tests for full sidecar emission, manifest count fields, and zero-truncation case |
-| `py/swarm_do/pipeline/tests/test_provider_evidence.py` | new test that the summary reports `showing 5 of N` from manifest counts |
+| `py/swarm_do/pipeline/tests/test_provider_evidence.py` | new test that the summary reports `5 shown of N` from manifest counts |
 
 **Implementation steps:**
 
@@ -455,13 +456,16 @@ emits no error.
 
 ### Phase C — Decision Gate For Deferred Runtime Polish
 
-**Status:** decision-only. No code changes until inputs from Phase R2/R3 local
-proof runs land.
+**Status:** implemented as a decision gate. No runtime-polish code changes are
+triggered until inputs from Phase R2/R3 local proof runs land.
 
 Phase C is a recorded decision protocol, not a queued implementation. Add no
 code from the deferred items unless the trigger criteria below are met. The
 internal-provider-review-plan.md already lists R2/R3 as the prerequisite local
 proof runs for real Codex/Claude eligibility — Phase C reuses that evidence.
+As of this implementation pass, no captured R2/R3 proof data is present in the
+repo, so the deferred MCO features remain rejected/deferred by the criteria
+below.
 
 **Trigger A — Progress-aware stall timeout** (MCO `runtime/formatters.py`
 `provider_progress` event handling, `error_kind in {"stall_timeout",

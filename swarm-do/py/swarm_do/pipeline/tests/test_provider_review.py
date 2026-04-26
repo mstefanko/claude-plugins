@@ -19,8 +19,11 @@ from swarm_do.pipeline.provider_review import (
     CLAUDE_WRITE_DENIAL_EDIT_PATH,
     DEFAULT_CLAUDE_R3_TIMEOUT_SECONDS,
     DEFAULT_CODEX_R2_TIMEOUT_SECONDS,
+    FULL_FINDINGS_SCHEMA_VERSION,
+    MAX_NORMALIZED_FINDINGS,
     ProviderReviewError,
     ProviderFixtureResult,
+    _normalized_finding_sort_key,
     _run_provider_process,
     ReviewProviderResolver,
     ReviewProviderProbeCheck,
@@ -172,6 +175,59 @@ class ProviderReviewTests(unittest.TestCase):
         self.assertEqual(code, 0)
         validate_provider_findings_v2_artifact(artifact)
         return artifact
+
+    def _run_fake_stage_with_output(
+        self,
+        fake_payloads: dict[str, Any],
+        *,
+        selection: str = "explicit",
+        providers: str | None = None,
+        timeout_seconds: int = 30,
+        min_success: int | None = None,
+        allow_parser_fallback: bool = False,
+    ) -> tuple[int, dict[str, Any], Path]:
+        old_data = os.environ.get("CLAUDE_PLUGIN_DATA")
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        root = Path(td.name)
+        repo = root / "repo"
+        repo.mkdir()
+        prompt = root / "prompt.txt"
+        prompt.write_text("Review this repo", encoding="utf-8")
+        fake = root / "fake"
+        fake.mkdir()
+        for provider_id, payload in fake_payloads.items():
+            text = payload if isinstance(payload, str) else json.dumps(payload)
+            (fake / f"{provider_id}.json").write_text(text, encoding="utf-8")
+        output_dir = root / "out"
+        os.environ["CLAUDE_PLUGIN_DATA"] = str(root / "data")
+        try:
+            code = run_stage(
+                argparse.Namespace(
+                    repo=str(repo),
+                    prompt_file=str(prompt),
+                    command="review",
+                    selection=selection,
+                    providers=providers if providers is not None else ",".join(fake_payloads),
+                    max_parallel=4,
+                    min_success=min_success,
+                    timeout_seconds=timeout_seconds,
+                    output_dir=str(output_dir),
+                    run_id="RUN_PROVIDER",
+                    issue_id="issue-1",
+                    stage_id="provider-review",
+                    fake_result_dir=str(fake),
+                    allow_parser_fallback=allow_parser_fallback,
+                )
+            )
+            artifact = json.loads((output_dir / "provider-findings.json").read_text(encoding="utf-8"))
+        finally:
+            if old_data is None:
+                os.environ.pop("CLAUDE_PLUGIN_DATA", None)
+            else:
+                os.environ["CLAUDE_PLUGIN_DATA"] = old_data
+        validate_provider_findings_v2_artifact(artifact)
+        return code, artifact, output_dir.resolve()
 
     def _run_realish_stage(
         self,
@@ -1096,7 +1152,7 @@ enabled = false
             "evidence": "schema_ok is false",
             "recommendation": "Preserve valid outputs",
         }
-        artifact = normalize_provider_review_results(
+        artifact, _findings_full = normalize_provider_review_results(
             [
                 ProviderRunResult("claude", {"findings": [finding]}, "{}\n", ""),
                 ProviderRunResult("codex", {"findings": [finding]}, "{}\n", ""),
@@ -1135,7 +1191,7 @@ enabled = false
             "summary": "Drops schema-valid provider responses",
             "confidence": 0.8,
         }
-        artifact = normalize_provider_review_results(
+        artifact, _findings_full = normalize_provider_review_results(
             [
                 ProviderRunResult("claude", {"findings": [first]}, "{}\n", ""),
                 ProviderRunResult("codex", {"findings": [second]}, "{}\n", ""),
@@ -1170,7 +1226,7 @@ enabled = false
             }
             for idx, severity in enumerate(("info", "low", "medium", "high", "critical", "high", "medium"))
         ]
-        artifact = normalize_provider_review_results(
+        artifact, _findings_full = normalize_provider_review_results(
             [ProviderRunResult("claude", {"findings": findings}, "{}\n", "")],
             run_id="RUN_PROVIDER",
             issue_id="issue-1",
@@ -1199,7 +1255,7 @@ enabled = false
             "evidence": "api_key = sk-abcdefghijklmnopqrstuvwxyz",
             "recommendation": "Remove Bearer abcdefghijklmnopqrstuvwxyz from logs",
         }
-        artifact = normalize_provider_review_results(
+        artifact, _findings_full = normalize_provider_review_results(
             [ProviderRunResult("claude", {"findings": [finding]}, "{}\n", "")],
             run_id="RUN_PROVIDER",
             issue_id="issue-1",
@@ -1344,7 +1400,7 @@ enabled = false
             self.assertIn(str(report_path), stdout.getvalue())
 
     def test_malformed_provider_output_is_partial_when_another_provider_is_valid(self) -> None:
-        artifact = normalize_provider_review_results(
+        artifact, _findings_full = normalize_provider_review_results(
             [
                 ProviderRunResult("claude", {"findings": []}, "{}\n", ""),
                 ProviderRunResult("codex", {"run_id": "model-owned"}, "{}\n", ""),
@@ -1438,6 +1494,98 @@ enabled = false
             self.assertEqual(artifact["provider_count"], 2)
             self.assertTrue((root / "out" / "providers" / "claude" / "last-message.json").is_file())
             validate_provider_findings_v2_artifact(artifact)
+
+    def test_normalized_artifact_keeps_top_five_and_writes_full_sidecar(self) -> None:
+        findings = [
+            {
+                "severity": severity,
+                "category": "logic",
+                "summary": f"Finding {idx}",
+                "file_path": f"pkg/file_{idx}.py",
+                "line_start": idx + 1,
+                "line_end": idx + 1,
+                "confidence": 0.9,
+            }
+            for idx, severity in enumerate(
+                ("info", "low", "medium", "high", "critical", "high", "medium", "low", "info", "critical", "high", "medium")
+            )
+        ]
+
+        code, artifact, output_dir = self._run_fake_stage_with_output(
+            {"claude": {"findings": findings}},
+            providers="claude",
+        )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(len(artifact["findings"]), MAX_NORMALIZED_FINDINGS)
+        full_path = output_dir / "provider-findings.full.json"
+        full = json.loads(full_path.read_text(encoding="utf-8"))
+        self.assertEqual(full["schema_version"], FULL_FINDINGS_SCHEMA_VERSION)
+        self.assertEqual(len(full["findings"]), 12)
+        self.assertEqual(full["findings"], sorted(full["findings"], key=_normalized_finding_sort_key))
+        self.assertEqual(artifact["findings"], full["findings"][:MAX_NORMALIZED_FINDINGS])
+        self.assertEqual(full["provider"], "swarm-review")
+        self.assertEqual(full["run_id"], artifact["run_id"])
+        self.assertEqual(full["issue_id"], artifact["issue_id"])
+        self.assertEqual(full["stage_id"], artifact["stage_id"])
+        self.assertEqual(full["configured_providers"], artifact["configured_providers"])
+        self.assertEqual(full["selected_providers"], artifact["selected_providers"])
+        self.assertEqual(full["schema_valid_providers"], artifact["schema_valid_providers"])
+        self.assertEqual(full["provider_count"], artifact["provider_count"])
+        self.assertEqual(full["min_success"], artifact["min_success"])
+        self.assertEqual(full["selection_result"], artifact["selection_result"])
+        self.assertEqual(full["source_artifact_path"], artifact["source_artifact_path"])
+        self.assertEqual(full["manifest_path"], artifact["manifest_path"])
+        self.assertEqual(full["display_cap"], MAX_NORMALIZED_FINDINGS)
+        self.assertEqual(full["displayed_count"], 5)
+        self.assertEqual(full["truncated_count"], 7)
+        manifest = json.loads((output_dir / "provider-review.manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["full_findings"]["path"], str(full_path))
+        self.assertEqual(manifest["full_findings"]["total_findings"], 12)
+        self.assertEqual(manifest["full_findings"]["displayed_count"], 5)
+        self.assertEqual(manifest["full_findings"]["truncated_count"], 7)
+
+    def test_normalized_artifact_writes_full_sidecar_with_zero_truncation(self) -> None:
+        findings = [
+            {
+                "severity": "medium",
+                "category": "test",
+                "summary": f"Finding {idx}",
+                "file_path": f"pkg/file_{idx}.py",
+                "line_start": idx + 1,
+                "line_end": idx + 1,
+                "confidence": 0.7,
+            }
+            for idx in range(3)
+        ]
+
+        code, artifact, output_dir = self._run_fake_stage_with_output(
+            {"claude": {"findings": findings}},
+            providers="claude",
+        )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(len(artifact["findings"]), 3)
+        full = json.loads((output_dir / "provider-findings.full.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(full["findings"]), 3)
+        self.assertEqual(full["displayed_count"], 3)
+        self.assertEqual(full["truncated_count"], 0)
+        manifest = json.loads((output_dir / "provider-review.manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["full_findings"]["total_findings"], 3)
+        self.assertEqual(manifest["full_findings"]["truncated_count"], 0)
+
+    def test_skipped_stage_does_not_write_full_sidecar(self) -> None:
+        code, artifact, output_dir = self._run_fake_stage_with_output(
+            {"claude": {"findings": []}, "codex": {"findings": []}},
+            selection="off",
+            providers="claude,codex",
+        )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(artifact["status"], "skipped")
+        self.assertFalse((output_dir / "provider-findings.full.json").exists())
+        manifest = json.loads((output_dir / "provider-review.manifest.json").read_text(encoding="utf-8"))
+        self.assertIsNone(manifest["full_findings"])
 
     def test_run_stage_runs_real_codex_when_r2_and_r4_gates_are_ready(self) -> None:
         def which(cmd: str) -> str | None:
