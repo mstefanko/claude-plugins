@@ -58,6 +58,11 @@ MCO remains useful for comparison and dogfood, but normal provider-review
 development moves to a smaller internal contract. Provider output remains
 evidence only; downstream Claude-backed review decides how to use it.
 
+Stock review-capable pipelines may include a `swarm-review` stage before real
+Claude/Codex eligibility is complete because the runner fails closed and records
+`skipped` when no read-only shim is eligible. This wires the operator UX without
+turning on real provider execution prematurely.
+
 ADR 0003 should be marked superseded only after `swarm-review` has validated
 runner fixtures, doctor behavior, read-only eligibility, and at least one
 stock-pipeline integration path.

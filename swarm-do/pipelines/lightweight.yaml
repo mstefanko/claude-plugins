@@ -17,7 +17,19 @@ stages:
     depends_on: [analysis, clarify]
     agents:
       - role: agent-writer
-  - id: review
+  - id: provider-review
     depends_on: [writer]
+    provider:
+      type: swarm-review
+      command: review
+      selection: auto
+      output: findings
+      memory: false
+      timeout_seconds: 1800
+      max_parallel: 4
+    failure_tolerance:
+      mode: best-effort
+  - id: review
+    depends_on: [writer, provider-review]
     agents:
       - role: agent-review

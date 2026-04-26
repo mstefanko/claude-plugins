@@ -633,11 +633,7 @@ def normalize_provider_review_results(
                 }
             )
 
-    groups: dict[str, list[dict[str, Any]]] = {}
-    for idx, candidate in enumerate(candidates):
-        hash_v1 = candidate["stable_finding_hash_v1"]
-        key = f"hash:{hash_v1}" if hash_v1 else f"single:{candidate['provider_id']}:{idx}"
-        groups.setdefault(key, []).append(candidate)
+    groups = _consensus_groups(candidates)
 
     findings: list[dict[str, Any]] = []
     for key in sorted(groups):
@@ -714,6 +710,51 @@ def normalize_provider_review_results(
         "provider_errors": provider_errors,
         "findings": findings,
     }
+
+
+def _consensus_groups(candidates: Sequence[Mapping[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    exact_groups: dict[str, list[dict[str, Any]]] = {}
+    singleton_groups: list[tuple[str, list[dict[str, Any]]]] = []
+    for idx, candidate in enumerate(candidates):
+        row = dict(candidate)
+        hash_v1 = row["stable_finding_hash_v1"]
+        if hash_v1:
+            exact_groups.setdefault(f"hash:{hash_v1}", []).append(row)
+        else:
+            singleton_groups.append((f"single:{row['provider_id']}:{idx}", [row]))
+
+    groups: dict[str, list[dict[str, Any]]] = {}
+    secondary_candidates: list[tuple[str, list[dict[str, Any]]]] = []
+    for key, group in exact_groups.items():
+        detected_by = {str(item["provider_id"]) for item in group}
+        if len(detected_by) >= 2:
+            groups[key] = group
+        else:
+            secondary_candidates.append((key, group))
+    secondary_candidates.extend(singleton_groups)
+
+    cluster_groups: dict[str, list[dict[str, Any]]] = {}
+    passthrough: dict[str, list[dict[str, Any]]] = {}
+    for key, group in secondary_candidates:
+        representative = group[0]
+        cluster_key = representative.get("cluster_key")
+        if isinstance(cluster_key, str) and cluster_key:
+            cluster_groups.setdefault(f"cluster:{cluster_key}", []).extend(group)
+        else:
+            passthrough[key] = group
+
+    for key, group in cluster_groups.items():
+        hashes = {item.get("stable_finding_hash_v1") for item in group}
+        detected_by = {str(item["provider_id"]) for item in group}
+        if len(group) > 1 and (len(hashes) > 1 or len(detected_by) > 1):
+            groups[key] = group
+        else:
+            representative = group[0]
+            hash_v1 = representative.get("stable_finding_hash_v1")
+            passthrough[f"hash:{hash_v1}" if hash_v1 else key] = group
+
+    groups.update(passthrough)
+    return groups
 
 
 def skipped_result(

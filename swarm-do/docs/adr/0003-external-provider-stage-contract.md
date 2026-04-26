@@ -4,9 +4,12 @@ Date: 2026-04-24
 
 ## Status
 
-Accepted for experimental opt-in use. Provider stages are not accepted for the
-default pipeline until the MCO validation gate in `docs/plan.md` Section 1.11
-passes through dogfood measurement.
+Accepted for the experimental MCO comparison path.
+
+ADR 0005 defines the internal `swarm-review` runner. Its stock
+skipped-by-default evidence stage is governed by ADR 0005's Phase 0 gates, not
+by the MCO validation gate below. This ADR continues to constrain `mco` stages
+until it is formally superseded.
 
 ## Context
 

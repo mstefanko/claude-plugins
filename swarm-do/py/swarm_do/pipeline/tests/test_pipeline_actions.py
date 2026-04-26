@@ -425,7 +425,6 @@ stages:
 
     def test_provider_review_module_and_config_editor_use_selection_policy(self) -> None:
         fork_pipeline("default", "provider-review-edit")
-        add_pipeline_stage_from_module("provider-review-edit", "provider-review")
         set_provider_review_config(
             "provider-review-edit",
             "provider-review",

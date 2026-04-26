@@ -25,8 +25,40 @@ class PipelineValidationTests(unittest.TestCase):
         pipeline = load_pipeline(item.path)
         self.assertEqual(
             topological_layers(pipeline),
-            [["research"], ["analysis", "clarify"], ["writer"], ["spec-review"], ["docs", "review"]],
+            [["research"], ["analysis", "clarify"], ["writer"], ["provider-review", "spec-review"], ["docs", "review"]],
         )
+        provider_stage = next(stage for stage in pipeline["stages"] if stage["id"] == "provider-review")
+        self.assertEqual(provider_stage["provider"]["type"], "swarm-review")
+        self.assertEqual(provider_stage["provider"]["selection"], "auto")
+        self.assertNotIn("providers", provider_stage["provider"])
+        result, *_ = validate_preset_and_pipeline("balanced")
+        self.assertTrue(result.ok, result.errors)
+
+    def test_stock_review_pipeline_collects_provider_evidence_before_synthesis(self) -> None:
+        item = find_pipeline("review")
+        self.assertIsNotNone(item)
+        pipeline = load_pipeline(item.path)
+
+        self.assertEqual(topological_layers(pipeline), [["provider-review"], ["review"]])
+        provider_stage = pipeline["stages"][0]
+        self.assertEqual(provider_stage["provider"]["type"], "swarm-review")
+        self.assertEqual(provider_stage["provider"]["selection"], "auto")
+        self.assertNotIn("providers", provider_stage["provider"])
+        result, *_ = validate_preset_and_pipeline("review")
+        self.assertTrue(result.ok, result.errors)
+
+    def test_stock_implementation_pipelines_use_auto_provider_review_without_allowlists(self) -> None:
+        for name in ("default", "lightweight", "ultra-plan"):
+            with self.subTest(name=name):
+                item = find_pipeline(name)
+                self.assertIsNotNone(item)
+                pipeline = load_pipeline(item.path)
+                stage = next(stage for stage in pipeline["stages"] if stage["id"] == "provider-review")
+                self.assertEqual(stage["provider"]["type"], "swarm-review")
+                self.assertEqual(stage["provider"]["selection"], "auto")
+                self.assertNotIn("providers", stage["provider"])
+                review = next(stage for stage in pipeline["stages"] if stage["id"] == "review")
+                self.assertIn("provider-review", review.get("depends_on") or [])
 
     def test_hybrid_review_adds_codex_review_after_spec_review(self) -> None:
         item = find_pipeline("hybrid-review")

@@ -41,8 +41,8 @@ coverage live in `actions.py`.
 - Pipelines open a composer workbench: intent-sorted gallery, selectable
   stage rows, focused stage inspector, validation rail, fork-first edit dialog,
   in-memory draft save/discard state, route/module edit controls, and
-  undo/redo. Provider-review stages are visibly experimental and read-only;
-  MCO remains the comparison path.
+  undo/redo. Provider-review stages are visibly read-only and may skip when no
+  shim is eligible; MCO remains the experimental comparison path.
   Stock pipelines remain read-only; editing starts by forking a pipeline and
   its matching preset into user-owned files.
 - The stock `brainstorm`, `research`, `design`, and `review` pipelines are

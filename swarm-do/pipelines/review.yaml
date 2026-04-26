@@ -3,7 +3,19 @@ name: review
 description: Output-only review fan-out with rubric lenses and a synthesized findings summary.
 parallelism: 5
 stages:
+  - id: provider-review
+    provider:
+      type: swarm-review
+      command: review
+      selection: auto
+      output: findings
+      memory: false
+      timeout_seconds: 1800
+      max_parallel: 4
+    failure_tolerance:
+      mode: best-effort
   - id: review
+    depends_on: [provider-review]
     fan_out:
       role: agent-review
       count: 5

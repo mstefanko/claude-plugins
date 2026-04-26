@@ -25,7 +25,9 @@ The plugin has two main modes:
 - Backend CLIs for the lanes you enable: `claude` for Claude-backed stages,
   `codex` for Codex-backed stages, and optional `mco` for MCO provider stages.
   Internal `swarm-review` provider shims use the same local CLIs but are
-  eligible only after their read-only Phase 0 checks pass.
+  eligible only after their read-only Phase 0 checks pass. Stock review-capable
+  pipelines include the internal provider-review stage; it records a clean
+  skipped artifact when no shim is eligible.
 - Optional TUI dependencies are managed by `bin/swarm-tui` on first launch.
 
 The plugin never initializes Beads implicitly. Run `/swarmdaddy:init-beads` only
@@ -82,15 +84,20 @@ uses the `default` pipeline and route resolution falls back to
 Use `bin/swarm mode <name>` or `bin/swarm preset load <name>` to activate a
 stock preset:
 
-- `balanced`: standard implementation pipeline with normal role defaults.
+- `balanced`: standard implementation pipeline with automatic provider-review
+  evidence when an eligible read-only shim is available.
 - `claude-only`: force all mutable orchestration through Claude.
 - `codex-only`: route supported roles through Codex where allowed by invariants.
-- `lightweight`: lower-cost implementation routing.
-- `ultra-plan`: wider planning/exploration before writing.
+- `lightweight`: lower-cost implementation routing with the same best-effort
+  provider-review evidence point.
+- `ultra-plan`: wider planning/exploration before writing, then best-effort
+  provider-review evidence before final review.
 - `hybrid-review`: standard implementation plus an opt-in Codex review lane.
 - `mco-review-lab`: experimental read-only MCO provider evidence before review.
 - `competitive`: manual Pattern 5 setup for two-writer trials.
-- `brainstorm`, `research`, `design`, `review`: output-only command profiles.
+- `brainstorm`, `research`, `design`, `review`: output-only command profiles;
+  `review` collects provider-review evidence before final synthesis when an
+  eligible shim is available.
 
 Useful profile commands:
 
