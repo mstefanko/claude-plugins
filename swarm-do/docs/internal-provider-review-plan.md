@@ -581,6 +581,12 @@ calibrating whether this can replace any older lanes.
   Doctor exposes that probe under provider rows while preserving the top-level
   contract, and fixtures cover route mismatch, missing flags, unsupported schema
   mode, and disabled-by-policy cases.
+- **Codex R2 fixture harness:** Codex now has bounded schema-smoke and
+  write-denial fixtures using the exact planned command builder
+  (`codex exec --json --sandbox read-only --output-schema --output-last-message`).
+  The resolver treats Codex schema output and read-only proof as separate
+  warning blockers until those probe results are green; R4 auth/readiness still
+  blocks real eligibility.
 - **Pipeline DSL:** `provider.type = "swarm-review"` supports `selection:
   auto|explicit|off`; stock pipelines reject hardcoded provider lists; graph,
   budget, validation, editing, and action helpers understand both `swarm-review`
@@ -598,16 +604,17 @@ calibrating whether this can replace any older lanes.
 
 ### Remaining Phases
 
-**Phase R2: Codex Read-Only And CLI-Drift Gate**
+**Phase R2: Codex Local Proof Run**
 
-- Add a Codex write-denial fixture against a temporary repo using the exact
-  planned command shape:
-  `codex exec --json --sandbox read-only --output-schema --output-last-message`.
-- Prove create, edit, and delete attempts are denied or fail closed.
-- Add a bounded structured-output smoke fixture if the local CLI can run it
-  without an unbounded review.
+- Run the opt-in real Codex fixtures on a machine where launching Codex is
+  acceptable:
+  `SWARM_RUN_CODEX_R2_FIXTURE=1 PYTHONPATH=py python3 -m unittest py.swarm_do.pipeline.tests.test_provider_review.ProviderReviewTests.test_local_codex_r2_fixtures_pass_when_explicitly_enabled`.
+- Record the local pass/fail result before using Codex as a real internal
+  provider shim.
 - Definition of done: Codex may become eligible only when command flags,
-  schema output, sandbox write denial, and readiness probing all pass.
+  schema output, sandbox write denial, and readiness probing all pass. The code
+  enforces this gate; local proof evidence is still operator-run and R4
+  readiness remains pending.
 
 **Phase R3: Claude Read-Only Gate**
 
@@ -722,7 +729,7 @@ Current passing focused suites:
 
 Validation still needed for future phases:
 
-- Real Codex CLI drift and write-denial tests.
+- Opt-in real Codex R2 schema-smoke and write-denial fixture run.
 - Real Claude CLI drift and write-denial tests.
 - Non-spend or bounded-spend readiness probe tests.
 - Native-schema fixture tests for real Codex output.

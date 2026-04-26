@@ -3,17 +3,22 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
 
 from swarm_do.pipeline.provider_review import (
+    DEFAULT_CODEX_R2_TIMEOUT_SECONDS,
     ReviewProviderResolver,
+    ReviewProviderProbeCheck,
     build_claude_review_command,
     build_codex_review_command,
     load_emission_schema,
     normalize_provider_review_results,
+    run_codex_structured_output_smoke_fixture,
+    run_codex_write_denial_fixture,
     run_stage,
     validate_provider_findings_v2_artifact,
 )
@@ -140,6 +145,87 @@ class ProviderReviewTests(unittest.TestCase):
             ],
         )
 
+    def test_codex_write_denial_fixture_uses_exact_read_only_command_and_passes_fail_closed(self) -> None:
+        captured: list[list[str]] = []
+
+        def runner(args, **kwargs):
+            captured.append(list(args))
+            return subprocess.CompletedProcess(args=args, returncode=1, stdout="", stderr="sandbox denied")
+
+        with tempfile.TemporaryDirectory() as td:
+            result = run_codex_write_denial_fixture(
+                codex_bin="/bin/codex",
+                runner=runner,
+                timeout_seconds=5,
+                work_root=Path(td),
+            )
+
+        self.assertTrue(result.ready, result.reason)
+        self.assertEqual(result.status, "ok")
+        self.assertEqual(captured[0][:5], ["/bin/codex", "exec", "--json", "--sandbox", "read-only"])
+        self.assertIn("-C", captured[0])
+        self.assertIn("--output-schema", captured[0])
+        self.assertIn("--output-last-message", captured[0])
+        self.assertEqual(result.data["mutation_checks"], {"create_denied": True, "edit_denied": True, "delete_denied": True})
+
+    def test_codex_write_denial_fixture_fails_when_sandbox_allows_mutation(self) -> None:
+        def runner(args, **kwargs):
+            repo = Path(args[args.index("-C") + 1])
+            (repo / "codex-created.txt").write_text("created", encoding="utf-8")
+            (repo / "codex-edit-target.txt").write_text("edited", encoding="utf-8")
+            (repo / "codex-delete-target.txt").unlink()
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+
+        with tempfile.TemporaryDirectory() as td:
+            result = run_codex_write_denial_fixture(
+                codex_bin="/bin/codex",
+                runner=runner,
+                timeout_seconds=5,
+                work_root=Path(td),
+            )
+
+        self.assertFalse(result.ready)
+        self.assertEqual(result.status, "error")
+        self.assertIn("allowed repo mutations", result.reason)
+        self.assertEqual(result.data["mutation_checks"], {"create_denied": False, "edit_denied": False, "delete_denied": False})
+
+    def test_codex_structured_output_smoke_fixture_validates_last_message_schema(self) -> None:
+        captured: list[list[str]] = []
+
+        def runner(args, **kwargs):
+            captured.append(list(args))
+            last_message = Path(args[args.index("--output-last-message") + 1])
+            last_message.write_text(json.dumps({"findings": []}), encoding="utf-8")
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout='{"event":"done"}\n', stderr="")
+
+        with tempfile.TemporaryDirectory() as td:
+            result = run_codex_structured_output_smoke_fixture(
+                codex_bin="/bin/codex",
+                runner=runner,
+                timeout_seconds=5,
+                work_root=Path(td),
+            )
+
+        self.assertTrue(result.ready, result.reason)
+        self.assertEqual(result.status, "ok")
+        self.assertEqual(captured[0][:5], ["/bin/codex", "exec", "--json", "--sandbox", "read-only"])
+        self.assertEqual(result.data["schema_mode"], "native")
+        self.assertEqual(result.data["finding_count"], 0)
+
+    @unittest.skipUnless(
+        os.environ.get("SWARM_RUN_CODEX_R2_FIXTURE") == "1",
+        "set SWARM_RUN_CODEX_R2_FIXTURE=1 to launch the real bounded Codex R2 fixtures",
+    )
+    def test_local_codex_r2_fixtures_pass_when_explicitly_enabled(self) -> None:
+        timeout = int(os.environ.get("SWARM_CODEX_R2_TIMEOUT_SECONDS", str(DEFAULT_CODEX_R2_TIMEOUT_SECONDS)))
+        codex_bin = os.environ.get("SWARM_CODEX_BIN", "codex")
+
+        schema_result = run_codex_structured_output_smoke_fixture(codex_bin=codex_bin, timeout_seconds=timeout)
+        read_only_result = run_codex_write_denial_fixture(codex_bin=codex_bin, timeout_seconds=timeout)
+
+        self.assertTrue(schema_result.ready, schema_result.as_probe_check().as_dict())
+        self.assertTrue(read_only_result.ready, read_only_result.as_probe_check().as_dict())
+
     def test_real_resolver_reports_exact_detected_cli_flags_but_stays_ineligible(self) -> None:
         def which(cmd: str) -> str | None:
             return f"/bin/{cmd}" if cmd in {"claude", "codex"} else None
@@ -176,7 +262,64 @@ class ProviderReviewTests(unittest.TestCase):
         self.assertEqual(by_id["codex"].schema_mode, "native")
         self.assertEqual(by_id["codex"].read_only_mode, "flag-detected")
         self.assertFalse(by_id["codex"].eligible)
-        self.assertIn("Phase 0 write-denial proof not complete", by_id["codex"].reason)
+        self.assertIsNotNone(by_id["codex"].probe)
+        self.assertEqual(by_id["codex"].probe.schema.status, "warning")
+        self.assertEqual(by_id["codex"].probe.read_only.status, "warning")
+        self.assertIn("schema", by_id["codex"].probe.blockers)
+        self.assertIn("read_only", by_id["codex"].probe.blockers)
+        self.assertIn("auth", by_id["codex"].probe.blockers)
+        self.assertIn("Phase R2 schema smoke proof not complete", by_id["codex"].reason)
+        self.assertIn("Phase R2 write-denial proof not complete", by_id["codex"].reason)
+
+    def test_codex_r2_proofs_clear_schema_and_read_only_gates_but_not_auth(self) -> None:
+        def which(cmd: str) -> str | None:
+            return f"/bin/{cmd}" if cmd == "codex" else None
+
+        def runner(args, **kwargs):
+            if args == ["codex", "exec", "--help"]:
+                stdout = "Usage: codex exec --json --sandbox --output-schema --output-last-message"
+            elif args == ["codex", "--version"]:
+                stdout = "codex 1.0"
+            else:
+                stdout = ""
+            return argparse.Namespace(args=args, returncode=0, stdout=stdout, stderr="")
+
+        old_data = os.environ.get("CLAUDE_PLUGIN_DATA")
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["CLAUDE_PLUGIN_DATA"] = td
+            try:
+                codex = next(
+                    status
+                    for status in ReviewProviderResolver(
+                        which=which,
+                        runner=runner,
+                        codex_schema_probe=ReviewProviderProbeCheck(
+                            "ok",
+                            True,
+                            "Codex structured-output smoke produced schema-valid provider emission",
+                        ),
+                        codex_read_only_probe=ReviewProviderProbeCheck(
+                            "ok",
+                            True,
+                            "Codex write-denial fixture completed without repo mutations",
+                        ),
+                    ).statuses()
+                    if status.provider_id == "codex"
+                )
+            finally:
+                if old_data is None:
+                    os.environ.pop("CLAUDE_PLUGIN_DATA", None)
+                else:
+                    os.environ["CLAUDE_PLUGIN_DATA"] = old_data
+
+        self.assertEqual(codex.schema_mode, "native")
+        self.assertEqual(codex.read_only_mode, "confirmed")
+        self.assertIsNotNone(codex.probe)
+        self.assertTrue(codex.probe.schema.ready)
+        self.assertTrue(codex.probe.read_only.ready)
+        self.assertEqual(codex.probe.blockers, ("auth",))
+        self.assertFalse(codex.eligible)
+        self.assertIn("Phase R4 pending", codex.reason)
 
     def test_real_resolver_fails_command_surface_closed_when_required_flag_is_missing(self) -> None:
         def which(cmd: str) -> str | None:

@@ -18,6 +18,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -40,6 +41,12 @@ SELECTIONS = {"auto", "explicit", "off"}
 DEFAULT_MAX_PARALLEL = 4
 DEFAULT_MIN_SUCCESS = 1
 DEFAULT_ROLE = "agent-review"
+DEFAULT_CODEX_R2_TIMEOUT_SECONDS = 90
+CODEX_WRITE_DENIAL_CREATE_PATH = "codex-created.txt"
+CODEX_WRITE_DENIAL_EDIT_PATH = "codex-edit-target.txt"
+CODEX_WRITE_DENIAL_DELETE_PATH = "codex-delete-target.txt"
+CODEX_WRITE_DENIAL_EDIT_ORIGINAL = "original edit target\n"
+CODEX_WRITE_DENIAL_DELETE_ORIGINAL = "original delete target\n"
 _SEVERITY_MAP = {
     "warning": "high",
     "error": "critical",
@@ -216,8 +223,42 @@ class ProviderRunResult:
         return self.error_class is None
 
 
+@dataclasses.dataclass(frozen=True)
+class CodexProbeResult:
+    name: str
+    status: str
+    ready: bool
+    reason: str
+    command_argv: tuple[str, ...] = ()
+    returncode: int | None = None
+    stdout_text: str = ""
+    stderr_text: str = ""
+    data: Mapping[str, Any] = dataclasses.field(default_factory=dict)
+
+    def as_probe_check(self) -> ReviewProviderProbeCheck:
+        data: dict[str, Any] = dict(self.data)
+        if self.command_argv:
+            data["command_argv"] = _redacted_argv(self.command_argv)
+        if self.returncode is not None:
+            data["returncode"] = self.returncode
+        if self.stdout_text:
+            data["stdout_snippet"] = _text_snippet(self.stdout_text)
+        if self.stderr_text:
+            data["stderr_snippet"] = _text_snippet(self.stderr_text)
+        return ReviewProviderProbeCheck(
+            status=self.status,
+            ready=self.ready,
+            reason=self.reason,
+            data=data,
+        )
+
+
 def _iso_utc_now() -> str:
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _text_snippet(text: str, limit: int = 1000) -> str:
+    return text[:limit]
 
 
 def _load_json_schema(path: Path) -> dict[str, Any]:
@@ -310,6 +351,12 @@ def _probe_check(status: str, ready: bool, reason: str, data: Mapping[str, Any] 
     return ReviewProviderProbeCheck(status=status, ready=ready, reason=reason, data=dict(data or {}))
 
 
+def _augment_probe_check(check: ReviewProviderProbeCheck, data: Mapping[str, Any]) -> ReviewProviderProbeCheck:
+    merged = dict(data)
+    merged.update(check.data)
+    return dataclasses.replace(check, data=merged)
+
+
 def _skipped_probe_check(reason: str) -> ReviewProviderProbeCheck:
     return _probe_check("skipped", False, reason)
 
@@ -386,6 +433,8 @@ class ReviewProviderResolver:
         which: Callable[[str], str | None] = shutil.which,
         runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
         fake_providers: Sequence[str] | None = None,
+        codex_schema_probe: ReviewProviderProbeCheck | None = None,
+        codex_read_only_probe: ReviewProviderProbeCheck | None = None,
     ):
         self.backend_resolver = BackendResolver(
             preset_name=preset_name,
@@ -395,6 +444,8 @@ class ReviewProviderResolver:
         self.which = which
         self.runner = runner
         self.fake_providers = tuple(fake_providers) if fake_providers is not None else _fake_provider_ids_from_env()
+        self.codex_schema_probe = codex_schema_probe
+        self.codex_read_only_probe = codex_read_only_probe
         self.policy = _merge_policy(
             self.backend_resolver.base.get("review_providers"),
             self.backend_resolver.preset.get("review_providers"),
@@ -514,6 +565,10 @@ class ReviewProviderResolver:
                 executable_name="codex",
                 required_schema_flags=("--json", "--output-schema", "--output-last-message"),
                 required_read_only_flags=("--sandbox",),
+                schema_probe=self.codex_schema_probe,
+                schema_probe_required_reason="structured-output flags detected but Phase R2 schema smoke proof not complete",
+                read_only_probe=self.codex_read_only_probe,
+                read_only_probe_required_reason="read-only flags detected but Phase R2 write-denial proof not complete",
             )
         if provider_id == "gemini":
             path = self.which("gemini")
@@ -556,6 +611,10 @@ class ReviewProviderResolver:
         executable_name: str,
         required_schema_flags: Sequence[str],
         required_read_only_flags: Sequence[str],
+        schema_probe: ReviewProviderProbeCheck | None = None,
+        schema_probe_required_reason: str | None = None,
+        read_only_probe: ReviewProviderProbeCheck | None = None,
+        read_only_probe_required_reason: str | None = None,
     ) -> ReviewProviderStatus:
         route: Route | None = None
         try:
@@ -592,41 +651,58 @@ class ReviewProviderResolver:
         read_only_ok = not missing_read_only_flags
         schema_mode = "native" if schema_ok else "unavailable"
         read_only_mode = "flag-detected" if read_only_ok else "unavailable"
+        effective_read_only_mode = read_only_mode
 
         if not path:
             schema = _skipped_probe_check("not checked because provider executable is unavailable")
             read_only = _skipped_probe_check("not checked because provider executable is unavailable")
         else:
-            schema = (
-                _probe_check(
-                    "ok",
-                    True,
-                    "native structured-output flags detected",
-                    {"schema_mode": schema_mode, "flags": list(schema_flags), "missing_flags": []},
-                )
-                if schema_ok
-                else _probe_check(
+            schema_data = {"schema_mode": schema_mode, "flags": list(schema_flags), "missing_flags": []}
+            if not schema_ok:
+                schema = _probe_check(
                     "error",
                     False,
                     "structured-output flags not detected: " + ", ".join(missing_schema_flags),
                     {"schema_mode": schema_mode, "flags": list(schema_flags), "missing_flags": list(missing_schema_flags)},
                 )
-            )
-            read_only = (
-                _probe_check(
+            elif schema_probe is not None:
+                schema = _augment_probe_check(schema_probe, schema_data)
+            elif schema_probe_required_reason is not None:
+                schema = _probe_check(
                     "warning",
                     False,
-                    "read-only flags detected but Phase 0 write-denial proof not complete",
-                    {"read_only_mode": read_only_mode, "flags": list(read_only_flags), "missing_flags": []},
+                    schema_probe_required_reason,
+                    schema_data,
                 )
-                if read_only_ok
-                else _probe_check(
+            else:
+                schema = _probe_check(
+                    "ok",
+                    True,
+                    "native structured-output flags detected",
+                    schema_data,
+                )
+            read_only_data = {"read_only_mode": read_only_mode, "flags": list(read_only_flags), "missing_flags": []}
+            if not read_only_ok:
+                read_only = _probe_check(
                     "error",
                     False,
                     "read-only flags not detected: " + ", ".join(missing_read_only_flags),
                     {"read_only_mode": read_only_mode, "flags": list(read_only_flags), "missing_flags": list(missing_read_only_flags)},
                 )
-            )
+            else:
+                if read_only_probe is not None and read_only_probe.ready:
+                    effective_read_only_mode = "confirmed"
+                    read_only_data["read_only_mode"] = effective_read_only_mode
+                if read_only_probe is not None:
+                    read_only = _augment_probe_check(read_only_probe, read_only_data)
+                else:
+                    read_only = _probe_check(
+                        "warning",
+                        False,
+                        read_only_probe_required_reason
+                        or "read-only flags detected but Phase 0 write-denial proof not complete",
+                        read_only_data,
+                    )
         auth = (
             _probe_check("warning", False, "auth readiness probe not implemented; Phase R4 pending")
             if path
@@ -653,7 +729,7 @@ class ReviewProviderResolver:
             executable=path,
             cli_version=version,
             schema_mode=schema_mode,
-            read_only_mode=read_only_mode,
+            read_only_mode=effective_read_only_mode,
             schema_flags=schema_flags,
             read_only_flags=read_only_flags,
             missing_schema_flags=missing_schema_flags,
@@ -706,6 +782,275 @@ def build_codex_review_command(
             command.extend(["-c", f'model_reasoning_effort="{route.effort}"'])
     command.append(prompt)
     return command
+
+
+def _ensure_probe_git_repo(repo: Path) -> None:
+    repo.mkdir(parents=True, exist_ok=True)
+    try:
+        completed = subprocess.run(["git", "init"], cwd=repo, text=True, capture_output=True, timeout=10, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        # Codex is invoked with -C against this directory. A real git init is
+        # best, but the fixture remains useful as a plain directory if git is
+        # unavailable in a constrained environment.
+        (repo / ".git").mkdir(exist_ok=True)
+    else:
+        if completed.returncode != 0:
+            (repo / ".git").mkdir(exist_ok=True)
+
+
+def _codex_write_denial_prompt() -> str:
+    return "\n".join(
+        [
+            "This is a bounded swarm-do Codex read-only sandbox fixture.",
+            "In the current repository, attempt each filesystem operation below using the available tools:",
+            f"1. Create {CODEX_WRITE_DENIAL_CREATE_PATH} with the text created by codex.",
+            f"2. Replace the entire contents of {CODEX_WRITE_DENIAL_EDIT_PATH} with the text edited by codex.",
+            f"3. Delete {CODEX_WRITE_DENIAL_DELETE_PATH}.",
+            "After those attempts, emit a JSON object matching the supplied schema.",
+            "Use an empty findings array unless the command itself discovers a review finding.",
+        ]
+    )
+
+
+def _codex_schema_smoke_prompt() -> str:
+    return "\n".join(
+        [
+            "This is a bounded swarm-do Codex structured-output smoke fixture.",
+            "Do not modify files and do not perform a review.",
+            "Emit a JSON object matching the supplied schema with an empty findings array.",
+        ]
+    )
+
+
+def _prepare_codex_write_denial_repo(root: Path) -> Path:
+    repo = root / "repo"
+    _ensure_probe_git_repo(repo)
+    (repo / CODEX_WRITE_DENIAL_EDIT_PATH).write_text(CODEX_WRITE_DENIAL_EDIT_ORIGINAL, encoding="utf-8")
+    (repo / CODEX_WRITE_DENIAL_DELETE_PATH).write_text(CODEX_WRITE_DENIAL_DELETE_ORIGINAL, encoding="utf-8")
+    return repo
+
+
+def _prepare_codex_schema_smoke_repo(root: Path) -> Path:
+    repo = root / "repo"
+    _ensure_probe_git_repo(repo)
+    (repo / "README.md").write_text("# Codex schema smoke fixture\n", encoding="utf-8")
+    return repo
+
+
+def _codex_mutation_checks(repo: Path) -> dict[str, bool]:
+    edit_path = repo / CODEX_WRITE_DENIAL_EDIT_PATH
+    delete_path = repo / CODEX_WRITE_DENIAL_DELETE_PATH
+    return {
+        "create_denied": not (repo / CODEX_WRITE_DENIAL_CREATE_PATH).exists(),
+        "edit_denied": edit_path.exists() and edit_path.read_text(encoding="utf-8") == CODEX_WRITE_DENIAL_EDIT_ORIGINAL,
+        "delete_denied": delete_path.exists() and delete_path.read_text(encoding="utf-8") == CODEX_WRITE_DENIAL_DELETE_ORIGINAL,
+    }
+
+
+def _codex_output_payload(last_message_file: Path) -> Mapping[str, Any]:
+    if not last_message_file.is_file():
+        raise ProviderReviewSchemaError(f"Codex did not write --output-last-message file: {last_message_file}")
+    text = last_message_file.read_text(encoding="utf-8").strip()
+    value = json.loads(text)
+    if isinstance(value, str):
+        value = json.loads(value)
+    if not isinstance(value, Mapping):
+        raise ProviderReviewSchemaError("Codex last message root is not an object")
+    validate_emission_payload(value)
+    return value
+
+
+def run_codex_write_denial_fixture(
+    *,
+    codex_bin: str = "codex",
+    route: Route | None = None,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    timeout_seconds: int = DEFAULT_CODEX_R2_TIMEOUT_SECONDS,
+    work_root: Path | None = None,
+) -> CodexProbeResult:
+    """Run the bounded Codex read-only sandbox proof against a temporary repo."""
+
+    if timeout_seconds < 1:
+        raise ProviderReviewError("Codex write-denial fixture timeout must be >= 1")
+    if work_root is None:
+        with tempfile.TemporaryDirectory(prefix="swarm-codex-read-only-") as td:
+            return run_codex_write_denial_fixture(
+                codex_bin=codex_bin,
+                route=route,
+                runner=runner,
+                timeout_seconds=timeout_seconds,
+                work_root=Path(td),
+            )
+
+    root = work_root.resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    repo = _prepare_codex_write_denial_repo(root)
+    last_message_file = root / "last-message.json"
+    command = build_codex_review_command(
+        codex_bin=codex_bin,
+        repo=repo,
+        prompt=_codex_write_denial_prompt(),
+        schema_file=EMISSION_SCHEMA_PATH,
+        last_message_file=last_message_file,
+        route=route,
+    )
+    try:
+        completed = runner(command, text=True, capture_output=True, timeout=timeout_seconds)
+    except subprocess.TimeoutExpired as exc:
+        checks = _codex_mutation_checks(repo)
+        return CodexProbeResult(
+            "codex-write-denial",
+            "warning",
+            False,
+            f"Codex write-denial fixture timed out after {timeout_seconds}s",
+            command_argv=tuple(command),
+            stdout_text=str(exc.stdout or ""),
+            stderr_text=str(exc.stderr or ""),
+            data={"mutation_checks": checks, "last_message_path": str(last_message_file)},
+        )
+    except OSError as exc:
+        checks = _codex_mutation_checks(repo)
+        return CodexProbeResult(
+            "codex-write-denial",
+            "error",
+            False,
+            f"Codex write-denial fixture failed to start: {exc}",
+            command_argv=tuple(command),
+            data={"mutation_checks": checks, "last_message_path": str(last_message_file)},
+        )
+
+    checks = _codex_mutation_checks(repo)
+    ready = all(checks.values())
+    if not ready:
+        failed = ", ".join(name for name, ok in checks.items() if not ok)
+        return CodexProbeResult(
+            "codex-write-denial",
+            "error",
+            False,
+            "Codex read-only sandbox allowed repo mutations: " + failed,
+            command_argv=tuple(command),
+            returncode=completed.returncode,
+            stdout_text=completed.stdout or "",
+            stderr_text=completed.stderr or "",
+            data={"mutation_checks": checks, "last_message_path": str(last_message_file)},
+        )
+
+    reason = (
+        "Codex write-denial fixture completed without repo mutations"
+        if completed.returncode == 0
+        else f"Codex write-denial fixture failed closed without repo mutations (exit {completed.returncode})"
+    )
+    return CodexProbeResult(
+        "codex-write-denial",
+        "ok",
+        True,
+        reason,
+        command_argv=tuple(command),
+        returncode=completed.returncode,
+        stdout_text=completed.stdout or "",
+        stderr_text=completed.stderr or "",
+        data={"mutation_checks": checks, "last_message_path": str(last_message_file)},
+    )
+
+
+def run_codex_structured_output_smoke_fixture(
+    *,
+    codex_bin: str = "codex",
+    route: Route | None = None,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    timeout_seconds: int = DEFAULT_CODEX_R2_TIMEOUT_SECONDS,
+    work_root: Path | None = None,
+) -> CodexProbeResult:
+    """Run a bounded Codex native-schema smoke check without reviewing code."""
+
+    if timeout_seconds < 1:
+        raise ProviderReviewError("Codex structured-output smoke timeout must be >= 1")
+    if work_root is None:
+        with tempfile.TemporaryDirectory(prefix="swarm-codex-schema-") as td:
+            return run_codex_structured_output_smoke_fixture(
+                codex_bin=codex_bin,
+                route=route,
+                runner=runner,
+                timeout_seconds=timeout_seconds,
+                work_root=Path(td),
+            )
+
+    root = work_root.resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    repo = _prepare_codex_schema_smoke_repo(root)
+    last_message_file = root / "last-message.json"
+    command = build_codex_review_command(
+        codex_bin=codex_bin,
+        repo=repo,
+        prompt=_codex_schema_smoke_prompt(),
+        schema_file=EMISSION_SCHEMA_PATH,
+        last_message_file=last_message_file,
+        route=route,
+    )
+    try:
+        completed = runner(command, text=True, capture_output=True, timeout=timeout_seconds)
+    except subprocess.TimeoutExpired as exc:
+        return CodexProbeResult(
+            "codex-schema-smoke",
+            "warning",
+            False,
+            f"Codex structured-output smoke timed out after {timeout_seconds}s",
+            command_argv=tuple(command),
+            stdout_text=str(exc.stdout or ""),
+            stderr_text=str(exc.stderr or ""),
+            data={"last_message_path": str(last_message_file), "schema_mode": "native"},
+        )
+    except OSError as exc:
+        return CodexProbeResult(
+            "codex-schema-smoke",
+            "error",
+            False,
+            f"Codex structured-output smoke failed to start: {exc}",
+            command_argv=tuple(command),
+            data={"last_message_path": str(last_message_file), "schema_mode": "native"},
+        )
+
+    if completed.returncode != 0:
+        return CodexProbeResult(
+            "codex-schema-smoke",
+            "error",
+            False,
+            f"Codex structured-output smoke exited {completed.returncode}",
+            command_argv=tuple(command),
+            returncode=completed.returncode,
+            stdout_text=completed.stdout or "",
+            stderr_text=completed.stderr or "",
+            data={"last_message_path": str(last_message_file), "schema_mode": "native"},
+        )
+    try:
+        payload = _codex_output_payload(last_message_file)
+    except (json.JSONDecodeError, ProviderReviewSchemaError) as exc:
+        return CodexProbeResult(
+            "codex-schema-smoke",
+            "error",
+            False,
+            f"Codex structured-output smoke did not produce schema-valid output: {exc}",
+            command_argv=tuple(command),
+            returncode=completed.returncode,
+            stdout_text=completed.stdout or "",
+            stderr_text=completed.stderr or "",
+            data={"last_message_path": str(last_message_file), "schema_mode": "native"},
+        )
+    return CodexProbeResult(
+        "codex-schema-smoke",
+        "ok",
+        True,
+        "Codex structured-output smoke produced schema-valid provider emission",
+        command_argv=tuple(command),
+        returncode=completed.returncode,
+        stdout_text=completed.stdout or "",
+        stderr_text=completed.stderr or "",
+        data={
+            "last_message_path": str(last_message_file),
+            "schema_mode": "native",
+            "finding_count": len(payload.get("findings") or []),
+        },
+    )
 
 
 def build_claude_review_command(
