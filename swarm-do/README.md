@@ -31,7 +31,10 @@ The plugin has two main modes:
   skipped artifact when no shim is eligible. Once a shim is eligible, one
   provider is enough to collect evidence, but single-provider findings stay
   `needs-verification`.
-- Optional TUI dependencies are managed by `bin/swarm-tui` on first launch.
+- The recommended configuration UI is `/swarmdaddy:configure`, backed by
+  `bin/swarm-tui`. It manages presets, pipelines, routes, provider readiness,
+  and active-run status; its optional Textual dependencies are installed into a
+  managed venv on first launch.
 
 The plugin never initializes Beads implicitly. Run `/swarmdaddy:init-beads` only
 when you have decided the current repo should get a `.beads/` store.
@@ -61,7 +64,24 @@ when you have decided the current repo should get a `.beads/` store.
    "${CLAUDE_PLUGIN_ROOT}/bin/swarm" permissions check
    ```
 
-4. Pick a command:
+4. Open the TUI to choose or fork presets/pipelines, inspect routes, and run
+   provider doctor from the same configuration view:
+
+   ```text
+   /swarmdaddy:configure
+   ```
+
+   The slash command delegates to:
+
+   ```bash
+   "${CLAUDE_PLUGIN_ROOT}/bin/swarm-tui"
+   ```
+
+   In cmux, the launcher opens the TUI in a right split pane. On first launch,
+   approve the managed venv install prompt. In non-interactive dev shells, use
+   `SWARM_TUI_AUTO_INSTALL=1 "${CLAUDE_PLUGIN_ROOT}/bin/swarm-tui"`.
+
+5. Pick a command:
 
    ```text
    /swarmdaddy:do docs/my-plan.md --decompose=inspect
@@ -71,7 +91,7 @@ when you have decided the current repo should get a `.beads/` store.
    /swarmdaddy:brainstorm "Safer migration paths for the telemetry schema"
    ```
 
-5. Resume interrupted implementation work by Beads epic id:
+6. Resume interrupted implementation work by Beads epic id:
 
    ```text
    /swarmdaddy:resume bd-123
@@ -83,6 +103,10 @@ when you have decided the current repo should get a `.beads/` store.
 Fresh installs have no active preset. With no active preset, `/swarmdaddy:do`
 uses the `default` pipeline and route resolution falls back to
 `${CLAUDE_PLUGIN_DATA}/backends.toml` and built-in role defaults.
+
+Most users should manage presets and pipelines through `/swarmdaddy:configure`
+or `bin/swarm-tui`. The CLI commands below are the scriptable equivalents and
+remain useful for checks, automation, and recovery.
 
 Use `bin/swarm mode <name>` or `bin/swarm preset load <name>` to activate a
 stock preset:
@@ -117,6 +141,56 @@ bin/swarm compete docs/my-plan.md
 `bin/swarm compete <plan-path>` validates and activates the `competitive`
 preset. It does not dispatch by itself; after it succeeds, run
 `/swarmdaddy:do <plan-path>`.
+
+## TUI Configuration Console
+
+Launch the TUI from the installed plugin:
+
+```text
+/swarmdaddy:configure
+```
+
+The slash command delegates to the launcher:
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/bin/swarm-tui"
+```
+
+From this repository checkout, `bin/swarm-tui` works as well. The wrapper sets
+`CLAUDE_PLUGIN_ROOT`, uses `${CLAUDE_PLUGIN_DATA}/tui/.venv` for its managed
+Textual environment, installs `tui/requirements.lock` when needed, and then
+runs `python -m swarm_do.tui.app`. When `CMUX_WORKSPACE_ID` is present and
+`cmux` is on `PATH`, it opens the TUI in a right split pane and reuses an
+already-running pane instead of spawning duplicates. Without cmux or an
+interactive terminal, it prints the terminal command to run manually.
+
+Use the TUI as the main place to manage swarm configuration:
+
+| Screen | Key | What You Can Do |
+|--------|-----|-----------------|
+| Dashboard | `d` | See active preset/pipeline, in-flight runs, token burn, latest checkpoint/observation, open a Beads issue, request handoff, or cancel a running `swarm-run`. |
+| Settings | `s` | Inspect effective role routes and edit base or user-preset route overrides with invariant checks. |
+| Presets | `p` | Browse stock/user presets, load a preset, view diffs, and delete user presets. Stock presets are read-only. |
+| Pipelines | `i` | Browse pipelines by intent, inspect stage topology, fork stock pipelines, edit user pipeline drafts, add modules, edit routes/lenses/provider stages, run lint/validation/provider doctor, and activate compatible profiles. |
+
+Important workflow details:
+
+- Stock presets and pipelines are read-only. Press `f` or `Enter` on a stock
+  pipeline to fork it into `${CLAUDE_PLUGIN_DATA}/pipelines/` and a matching
+  user preset before editing.
+- Pipeline edits are in-memory until `Ctrl+S`; the validation rail blocks hard
+  errors before writing YAML.
+- Provider stages can be managed from the Pipelines screen: press `o` to edit
+  `swarm-review` or MCO settings and `d` to run provider doctor before
+  activation.
+- The TUI manages configuration and active-run operations. Starting a new swarm
+  run still happens through `/swarmdaddy:*` slash commands after you activate
+  the desired profile.
+- `/swarmdaddy:setup` is an alias for `/swarmdaddy:configure`. It opens the TUI
+  and does not initialize Beads; use `/swarmdaddy:init-beads` for that.
+
+Top-level navigation: `d` dashboard, `s` settings, `p` presets, `i` pipelines,
+`q` quit. See `tui/README.md` for the full key map.
 
 ## Provider Review Versus MCO
 
@@ -158,6 +232,11 @@ only after material local CLI or command-contract drift.
   Supported flags include `--codex-review auto|on|off`,
   `--risk low|moderate|high`, `--decompose=off|inspect|enforce`,
   `--force-simple <phase_id>`, `--force-decompose <phase_id>`, and `--auto`.
+- `/swarmdaddy:configure`: open the TUI configuration console. In cmux it opens
+  a right split pane; otherwise it uses the current interactive terminal or
+  prints manual launch instructions.
+- `/swarmdaddy:setup`: alias for `/swarmdaddy:configure`; does not initialize
+  Beads.
 - `/swarmdaddy:brainstorm <topic-or-path> [--dry-run]`: output-only divergent
   exploration with a synthesis note.
 - `/swarmdaddy:research <question-or-path> [--dry-run]`: output-only evidence
@@ -285,7 +364,8 @@ Additional helpers:
   pipeline stages.
 - `bin/extract-phase.sh`: findings extraction shim.
 - `bin/swarm-telemetry`: telemetry inspection and maintenance CLI.
-- `bin/swarm-tui`: optional Textual operator console.
+- `bin/swarm-tui`: recommended Textual configuration console for presets,
+  pipelines, routes, provider doctoring, and active-run status.
 
 ## Data And Configuration
 
@@ -342,16 +422,6 @@ bin/swarm permissions install --role writer --scope repo
 Use `--role provider-review` for the internal read-only provider runner profile.
 
 `--rollback` removes that role fragment's rules from the target settings file.
-
-## TUI
-
-`bin/swarm-tui` launches the optional operator console. On first launch it
-creates or updates a managed virtualenv under `${CLAUDE_PLUGIN_DATA}/tui/.venv`
-from `tui/requirements.lock`. Set `SWARM_TUI_AUTO_INSTALL=1` for
-non-interactive bootstrap in a dev shell.
-
-The TUI reads the same telemetry, preset, pipeline, provider, and in-flight
-state as the CLI. See `tui/README.md` for screen-specific controls.
 
 ## Telemetry
 

@@ -8,6 +8,74 @@ export CLAUDE_PLUGIN_DATA="${CLAUDE_PLUGIN_DATA:-$ROOT/data}"
 REQ_LOCK="$ROOT/tui/requirements.lock"
 VENV_DIR="$CLAUDE_PLUGIN_DATA/tui/.venv"
 HASH_FILE="$CLAUDE_PLUGIN_DATA/tui/requirements.lock.hash"
+CMUX_PANE_FILE="$CLAUDE_PLUGIN_DATA/tui/cmux-pane.surface"
+
+shell_quote() {
+  printf '%q' "$1"
+}
+
+cmux_surface_alive() {
+  local surface="$1"
+  [[ -n "$surface" ]] || return 1
+  cmux read-screen --surface "surface:$surface" >/dev/null 2>&1
+}
+
+launch_cmux_pane() {
+  local existing result surface surface_flag cmd screen
+  existing=""
+  [[ -f "$CMUX_PANE_FILE" ]] && existing="$(cat "$CMUX_PANE_FILE")"
+  if cmux_surface_alive "$existing"; then
+    echo "SwarmDaddy TUI already running in cmux pane (surface $existing)."
+    return 0
+  fi
+  rm -f "$CMUX_PANE_FILE"
+
+  if ! result="$(cmux new-pane --direction right 2>&1)"; then
+    echo "swarm-tui: cmux launch failed: $result" >&2
+    echo "swarm-tui: run this in an interactive terminal instead:" >&2
+    echo "  $(shell_quote "$ROOT/bin/swarm-tui")" >&2
+    return 1
+  fi
+
+  surface="$(printf '%s\n' "$result" | sed -n 's/.*surface:\([^[:space:]]*\).*/\1/p')"
+  mkdir -p "$(dirname "$CMUX_PANE_FILE")"
+  [[ -n "$surface" ]] && printf '%s\n' "$surface" >"$CMUX_PANE_FILE"
+  surface_flag="surface:$surface"
+
+  cmd="cd $(shell_quote "$PWD") && SWARM_TUI_CMUX_PANE=1 CLAUDE_PLUGIN_ROOT=$(shell_quote "$CLAUDE_PLUGIN_ROOT") CLAUDE_PLUGIN_DATA=$(shell_quote "$CLAUDE_PLUGIN_DATA") $(shell_quote "$ROOT/bin/swarm-tui")"
+  for arg in "$@"; do
+    cmd+=" $(shell_quote "$arg")"
+  done
+
+  for _ in 1 2 3 4 5 6 7 8; do
+    sleep 0.25
+    if [[ -n "$surface" ]]; then
+      screen="$(cmux read-screen --surface "$surface_flag" 2>/dev/null || true)"
+    else
+      screen="$(cmux read-screen 2>/dev/null || true)"
+    fi
+    [[ -n "${screen//[[:space:]]/}" ]] && break
+  done
+
+  if [[ -n "$surface" ]]; then
+    cmux send --surface "$surface_flag" "$cmd"$'\n' >/dev/null
+  else
+    cmux send "$cmd"$'\n' >/dev/null
+  fi
+  echo "SwarmDaddy TUI opened in cmux split pane."
+}
+
+if [[ -z "${SWARM_TUI_CMUX_PANE:-}" && -n "${CMUX_WORKSPACE_ID:-}" ]] && command -v cmux >/dev/null 2>&1; then
+  launch_cmux_pane "$@"
+  exit $?
+fi
+
+if [[ -z "${SWARM_TUI_CMUX_PANE:-}" && ! -t 0 ]]; then
+  echo "swarm-tui: no interactive terminal or cmux workspace detected."
+  echo "swarm-tui: run this from a terminal:"
+  echo "  $(shell_quote "$ROOT/bin/swarm-tui")"
+  exit 0
+fi
 
 hash_file() {
   if command -v shasum >/dev/null 2>&1; then

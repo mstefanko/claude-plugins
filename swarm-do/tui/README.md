@@ -1,11 +1,27 @@
 # SwarmDaddy TUI
 
-The operator console is an optional Textual app. The CLI and `/swarmdaddy:do`
-continue to work without installing these dependencies.
+The TUI is the recommended operator surface for managing SwarmDaddy
+configuration. Use it to inspect and edit presets, pipelines, role routes,
+provider-review settings, provider readiness, and active-run state. The
+`/swarmdaddy:configure` slash command opens this console; the CLI remains the
+scriptable surface and other `/swarmdaddy:*` commands remain the dispatch
+surface.
 
 ## Launch
 
-Run:
+From an installed plugin:
+
+```text
+/swarmdaddy:configure
+```
+
+That slash command delegates to:
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/bin/swarm-tui"
+```
+
+From this repository checkout:
 
 ```bash
 bin/swarm-tui
@@ -19,6 +35,45 @@ python -m swarm_do.tui.app
 ```
 
 Set `SWARM_TUI_AUTO_INSTALL=1` for non-interactive bootstrap in a dev shell.
+
+When `CMUX_WORKSPACE_ID` is present and `cmux` is on `PATH`, the wrapper opens
+the TUI in a right split pane and records the pane under
+`${CLAUDE_PLUGIN_DATA}/tui/cmux-pane.surface` so repeated launches reuse the
+existing pane. Set `SWARM_TUI_CMUX_PANE=1` only when intentionally running the
+TUI inside the pane and avoiding recursive split creation.
+
+`/swarmdaddy:setup` is an alias for `/swarmdaddy:configure`. It opens this TUI;
+it does not initialize Beads.
+
+## What You Can Manage
+
+- **Dashboard:** active preset/pipeline, in-flight runs, recent burn telemetry,
+  latest checkpoint/observation, Beads issue open, handoff request, and cancel
+  for running `swarm-run` processes.
+- **Settings:** effective role routes and editable base/user-preset route
+  overrides. Stock presets remain read-only; fork first before editing their
+  routes.
+- **Presets:** stock and user preset browsing, loading, diff preview, and user
+  preset deletion.
+- **Pipelines:** intent-sorted pipeline gallery, stage topology, stage
+  inspector, validation rail, fork-first editing, modules, routes, fan-out
+  branch routes, prompt lenses, provider-review settings, MCO settings, lint,
+  validation, provider doctor, and profile activation.
+
+The TUI writes user-owned configuration under `${CLAUDE_PLUGIN_DATA}/presets/`
+and `${CLAUDE_PLUGIN_DATA}/pipelines/`. It does not edit stock files in place.
+
+## Navigation
+
+Top-level keys:
+
+| Key | Screen |
+|-----|--------|
+| `d` | Dashboard |
+| `s` | Settings |
+| `p` | Presets |
+| `i` | Pipelines |
+| `q` | Quit |
 
 ## Dev Loop
 
@@ -35,9 +90,14 @@ coverage live in `actions.py`.
 
 ## Screens
 
-- Dashboard reads `telemetry/runs.jsonl` and `in-flight/*.lock`.
-- Settings edits `${CLAUDE_PLUGIN_DATA}/backends.toml` through invariant-checked helpers.
-- Presets browse stock and user presets; stock presets are read-only.
+- Dashboard reads `telemetry/runs.jsonl` and `in-flight/*.lock`. Press `o` to
+  open the selected Beads issue, `f` to request a Codex handoff, and `c` to
+  cancel a selected running `swarm-run`.
+- Settings edits `${CLAUDE_PLUGIN_DATA}/backends.toml` or user-preset route
+  overrides through invariant-checked helpers. Press `Enter` on a route to edit
+  it.
+- Presets browse stock and user presets; stock presets are read-only. Press `l`
+  to load, `d` to diff, and `x` to delete user presets.
 - Pipelines open a composer workbench: intent-sorted gallery, selectable
   stage rows, focused stage inspector, validation rail, fork-first edit dialog,
   in-memory draft save/discard state, route/module edit controls, and
