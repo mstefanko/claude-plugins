@@ -18,6 +18,8 @@
     "selected_providers",
     "launched_providers",
     "schema_valid_providers",
+    "provider_schema_modes",
+    "parser_fallbacks",
     "provider_count",
     "min_success",
     "selection_result",
@@ -109,6 +111,37 @@
       "type": "array",
       "items": { "type": "string" },
       "description": "Provider IDs whose outputs passed the model emission schema."
+    },
+    "provider_schema_modes": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "enum": ["native", "parser-fallback", "unavailable"]
+      },
+      "description": "Schema mode used by each launched provider output."
+    },
+    "parser_fallbacks": {
+      "type": "array",
+      "description": "Explicit experiment-mode parser fallback recoveries. Empty for native-schema and skipped runs.",
+      "items": {
+        "type": "object",
+        "required": ["provider", "schema_mode", "confidence_cap", "message", "sidecar_path"],
+        "additionalProperties": false,
+        "properties": {
+          "provider": { "type": "string" },
+          "schema_mode": {
+            "type": "string",
+            "enum": ["parser-fallback"]
+          },
+          "confidence_cap": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 0.65
+          },
+          "message": { "type": ["string", "null"] },
+          "sidecar_path": { "type": ["string", "null"] }
+        }
+      }
     },
     "provider_count": {
       "type": "integer",

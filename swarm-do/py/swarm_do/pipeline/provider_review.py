@@ -45,6 +45,9 @@ DEFAULT_MAX_PARALLEL = 4
 DEFAULT_MIN_SUCCESS = 1
 DOCTOR_CACHE_FILENAME = "provider-review-doctor-cache.json"
 DEFAULT_ROLE = "agent-review"
+NATIVE_SCHEMA_MODE = "native"
+PARSER_FALLBACK_SCHEMA_MODE = "parser-fallback"
+PARSER_FALLBACK_CONFIDENCE_CAP = 0.65
 DEFAULT_CODEX_R2_TIMEOUT_SECONDS = 90
 DEFAULT_CLAUDE_R3_TIMEOUT_SECONDS = 90
 DEFAULT_AUTH_PROBE_TIMEOUT_SECONDS = 10
@@ -71,6 +74,11 @@ _CATEGORY_REWRITES = {"types": "types_or_null", "null": "types_or_null"}
 _LEADING_VERB_RE = re.compile(r"^[A-Z][a-z]*[a-z] ")
 _SAFE_PROVIDER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _HELP_FLAG_RE = re.compile(r"(?<![A-Za-z0-9_-])--?[A-Za-z0-9][A-Za-z0-9-]*(?![A-Za-z0-9_-])")
+_FALLBACK_LINE_RE = re.compile(
+    r"^\s*(?:[-*]|\d+[.)])\s*"
+    r"(?:\[(?P<severity>[A-Za-z]+)(?:\s*\|\s*[A-Za-z]+)?\]\s*)?"
+    r"(?P<location>[^:\n]+:\d+(?:-\d+)?)\s*(?:-|:)\s*(?P<summary>.+?)\s*$"
+)
 
 
 class ProviderReviewError(ValueError):
@@ -1393,6 +1401,164 @@ def _claude_output_payload(stdout_text: str) -> Mapping[str, Any]:
     return payload
 
 
+def _fallback_location(location: Any) -> tuple[str | None, int | None, int | None]:
+    text = str(location or "").strip()
+    if ":" not in text:
+        return (None, None, None)
+    file_raw, _, line_part = text.partition(":")
+    if "-" in line_part:
+        start_raw, _, end_raw = line_part.partition("-")
+    else:
+        start_raw = end_raw = line_part
+    line_start = _to_int(start_raw)
+    line_end = _to_int(end_raw)
+    return (file_raw or None, line_start, line_end)
+
+
+def _fallback_finding_from_mapping(raw: Mapping[str, Any]) -> dict[str, Any] | None:
+    summary = str(raw.get("summary") or raw.get("rationale") or raw.get("message") or "").strip()
+    if not summary:
+        return None
+    file_path = raw.get("file_path")
+    line_start = raw.get("line_start")
+    line_end = raw.get("line_end")
+    if not file_path and raw.get("location"):
+        file_path, line_start, line_end = _fallback_location(raw.get("location"))
+    confidence = raw.get("confidence")
+    if not isinstance(confidence, (int, float)) or isinstance(confidence, bool):
+        confidence = PARSER_FALLBACK_CONFIDENCE_CAP
+    return {
+        "severity": _map_severity(raw.get("severity")),
+        "category": _category(raw.get("category") or raw.get("category_class") or "parser-fallback"),
+        "summary": summary,
+        "file_path": str(file_path) if file_path else None,
+        "line_start": _to_int(line_start),
+        "line_end": _to_int(line_end),
+        "confidence": max(0.0, min(1.0, float(confidence))),
+        "evidence": _bounded_text(raw.get("evidence") or raw.get("location")),
+        "recommendation": _bounded_text(raw.get("recommendation")),
+    }
+
+
+def _fallback_findings_from_json(value: Any) -> tuple[list[dict[str, Any]], str] | None:
+    if isinstance(value, str):
+        value = json.loads(value)
+    if isinstance(value, Mapping) and isinstance(value.get("findings"), list):
+        raw_findings = value["findings"]
+    elif isinstance(value, list):
+        raw_findings = value
+    else:
+        return None
+    findings: list[dict[str, Any]] = []
+    for raw in raw_findings:
+        if not isinstance(raw, Mapping):
+            continue
+        finding = _fallback_finding_from_mapping(raw)
+        if finding is not None:
+            findings.append(finding)
+    return findings, "json-findings"
+
+
+def _fallback_findings_from_text(text: str) -> tuple[list[dict[str, Any]], str]:
+    findings: list[dict[str, Any]] = []
+    for line in text.splitlines():
+        match = _FALLBACK_LINE_RE.match(line)
+        if not match:
+            continue
+        file_path, line_start, line_end = _fallback_location(match.group("location"))
+        findings.append(
+            {
+                "severity": _map_severity(match.group("severity")),
+                "category": "parser-fallback",
+                "summary": match.group("summary").strip(),
+                "file_path": file_path,
+                "line_start": line_start,
+                "line_end": line_end,
+                "confidence": PARSER_FALLBACK_CONFIDENCE_CAP,
+                "evidence": _bounded_text(line.strip()),
+                "recommendation": None,
+            }
+        )
+    return findings, "line-parser"
+
+
+def parse_provider_review_fallback_text(text: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Parse provider output in explicit experiment mode only."""
+
+    stripped = text.strip()
+    if not stripped:
+        raise ProviderReviewSchemaError("parser fallback received empty provider output")
+    parser_name = "line-parser"
+    findings: list[dict[str, Any]] = []
+    try:
+        value = _json_from_text_or_last_line(stripped)
+    except json.JSONDecodeError:
+        findings, parser_name = _fallback_findings_from_text(stripped)
+    else:
+        try:
+            parsed = _fallback_findings_from_json(value)
+        except json.JSONDecodeError:
+            parsed = None
+        if parsed is None:
+            findings, parser_name = _fallback_findings_from_text(stripped)
+        else:
+            findings, parser_name = parsed
+    if not findings:
+        raise ProviderReviewSchemaError("parser fallback could not recover any findings")
+    payload = {"findings": findings}
+    validate_emission_payload(payload)
+    return payload, {
+        "parser": parser_name,
+        "schema_mode": PARSER_FALLBACK_SCHEMA_MODE,
+        "finding_count": len(findings),
+        "confidence_cap": PARSER_FALLBACK_CONFIDENCE_CAP,
+    }
+
+
+def _fallback_raw_text(*parts: str | None) -> str:
+    return "\n".join(part for part in parts if part)
+
+
+def _try_parser_fallback_result(
+    *,
+    provider_id: str,
+    native_error: Exception | str,
+    raw_text: str,
+    stdout_text: str,
+    stderr_text: str,
+    elapsed_seconds: float = 0.0,
+    command_argv: Sequence[str] = (),
+    returncode: int | None = None,
+) -> ProviderRunResult | None:
+    candidates = [raw_text]
+    candidates.extend(line.strip() for line in raw_text.splitlines() if line.strip())
+    payload: dict[str, Any] | None = None
+    diagnostics: dict[str, Any] | None = None
+    for candidate in candidates:
+        try:
+            payload, diagnostics = parse_provider_review_fallback_text(candidate)
+        except (json.JSONDecodeError, ProviderReviewSchemaError):
+            continue
+        break
+    if payload is None or diagnostics is None:
+        return None
+    return ProviderRunResult(
+        provider_id,
+        payload,
+        stdout_text,
+        stderr_text,
+        schema_mode=PARSER_FALLBACK_SCHEMA_MODE,
+        elapsed_seconds=elapsed_seconds,
+        last_message_text=json.dumps(payload, sort_keys=True) + "\n",
+        command_argv=tuple(command_argv),
+        returncode=returncode,
+        message=(
+            f"parser fallback recovered {diagnostics['finding_count']} finding(s) "
+            f"after native schema failure: {native_error}"
+        ),
+    )
+
+
 def run_claude_write_denial_fixture(
     *,
     claude_bin: str = "claude",
@@ -1538,8 +1704,8 @@ def _to_int(value: Any) -> int | None:
 def _confidence(value: Any, *, schema_mode: str, anchored: bool) -> float:
     raw = float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else 0.0
     raw = max(0.0, min(1.0, raw))
-    if schema_mode != "native":
-        raw = min(raw, 0.65)
+    if schema_mode != NATIVE_SCHEMA_MODE:
+        raw = min(raw, PARSER_FALLBACK_CONFIDENCE_CAP)
     if not anchored:
         raw = min(raw, 0.50)
     return raw
@@ -1640,6 +1806,18 @@ def normalize_provider_review_results(
 
     provider_count = len(valid_payloads)
     schema_valid_providers = [result.provider_id for result, _payload in valid_payloads]
+    provider_schema_modes = {result.provider_id: result.schema_mode for result in results}
+    parser_fallbacks = [
+        {
+            "provider": result.provider_id,
+            "schema_mode": result.schema_mode,
+            "confidence_cap": PARSER_FALLBACK_CONFIDENCE_CAP,
+            "message": result.message,
+            "sidecar_path": result.sidecar_path,
+        }
+        for result in results
+        if result.schema_mode == PARSER_FALLBACK_SCHEMA_MODE
+    ]
     candidates: list[dict[str, Any]] = []
     for result, payload in valid_payloads:
         for idx, raw in enumerate(payload.get("findings") or []):
@@ -1660,8 +1838,12 @@ def normalize_provider_review_results(
         max_confidence = max(float(item["confidence"]) for item in group)
         agreement_ratio = (len(detected_by) / provider_count) if provider_count > 0 else 0.0
         consensus_score = agreement_ratio * max_confidence
-        exact_hash_agreement = key.startswith("hash:") and len(detected_by) >= 2
-        if exact_hash_agreement and consensus_score >= 0.75:
+        group_schema_modes = {str(item["schema_mode"]) for item in group}
+        fallback_capped = any(mode != NATIVE_SCHEMA_MODE for mode in group_schema_modes)
+        exact_hash_agreement = key.startswith("hash:") and len(detected_by) >= 2 and not fallback_capped
+        if fallback_capped:
+            consensus_level = "unverified"
+        elif exact_hash_agreement and consensus_score >= 0.75:
             consensus_level = "confirmed"
         elif representative["stable_finding_hash_v1"] or representative["file_path"] or representative["evidence"]:
             consensus_level = "needs-verification"
@@ -1723,6 +1905,8 @@ def normalize_provider_review_results(
         "selected_providers": list(selected_providers),
         "launched_providers": [result.provider_id for result in results],
         "schema_valid_providers": schema_valid_providers,
+        "provider_schema_modes": provider_schema_modes,
+        "parser_fallbacks": parser_fallbacks,
         "provider_count": provider_count,
         "min_success": min_success,
         "selection_result": selection_result or "",
@@ -2054,6 +2238,7 @@ def _run_codex_review_provider(
     provider_dir: Path,
     timeout_seconds: int,
     runner: Callable[..., subprocess.CompletedProcess[str]],
+    allow_parser_fallback: bool = False,
 ) -> ProviderRunResult:
     started = time.monotonic()
     last_message_file = provider_dir / "last-message.json"
@@ -2115,6 +2300,19 @@ def _run_codex_review_provider(
     try:
         payload = _codex_output_payload(last_message_file)
     except (json.JSONDecodeError, ProviderReviewSchemaError) as exc:
+        if allow_parser_fallback:
+            fallback = _try_parser_fallback_result(
+                provider_id=status.provider_id,
+                native_error=exc,
+                raw_text=_fallback_raw_text(last_message_text, completed.stdout, completed.stderr),
+                stdout_text=completed.stdout or "",
+                stderr_text=completed.stderr or "",
+                elapsed_seconds=elapsed,
+                command_argv=command,
+                returncode=completed.returncode,
+            )
+            if fallback is not None:
+                return fallback
         return ProviderRunResult(
             status.provider_id,
             None,
@@ -2148,6 +2346,7 @@ def _run_claude_review_provider(
     prompt_text: str,
     timeout_seconds: int,
     runner: Callable[..., subprocess.CompletedProcess[str]],
+    allow_parser_fallback: bool = False,
 ) -> ProviderRunResult:
     started = time.monotonic()
     command = build_claude_review_command(
@@ -2201,6 +2400,19 @@ def _run_claude_review_provider(
     try:
         payload = _claude_output_payload(completed.stdout or "")
     except (json.JSONDecodeError, ProviderReviewSchemaError) as exc:
+        if allow_parser_fallback:
+            fallback = _try_parser_fallback_result(
+                provider_id=status.provider_id,
+                native_error=exc,
+                raw_text=_fallback_raw_text(completed.stdout, completed.stderr),
+                stdout_text=completed.stdout or "",
+                stderr_text=completed.stderr or "",
+                elapsed_seconds=elapsed,
+                command_argv=command,
+                returncode=completed.returncode,
+            )
+            if fallback is not None:
+                return fallback
         return ProviderRunResult(
             status.provider_id,
             None,
@@ -2235,6 +2447,7 @@ def _run_real_provider(
     output_dir: Path,
     timeout_seconds: int,
     runner: Callable[..., subprocess.CompletedProcess[str]],
+    allow_parser_fallback: bool = False,
 ) -> ProviderRunResult:
     if status is None or not status.eligible:
         return ProviderRunResult(
@@ -2264,6 +2477,7 @@ def _run_real_provider(
             provider_dir=provider_dir,
             timeout_seconds=timeout_seconds,
             runner=runner,
+            allow_parser_fallback=allow_parser_fallback,
         )
     if provider_id == "claude":
         return _run_claude_review_provider(
@@ -2272,6 +2486,7 @@ def _run_real_provider(
             prompt_text=prompt_text,
             timeout_seconds=timeout_seconds,
             runner=runner,
+            allow_parser_fallback=allow_parser_fallback,
         )
     return ProviderRunResult(
         provider_id,
@@ -2283,14 +2498,33 @@ def _run_real_provider(
     )
 
 
-def _run_fake_provider(provider_id: str, fake_result_dir: Path, provider_dir: Path, timeout_seconds: int) -> ProviderRunResult:
+def _run_fake_provider(
+    provider_id: str,
+    fake_result_dir: Path,
+    provider_dir: Path,
+    timeout_seconds: int,
+    allow_parser_fallback: bool = False,
+) -> ProviderRunResult:
     started = time.monotonic()
     path = _fake_payload_path(fake_result_dir, provider_id)
     if not path.is_file():
         return ProviderRunResult(provider_id, None, "", f"missing fake result: {path}", "spawn_error", f"missing fake result: {path}")
+    raw_text = path.read_text(encoding="utf-8")
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(raw_text)
     except json.JSONDecodeError as exc:
+        if allow_parser_fallback:
+            elapsed = time.monotonic() - started
+            fallback = _try_parser_fallback_result(
+                provider_id=provider_id,
+                native_error=exc,
+                raw_text=raw_text,
+                stdout_text=raw_text,
+                stderr_text="",
+                elapsed_seconds=elapsed,
+            )
+            if fallback is not None:
+                return fallback
         return ProviderRunResult(provider_id, None, "", str(exc), "malformed_output", f"fake result is not JSON: {exc}")
     if isinstance(payload, Mapping):
         sleep_seconds = payload.get("_fake_sleep_seconds")
@@ -2349,11 +2583,19 @@ def _run_selected_fake_providers(
     output_dir: Path,
     timeout_seconds: int,
     max_parallel: int,
+    allow_parser_fallback: bool = False,
 ) -> list[ProviderRunResult]:
     results: list[ProviderRunResult] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, max_parallel)) as executor:
         future_map = {
-            executor.submit(_run_fake_provider, provider_id, fake_result_dir, output_dir / "providers" / _safe_provider_dir(provider_id), timeout_seconds): provider_id
+            executor.submit(
+                _run_fake_provider,
+                provider_id,
+                fake_result_dir,
+                output_dir / "providers" / _safe_provider_dir(provider_id),
+                timeout_seconds,
+                allow_parser_fallback,
+            ): provider_id
             for provider_id in provider_ids
         }
         for future in concurrent.futures.as_completed(future_map):
@@ -2376,6 +2618,7 @@ def _run_selected_real_providers(
     timeout_seconds: int,
     max_parallel: int,
     runner: Callable[..., subprocess.CompletedProcess[str]],
+    allow_parser_fallback: bool = False,
 ) -> list[ProviderRunResult]:
     prompt_text = prompt_file.read_text(encoding="utf-8")
     status_by_id = {status.provider_id: status for status in provider_statuses}
@@ -2391,6 +2634,7 @@ def _run_selected_real_providers(
                 output_dir=output_dir,
                 timeout_seconds=timeout_seconds,
                 runner=runner,
+                allow_parser_fallback=allow_parser_fallback,
             ): provider_id
             for provider_id in provider_ids
         }
@@ -2412,6 +2656,7 @@ def write_manifest(
     output_dir: Path,
     timeout_seconds: int,
     command_argv: Sequence[str],
+    allow_parser_fallback: bool = False,
 ) -> dict[str, Any]:
     manifest = {
         "schema_version": "provider-review.manifest.v1",
@@ -2422,6 +2667,12 @@ def write_manifest(
         "timeout_seconds": timeout_seconds,
         "selection": selection.as_dict(),
         "command_argv": _redacted_argv(command_argv),
+        "parser_fallback": {
+            "enabled": allow_parser_fallback,
+            "mode": "experiment" if allow_parser_fallback else "off",
+            "stock_auto_allowed": False,
+            "confidence_cap": PARSER_FALLBACK_CONFIDENCE_CAP,
+        },
         "raw_sidecars": str(output_dir / "providers"),
         "retention": {
             "class": "local-run-artifact-sensitive",
@@ -2447,6 +2698,12 @@ def run_stage(args: argparse.Namespace) -> int:
     result_path = output_dir / "provider-findings.json"
     manifest_path = output_dir / "provider-review.manifest.json"
     explicit = parse_provider_csv(args.providers)
+    allow_parser_fallback = bool(getattr(args, "allow_parser_fallback", False))
+    if allow_parser_fallback:
+        if args.selection != "explicit":
+            raise ProviderReviewError("--allow-parser-fallback requires --selection explicit")
+        if not explicit:
+            raise ProviderReviewError("--allow-parser-fallback requires --providers")
     fake_result_dir = Path(args.fake_result_dir).resolve() if args.fake_result_dir else None
     fake_providers = explicit if fake_result_dir is not None and explicit else None
     runner = getattr(args, "runner", subprocess.run)
@@ -2468,6 +2725,7 @@ def run_stage(args: argparse.Namespace) -> int:
         output_dir=output_dir,
         timeout_seconds=args.timeout_seconds,
         command_argv=sys.argv,
+        allow_parser_fallback=allow_parser_fallback,
     )
 
     if not selection.selected_providers:
@@ -2497,6 +2755,7 @@ def run_stage(args: argparse.Namespace) -> int:
             timeout_seconds=args.timeout_seconds,
             max_parallel=selection.policy.max_parallel,
             runner=runner,
+            allow_parser_fallback=allow_parser_fallback,
         )
     else:
         results = _run_selected_fake_providers(
@@ -2505,6 +2764,7 @@ def run_stage(args: argparse.Namespace) -> int:
             output_dir=output_dir,
             timeout_seconds=args.timeout_seconds,
             max_parallel=selection.policy.max_parallel,
+            allow_parser_fallback=allow_parser_fallback,
         )
     artifact = normalize_provider_review_results(
         results,
@@ -2538,6 +2798,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--issue-id", required=True)
     parser.add_argument("--stage-id", default="provider-review")
+    parser.add_argument(
+        "--allow-parser-fallback",
+        action="store_true",
+        help="enable explicit experiment-mode parsing after native schema failure; requires selection=explicit",
+    )
     parser.add_argument("--fake-result-dir", help=argparse.SUPPRESS)
     return parser
 

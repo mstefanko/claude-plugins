@@ -642,6 +642,15 @@ whether this can replace any older lanes.
   `max_parallel = 4`. A single eligible provider may run as evidence after its
   local proof gates are green, but single-provider findings remain
   `needs-verification` and secondary clusters cannot promote confidence.
+- **R11 Codex lane retirement inventory:**
+  `docs/codex-lane-retirement-inventory.md` records all current
+  `agent-codex-review` consumers and the parity checklist required before that
+  lane can be removed or replaced.
+- **R12 parser fallback experiment:** parser fallback is implemented as an
+  explicit experiment-mode option only. It requires `selection: explicit`,
+  records `provider_schema_modes` and `parser_fallbacks` in the normalized v2
+  artifact, caps fallback confidence at `0.65`, and keeps fallback-capped
+  findings at `unverified` consensus.
 
 ### Remaining Phases
 
@@ -668,23 +677,6 @@ whether this can replace any older lanes.
 - Definition of done: the code gate is implemented; real Claude eligibility
   still requires a green local proof plus R4 auth readiness.
 
-**Phase R11: Codex Lane Retirement Inventory**
-
-- Inventory all `agent-codex-review` consumers before replacing or retiring that
-  lane.
-- Preserve blocking-issues semantics, timeout/discard behavior, telemetry
-  extraction, and hybrid-review UX before any replacement.
-- Definition of done: a written inventory and parity checklist exists before
-  any code removes or rewires `agent-codex-review`.
-
-**Phase R12: Parser Fallback Experiment**
-
-- Keep parser fallback out of stock automatic review.
-- If needed, add explicit experiment-mode parsing with confidence caps,
-  diagnostics, and fixtures.
-- Definition of done: fallback output never silently looks equivalent to native
-  schema output.
-
 ## Test Matrix
 
 Current passing focused suites:
@@ -708,7 +700,6 @@ Validation still needed for future phases:
 - `bin/swarm providers calibrate-consensus <samples.json>` on those captured
   labeled samples before secondary clusters are considered for confidence
   promotion.
-- Parser fallback confidence-cap tests if fallback mode is implemented.
 - Duplicate consensus tests using captured real Claude/Codex outputs.
 - Additional end-to-end provider evidence summary tests using captured real CLI
   samples after local proof runs.

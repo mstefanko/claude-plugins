@@ -18,6 +18,7 @@ from swarm_do.pipeline.provider_review import (
     CLAUDE_WRITE_DENIAL_EDIT_PATH,
     DEFAULT_CLAUDE_R3_TIMEOUT_SECONDS,
     DEFAULT_CODEX_R2_TIMEOUT_SECONDS,
+    ProviderReviewError,
     ReviewProviderResolver,
     ReviewProviderProbeCheck,
     calibrate_consensus_samples,
@@ -26,6 +27,7 @@ from swarm_do.pipeline.provider_review import (
     format_consensus_calibration_report,
     load_emission_schema,
     normalize_provider_review_results,
+    parse_provider_review_fallback_text,
     run_claude_auth_status_probe,
     run_claude_write_denial_fixture,
     run_codex_auth_status_probe,
@@ -48,6 +50,7 @@ class ProviderReviewTests(unittest.TestCase):
         providers: str | None = None,
         timeout_seconds: int = 30,
         min_success: int | None = None,
+        allow_parser_fallback: bool = False,
     ) -> dict[str, Any]:
         old_data = os.environ.get("CLAUDE_PLUGIN_DATA")
         with tempfile.TemporaryDirectory() as td:
@@ -78,6 +81,7 @@ class ProviderReviewTests(unittest.TestCase):
                         issue_id="issue-1",
                         stage_id="provider-review",
                         fake_result_dir=str(fake),
+                        allow_parser_fallback=allow_parser_fallback,
                     )
                 )
                 artifact = json.loads((root / "out" / "provider-findings.json").read_text(encoding="utf-8"))
@@ -97,6 +101,7 @@ class ProviderReviewTests(unittest.TestCase):
         runner,
         resolver_factory,
         timeout_seconds: int = 30,
+        allow_parser_fallback: bool = False,
     ) -> tuple[int, dict[str, Any], dict[str, dict[str, Any]]]:
         old_data = os.environ.get("CLAUDE_PLUGIN_DATA")
         with tempfile.TemporaryDirectory() as td:
@@ -125,6 +130,7 @@ class ProviderReviewTests(unittest.TestCase):
                         fake_result_dir=None,
                         runner=runner,
                         resolver=resolver,
+                        allow_parser_fallback=allow_parser_fallback,
                     )
                 )
                 artifact = json.loads((root / "out" / "provider-findings.json").read_text(encoding="utf-8"))
@@ -167,6 +173,107 @@ class ProviderReviewTests(unittest.TestCase):
         )
 
         self.assertTrue(any("unexpected property 'run_id'" in error for error in errors))
+
+    def test_parser_fallback_converts_legacy_json_with_diagnostics(self) -> None:
+        payload, diagnostics = parse_provider_review_fallback_text(
+            json.dumps(
+                {
+                    "findings": [
+                        {
+                            "severity": "warning",
+                            "category": "types",
+                            "location": "pkg/parser.py:10-12",
+                            "rationale": "Rejects a valid token at EOF",
+                        }
+                    ]
+                }
+            )
+        )
+
+        self.assertEqual(diagnostics["schema_mode"], "parser-fallback")
+        self.assertEqual(diagnostics["confidence_cap"], 0.65)
+        self.assertEqual(payload["findings"][0]["severity"], "high")
+        self.assertEqual(payload["findings"][0]["category"], "types_or_null")
+        self.assertEqual(payload["findings"][0]["file_path"], "pkg/parser.py")
+        self.assertEqual(payload["findings"][0]["line_start"], 10)
+        self.assertEqual(payload["findings"][0]["line_end"], 12)
+        self.assertEqual(payload["findings"][0]["confidence"], 0.65)
+        self.assertEqual(validate_value(payload, load_emission_schema()), [])
+
+    def test_parser_fallback_is_explicit_and_marks_normalized_artifact(self) -> None:
+        artifact = self._run_fake_stage(
+            {
+                "claude": "- [CRITICAL] py/swarm_do/pipeline/provider_review.py:42 - Parser recovered finding",
+            },
+            providers="claude",
+            allow_parser_fallback=True,
+        )
+
+        self.assertEqual(artifact["status"], "ok")
+        self.assertEqual(artifact["provider_count"], 1)
+        self.assertEqual(artifact["provider_schema_modes"], {"claude": "parser-fallback"})
+        self.assertEqual(artifact["parser_fallbacks"][0]["provider"], "claude")
+        self.assertEqual(artifact["parser_fallbacks"][0]["confidence_cap"], 0.65)
+        self.assertEqual(artifact["findings"][0]["detected_by"], ["claude"])
+        self.assertEqual(artifact["findings"][0]["max_confidence"], 0.65)
+        self.assertEqual(artifact["findings"][0]["consensus_level"], "unverified")
+        validate_provider_findings_v2_artifact(artifact)
+
+    def test_parser_fallback_stays_off_without_experiment_flag(self) -> None:
+        artifact = self._run_fake_stage(
+            {
+                "claude": {"findings": []},
+                "codex": "- [CRITICAL] py/swarm_do/pipeline/provider_review.py:42 - Parser recovered finding",
+            },
+            providers="claude,codex",
+        )
+
+        self.assertEqual(artifact["status"], "partial")
+        self.assertEqual(artifact["provider_count"], 1)
+        self.assertEqual(artifact["parser_fallbacks"], [])
+        self.assertEqual(artifact["provider_errors"][0]["provider"], "codex")
+        self.assertEqual(artifact["provider_errors"][0]["provider_error_class"], "malformed_output")
+
+    def test_parser_fallback_requires_explicit_selection(self) -> None:
+        old_data = os.environ.get("CLAUDE_PLUGIN_DATA")
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            repo = root / "repo"
+            repo.mkdir()
+            prompt = root / "prompt.txt"
+            prompt.write_text("Review this repo", encoding="utf-8")
+            fake = root / "fake"
+            fake.mkdir()
+            (fake / "claude.json").write_text(
+                "- [CRITICAL] py/swarm_do/pipeline/provider_review.py:42 - Parser recovered finding",
+                encoding="utf-8",
+            )
+            os.environ["CLAUDE_PLUGIN_DATA"] = str(root / "data")
+            try:
+                with self.assertRaisesRegex(ProviderReviewError, "requires --selection explicit"):
+                    run_stage(
+                        argparse.Namespace(
+                            repo=str(repo),
+                            prompt_file=str(prompt),
+                            command="review",
+                            selection="auto",
+                            providers="claude",
+                            max_parallel=4,
+                            min_success=None,
+                            timeout_seconds=30,
+                            output_dir=str(root / "out"),
+                            run_id="RUN_PROVIDER",
+                            issue_id="issue-1",
+                            stage_id="provider-review",
+                            fake_result_dir=str(fake),
+                            allow_parser_fallback=True,
+                        )
+                    )
+            finally:
+                if old_data is None:
+                    os.environ.pop("CLAUDE_PLUGIN_DATA", None)
+                else:
+                    os.environ["CLAUDE_PLUGIN_DATA"] = old_data
 
     def test_command_builders_include_schema_and_read_only_flags(self) -> None:
         route = Route("codex", "gpt-5.4", "high", "test")
@@ -1137,6 +1244,59 @@ enabled = false
         self.assertEqual(artifact["provider_errors"][0]["provider"], "codex")
         self.assertEqual(artifact["provider_errors"][0]["provider_error_class"], "malformed_output")
         self.assertEqual(sidecars["codex"]["last_message"], "{not-json")
+
+    def test_run_stage_parser_fallback_recovers_real_codex_legacy_output_when_explicit(self) -> None:
+        legacy_payload = {
+            "findings": [
+                {
+                    "severity": "error",
+                    "category": "security",
+                    "location": "py/swarm_do/pipeline/provider_review.py:77",
+                    "rationale": "Allows fallback output to masquerade as native schema",
+                }
+            ]
+        }
+
+        def which(cmd: str) -> str | None:
+            return "/bin/codex" if cmd == "codex" else None
+
+        def runner(args, **kwargs):
+            if args == ["codex", "exec", "--help"]:
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="--json --sandbox --output-schema --output-last-message", stderr="")
+            if args == ["codex", "--version"]:
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="codex 1.0", stderr="")
+            if args == ["codex", "login", "status"]:
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="Logged in using ChatGPT\n", stderr="")
+            if args[:2] == ["/bin/codex", "exec"]:
+                last_message = Path(args[args.index("--output-last-message") + 1])
+                last_message.parent.mkdir(parents=True, exist_ok=True)
+                last_message.write_text(json.dumps(legacy_payload), encoding="utf-8")
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout='{"event":"done"}\n', stderr="")
+            raise AssertionError(args)
+
+        def resolver_factory():
+            return ReviewProviderResolver(
+                which=which,
+                runner=runner,
+                codex_schema_probe=ReviewProviderProbeCheck("ok", True, "Codex schema proof green"),
+                codex_read_only_probe=ReviewProviderProbeCheck("ok", True, "Codex read-only proof green"),
+            )
+
+        code, artifact, sidecars = self._run_realish_stage(
+            ("codex",),
+            runner=runner,
+            resolver_factory=resolver_factory,
+            allow_parser_fallback=True,
+        )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(artifact["status"], "ok")
+        self.assertEqual(artifact["provider_schema_modes"], {"codex": "parser-fallback"})
+        self.assertEqual(artifact["parser_fallbacks"][0]["provider"], "codex")
+        self.assertEqual(artifact["findings"][0]["severity"], "critical")
+        self.assertEqual(artifact["findings"][0]["max_confidence"], 0.65)
+        self.assertEqual(artifact["findings"][0]["consensus_level"], "unverified")
+        self.assertEqual(sidecars["codex"]["meta"]["schema_mode"], "parser-fallback")
 
     def test_run_stage_records_real_codex_timeout_as_partial_with_claude_success(self) -> None:
         def which(cmd: str) -> str | None:
