@@ -25,7 +25,8 @@ The plugin has two main modes:
 - Backend CLIs for the lanes you enable: `claude` for Claude-backed stages,
   `codex` for Codex-backed stages, and optional `mco` for MCO provider stages.
   Internal `swarm-review` provider shims use the same local CLIs but are
-  eligible only after their read-only Phase 0 checks pass. Stock review-capable
+  eligible only after provider doctor gates pass for installed CLI, native
+  schema support, read-only proof, and auth readiness. Stock review-capable
   pipelines include the internal provider-review stage; it records a clean
   skipped artifact when no shim is eligible. Once a shim is eligible, one
   provider is enough to collect evidence, but single-provider findings stay
@@ -55,8 +56,8 @@ when you have decided the current repo should get a `.beads/` store.
 
    ```bash
    "${CLAUDE_PLUGIN_ROOT}/bin/swarm" preset list
-  "${CLAUDE_PLUGIN_ROOT}/bin/swarm" providers doctor
-  "${CLAUDE_PLUGIN_ROOT}/bin/swarm" providers doctor --review
+   "${CLAUDE_PLUGIN_ROOT}/bin/swarm" providers doctor
+   "${CLAUDE_PLUGIN_ROOT}/bin/swarm" providers doctor --review
    "${CLAUDE_PLUGIN_ROOT}/bin/swarm" permissions check
    ```
 
@@ -116,6 +117,40 @@ bin/swarm compete docs/my-plan.md
 `bin/swarm compete <plan-path>` validates and activates the `competitive`
 preset. It does not dispatch by itself; after it succeeds, run
 `/swarmdaddy:do <plan-path>`.
+
+## Provider Review Versus MCO
+
+SwarmDaddy has two provider evidence paths. New work should normally use the
+internal provider-review stage; MCO remains an opt-in comparison lab.
+
+| Path | Pipeline type | Helper | When it appears | Contract |
+|------|---------------|--------|-----------------|----------|
+| Internal provider review | `provider.type: swarm-review` | `bin/swarm-provider-review` | The `default` pipeline and presets that select it (`balanced`, `claude-only`, `codex-only`), plus `lightweight`, `ultra-plan`, and output-only `review` | Swarm-owned v2 artifact, native-schema Claude/Codex shims, read-only gated, evidence-only |
+| MCO comparison path | `provider.type: mco` | `bin/swarm-stage-mco` | `mco-review-lab` only | External `mco review` adapter, v1 artifact, experimental comparison path |
+
+In implementation pipelines, the internal stage runs after `writer` and before
+the final `agent-review`. In output-only `review`, it runs before the review
+synthesis. It uses `selection: auto` in stock presets, so provider doctor
+chooses only eligible read-only shims. If no shim is eligible, the stage
+succeeds with a skipped provider artifact instead of blocking the run.
+
+Provider findings are not quality gates by themselves. They are normalized,
+deduplicated evidence for the downstream reviewer. A single provider can
+produce useful evidence, but it stays `needs-verification`; only conservative
+agreement can become stronger later.
+
+Useful commands:
+
+```bash
+bin/swarm providers doctor --review
+bin/swarm providers doctor --mco
+bin/swarm providers doctor --review --mco
+bin/swarm providers evidence <provider-findings.json>
+```
+
+The 2026-04-26 local Codex R2 and Claude R3 proof record lives in
+`docs/provider-review-r2-r3-proof-2026-04-26.md`. Re-run those opt-in fixtures
+only after material local CLI or command-contract drift.
 
 ## Slash Commands
 
@@ -194,6 +229,7 @@ bin/swarm pipeline drift <name>
 
 bin/swarm mode claude-only|codex-only|balanced|brainstorm|research|design|review|custom
 bin/swarm providers doctor [--preset <name|current>] [--review] [--mco] [--mco-timeout-seconds N] [--json]
+bin/swarm providers evidence <provider-findings.json>
 bin/swarm providers calibrate-consensus <samples.json> [--output <report.json>] [--json]
 bin/swarm permissions check [--role <role>] [--scope repo|user] [--path <settings.json>]
 bin/swarm permissions install --role <role> [--dry-run] [--rollback] [--scope repo|user] [--path <settings.json>]
@@ -242,10 +278,11 @@ Additional helpers:
   aliases over `swarm-run`.
 - `bin/swarm-provider-review`: internal read-only provider evidence runner.
 - `bin/swarm providers evidence <provider-findings.json>`: bounded downstream
-  prompt summary for provider-review artifacts.
+  prompt summary for `swarm-review` v2 artifacts and MCO v1 artifacts.
 - `bin/swarm providers calibrate-consensus <samples.json>`: measures labeled
   provider-review samples for secondary-cluster false merges/splits.
-- `bin/swarm-stage-mco`: provider-stage helper used by MCO pipeline stages.
+- `bin/swarm-stage-mco`: experimental provider-stage helper used only by MCO
+  pipeline stages.
 - `bin/extract-phase.sh`: findings extraction shim.
 - `bin/swarm-telemetry`: telemetry inspection and maintenance CLI.
 - `bin/swarm-tui`: optional Textual operator console.
@@ -281,7 +318,8 @@ Pipelines support these stage shapes:
 - `fan_out`: multiple branches of one role, optionally with prompt variants or
   model routes, followed by a merge agent.
 - `provider`: read-only evidence stages. `swarm-review` is the internal
-  runner; `mco` remains the experimental comparison path.
+  runner used by stock review-capable pipelines; `mco` remains the experimental
+  comparison path used by `mco-review-lab`.
 
 Prompt lenses are cataloged overlays for specific roles and pipeline positions.
 Fan-out prompt variants and single-agent `lens` overlays are validated against
@@ -364,6 +402,7 @@ Role dispatch:
 |------|-----------|
 | `agent-codex-review` | Parses Codex `findings.json` payloads. |
 | `agent-review`, `agent-code-review` | Parses reviewer markdown notes. |
+| `swarm-review`, `provider-review` | Down-converts internal provider-review v2 artifacts into standard findings rows. |
 | Any other role | Skipped with a warning and exit 0. |
 
 Finding hashes use the stable four-field payload
