@@ -191,12 +191,13 @@ def _provider_branch_count(stage: Mapping[str, Any]) -> int:
     if isinstance(provider, Mapping):
         if provider.get("type") == "swarm-review":
             selection = provider.get("selection", "auto")
+            max_parallel = provider.get("max_parallel")
+            max_selected = max_parallel if isinstance(max_parallel, int) and max_parallel > 0 else 4
             if selection == "off":
                 return 0
             if selection == "explicit" and isinstance(provider.get("providers"), list):
-                return len(provider["providers"])
-            max_parallel = provider.get("max_parallel")
-            return max_parallel if isinstance(max_parallel, int) and max_parallel > 0 else 4
+                return min(len(provider["providers"]), max_selected)
+            return max_selected
         if isinstance(provider.get("providers"), list):
             return len(provider["providers"])
     return 1
@@ -808,6 +809,7 @@ def validate_preset_pipeline_mappings(
         try:
             result.budget = budget_preview(preset, pipeline, plan_path)
             result.errors.extend(result.budget.exceeds)
+            result.warnings.extend(result.budget.warnings)
         except Exception as exc:
             result.add(f"budget preview failed: {exc}")
     return result

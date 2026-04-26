@@ -42,6 +42,7 @@ class ProviderReviewTests(unittest.TestCase):
         selection: str = "explicit",
         providers: str | None = None,
         timeout_seconds: int = 30,
+        min_success: int | None = None,
     ) -> dict[str, Any]:
         old_data = os.environ.get("CLAUDE_PLUGIN_DATA")
         with tempfile.TemporaryDirectory() as td:
@@ -65,6 +66,7 @@ class ProviderReviewTests(unittest.TestCase):
                         selection=selection,
                         providers=providers if providers is not None else ",".join(fake_payloads),
                         max_parallel=4,
+                        min_success=min_success,
                         timeout_seconds=timeout_seconds,
                         output_dir=str(root / "out"),
                         run_id="RUN_PROVIDER",
@@ -109,6 +111,7 @@ class ProviderReviewTests(unittest.TestCase):
                         selection="explicit",
                         providers=",".join(providers),
                         max_parallel=4,
+                        min_success=None,
                         timeout_seconds=timeout_seconds,
                         output_dir=str(root / "out"),
                         run_id="RUN_PROVIDER",
@@ -871,6 +874,20 @@ enabled = false
         self.assertEqual(artifact["provider_errors"][0]["provider"], "codex")
         self.assertEqual(artifact["provider_errors"][0]["provider_error_class"], "malformed_output")
         validate_provider_findings_v2_artifact(artifact)
+
+    def test_min_success_is_enforced_against_schema_valid_provider_outputs(self) -> None:
+        artifact = self._run_fake_stage(
+            {"claude": {"findings": []}},
+            providers="claude",
+            min_success=2,
+        )
+
+        self.assertEqual(artifact["status"], "partial")
+        self.assertEqual(artifact["provider_count"], 1)
+        self.assertEqual(artifact["schema_valid_providers"], ["claude"])
+        self.assertEqual(artifact["min_success"], 2)
+        self.assertIn("selected provider count 1 below min_success 2", artifact["status_reason"])
+        self.assertIn("schema-valid provider count 1 below min_success 2", artifact["status_reason"])
 
     def test_run_stage_writes_fake_sidecars_and_v2_artifact(self) -> None:
         old_data = os.environ.get("CLAUDE_PLUGIN_DATA")

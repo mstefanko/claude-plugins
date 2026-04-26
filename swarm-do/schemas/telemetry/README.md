@@ -140,8 +140,14 @@ Schemas: `provider_findings.schema.json#v1-draft` for MCO,
 `provider_findings.v2.schema.json#v2-draft` for `swarm-review`.
 
 Key provider fields: `provider`, `provider_count`, `selected_providers`,
+`launched_providers`, `schema_valid_providers`, `min_success`, `status_reason`,
 `detected_by`, `consensus_score`, `consensus_level`, `source_artifact_path`,
 and `provider_error_class`.
+
+Use `bin/swarm providers evidence <provider-findings.json>` to render the
+bounded downstream review summary. It includes normalized finding and provider
+error metadata while avoiding raw stdout, stderr, last-message text, and
+provider evidence snippets.
 
 Raw provider sidecars for `swarm-review` stay under the run stage artifact
 directory and are classified as local sensitive run artifacts. They are retained

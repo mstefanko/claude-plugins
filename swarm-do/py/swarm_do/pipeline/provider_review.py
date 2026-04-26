@@ -29,7 +29,7 @@ from swarm_do.telemetry.extractors.paths import normalize_path
 from swarm_do.telemetry.ids import new_ulid
 from swarm_do.telemetry.schemas import validate_value
 
-from .paths import REPO_ROOT
+from .paths import REPO_ROOT, resolve_data_dir
 from .resolver import BackendResolver, Route
 
 
@@ -40,6 +40,7 @@ KNOWN_REVIEW_SHIMS = ("claude", "codex", "gemini")
 SELECTIONS = {"auto", "explicit", "off"}
 DEFAULT_MAX_PARALLEL = 4
 DEFAULT_MIN_SUCCESS = 1
+DOCTOR_CACHE_FILENAME = "provider-review-doctor-cache.json"
 DEFAULT_ROLE = "agent-review"
 DEFAULT_CODEX_R2_TIMEOUT_SECONDS = 90
 DEFAULT_CLAUDE_R3_TIMEOUT_SECONDS = 90
@@ -315,6 +316,28 @@ def parse_provider_csv(raw: str | None) -> tuple[str, ...]:
         if not _SAFE_PROVIDER_RE.fullmatch(provider_id):
             raise ProviderReviewError(f"invalid provider id: {provider_id!r}")
     return providers
+
+
+def review_doctor_cache_path() -> Path:
+    return resolve_data_dir() / DOCTOR_CACHE_FILENAME
+
+
+def load_review_doctor_cache() -> dict[str, Any] | None:
+    path = review_doctor_cache_path()
+    if not path.is_file():
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def write_review_doctor_cache(payload: Mapping[str, Any]) -> Path:
+    path = review_doctor_cache_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _write_json(path, dict(payload))
+    return path
 
 
 def _detected_required_flags(help_text: str, required_flags: Sequence[str]) -> tuple[str, ...]:
@@ -1536,8 +1559,12 @@ def normalize_provider_review_results(
     selected_providers: Sequence[str],
     source_artifact_path: str,
     manifest_path: str,
+    min_success: int = DEFAULT_MIN_SUCCESS,
+    selection_result: str | None = None,
     timestamp: str | None = None,
 ) -> dict[str, Any]:
+    if min_success < 1:
+        raise ProviderReviewError("min_success must be >= 1")
     ts = timestamp or _iso_utc_now()
     provider_errors: list[dict[str, Any]] = []
     valid_payloads: list[tuple[ProviderRunResult, Mapping[str, Any]]] = []
@@ -1569,6 +1596,7 @@ def normalize_provider_review_results(
         valid_payloads.append((result, result.payload))
 
     provider_count = len(valid_payloads)
+    schema_valid_providers = [result.provider_id for result, _payload in valid_payloads]
     candidates: list[dict[str, Any]] = []
     for result, payload in valid_payloads:
         for idx, raw in enumerate(payload.get("findings") or []):
@@ -1657,32 +1685,62 @@ def normalize_provider_review_results(
             }
         )
 
-    if not selected_providers:
-        status = "skipped"
-    elif provider_errors and provider_count:
-        status = "partial"
-    elif provider_errors:
-        status = "error"
-    else:
-        status = "ok"
+    status, status_reason = _provider_review_status(
+        selected_count=len(selected_providers),
+        provider_count=provider_count,
+        min_success=min_success,
+        provider_errors=provider_errors,
+        selection_result=selection_result,
+    )
 
     return {
         "schema_version": SCHEMA_VERSION,
         "provider": "swarm-review",
         "command": "review",
         "status": status,
+        "status_reason": status_reason,
         "run_id": run_id,
         "issue_id": issue_id,
         "stage_id": stage_id,
         "configured_providers": list(configured_providers),
         "selected_providers": list(selected_providers),
         "launched_providers": [result.provider_id for result in results],
+        "schema_valid_providers": schema_valid_providers,
         "provider_count": provider_count,
+        "min_success": min_success,
+        "selection_result": selection_result or "",
         "source_artifact_path": source_artifact_path,
         "manifest_path": manifest_path,
         "provider_errors": provider_errors,
         "findings": findings,
     }
+
+
+def _provider_review_status(
+    *,
+    selected_count: int,
+    provider_count: int,
+    min_success: int,
+    provider_errors: Sequence[Mapping[str, Any]],
+    selection_result: str | None,
+) -> tuple[str, str]:
+    if selected_count == 0:
+        if selection_result == "off":
+            return "skipped", "provider review selection is off"
+        return "skipped", "no provider review shims were selected"
+
+    reasons: list[str] = []
+    if selected_count < min_success:
+        reasons.append(f"selected provider count {selected_count} below min_success {min_success}")
+    if provider_count < min_success:
+        reasons.append(f"schema-valid provider count {provider_count} below min_success {min_success}")
+
+    if reasons:
+        status = "partial" if provider_count > 0 else "error"
+        return status, "; ".join(reasons)
+    if provider_errors:
+        return "partial", "one or more selected providers failed after enough schema-valid outputs were collected"
+    return "ok", f"schema-valid provider count {provider_count} met min_success {min_success}"
 
 
 def _consensus_groups(candidates: Sequence[Mapping[str, Any]]) -> dict[str, list[dict[str, Any]]]:
@@ -1739,6 +1797,8 @@ def skipped_result(
     selected_providers: Sequence[str],
     source_artifact_path: str,
     manifest_path: str,
+    min_success: int = DEFAULT_MIN_SUCCESS,
+    selection_result: str | None = None,
 ) -> dict[str, Any]:
     return normalize_provider_review_results(
         [],
@@ -1749,6 +1809,8 @@ def skipped_result(
         selected_providers=selected_providers,
         source_artifact_path=source_artifact_path,
         manifest_path=manifest_path,
+        min_success=min_success,
+        selection_result=selection_result,
     )
 
 
@@ -2207,6 +2269,9 @@ def run_stage(args: argparse.Namespace) -> int:
         raise ProviderReviewError("only --command review is supported")
     if args.timeout_seconds < 1:
         raise ProviderReviewError("--timeout-seconds must be >= 1")
+    min_success_override = getattr(args, "min_success", None)
+    if min_success_override is not None and min_success_override < 1:
+        raise ProviderReviewError("--min-success must be >= 1")
     repo = Path(args.repo).resolve()
     prompt_file = Path(args.prompt_file).resolve()
     output_dir = Path(args.output_dir).resolve()
@@ -2223,6 +2288,11 @@ def run_stage(args: argparse.Namespace) -> int:
         explicit_providers=explicit,
         max_parallel=args.max_parallel,
     )
+    if min_success_override is not None:
+        selection = dataclasses.replace(
+            selection,
+            policy=dataclasses.replace(selection.policy, min_success=min_success_override),
+        )
     write_manifest(
         path=manifest_path,
         selection=selection,
@@ -2241,6 +2311,8 @@ def run_stage(args: argparse.Namespace) -> int:
             selected_providers=selection.selected_providers,
             source_artifact_path=str(result_path),
             manifest_path=str(manifest_path),
+            min_success=selection.policy.min_success,
+            selection_result=selection.selection_result,
         )
         validate_provider_findings_v2_artifact(artifact)
         _write_json(result_path, artifact)
@@ -2275,6 +2347,8 @@ def run_stage(args: argparse.Namespace) -> int:
         selected_providers=selection.selected_providers,
         source_artifact_path=str(result_path),
         manifest_path=str(manifest_path),
+        min_success=selection.policy.min_success,
+        selection_result=selection.selection_result,
     )
     validate_provider_findings_v2_artifact(artifact)
     _write_json(result_path, artifact)
@@ -2290,6 +2364,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--selection", choices=sorted(SELECTIONS), default="auto")
     parser.add_argument("--providers", help="comma-separated provider allowlist for selection=explicit")
     parser.add_argument("--max-parallel", type=int, default=DEFAULT_MAX_PARALLEL)
+    parser.add_argument("--min-success", type=int)
     parser.add_argument("--timeout-seconds", type=int, default=1800)
     parser.add_argument("--output-dir", required=True, help="swarm run artifact directory for provider review")
     parser.add_argument("--run-id", required=True)

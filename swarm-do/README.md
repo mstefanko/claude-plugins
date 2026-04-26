@@ -238,6 +238,8 @@ Additional helpers:
 - `bin/swarm-gpt`, `bin/swarm-claude`, `bin/swarm-gpt-review`: convenience
   aliases over `swarm-run`.
 - `bin/swarm-provider-review`: internal read-only provider evidence runner.
+- `bin/swarm providers evidence <provider-findings.json>`: bounded downstream
+  prompt summary for provider-review artifacts.
 - `bin/swarm-stage-mco`: provider-stage helper used by MCO pipeline stages.
 - `bin/extract-phase.sh`: findings extraction shim.
 - `bin/swarm-telemetry`: telemetry inspection and maintenance CLI.
@@ -256,6 +258,8 @@ Important paths:
 - `${CLAUDE_PLUGIN_DATA}/active-run.json`: dispatcher-owned active run state.
 - `${CLAUDE_PLUGIN_DATA}/runs/<run_id>/checkpoint.v1.json`: resume checkpoints.
 - `${CLAUDE_PLUGIN_DATA}/in-flight/*.lock`: running backend process locks.
+- `${CLAUDE_PLUGIN_DATA}/provider-review-doctor-cache.json`: latest provider
+  doctor selection data used by dry-run budget estimates when available.
 
 From a development shell where `CLAUDE_PLUGIN_DATA` is not set, most pipeline
 helpers use the repo's `data/` directory as a local fallback.

@@ -11,7 +11,8 @@ from unittest.mock import patch
 
 from swarm_do.pipeline import catalog
 from swarm_do.pipeline.cli import cmd_research
-from swarm_do.pipeline.engine import graph_lines, stage_agent_count, topological_layers
+from swarm_do.pipeline.engine import budget_preview, graph_lines, stage_agent_count, topological_layers
+from swarm_do.pipeline.provider_review import write_review_doctor_cache
 from swarm_do.pipeline.registry import find_pipeline, load_pipeline
 from swarm_do.pipeline.resolver import BackendResolver
 from swarm_do.pipeline.simple_yaml import loads
@@ -169,6 +170,85 @@ stages:
         self.assertEqual(stage_agent_count(pipeline["stages"][0]), 2)
         rendered = "\n".join(graph_lines(pipeline))
         self.assertIn("provider=swarm-review command=review selection=auto", rendered)
+
+    def test_budget_preview_uses_review_doctor_cache_for_auto_selection(self) -> None:
+        pipeline = loads(
+            """
+pipeline_version: 1
+name: provider-review-cache
+stages:
+  - id: provider-review
+    provider:
+      type: swarm-review
+      command: review
+      selection: auto
+      timeout_seconds: 1800
+      max_parallel: 4
+"""
+        )
+        preset = {
+            "budget": {
+                "max_agents_per_run": 10,
+                "max_estimated_cost_usd": 10.0,
+                "max_wall_clock_seconds": 10000,
+            }
+        }
+        old_data = os.environ.get("CLAUDE_PLUGIN_DATA")
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["CLAUDE_PLUGIN_DATA"] = td
+            try:
+                write_review_doctor_cache(
+                    {
+                        "pipeline_name": "provider-review-cache",
+                        "eligible_review_providers": ["claude"],
+                        "selected_review_providers": ["claude"],
+                    }
+                )
+                preview = budget_preview(preset, pipeline, None)
+            finally:
+                if old_data is None:
+                    os.environ.pop("CLAUDE_PLUGIN_DATA", None)
+                else:
+                    os.environ["CLAUDE_PLUGIN_DATA"] = old_data
+
+        self.assertEqual(preview.stage_estimates[0]["agents_per_phase"], 1)
+        self.assertEqual(preview.warnings, [])
+
+    def test_budget_preview_warns_when_auto_selection_uses_upper_bound(self) -> None:
+        pipeline = loads(
+            """
+pipeline_version: 1
+name: provider-review-no-cache
+stages:
+  - id: provider-review
+    provider:
+      type: swarm-review
+      command: review
+      selection: auto
+      timeout_seconds: 1800
+      max_parallel: 4
+"""
+        )
+        preset = {
+            "budget": {
+                "max_agents_per_run": 10,
+                "max_estimated_cost_usd": 10.0,
+                "max_wall_clock_seconds": 10000,
+            }
+        }
+        old_data = os.environ.get("CLAUDE_PLUGIN_DATA")
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["CLAUDE_PLUGIN_DATA"] = td
+            try:
+                preview = budget_preview(preset, pipeline, None)
+            finally:
+                if old_data is None:
+                    os.environ.pop("CLAUDE_PLUGIN_DATA", None)
+                else:
+                    os.environ["CLAUDE_PLUGIN_DATA"] = old_data
+
+        self.assertEqual(preview.stage_estimates[0]["agents_per_phase"], 3)
+        self.assertTrue(any("upper-bound estimate 3" in warning for warning in preview.warnings))
 
     def test_swarm_review_rejects_providers_unless_selection_is_explicit(self) -> None:
         pipeline = loads(

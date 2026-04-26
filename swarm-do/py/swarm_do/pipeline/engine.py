@@ -7,6 +7,8 @@ import re
 from pathlib import Path
 from typing import Any, Mapping
 
+from .provider_review import DEFAULT_MAX_PARALLEL, KNOWN_REVIEW_SHIMS, load_review_doctor_cache
+
 
 @dataclasses.dataclass(frozen=True)
 class BudgetPreview:
@@ -19,6 +21,7 @@ class BudgetPreview:
     parallelism: int
     stage_estimates: list[dict[str, Any]]
     exceeds: list[str]
+    warnings: list[str] = dataclasses.field(default_factory=list)
 
 
 def topological_layers(pipeline: Mapping[str, Any]) -> list[list[str]]:
@@ -38,6 +41,13 @@ def topological_layers(pipeline: Mapping[str, Any]) -> list[list[str]]:
 
 
 def stage_agent_count(stage: Mapping[str, Any]) -> int:
+    return _stage_agent_estimate(stage, None)[0]
+
+
+def _stage_agent_estimate(
+    stage: Mapping[str, Any],
+    doctor_cache: Mapping[str, Any] | None,
+) -> tuple[int, str | None]:
     fan = stage.get("fan_out") if isinstance(stage, Mapping) else None
     if isinstance(fan, Mapping):
         raw_count = fan.get("count", 0)
@@ -45,22 +55,33 @@ def stage_agent_count(stage: Mapping[str, Any]) -> int:
         merge = stage.get("merge")
         if isinstance(merge, Mapping) and merge.get("strategy") == "synthesize":
             count += 1
-        return count
+        return count, None
     provider = stage.get("provider") if isinstance(stage, Mapping) else None
     if isinstance(provider, Mapping):
         if provider.get("type") == "swarm-review":
             selection = provider.get("selection", "auto")
             if selection == "off":
-                return 0
+                return 0, None
+            max_parallel = provider.get("max_parallel")
+            max_selected = max_parallel if isinstance(max_parallel, int) and max_parallel > 0 else DEFAULT_MAX_PARALLEL
             if selection == "explicit":
                 providers = provider.get("providers", [])
-                return len(providers) if isinstance(providers, list) else 0
-            max_parallel = provider.get("max_parallel")
-            return min(max_parallel if isinstance(max_parallel, int) and max_parallel > 0 else 4, 3)
+                explicit_count = len(providers) if isinstance(providers, list) else 0
+                return min(explicit_count, max_selected), None
+            if doctor_cache is not None:
+                eligible = doctor_cache.get("eligible_review_providers")
+                eligible_count = len(eligible) if isinstance(eligible, list) else 0
+                return min(max_selected, eligible_count), None
+            upper_bound = min(max_selected, len(KNOWN_REVIEW_SHIMS))
+            stage_id = stage.get("id") or "provider-review"
+            return (
+                upper_bound,
+                f"{stage_id}: provider-review auto selection has no doctor cache; using upper-bound estimate {upper_bound}",
+            )
         providers = provider.get("providers", [])
-        return len(providers) if isinstance(providers, list) else 1
+        return (len(providers) if isinstance(providers, list) else 1), None
     agents = stage.get("agents") if isinstance(stage, Mapping) else None
-    return len(agents) if isinstance(agents, list) else 0
+    return (len(agents) if isinstance(agents, list) else 0), None
 
 
 def pipeline_agent_count(pipeline: Mapping[str, Any]) -> int:
@@ -85,19 +106,28 @@ def estimate_phase_count(plan_path: str | Path | None) -> int:
 
 def budget_preview(preset: Mapping[str, Any], pipeline: Mapping[str, Any], plan_path: str | Path | None) -> BudgetPreview:
     phases = estimate_phase_count(plan_path)
-    agents_per_phase = pipeline_agent_count(pipeline)
+    doctor_cache = _doctor_cache_for_pipeline(pipeline)
+    stage_counts: list[tuple[Mapping[str, Any], int, str | None]] = [
+        (stage, *_stage_agent_estimate(stage, doctor_cache))
+        for stage in pipeline.get("stages") or []
+    ]
+    agents_per_phase = sum(count for _stage, count, _warning in stage_counts)
     agents = agents_per_phase * phases
     layers = topological_layers(pipeline)
     parallelism = pipeline_parallelism(pipeline)
-    fan_out_width = max((stage_agent_count(stage) for stage in pipeline.get("stages") or []), default=0)
-    stage_estimates = [
-        {
+    fan_out_width = max((count for _stage, count, _warning in stage_counts), default=0)
+    stage_estimates = []
+    warnings: list[str] = []
+    for stage, count, warning in stage_counts:
+        row: dict[str, Any] = {
             "stage_id": stage.get("id"),
-            "agents_per_phase": stage_agent_count(stage),
-            "estimated_tokens_per_phase": stage_agent_count(stage) * 18_000,
+            "agents_per_phase": count,
+            "estimated_tokens_per_phase": count * 18_000,
         }
-        for stage in pipeline.get("stages") or []
-    ]
+        if warning:
+            row["estimate_warning"] = warning
+            warnings.append(warning)
+        stage_estimates.append(row)
     estimated_tokens = agents * 18_000
     estimated_cost = round(agents * 0.18, 4)
     effective_layers = sum(max(1, (len(layer) + parallelism - 1) // parallelism) for layer in layers)
@@ -125,7 +155,19 @@ def budget_preview(preset: Mapping[str, Any], pipeline: Mapping[str, Any], plan_
         parallelism,
         stage_estimates,
         exceeds,
+        warnings,
     )
+
+
+def _doctor_cache_for_pipeline(pipeline: Mapping[str, Any]) -> dict[str, Any] | None:
+    cache = load_review_doctor_cache()
+    if not cache:
+        return None
+    cached_pipeline = cache.get("pipeline_name")
+    current_pipeline = pipeline.get("name")
+    if isinstance(cached_pipeline, str) and cached_pipeline and cached_pipeline != current_pipeline:
+        return None
+    return cache
 
 
 def graph_lines(pipeline: Mapping[str, Any]) -> list[str]:

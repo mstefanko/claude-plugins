@@ -192,10 +192,13 @@ def cmd_preset_dry_run(args: argparse.Namespace) -> int:
         print(f"  parallelism: {b.parallelism}")
         print("  stages:")
         for stage in b.stage_estimates:
-            print(
+            line = (
                 f"    - {stage['stage_id']}: agents_per_phase={stage['agents_per_phase']} "
                 f"estimated_tokens_per_phase={stage['estimated_tokens_per_phase']}"
             )
+            if stage.get("estimate_warning"):
+                line += f" warning={stage['estimate_warning']}"
+            print(line)
     if pipeline:
         print("Stage graph")
         print("\n".join(graph_lines(pipeline)))
@@ -484,6 +487,7 @@ def cmd_pipeline_drift(args: argparse.Namespace) -> int:
 
 def cmd_providers_doctor(args: argparse.Namespace) -> int:
     from .providers import format_provider_report, provider_doctor
+    from .provider_review import write_review_doctor_cache
 
     if args.mco_timeout_seconds < 1:
         print("swarm: providers doctor: --mco-timeout-seconds must be >= 1", file=sys.stderr)
@@ -494,11 +498,30 @@ def cmd_providers_doctor(args: argparse.Namespace) -> int:
         run_review=args.review,
         mco_timeout_seconds=args.mco_timeout_seconds,
     )
+    if report.review_selection is not None:
+        write_review_doctor_cache(report.as_dict())
     if args.json:
         print(json.dumps(report.as_dict(), indent=2, sort_keys=True))
     else:
         print(format_provider_report(report))
     return 0 if report.ok else 1
+
+
+def cmd_providers_evidence(args: argparse.Namespace) -> int:
+    from .provider_evidence import provider_evidence_summary_from_file
+
+    try:
+        print(
+            provider_evidence_summary_from_file(
+                args.artifact,
+                max_findings=args.max_findings,
+                max_errors=args.max_errors,
+            )
+        )
+    except Exception as exc:
+        print(f"swarm: providers evidence: {exc}", file=sys.stderr)
+        return 1
+    return 0
 
 
 def cmd_mode(args: argparse.Namespace) -> int:
@@ -896,6 +919,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--mco-timeout-seconds", type=int, default=30)
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_providers_doctor)
+    p = providers_sub.add_parser("evidence")
+    p.add_argument("artifact", help="provider-findings.json artifact path")
+    p.add_argument("--max-findings", type=int, default=5)
+    p.add_argument("--max-errors", type=int, default=5)
+    p.set_defaults(func=cmd_providers_evidence)
 
     mode = sub.add_parser("mode")
     mode.add_argument("name", choices=["claude-only", "codex-only", "balanced", "brainstorm", "research", "design", "review", "custom"])

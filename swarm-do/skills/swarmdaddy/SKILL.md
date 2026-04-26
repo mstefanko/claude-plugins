@@ -184,7 +184,8 @@ context pointers.
   --issue-id <bd-id> \
   --stage-id <stage-id> \
   --timeout-seconds <timeout-seconds> \
-  --max-parallel <max-parallel>
+  --max-parallel <max-parallel> \
+  [--min-success <failure_tolerance.min_success-when-quorum>]
 ```
 
 For MCO review stages use:
@@ -203,12 +204,16 @@ For MCO review stages use:
 ```
 
 Provider stages are evidence-only. Attach the normalized
-`provider-findings.json` path and a short summary to the provider stage issue,
-then pass that evidence to downstream Claude-backed stages. Do not let provider
-results automatically approve, reject, merge, mutate beads state outside their
-stage issue, or write repo files. Treat provider failures according to the
-stage `failure_tolerance`; `best-effort` means continue with "no usable provider
-evidence."
+`provider-findings.json` path and the deterministic helper output from
+`bin/swarm providers evidence <provider-findings.json>` to the provider stage
+issue, then pass that bounded summary to downstream Claude-backed stages. The
+summary includes artifact path, stage status, selected/valid provider counts,
+top normalized findings, and normalized provider errors; it intentionally omits
+raw provider stdout, stderr, last-message text, and evidence snippets. Do not
+let provider results automatically approve, reject, merge, mutate beads state
+outside their stage issue, or write repo files. Treat provider failures
+according to the stage `failure_tolerance`; `best-effort` means continue with
+"no usable provider evidence."
 6. Create dependency edges matching `depends_on`. Fan-out branch issues all block the merge issue.
 7. Enforce `failure_tolerance` before starting a merge or downstream stage:
    - `strict`: all branches must succeed.

@@ -9,13 +9,17 @@
     "provider",
     "command",
     "status",
+    "status_reason",
     "run_id",
     "issue_id",
     "stage_id",
     "configured_providers",
     "selected_providers",
     "launched_providers",
+    "schema_valid_providers",
     "provider_count",
+    "min_success",
+    "selection_result",
     "source_artifact_path",
     "manifest_path",
     "provider_errors",
@@ -39,6 +43,9 @@
       "type": "string",
       "enum": ["ok", "partial", "error", "skipped"]
     },
+    "status_reason": {
+      "type": "string"
+    },
     "run_id": {
       "type": "string",
       "pattern": "^[0-9A-Z_-]{1,64}$"
@@ -61,10 +68,23 @@
       "type": "array",
       "items": { "type": "string" }
     },
+    "schema_valid_providers": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Provider IDs whose outputs passed the model emission schema."
+    },
     "provider_count": {
       "type": "integer",
       "minimum": 0,
       "description": "Number of provider outputs that passed the emission schema."
+    },
+    "min_success": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Minimum schema-valid provider output count required by the stage/policy."
+    },
+    "selection_result": {
+      "type": "string"
     },
     "source_artifact_path": {
       "type": "string",

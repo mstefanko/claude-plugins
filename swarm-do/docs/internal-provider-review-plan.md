@@ -621,6 +621,17 @@ whether this can replace any older lanes.
   helpers, so adding `bin/swarm-provider-review` required no manifest entry.
 - **Docs and TUI:** README, telemetry README, and the TUI state/app helpers are
   provider-review aware, including configured versus selected provider preview.
+- **R7 runtime selection and failure semantics:** `swarm-provider-review`
+  records `min_success`, `schema_valid_providers`, `selection_result`, and
+  `status_reason`; it evaluates `min_success` against schema-valid outputs
+  rather than launched providers. Dry-run budget estimates now use the provider
+  doctor cache when available and otherwise emit an upper-bound auto-selection
+  warning.
+- **R8 downstream evidence summary:** `bin/swarm providers evidence
+  <provider-findings.json>` renders a deterministic bounded summary for both
+  MCO v1 and swarm-review v2 artifacts, including artifact path, status,
+  provider counts, top normalized findings, and provider errors while omitting
+  raw provider text.
 
 ### Remaining Phases
 
@@ -646,27 +657,6 @@ whether this can replace any older lanes.
   `--tools`/`--disallowedTools` restrictions before eligibility.
 - Definition of done: the code gate is implemented; real Claude eligibility
   still requires a green local proof plus R4 auth readiness.
-
-**Phase R7: Runtime Selection And Failure Semantics**
-
-- Enforce `min_success` against schema-valid provider outputs, not launched
-  providers.
-- Record whether stages skipped, ran, partially succeeded, or failed because too
-  few providers were selected.
-- Make budget/dry-run estimates use doctor cache data when available and
-  otherwise show an upper-bound warning.
-- Definition of done: stage artifacts and previews explain configured,
-  selected, launched, schema-valid, and minimum-success counts.
-
-**Phase R8: Downstream Evidence Summary**
-
-- Add a deterministic provider-evidence summary helper for downstream review
-  prompts.
-- Include artifact path, status, selected providers, provider_count, top
-  findings, and provider errors while avoiding raw provider text.
-- Keep provider results from mutating Beads outside the provider-stage issue.
-- Definition of done: downstream Claude review receives bounded provider
-  evidence consistently for MCO v1 and swarm-review v2 artifacts.
 
 **Phase R9: Consensus Calibration**
 
@@ -710,6 +700,7 @@ whether this can replace any older lanes.
 Current passing focused suites:
 
 - `PYTHONPATH=py python3 -m unittest py.swarm_do.pipeline.tests.test_provider_review`
+- `PYTHONPATH=py python3 -m unittest py.swarm_do.pipeline.tests.test_provider_evidence`
 - `PYTHONPATH=py python3 -m unittest py.swarm_do.pipeline.tests.test_providers`
 - `PYTHONPATH=py python3 -m unittest py.swarm_do.pipeline.tests.test_pipeline_validation`
 - `PYTHONPATH=py python3 -m unittest py.swarm_do.pipeline.tests.test_pipeline_actions`
@@ -726,7 +717,8 @@ Validation still needed for future phases:
   are acceptable on an operator machine.
 - Parser fallback confidence-cap tests if fallback mode is implemented.
 - Duplicate consensus tests using captured real Claude/Codex outputs.
-- End-to-end provider evidence summary tests for downstream review prompts.
+- Additional end-to-end provider evidence summary tests using captured real CLI
+  samples after local proof runs.
 
 ## Risks
 
@@ -766,7 +758,7 @@ stores raw sidecars; it is not optional future research.
 | Consensus clustering quality | Exact-hash consensus and conservative secondary clustering are implemented. Real Claude/Codex outputs must still be sampled for false merge and false split rates before secondary clusters affect stock/default confidence. | Pending Phase R9 before promoting secondary-cluster `confirmed` confidence. |
 | Parser-fallback default policy | No more research is needed for v1 policy. Parser fallback is off for stock automatic provider review and allowed only for doctor diagnostics or explicit experiment-mode runs, with confidence caps. | Resolved for v1; optional Phase R12 only if fallback is implemented. |
 | Provider artifact retention/redaction | Minimum policy is implemented in the manifest: raw sidecars are sensitive local run artifacts, retained or purged with the run directory, and excluded from telemetry. Real-shim meta sidecars include redacted argv only. | Complete for fake and gated real-shim runner paths; revisit before stock real-shim enablement. |
-| End-to-end fake and simulated real-shim tests | Fake-shim runner and normalizer tests cover no eligible providers, selection off, partial provider failure, malformed output, timeout, no findings, and duplicate findings. Simulated native-schema tests cover gated real Codex/Claude execution, malformed output, and timeout handling without launching provider CLIs. | Complete for current harnesses; add captured real CLI samples after local proof runs. |
+| End-to-end fake and simulated real-shim tests | Fake-shim runner and normalizer tests cover no eligible providers, selection off, partial provider failure, malformed output, timeout, no findings, duplicate findings, minimum-success enforcement, and bounded downstream evidence summaries for MCO v1 plus swarm-review v2. Simulated native-schema tests cover gated real Codex/Claude execution, malformed output, and timeout handling without launching provider CLIs. | Complete for current harnesses; add captured real CLI samples after local proof runs. |
 
 Remaining research after the v1 runner:
 
