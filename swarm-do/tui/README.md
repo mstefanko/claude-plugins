@@ -87,9 +87,10 @@ have no prompt-overlay field.
 
 Provider result previews appear in the stage inspector when a prior
 `${CLAUDE_PLUGIN_DATA}/runs/<run-id>/stages/<stage-id>/provider-findings.json`
-artifact exists. The preview shows status, provider count, selected providers,
-provider errors, and finding count; provider output remains evidence for
-downstream Claude-backed stages, not an automatic quality gate decision.
+artifact exists. The preview shows status, provider count, configured and
+selected providers, provider errors, and finding count; provider output remains
+evidence for downstream Claude-backed stages, not an automatic quality gate
+decision.
 
 ## Invariant Guards
 

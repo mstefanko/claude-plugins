@@ -17,19 +17,23 @@ from swarm_do.pipeline.actions import (
     rename_user_preset,
     set_mco_provider_config,
     set_base_route,
+    set_provider_review_config,
     set_stage_agent_route,
     set_user_preset_pipeline,
     set_user_preset_route,
 )
 from swarm_do.pipeline.config_hash import active_config_hash
 from swarm_do.pipeline.providers import ProviderCheck, ProviderDoctorReport
+from swarm_do.pipeline.provider_review import ReviewProviderPolicy, ReviewProviderStatus, ReviewSelectionResult
 from swarm_do.pipeline.registry import find_pipeline, load_pipeline, load_preset
 from swarm_do.tui.state import (
     current_prompt_lens_ids,
     current_mco_provider_config,
+    current_provider_review_config,
     current_stage_agent_lens_id,
     draft_add_module_stage,
     draft_set_mco_provider_config,
+    draft_set_provider_review_config,
     draft_set_prompt_variant_lenses,
     draft_remove_stage,
     draft_reset_fan_out_routes,
@@ -46,9 +50,11 @@ from swarm_do.tui.state import (
     load_run_events,
     module_palette_rows,
     mco_provider_result_preview,
+    provider_result_preview,
     pipeline_activation_blocker,
     pipeline_gallery_rows,
     pipeline_lens_rows,
+    pipeline_has_provider_stage,
     pipeline_profile_summary,
     pipeline_stage_rows,
     pipeline_validation_report,
@@ -495,6 +501,55 @@ class TuiStateTests(EnvTestCase):
         self.assertTrue(draft.undo())
         self.assertEqual(current_mco_provider_config(draft.pipeline, "mco-review")["providers"], ["claude"])
 
+    def test_pipeline_draft_provider_review_config_edits_are_validated_and_undoable(self) -> None:
+        fork_preset_and_pipeline("balanced", "default", "provider-review-draft")
+        draft = start_pipeline_draft("provider-review-draft")
+
+        config = current_provider_review_config(draft.pipeline, "provider-review")
+        self.assertEqual(config["provider_type"], "swarm-review")
+        self.assertEqual(config["selection"], "auto")
+        self.assertEqual(config["configured_providers"], [])
+
+        draft_set_provider_review_config(
+            draft,
+            "provider-review",
+            selection="explicit",
+            providers=["codex", "claude", "codex"],
+            timeout_seconds=600,
+            max_parallel=2,
+            failure_tolerance_mode="quorum",
+            min_success=2,
+        )
+
+        stage = next(stage for stage in draft.pipeline["stages"] if stage["id"] == "provider-review")
+        self.assertEqual(stage["provider"]["providers"], ["codex", "claude"])
+        self.assertEqual(stage["provider"]["selection"], "explicit")
+        self.assertEqual(stage["provider"]["max_parallel"], 2)
+        self.assertFalse(stage["provider"]["memory"])
+        self.assertEqual(stage["provider"]["timeout_seconds"], 600)
+        self.assertEqual(stage["failure_tolerance"], {"mode": "quorum", "min_success": 2})
+        self.assertTrue(validate_pipeline_draft(draft).ok)
+
+        with self.assertRaisesRegex(ValueError, "invalid review provider"):
+            draft_set_provider_review_config(
+                draft,
+                "provider-review",
+                selection="explicit",
+                providers=["../escape"],
+                timeout_seconds=600,
+                max_parallel=2,
+            )
+        with self.assertRaisesRegex(ValueError, "selection"):
+            draft_set_provider_review_config(
+                draft,
+                "provider-review",
+                selection="sometimes",
+                timeout_seconds=600,
+            )
+
+        self.assertTrue(draft.undo())
+        self.assertEqual(current_provider_review_config(draft.pipeline, "provider-review")["selection"], "auto")
+
     def test_mco_provider_result_preview_summarizes_prior_artifact(self) -> None:
         artifact_dir = self.root / "runs" / "run-1" / "stages" / "mco-review"
         artifact_dir.mkdir(parents=True)
@@ -519,8 +574,36 @@ class TuiStateTests(EnvTestCase):
 
         preview = "\n".join(mco_provider_result_preview("mco-review"))
 
-        self.assertIn("status=partial provider_count=2 selected=claude, codex findings=2 errors=1", preview)
+        self.assertIn("status=partial provider_count=2 configured=n/a selected=claude, codex findings=2 errors=1", preview)
         self.assertIn("error[0]: codex:auth missing token", preview)
+
+    def test_provider_result_preview_summarizes_swarm_review_artifact(self) -> None:
+        artifact_dir = self.root / "runs" / "run-1" / "stages" / "provider-review"
+        artifact_dir.mkdir(parents=True)
+        (artifact_dir / "provider-findings.json").write_text(
+            json.dumps(
+                {
+                    "status": "partial",
+                    "provider_count": 1,
+                    "configured_providers": ["claude", "codex"],
+                    "selected_providers": ["claude"],
+                    "provider_errors": [
+                        {
+                            "provider": "codex",
+                            "provider_error_class": "auth",
+                            "message": "not authenticated",
+                        }
+                    ],
+                    "findings": [{"summary": "one"}],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        preview = "\n".join(provider_result_preview("provider-review"))
+
+        self.assertIn("configured=claude, codex selected=claude", preview)
+        self.assertIn("error[0]: codex:auth not authenticated", preview)
 
     def test_pipeline_workbench_preview_includes_validation_and_diff_for_user_fork(self) -> None:
         fork_preset_and_pipeline("balanced", "default", "ui-preview")
@@ -559,6 +642,49 @@ class TuiStateTests(EnvTestCase):
 
         self.assertIn("provider doctor: ERROR required=mco", report)
         self.assertIn("ERROR provider:mco: selected MCO provider(s) not ready", report)
+
+    def test_pipeline_validation_report_includes_swarm_review_doctor_selection(self) -> None:
+        status = ReviewProviderStatus(
+            provider_id="claude",
+            status="eligible",
+            reason="fake ready",
+            eligible=True,
+            schema_mode="native",
+            read_only_mode="confirmed",
+            fake=True,
+        )
+        selection = ReviewSelectionResult(
+            policy=ReviewProviderPolicy(selection="auto"),
+            configured_providers=("claude", "codex"),
+            eligible_providers=("claude",),
+            selected_providers=("claude",),
+            skipped_providers=(),
+            provider_statuses=(status,),
+            selection_result="selected",
+        )
+
+        def fake_doctor(**kwargs) -> ProviderDoctorReport:
+            self.assertTrue(kwargs["run_review"])
+            self.assertFalse(kwargs["run_mco"])
+            return ProviderDoctorReport(
+                active_preset="balanced",
+                pipeline_name="default",
+                required_backends=("claude",),
+                required_providers=("swarm-review",),
+                checks=(ProviderCheck("provider-review:claude", "ok", "fake ready"),),
+                review_required=True,
+                review_selection=selection,
+            )
+
+        report = pipeline_validation_report(
+            "default",
+            include_provider_doctor=True,
+            provider_doctor_fn=fake_doctor,
+        )
+
+        self.assertTrue(pipeline_has_provider_stage(load_pipeline(find_pipeline("default").path), "swarm-review"))
+        self.assertIn("provider doctor: OK required=swarm-review", report)
+        self.assertIn("review configured=claude, codex selected=claude", report)
 
 
 class TuiActionTests(EnvTestCase):
@@ -637,6 +763,34 @@ max_wall_clock_seconds = 1800
         self.assertEqual(stage["provider"]["output"], "findings")
         self.assertFalse(stage["provider"]["memory"])
         self.assertEqual(stage["failure_tolerance"], {"mode": "strict"})
+
+    def test_saved_provider_review_config_preserves_read_only_boundaries(self) -> None:
+        fork_preset_and_pipeline("balanced", "default", "provider-review-action")
+
+        set_provider_review_config(
+            "provider-review-action",
+            "provider-review",
+            selection="explicit",
+            providers=["claude", "codex"],
+            timeout_seconds=1200,
+            max_parallel=2,
+            failure_tolerance_mode="quorum",
+            min_success=1,
+        )
+
+        stage = next(
+            stage
+            for stage in load_pipeline(find_pipeline("provider-review-action").path)["stages"]
+            if stage["id"] == "provider-review"
+        )
+        self.assertEqual(stage["provider"]["type"], "swarm-review")
+        self.assertEqual(stage["provider"]["selection"], "explicit")
+        self.assertEqual(stage["provider"]["providers"], ["claude", "codex"])
+        self.assertEqual(stage["provider"]["command"], "review")
+        self.assertEqual(stage["provider"]["output"], "findings")
+        self.assertFalse(stage["provider"]["memory"])
+        self.assertEqual(stage["provider"]["max_parallel"], 2)
+        self.assertEqual(stage["failure_tolerance"], {"mode": "quorum", "min_success": 1})
 
     def test_preset_rename_rejects_path_traversal(self) -> None:
         presets = self.root / "presets"

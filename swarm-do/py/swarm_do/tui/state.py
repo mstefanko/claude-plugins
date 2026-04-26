@@ -31,12 +31,16 @@ from swarm_do.pipeline.diff import diff_user_pipeline, stock_drift_for_pipeline
 from swarm_do.pipeline.editing import (
     find_stage_by_id as _stage_by_id,
     mutable_mco_provider_stage as _mutable_mco_provider_stage,
+    mutable_provider_review_stage as _mutable_provider_review_stage,
     mutable_stage_agent as _mutable_stage_agent,
     mutable_stage_by_id as _mutable_stage_by_id,
     mutable_stage_fan_out as _mutable_stage_fan_out,
     normalize_mco_providers as _normalize_mco_providers,
+    normalize_review_providers as _normalize_review_providers,
     provider_failure_tolerance as _provider_failure_tolerance,
     validate_mco_timeout as _validate_mco_timeout,
+    validate_provider_review_max_parallel as _validate_provider_review_max_parallel,
+    validate_provider_review_selection as _validate_provider_review_selection,
 )
 from swarm_do.pipeline.engine import graph_lines, topological_layers
 from swarm_do.pipeline.paths import resolve_data_dir
@@ -45,6 +49,7 @@ from swarm_do.pipeline.registry import find_pipeline, list_pipelines, list_prese
 from swarm_do.pipeline.resolver import BACKENDS, EFFORTS, BackendResolver, active_preset_name
 from swarm_do.pipeline.validation import (
     MCO_PROVIDERS,
+    REVIEW_PROVIDER_SELECTIONS,
     TOLERANCE_MODES,
     ValidationResult,
     invariant_errors,
@@ -241,7 +246,14 @@ def _stage_summary(stage: Mapping[str, Any]) -> str:
         return f"{fan.get('role')} x{fan.get('count')} {fan.get('variant')}"
     if isinstance(stage.get("provider"), Mapping):
         provider = stage["provider"]
-        return f"{provider.get('type')} {provider.get('command')} {provider.get('providers')}"
+        provider_type = provider.get("type")
+        if provider_type == "swarm-review":
+            return (
+                f"{provider_type} {provider.get('command')} "
+                f"selection={provider.get('selection', 'auto')} "
+                f"max_parallel={provider.get('max_parallel', 4)}"
+            )
+        return f"{provider_type} {provider.get('command')} providers={provider.get('providers')}"
     roles = [str(agent.get("role") or "<missing-role>") for agent in stage.get("agents") or [] if isinstance(agent, Mapping)]
     return ", ".join(roles) if roles else "no agents"
 
@@ -496,6 +508,97 @@ def draft_set_mco_provider_config(
     provider["output"] = "findings"
     provider["memory"] = False
     provider["timeout_seconds"] = timeout
+    stage["failure_tolerance"] = tolerance
+
+
+def current_provider_review_config(pipeline: Mapping[str, Any], stage_id: str) -> dict[str, Any]:
+    stage = _stage_by_id(pipeline, stage_id)
+    if stage is None:
+        raise ValueError(f"stage not found: {stage_id}")
+    provider = stage.get("provider")
+    if not isinstance(provider, Mapping):
+        raise ValueError(f"stage {stage_id} is not a provider stage")
+    provider_type = provider.get("type")
+    if provider_type == "mco":
+        config = current_mco_provider_config(pipeline, stage_id)
+        return {
+            **config,
+            "provider_type": "mco",
+            "selection": "explicit",
+            "configured_providers": config["providers"],
+            "max_parallel": len(config["providers"]),
+        }
+    if provider_type != "swarm-review":
+        raise ValueError(f"stage {stage_id} is not a provider-review stage")
+    tolerance = stage.get("failure_tolerance")
+    tolerance_mode = tolerance.get("mode", "best-effort") if isinstance(tolerance, Mapping) else "best-effort"
+    min_success = tolerance.get("min_success") if isinstance(tolerance, Mapping) else None
+    providers = [
+        str(name)
+        for name in (provider.get("providers") or [])
+        if isinstance(name, str)
+    ]
+    selection = provider.get("selection", "auto")
+    if selection not in REVIEW_PROVIDER_SELECTIONS:
+        selection = "auto"
+    return {
+        "provider_type": "swarm-review",
+        "selection": selection,
+        "providers": providers,
+        "configured_providers": providers if selection == "explicit" else [],
+        "timeout_seconds": (
+            provider.get("timeout_seconds")
+            if isinstance(provider.get("timeout_seconds"), int)
+            else 1800
+        ),
+        "max_parallel": (
+            provider.get("max_parallel")
+            if isinstance(provider.get("max_parallel"), int)
+            else 4
+        ),
+        "failure_tolerance_mode": tolerance_mode if tolerance_mode in TOLERANCE_MODES else "best-effort",
+        "min_success": min_success if isinstance(min_success, int) else None,
+    }
+
+
+def draft_set_provider_review_config(
+    draft: PipelineEditDraft,
+    stage_id: str,
+    *,
+    selection: str,
+    providers: list[str] | None = None,
+    timeout_seconds: int,
+    max_parallel: int = 4,
+    failure_tolerance_mode: str = "best-effort",
+    min_success: int | None = None,
+) -> None:
+    stage, provider = _mutable_provider_review_stage(draft.pipeline, stage_id)
+    normalized_selection = _validate_provider_review_selection(selection)
+    timeout = _validate_mco_timeout(timeout_seconds)
+    parallel = _validate_provider_review_max_parallel(max_parallel)
+    normalized_providers: list[str] = []
+    if normalized_selection == "explicit":
+        normalized_providers = _normalize_review_providers(providers or [])
+        branch_count = len(normalized_providers)
+    else:
+        branch_count = 0 if normalized_selection == "off" else parallel
+    tolerance = _provider_failure_tolerance(
+        failure_tolerance_mode,
+        min_success,
+        branch_count=branch_count,
+    )
+    draft.checkpoint(f"set provider-review config for {stage_id}")
+    provider["type"] = "swarm-review"
+    provider["command"] = "review"
+    provider["selection"] = normalized_selection
+    provider["output"] = "findings"
+    provider["memory"] = False
+    provider["timeout_seconds"] = timeout
+    provider["max_parallel"] = parallel
+    if normalized_selection == "explicit":
+        provider["providers"] = normalized_providers
+    else:
+        provider.pop("providers", None)
     stage["failure_tolerance"] = tolerance
 
 
@@ -920,7 +1023,7 @@ def pipeline_lens_rows(pipeline: dict[str, Any]) -> list[dict[str, str]]:
     return rows
 
 
-def latest_mco_provider_artifact(stage_id: str, data_dir: Path | None = None) -> Path | None:
+def latest_provider_artifact(stage_id: str, data_dir: Path | None = None) -> Path | None:
     runs_dir = (data_dir or resolve_data_dir()) / "runs"
     if not runs_dir.is_dir():
         return None
@@ -934,8 +1037,12 @@ def latest_mco_provider_artifact(stage_id: str, data_dir: Path | None = None) ->
     return max(candidates, key=lambda path: path.stat().st_mtime)
 
 
-def mco_provider_result_preview(stage_id: str, data_dir: Path | None = None) -> list[str]:
-    artifact = latest_mco_provider_artifact(stage_id, data_dir)
+def latest_mco_provider_artifact(stage_id: str, data_dir: Path | None = None) -> Path | None:
+    return latest_provider_artifact(stage_id, data_dir)
+
+
+def provider_result_preview(stage_id: str, data_dir: Path | None = None) -> list[str]:
+    artifact = latest_provider_artifact(stage_id, data_dir)
     if artifact is None:
         return []
     try:
@@ -946,16 +1053,19 @@ def mco_provider_result_preview(stage_id: str, data_dir: Path | None = None) -> 
         return [f"provider-result: invalid root {artifact}"]
     findings = payload.get("findings")
     errors = payload.get("provider_errors")
+    configured = payload.get("configured_providers")
     selected = payload.get("selected_providers")
     findings_count = len(findings) if isinstance(findings, list) else 0
     error_rows = errors if isinstance(errors, list) else []
+    configured_text = ", ".join(str(item) for item in configured) if isinstance(configured, list) else "n/a"
     selected_text = ", ".join(str(item) for item in selected) if isinstance(selected, list) else "n/a"
     lines = [
         f"provider-result: {artifact}",
         (
             f"  status={payload.get('status', 'unknown')} "
             f"provider_count={payload.get('provider_count', 'n/a')} "
-            f"selected={selected_text} findings={findings_count} errors={len(error_rows)}"
+            f"configured={configured_text} selected={selected_text} "
+            f"findings={findings_count} errors={len(error_rows)}"
         ),
     ]
     for idx, item in enumerate(error_rows[:3]):
@@ -968,6 +1078,10 @@ def mco_provider_result_preview(stage_id: str, data_dir: Path | None = None) -> 
     if len(error_rows) > 3:
         lines.append(f"  ... {len(error_rows) - 3} more provider error(s)")
     return lines
+
+
+def mco_provider_result_preview(stage_id: str, data_dir: Path | None = None) -> list[str]:
+    return provider_result_preview(stage_id, data_dir)
 
 
 def _format_route(route: Any) -> str:
@@ -1026,22 +1140,32 @@ def _stage_detail_lines(stage: Mapping[str, Any], *, prefix: str = "  ") -> list
                 lines.append(f"{prefix}  branch[{idx}]: variant={variant} lens={lens_id}")
     provider = stage.get("provider")
     if isinstance(provider, Mapping):
+        selection_text = ""
+        if provider.get("type") == "swarm-review":
+            selection_text = (
+                f" selection={provider.get('selection', 'auto')}"
+                f" max_parallel={provider.get('max_parallel', 4)}"
+            )
         lines.append(
             f"{prefix}  provider: type={provider.get('type')} command={provider.get('command')} "
-            f"providers={provider.get('providers')}"
+            f"providers={provider.get('providers')}{selection_text}"
         )
         if provider.get("type") == "mco":
             lines.append(
                 f"{prefix}  provider-boundary: experimental read-only evidence; "
                 "no merge, approval, memory, or repo writes"
             )
+        elif provider.get("type") == "swarm-review":
+            lines.append(
+                f"{prefix}  provider-boundary: internal read-only evidence; "
+                "real shims stay ineligible until Phase 0 gates pass"
+            )
         lines.append(
             f"{prefix}  provider-config: mode={provider.get('mode', 'review')} "
             f"output={provider.get('output', 'findings')} memory={provider.get('memory', False)} "
             f"timeout_seconds={provider.get('timeout_seconds')}"
         )
-        if provider.get("type") == "mco":
-            lines.extend(f"{prefix}  {line}" for line in mco_provider_result_preview(stage_id))
+        lines.extend(f"{prefix}  {line}" for line in provider_result_preview(stage_id))
     merge = stage.get("merge")
     if isinstance(merge, Mapping):
         lines.append(f"{prefix}  merge: {merge.get('strategy')}:{merge.get('agent')}")
@@ -1151,9 +1275,15 @@ def pipeline_activation_blocker(pipeline_name: str, pipeline: Mapping[str, Any] 
 
 
 def pipeline_has_mco_provider(pipeline: Mapping[str, Any]) -> bool:
+    return pipeline_has_provider_stage(pipeline, "mco")
+
+
+def pipeline_has_provider_stage(pipeline: Mapping[str, Any], provider_type: str | None = None) -> bool:
     for stage in pipeline.get("stages") or []:
         provider = stage.get("provider") if isinstance(stage, Mapping) else None
-        if isinstance(provider, Mapping) and provider.get("type") == "mco":
+        if not isinstance(provider, Mapping):
+            continue
+        if provider_type is None or provider.get("type") == provider_type:
             return True
     return False
 
@@ -1253,15 +1383,31 @@ def pipeline_validation_report(
             f"  budget: agents={b.agent_count} cost=${b.estimated_cost_usd:.4f} "
             f"wall={b.estimated_wall_clock_seconds}s fan_out_width={b.fan_out_width}"
         )
-    if _pipeline_has_provider(pipeline_name, "mco"):
+    has_mco = _pipeline_has_provider(pipeline_name, "mco")
+    has_swarm_review = _pipeline_has_provider(pipeline_name, "swarm-review")
+    if has_mco or has_swarm_review:
         if include_provider_doctor:
-            report = provider_doctor_fn(preset_name=preset_name, run_mco=True)
+            report = provider_doctor_fn(
+                preset_name=preset_name,
+                run_mco=has_mco,
+                run_review=has_swarm_review,
+            )
             status = "OK" if report.ok else "ERROR"
             lines.append(f"  provider doctor: {status} required={', '.join(report.required_providers) or 'none'}")
+            payload = report.as_dict()
+            if payload.get("configured_review_providers") is not None:
+                configured = ", ".join(payload.get("configured_review_providers") or []) or "none"
+                selected = ", ".join(payload.get("selected_review_providers") or []) or "none"
+                lines.append(f"    review configured={configured} selected={selected}")
             for check in report.checks:
                 lines.append(f"    {check.status.upper()} {check.name}: {check.detail}")
         else:
-            lines.append("  provider doctor: required for mco (run Validate for readiness)")
+            provider_names = []
+            if has_swarm_review:
+                provider_names.append("swarm-review")
+            if has_mco:
+                provider_names.append("mco")
+            lines.append(f"  provider doctor: required for {', '.join(provider_names)} (run Validate for readiness)")
     return "\n".join(lines)
 
 

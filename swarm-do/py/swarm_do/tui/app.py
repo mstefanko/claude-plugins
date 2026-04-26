@@ -42,6 +42,7 @@ from swarm_do.tui.state import (
     StageRow,
     current_prompt_lens_ids,
     current_mco_provider_config,
+    current_provider_review_config,
     current_stage_agent_lens_id,
     draft_add_module_stage,
     draft_remove_stage,
@@ -50,6 +51,7 @@ from swarm_do.tui.state import (
     draft_set_prompt_variant_lenses,
     draft_set_fan_out_branch_route,
     draft_set_mco_provider_config,
+    draft_set_provider_review_config,
     draft_set_stage_agent_lens,
     draft_set_stage_agent_route,
     draft_status_line,
@@ -60,7 +62,7 @@ from swarm_do.tui.state import (
     module_palette_rows,
     pipeline_gallery_rows,
     pipeline_activation_blocker,
-    pipeline_has_mco_provider,
+    pipeline_has_provider_stage,
     pipeline_profile_preset,
     pipeline_stage_rows,
     pipeline_validation_report,
@@ -293,6 +295,57 @@ if TEXTUAL_IMPORT_ERROR is None:
                     self.query_one("#mco-timeout", Input).value.strip(),
                     str(self.query_one("#mco-tolerance", Select).value),
                     self.query_one("#mco-min-success", Input).value.strip(),
+                )
+            )
+
+
+    class ProviderReviewConfigModal(ModalScreen[tuple[str, str, str, str, str, str] | None]):
+        def __init__(self, stage_id: str, config: dict[str, Any]):
+            super().__init__()
+            self.stage_id = stage_id
+            self.config = config
+
+        def compose(self) -> ComposeResult:
+            selection = str(self.config.get("selection") or "auto")
+            providers = ", ".join(str(provider) for provider in self.config.get("providers") or [])
+            timeout = str(self.config.get("timeout_seconds") or 1800)
+            max_parallel = str(self.config.get("max_parallel") or 4)
+            mode = str(self.config.get("failure_tolerance_mode") or "best-effort")
+            min_success = self.config.get("min_success")
+            with Container(id="modal"):
+                yield Label(f"{self.stage_id} Provider Review", classes="modal-title")
+                yield Static("internal read-only evidence")
+                yield Select(
+                    [(label, label) for label in ("auto", "explicit", "off")],
+                    value=selection if selection in {"auto", "explicit", "off"} else "auto",
+                    id="provider-selection",
+                )
+                yield Input(value=providers, placeholder="providers for explicit selection", id="provider-list")
+                yield Input(value=timeout, placeholder="timeout seconds", id="provider-timeout")
+                yield Input(value=max_parallel, placeholder="max parallel", id="provider-max-parallel")
+                yield Select(
+                    [(label, label) for label in ("best-effort", "strict", "quorum")],
+                    value=mode if mode in {"best-effort", "strict", "quorum"} else "best-effort",
+                    id="provider-tolerance",
+                )
+                yield Input(value=str(min_success or ""), placeholder="min_success for quorum", id="provider-min-success")
+                with Horizontal(classes="buttons"):
+                    yield Button("Save", id="save", variant="primary")
+                    yield Button("Cancel", id="cancel")
+
+        def on_button_pressed(self, event: Button.Pressed) -> None:
+            event.stop()
+            if event.button.id == "cancel":
+                self.dismiss(None)
+                return
+            self.dismiss(
+                (
+                    str(self.query_one("#provider-selection", Select).value),
+                    self.query_one("#provider-list", Input).value.strip(),
+                    self.query_one("#provider-timeout", Input).value.strip(),
+                    self.query_one("#provider-max-parallel", Input).value.strip(),
+                    str(self.query_one("#provider-tolerance", Select).value),
+                    self.query_one("#provider-min-success", Input).value.strip(),
                 )
             )
 
@@ -577,7 +630,7 @@ if TEXTUAL_IMPORT_ERROR is None:
             ("r", "edit_stage_route", "Route"),
             ("b", "edit_branch_route", "Branch"),
             ("n", "edit_lenses", "Lens"),
-            ("o", "edit_mco", "MCO"),
+            ("o", "edit_provider", "Provider"),
             ("d", "provider_doctor", "Doctor"),
             ("m", "add_module", "Module"),
             ("delete", "remove_stage", "Remove"),
@@ -907,15 +960,52 @@ if TEXTUAL_IMPORT_ERROR is None:
 
             self.app.push_screen(LensModal(stage.stage_id, role, rows, current_ids), done)
 
-        def action_edit_mco(self) -> None:
+        def action_edit_provider(self) -> None:
             draft = self._draft_for_selected()
             stage = self._selected_stage_row()
             if draft is None or stage is None:
                 return
             mapping = self._selected_stage_mapping()
             provider = mapping.get("provider") if isinstance(mapping, dict) else None
-            if not isinstance(provider, dict) or provider.get("type") != "mco":
-                self.app.push_screen(MessageModal("MCO config", "Select an MCO provider stage."))
+            if not isinstance(provider, dict):
+                self.app.push_screen(MessageModal("Provider config", "Select a provider stage."))
+                return
+            provider_type = provider.get("type")
+            if provider_type == "swarm-review":
+                try:
+                    config = current_provider_review_config(draft.pipeline, stage.stage_id)
+                except Exception as exc:
+                    self.app.push_screen(MessageModal("Provider review unavailable", str(exc)))
+                    return
+
+                def provider_done(value: tuple[str, str, str, str, str, str] | None) -> None:
+                    if value is None:
+                        return
+                    selection, providers_text, timeout_text, max_parallel_text, tolerance_mode, min_success_text = value
+                    providers = [part.strip() for part in providers_text.split(",") if part.strip()]
+                    try:
+                        timeout_seconds = int(timeout_text)
+                        max_parallel = int(max_parallel_text)
+                        min_success = int(min_success_text) if min_success_text else None
+                        draft_set_provider_review_config(
+                            draft,
+                            stage.stage_id,
+                            selection=selection,
+                            providers=providers,
+                            timeout_seconds=timeout_seconds,
+                            max_parallel=max_parallel,
+                            failure_tolerance_mode=tolerance_mode,
+                            min_success=min_success,
+                        )
+                    except Exception as exc:
+                        self.app.push_screen(MessageModal("Provider review refused", str(exc)))
+                        return
+                    self.refresh_stages()
+
+                self.app.push_screen(ProviderReviewConfigModal(stage.stage_id, config), provider_done)
+                return
+            if provider_type != "mco":
+                self.app.push_screen(MessageModal("Provider config", "This provider stage is not editable."))
                 return
             try:
                 config = current_mco_provider_config(draft.pipeline, stage.stage_id)
@@ -945,13 +1035,16 @@ if TEXTUAL_IMPORT_ERROR is None:
 
             self.app.push_screen(McoConfigModal(stage.stage_id, config), done)
 
+        def action_edit_mco(self) -> None:
+            self.action_edit_provider()
+
         def action_provider_doctor(self) -> None:
             row = self._selected_gallery_row()
             pipeline = self._current_pipeline()
             if row is None or pipeline is None:
                 return
-            if not pipeline_has_mco_provider(pipeline):
-                self.app.push_screen(MessageModal("Provider doctor", "The selected pipeline has no MCO provider stage."))
+            if not pipeline_has_provider_stage(pipeline):
+                self.app.push_screen(MessageModal("Provider doctor", "The selected pipeline has no provider stage."))
                 return
             if self._draft is not None and self._draft.pipeline_name == row.name and self._draft.dirty:
                 self.app.push_screen(MessageModal("Provider doctor", "Save the draft before running provider doctor."))
