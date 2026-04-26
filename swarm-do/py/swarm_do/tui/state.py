@@ -1158,7 +1158,7 @@ def _stage_detail_lines(stage: Mapping[str, Any], *, prefix: str = "  ") -> list
         elif provider.get("type") == "swarm-review":
             lines.append(
                 f"{prefix}  provider-boundary: internal read-only evidence; "
-                "real shims stay ineligible until Phase 0 gates pass"
+                "real shims require green R2/R3/R4 eligibility gates"
             )
         lines.append(
             f"{prefix}  provider-config: mode={provider.get('mode', 'review')} "

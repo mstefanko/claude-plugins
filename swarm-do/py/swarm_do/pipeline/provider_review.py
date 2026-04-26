@@ -224,6 +224,9 @@ class ProviderRunResult:
     schema_mode: str = "native"
     elapsed_seconds: float = 0.0
     sidecar_path: str | None = None
+    last_message_text: str | None = None
+    command_argv: tuple[str, ...] = ()
+    returncode: int | None = None
 
     @property
     def ok(self) -> bool:
@@ -1793,6 +1796,263 @@ def _fake_payload_path(fake_result_dir: Path, provider_id: str) -> Path:
     return fake_result_dir / f"{_safe_provider_dir(provider_id)}.json"
 
 
+def _read_text_if_exists(path: Path) -> str | None:
+    if not path.is_file():
+        return None
+    return path.read_text(encoding="utf-8")
+
+
+def _route_from_status(status: ReviewProviderStatus) -> Route | None:
+    if not isinstance(status.route, Mapping):
+        return None
+    try:
+        return Route(
+            backend=str(status.route["backend"]),
+            model=str(status.route["model"]),
+            effort=str(status.route["effort"]),
+            setting_source=str(status.route["setting_source"]),
+        )
+    except KeyError:
+        return None
+
+
+def _run_codex_review_provider(
+    status: ReviewProviderStatus,
+    *,
+    repo: Path,
+    prompt_text: str,
+    provider_dir: Path,
+    timeout_seconds: int,
+    runner: Callable[..., subprocess.CompletedProcess[str]],
+) -> ProviderRunResult:
+    started = time.monotonic()
+    last_message_file = provider_dir / "last-message.json"
+    command = build_codex_review_command(
+        codex_bin=status.executable or "codex",
+        repo=repo,
+        prompt=prompt_text,
+        schema_file=EMISSION_SCHEMA_PATH,
+        last_message_file=last_message_file,
+        route=_route_from_status(status),
+    )
+    try:
+        completed = runner(command, text=True, capture_output=True, timeout=timeout_seconds)
+    except subprocess.TimeoutExpired as exc:
+        elapsed = time.monotonic() - started
+        last_message_text = _read_text_if_exists(last_message_file)
+        return ProviderRunResult(
+            status.provider_id,
+            None,
+            str(exc.stdout or ""),
+            str(exc.stderr or ""),
+            "timeout",
+            f"provider timed out after {timeout_seconds}s",
+            schema_mode="native",
+            elapsed_seconds=elapsed,
+            last_message_text=last_message_text,
+            command_argv=tuple(command),
+        )
+    except OSError as exc:
+        elapsed = time.monotonic() - started
+        return ProviderRunResult(
+            status.provider_id,
+            None,
+            "",
+            str(exc),
+            "spawn_error",
+            f"provider failed to start: {exc}",
+            schema_mode="native",
+            elapsed_seconds=elapsed,
+            command_argv=tuple(command),
+        )
+
+    elapsed = time.monotonic() - started
+    last_message_text = _read_text_if_exists(last_message_file)
+    if completed.returncode != 0:
+        return ProviderRunResult(
+            status.provider_id,
+            None,
+            completed.stdout or "",
+            completed.stderr or "",
+            "provider_error",
+            f"provider exited {completed.returncode}",
+            schema_mode="native",
+            elapsed_seconds=elapsed,
+            last_message_text=last_message_text,
+            command_argv=tuple(command),
+            returncode=completed.returncode,
+        )
+    try:
+        payload = _codex_output_payload(last_message_file)
+    except (json.JSONDecodeError, ProviderReviewSchemaError) as exc:
+        return ProviderRunResult(
+            status.provider_id,
+            None,
+            completed.stdout or "",
+            completed.stderr or "",
+            "malformed_output",
+            str(exc),
+            schema_mode="native",
+            elapsed_seconds=elapsed,
+            last_message_text=last_message_text,
+            command_argv=tuple(command),
+            returncode=completed.returncode,
+        )
+    return ProviderRunResult(
+        status.provider_id,
+        payload,
+        completed.stdout or "",
+        completed.stderr or "",
+        schema_mode="native",
+        elapsed_seconds=elapsed,
+        last_message_text=json.dumps(payload, sort_keys=True) + "\n",
+        command_argv=tuple(command),
+        returncode=completed.returncode,
+    )
+
+
+def _run_claude_review_provider(
+    status: ReviewProviderStatus,
+    *,
+    repo: Path,
+    prompt_text: str,
+    timeout_seconds: int,
+    runner: Callable[..., subprocess.CompletedProcess[str]],
+) -> ProviderRunResult:
+    started = time.monotonic()
+    command = build_claude_review_command(
+        claude_bin=status.executable or "claude",
+        prompt=prompt_text,
+        schema_json=minified_emission_schema(),
+    )
+    try:
+        completed = runner(command, cwd=repo, text=True, capture_output=True, timeout=timeout_seconds)
+    except subprocess.TimeoutExpired as exc:
+        elapsed = time.monotonic() - started
+        return ProviderRunResult(
+            status.provider_id,
+            None,
+            str(exc.stdout or ""),
+            str(exc.stderr or ""),
+            "timeout",
+            f"provider timed out after {timeout_seconds}s",
+            schema_mode="native",
+            elapsed_seconds=elapsed,
+            command_argv=tuple(command),
+        )
+    except OSError as exc:
+        elapsed = time.monotonic() - started
+        return ProviderRunResult(
+            status.provider_id,
+            None,
+            "",
+            str(exc),
+            "spawn_error",
+            f"provider failed to start: {exc}",
+            schema_mode="native",
+            elapsed_seconds=elapsed,
+            command_argv=tuple(command),
+        )
+
+    elapsed = time.monotonic() - started
+    if completed.returncode != 0:
+        return ProviderRunResult(
+            status.provider_id,
+            None,
+            completed.stdout or "",
+            completed.stderr or "",
+            "provider_error",
+            f"provider exited {completed.returncode}",
+            schema_mode="native",
+            elapsed_seconds=elapsed,
+            command_argv=tuple(command),
+            returncode=completed.returncode,
+        )
+    try:
+        payload = _claude_output_payload(completed.stdout or "")
+    except (json.JSONDecodeError, ProviderReviewSchemaError) as exc:
+        return ProviderRunResult(
+            status.provider_id,
+            None,
+            completed.stdout or "",
+            completed.stderr or "",
+            "malformed_output",
+            str(exc),
+            schema_mode="native",
+            elapsed_seconds=elapsed,
+            command_argv=tuple(command),
+            returncode=completed.returncode,
+        )
+    return ProviderRunResult(
+        status.provider_id,
+        payload,
+        completed.stdout or "",
+        completed.stderr or "",
+        schema_mode="native",
+        elapsed_seconds=elapsed,
+        last_message_text=json.dumps(payload, sort_keys=True) + "\n",
+        command_argv=tuple(command),
+        returncode=completed.returncode,
+    )
+
+
+def _run_real_provider(
+    provider_id: str,
+    status: ReviewProviderStatus | None,
+    *,
+    repo: Path,
+    prompt_text: str,
+    output_dir: Path,
+    timeout_seconds: int,
+    runner: Callable[..., subprocess.CompletedProcess[str]],
+) -> ProviderRunResult:
+    if status is None or not status.eligible:
+        return ProviderRunResult(
+            provider_id,
+            None,
+            "",
+            "",
+            "not_eligible",
+            "provider was selected without a ready eligibility probe",
+        )
+    if status.fake:
+        return ProviderRunResult(
+            provider_id,
+            None,
+            "",
+            "",
+            "configuration_error",
+            "fake provider selected without --fake-result-dir",
+        )
+    provider_dir = output_dir / "providers" / _safe_provider_dir(provider_id)
+    provider_dir.mkdir(parents=True, exist_ok=True)
+    if provider_id == "codex":
+        return _run_codex_review_provider(
+            status,
+            repo=repo,
+            prompt_text=prompt_text,
+            provider_dir=provider_dir,
+            timeout_seconds=timeout_seconds,
+            runner=runner,
+        )
+    if provider_id == "claude":
+        return _run_claude_review_provider(
+            status,
+            repo=repo,
+            prompt_text=prompt_text,
+            timeout_seconds=timeout_seconds,
+            runner=runner,
+        )
+    return ProviderRunResult(
+        provider_id,
+        None,
+        "",
+        "",
+        "unsupported_provider",
+        f"no real provider execution shim registered for {provider_id}",
+    )
+
+
 def _run_fake_provider(provider_id: str, fake_result_dir: Path, provider_dir: Path, timeout_seconds: int) -> ProviderRunResult:
     started = time.monotonic()
     path = _fake_payload_path(fake_result_dir, provider_id)
@@ -1829,17 +2089,25 @@ def _write_provider_sidecars(output_dir: Path, result: ProviderRunResult) -> Pro
     meta_path = provider_dir / "meta.json"
     _write_text(stdout_path, result.stdout_text)
     _write_text(stderr_path, result.stderr_text)
-    _write_json(last_message_path, result.payload)
+    if result.last_message_text is None:
+        _write_json(last_message_path, result.payload)
+    else:
+        _write_text(last_message_path, result.last_message_text)
+    meta: dict[str, Any] = {
+        "provider_id": result.provider_id,
+        "status": "ok" if result.ok else "error",
+        "error_class": result.error_class,
+        "message": result.message,
+        "schema_mode": result.schema_mode,
+        "elapsed_seconds": round(result.elapsed_seconds, 6),
+    }
+    if result.returncode is not None:
+        meta["returncode"] = result.returncode
+    if result.command_argv:
+        meta["command_argv"] = _redacted_argv(result.command_argv)
     _write_json(
         meta_path,
-        {
-            "provider_id": result.provider_id,
-            "status": "ok" if result.ok else "error",
-            "error_class": result.error_class,
-            "message": result.message,
-            "schema_mode": result.schema_mode,
-            "elapsed_seconds": round(result.elapsed_seconds, 6),
-        },
+        meta,
     )
     return dataclasses.replace(result, sidecar_path=str(provider_dir))
 
@@ -1856,6 +2124,44 @@ def _run_selected_fake_providers(
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, max_parallel)) as executor:
         future_map = {
             executor.submit(_run_fake_provider, provider_id, fake_result_dir, output_dir / "providers" / _safe_provider_dir(provider_id), timeout_seconds): provider_id
+            for provider_id in provider_ids
+        }
+        for future in concurrent.futures.as_completed(future_map):
+            try:
+                result = future.result(timeout=timeout_seconds + 1)
+            except Exception as exc:
+                provider_id = future_map[future]
+                result = ProviderRunResult(provider_id, None, "", str(exc), "spawn_error", str(exc))
+            results.append(_write_provider_sidecars(output_dir, result))
+    return sorted(results, key=lambda result: provider_ids.index(result.provider_id))
+
+
+def _run_selected_real_providers(
+    provider_ids: Sequence[str],
+    *,
+    provider_statuses: Sequence[ReviewProviderStatus],
+    repo: Path,
+    prompt_file: Path,
+    output_dir: Path,
+    timeout_seconds: int,
+    max_parallel: int,
+    runner: Callable[..., subprocess.CompletedProcess[str]],
+) -> list[ProviderRunResult]:
+    prompt_text = prompt_file.read_text(encoding="utf-8")
+    status_by_id = {status.provider_id: status for status in provider_statuses}
+    results: list[ProviderRunResult] = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, max_parallel)) as executor:
+        future_map = {
+            executor.submit(
+                _run_real_provider,
+                provider_id,
+                status_by_id.get(provider_id),
+                repo=repo,
+                prompt_text=prompt_text,
+                output_dir=output_dir,
+                timeout_seconds=timeout_seconds,
+                runner=runner,
+            ): provider_id
             for provider_id in provider_ids
         }
         for future in concurrent.futures.as_completed(future_map):
@@ -1910,7 +2216,8 @@ def run_stage(args: argparse.Namespace) -> int:
     explicit = parse_provider_csv(args.providers)
     fake_result_dir = Path(args.fake_result_dir).resolve() if args.fake_result_dir else None
     fake_providers = explicit if fake_result_dir is not None and explicit else None
-    resolver = ReviewProviderResolver(fake_providers=fake_providers)
+    runner = getattr(args, "runner", subprocess.run)
+    resolver = getattr(args, "resolver", None) or ReviewProviderResolver(fake_providers=fake_providers, runner=runner)
     selection = resolver.select(
         selection=args.selection,
         explicit_providers=explicit,
@@ -1941,14 +2248,24 @@ def run_stage(args: argparse.Namespace) -> int:
         return 0
 
     if fake_result_dir is None:
-        raise ProviderReviewError("real provider shims are not eligible until Phase 0 gates are complete")
-    results = _run_selected_fake_providers(
-        selection.selected_providers,
-        fake_result_dir=fake_result_dir,
-        output_dir=output_dir,
-        timeout_seconds=args.timeout_seconds,
-        max_parallel=selection.policy.max_parallel,
-    )
+        results = _run_selected_real_providers(
+            selection.selected_providers,
+            provider_statuses=selection.provider_statuses,
+            repo=repo,
+            prompt_file=prompt_file,
+            output_dir=output_dir,
+            timeout_seconds=args.timeout_seconds,
+            max_parallel=selection.policy.max_parallel,
+            runner=runner,
+        )
+    else:
+        results = _run_selected_fake_providers(
+            selection.selected_providers,
+            fake_result_dir=fake_result_dir,
+            output_dir=output_dir,
+            timeout_seconds=args.timeout_seconds,
+            max_parallel=selection.policy.max_parallel,
+        )
     artifact = normalize_provider_review_results(
         results,
         run_id=args.run_id,

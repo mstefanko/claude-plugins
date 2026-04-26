@@ -547,9 +547,10 @@ TUI follow-up:
 ## Implementation Work Breakdown
 
 Updated on 2026-04-26. The first implementation pass has landed the
-skipped-by-default internal provider-review path. The remaining work is now
-mostly about proving real Claude/Codex eligibility, turning on real shims, and
-calibrating whether this can replace any older lanes.
+skipped-by-default internal provider-review path plus gated real Claude/Codex
+execution plumbing. The remaining work is now mostly about recording local
+proof evidence, enforcing runtime minimum-success semantics, and calibrating
+whether this can replace any older lanes.
 
 ### Completed Slices
 
@@ -565,6 +566,15 @@ calibrating whether this can replace any older lanes.
 - **Fake-shim runner:** `bin/swarm-provider-review` can select fake providers,
   run them in parallel, write raw sidecars plus `provider-review.manifest.json`,
   and emit a normalized `provider-findings.json` artifact.
+- **R5/R6 real shim execution plumbing:** when the resolver selects an eligible
+  real Codex or Claude shim, `bin/swarm-provider-review` now runs the native
+  schema command, stores stdout/stderr/last-message/meta sidecars, validates
+  emission schema output before normalization, and records malformed output,
+  provider exits, and timeouts as provider errors instead of crashing the stage.
+  Unit fixtures cover Codex ok/no-findings, Codex malformed output, Codex
+  timeout with partial success, Claude no-findings, Claude one finding, Claude
+  malformed output, and Claude timeout with partial success. Actual local
+  eligibility still requires green R2/R3/R4 gates.
 - **Normalizer:** Provider emissions are validated, normalized to
   `provider-findings.v2-draft`, deduped by exact stable hash, conservatively
   clustered by anchored location/category, and scored without promoting
@@ -636,26 +646,6 @@ calibrating whether this can replace any older lanes.
   `--tools`/`--disallowedTools` restrictions before eligibility.
 - Definition of done: the code gate is implemented; real Claude eligibility
   still requires a green local proof plus R4 auth readiness.
-
-**Phase R5: Real Codex Shim Execution**
-
-- Implement the Codex execution path behind the R2/R4 gates.
-- Store stdout/stderr/last-message/meta sidecars using the existing manifest and
-  redaction policy.
-- Validate native schema output before normalization; malformed output becomes a
-  provider error, not a stage crash.
-- Definition of done: an explicit Codex provider-review run can produce ok,
-  partial, malformed-output, timeout, and no-findings artifacts.
-
-**Phase R6: Real Claude Shim Execution**
-
-- Implement Claude execution behind the R3/R4 gates.
-- Keep parser fallback disabled for stock automatic selection; allow it only for
-  explicit experiment mode or doctor diagnostics if implemented.
-- Add captured native-schema fixtures for no findings, one finding, malformed
-  output, and timeout.
-- Definition of done: Claude can run as a real eligible shim only after the
-  local read-only proof is green.
 
 **Phase R7: Runtime Selection And Failure Semantics**
 
@@ -732,8 +722,8 @@ Validation still needed for future phases:
 - Opt-in real Claude R3 write-denial fixture run.
 - Bounded-spend readiness probe tests only if a future provider loses a
   non-spend status surface.
-- Native-schema fixture tests for real Codex output.
-- Native-schema fixture tests for real Claude output.
+- Captured real CLI output samples for Codex and Claude, after local proof runs
+  are acceptable on an operator machine.
 - Parser fallback confidence-cap tests if fallback mode is implemented.
 - Duplicate consensus tests using captured real Claude/Codex outputs.
 - End-to-end provider evidence summary tests for downstream review prompts.
@@ -775,10 +765,10 @@ stores raw sidecars; it is not optional future research.
 | Non-spend auth probing for Claude/Codex | Initial probes are implemented with `claude auth status --json` and `codex login status`. Doctor distinguishes installed, route mismatch, not authenticated, launch unavailable, and spend-probe-required without running a full review. Unsupported status surfaces are reported as explicit bounded-spend follow-up work. | Complete for initial Claude/Codex R4 gate; tune as provider CLIs drift. |
 | Consensus clustering quality | Exact-hash consensus and conservative secondary clustering are implemented. Real Claude/Codex outputs must still be sampled for false merge and false split rates before secondary clusters affect stock/default confidence. | Pending Phase R9 before promoting secondary-cluster `confirmed` confidence. |
 | Parser-fallback default policy | No more research is needed for v1 policy. Parser fallback is off for stock automatic provider review and allowed only for doctor diagnostics or explicit experiment-mode runs, with confidence caps. | Resolved for v1; optional Phase R12 only if fallback is implemented. |
-| Provider artifact retention/redaction | Minimum policy is implemented in the manifest: raw sidecars are sensitive local run artifacts, retained or purged with the run directory, and excluded from telemetry. | Complete for fake-shim runner; revisit before stock real-shim enablement. |
-| End-to-end fake-shim tests | Fake-shim runner and normalizer tests cover no eligible providers, selection off, partial provider failure, malformed output, timeout, no findings, and duplicate findings. | Complete for current fake-shim harness. |
+| Provider artifact retention/redaction | Minimum policy is implemented in the manifest: raw sidecars are sensitive local run artifacts, retained or purged with the run directory, and excluded from telemetry. Real-shim meta sidecars include redacted argv only. | Complete for fake and gated real-shim runner paths; revisit before stock real-shim enablement. |
+| End-to-end fake and simulated real-shim tests | Fake-shim runner and normalizer tests cover no eligible providers, selection off, partial provider failure, malformed output, timeout, no findings, and duplicate findings. Simulated native-schema tests cover gated real Codex/Claude execution, malformed output, and timeout handling without launching provider CLIs. | Complete for current harnesses; add captured real CLI samples after local proof runs. |
 
-Remaining research after the fake-shim v1 runner:
+Remaining research after the v1 runner:
 
 - Re-measure the secondary consensus key as provider behavior changes.
 - Revisit parser fallback only if native schema support proves too brittle.

@@ -83,6 +83,62 @@ class ProviderReviewTests(unittest.TestCase):
         validate_provider_findings_v2_artifact(artifact)
         return artifact
 
+    def _run_realish_stage(
+        self,
+        providers: tuple[str, ...],
+        *,
+        runner,
+        resolver_factory,
+        timeout_seconds: int = 30,
+    ) -> tuple[int, dict[str, Any], dict[str, dict[str, Any]]]:
+        old_data = os.environ.get("CLAUDE_PLUGIN_DATA")
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            repo = root / "repo"
+            repo.mkdir()
+            prompt = root / "prompt.txt"
+            prompt.write_text("Review this repo", encoding="utf-8")
+            os.environ["CLAUDE_PLUGIN_DATA"] = str(root / "data")
+            try:
+                resolver = resolver_factory()
+                code = run_stage(
+                    argparse.Namespace(
+                        repo=str(repo),
+                        prompt_file=str(prompt),
+                        command="review",
+                        selection="explicit",
+                        providers=",".join(providers),
+                        max_parallel=4,
+                        timeout_seconds=timeout_seconds,
+                        output_dir=str(root / "out"),
+                        run_id="RUN_PROVIDER",
+                        issue_id="issue-1",
+                        stage_id="provider-review",
+                        fake_result_dir=None,
+                        runner=runner,
+                        resolver=resolver,
+                    )
+                )
+                artifact = json.loads((root / "out" / "provider-findings.json").read_text(encoding="utf-8"))
+                sidecars: dict[str, dict[str, Any]] = {}
+                for provider_id in providers:
+                    provider_dir = root / "out" / "providers" / provider_id.replace(":", "_")
+                    if not provider_dir.is_dir():
+                        continue
+                    sidecars[provider_id] = {
+                        "stdout": (provider_dir / "stdout.jsonl").read_text(encoding="utf-8"),
+                        "stderr": (provider_dir / "stderr.txt").read_text(encoding="utf-8"),
+                        "last_message": (provider_dir / "last-message.json").read_text(encoding="utf-8"),
+                        "meta": json.loads((provider_dir / "meta.json").read_text(encoding="utf-8")),
+                    }
+            finally:
+                if old_data is None:
+                    os.environ.pop("CLAUDE_PLUGIN_DATA", None)
+                else:
+                    os.environ["CLAUDE_PLUGIN_DATA"] = old_data
+        validate_provider_findings_v2_artifact(artifact)
+        return code, artifact, sidecars
+
     def test_emission_schema_accepts_no_findings_and_rejects_swarm_owned_fields(self) -> None:
         schema = load_emission_schema()
 
@@ -875,6 +931,237 @@ enabled = false
             self.assertEqual(artifact["provider_count"], 2)
             self.assertTrue((root / "out" / "providers" / "claude" / "last-message.json").is_file())
             validate_provider_findings_v2_artifact(artifact)
+
+    def test_run_stage_runs_real_codex_when_r2_and_r4_gates_are_ready(self) -> None:
+        def which(cmd: str) -> str | None:
+            return "/bin/codex" if cmd == "codex" else None
+
+        def runner(args, **kwargs):
+            if args == ["codex", "exec", "--help"]:
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="--json --sandbox --output-schema --output-last-message", stderr="")
+            if args == ["codex", "--version"]:
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="codex 1.0", stderr="")
+            if args == ["codex", "login", "status"]:
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="Logged in using ChatGPT\n", stderr="")
+            if args[:2] == ["/bin/codex", "exec"]:
+                last_message = Path(args[args.index("--output-last-message") + 1])
+                last_message.parent.mkdir(parents=True, exist_ok=True)
+                last_message.write_text(json.dumps({"findings": []}), encoding="utf-8")
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout='{"event":"done"}\n', stderr="")
+            raise AssertionError(args)
+
+        def resolver_factory():
+            return ReviewProviderResolver(
+                which=which,
+                runner=runner,
+                codex_schema_probe=ReviewProviderProbeCheck("ok", True, "Codex schema proof green"),
+                codex_read_only_probe=ReviewProviderProbeCheck("ok", True, "Codex read-only proof green"),
+            )
+
+        code, artifact, sidecars = self._run_realish_stage(("codex",), runner=runner, resolver_factory=resolver_factory)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(artifact["status"], "ok")
+        self.assertEqual(artifact["provider_count"], 1)
+        self.assertEqual(artifact["selected_providers"], ["codex"])
+        self.assertEqual(artifact["launched_providers"], ["codex"])
+        self.assertEqual(sidecars["codex"]["meta"]["command_argv"][:5], ["/bin/codex", "exec", "--json", "--sandbox", "read-only"])
+        self.assertEqual(json.loads(sidecars["codex"]["last_message"]), {"findings": []})
+
+    def test_run_stage_records_malformed_real_codex_output_without_crashing(self) -> None:
+        def which(cmd: str) -> str | None:
+            return "/bin/codex" if cmd == "codex" else None
+
+        def runner(args, **kwargs):
+            if args == ["codex", "exec", "--help"]:
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="--json --sandbox --output-schema --output-last-message", stderr="")
+            if args == ["codex", "--version"]:
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="codex 1.0", stderr="")
+            if args == ["codex", "login", "status"]:
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="Logged in using ChatGPT\n", stderr="")
+            if args[:2] == ["/bin/codex", "exec"]:
+                last_message = Path(args[args.index("--output-last-message") + 1])
+                last_message.parent.mkdir(parents=True, exist_ok=True)
+                last_message.write_text("{not-json", encoding="utf-8")
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout='{"event":"done"}\n', stderr="")
+            raise AssertionError(args)
+
+        def resolver_factory():
+            return ReviewProviderResolver(
+                which=which,
+                runner=runner,
+                codex_schema_probe=ReviewProviderProbeCheck("ok", True, "Codex schema proof green"),
+                codex_read_only_probe=ReviewProviderProbeCheck("ok", True, "Codex read-only proof green"),
+            )
+
+        code, artifact, sidecars = self._run_realish_stage(("codex",), runner=runner, resolver_factory=resolver_factory)
+
+        self.assertEqual(code, 1)
+        self.assertEqual(artifact["status"], "error")
+        self.assertEqual(artifact["provider_count"], 0)
+        self.assertEqual(artifact["provider_errors"][0]["provider"], "codex")
+        self.assertEqual(artifact["provider_errors"][0]["provider_error_class"], "malformed_output")
+        self.assertEqual(sidecars["codex"]["last_message"], "{not-json")
+
+    def test_run_stage_records_real_codex_timeout_as_partial_with_claude_success(self) -> None:
+        def which(cmd: str) -> str | None:
+            return f"/bin/{cmd}" if cmd in {"claude", "codex"} else None
+
+        def runner(args, **kwargs):
+            if args == ["claude", "--help"]:
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="-p --permission-mode --output-format --json-schema", stderr="")
+            if args == ["codex", "exec", "--help"]:
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="--json --sandbox --output-schema --output-last-message", stderr="")
+            if args == ["claude", "--version"]:
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="claude 1.0", stderr="")
+            if args == ["codex", "--version"]:
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="codex 1.0", stderr="")
+            if args == ["claude", "auth", "status", "--json"]:
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout=json.dumps({"loggedIn": True}), stderr="")
+            if args == ["codex", "login", "status"]:
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="Logged in using ChatGPT\n", stderr="")
+            if args[:2] == ["/bin/codex", "exec"]:
+                raise subprocess.TimeoutExpired(args, kwargs["timeout"], output='{"event":"started"}\n', stderr="slow")
+            if args[:2] == ["/bin/claude", "-p"]:
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout=json.dumps({"findings": []}), stderr="")
+            raise AssertionError(args)
+
+        def resolver_factory():
+            return ReviewProviderResolver(
+                which=which,
+                runner=runner,
+                claude_read_only_probe=ReviewProviderProbeCheck("ok", True, "Claude read-only proof green"),
+                codex_schema_probe=ReviewProviderProbeCheck("ok", True, "Codex schema proof green"),
+                codex_read_only_probe=ReviewProviderProbeCheck("ok", True, "Codex read-only proof green"),
+            )
+
+        code, artifact, sidecars = self._run_realish_stage(("claude", "codex"), runner=runner, resolver_factory=resolver_factory)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(artifact["status"], "partial")
+        self.assertEqual(artifact["provider_count"], 1)
+        self.assertEqual(artifact["provider_errors"][0]["provider"], "codex")
+        self.assertEqual(artifact["provider_errors"][0]["provider_error_class"], "timeout")
+        self.assertEqual(sidecars["claude"]["meta"]["status"], "ok")
+        self.assertEqual(sidecars["codex"]["meta"]["error_class"], "timeout")
+
+    def test_run_stage_runs_real_claude_native_schema_finding_when_r3_and_r4_gates_are_ready(self) -> None:
+        finding = {
+            "severity": "high",
+            "category": "logic",
+            "summary": "Rejects valid output",
+            "file_path": "py/swarm_do/pipeline/provider_review.py",
+            "line_start": 42,
+            "line_end": 42,
+            "confidence": 0.9,
+            "evidence": "schema_ok is false",
+            "recommendation": "Preserve valid provider emissions",
+        }
+
+        def which(cmd: str) -> str | None:
+            return "/bin/claude" if cmd == "claude" else None
+
+        def runner(args, **kwargs):
+            if args == ["claude", "--help"]:
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="-p --permission-mode --output-format --json-schema", stderr="")
+            if args == ["claude", "--version"]:
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="claude 1.0", stderr="")
+            if args == ["claude", "auth", "status", "--json"]:
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout=json.dumps({"loggedIn": True}), stderr="")
+            if args[:2] == ["/bin/claude", "-p"]:
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout=json.dumps({"result": json.dumps({"findings": [finding]})}), stderr="")
+            raise AssertionError(args)
+
+        def resolver_factory():
+            return ReviewProviderResolver(
+                which=which,
+                runner=runner,
+                claude_read_only_probe=ReviewProviderProbeCheck("ok", True, "Claude read-only proof green"),
+            )
+
+        code, artifact, sidecars = self._run_realish_stage(("claude",), runner=runner, resolver_factory=resolver_factory)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(artifact["status"], "ok")
+        self.assertEqual(artifact["provider_count"], 1)
+        self.assertEqual(artifact["findings"][0]["detected_by"], ["claude"])
+        self.assertEqual(artifact["findings"][0]["summary"], "Rejects valid output")
+        self.assertEqual(sidecars["claude"]["meta"]["command_argv"][:5], ["/bin/claude", "-p", "--permission-mode", "plan", "--output-format"])
+
+    def test_run_stage_records_malformed_real_claude_output_without_crashing(self) -> None:
+        def which(cmd: str) -> str | None:
+            return "/bin/claude" if cmd == "claude" else None
+
+        def runner(args, **kwargs):
+            if args == ["claude", "--help"]:
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="-p --permission-mode --output-format --json-schema", stderr="")
+            if args == ["claude", "--version"]:
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="claude 1.0", stderr="")
+            if args == ["claude", "auth", "status", "--json"]:
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout=json.dumps({"loggedIn": True}), stderr="")
+            if args[:2] == ["/bin/claude", "-p"]:
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="{not-json", stderr="")
+            raise AssertionError(args)
+
+        def resolver_factory():
+            return ReviewProviderResolver(
+                which=which,
+                runner=runner,
+                claude_read_only_probe=ReviewProviderProbeCheck("ok", True, "Claude read-only proof green"),
+            )
+
+        code, artifact, sidecars = self._run_realish_stage(("claude",), runner=runner, resolver_factory=resolver_factory)
+
+        self.assertEqual(code, 1)
+        self.assertEqual(artifact["status"], "error")
+        self.assertEqual(artifact["provider_errors"][0]["provider"], "claude")
+        self.assertEqual(artifact["provider_errors"][0]["provider_error_class"], "malformed_output")
+        self.assertEqual(sidecars["claude"]["stdout"], "{not-json")
+
+    def test_run_stage_records_real_claude_timeout_as_partial_with_codex_success(self) -> None:
+        def which(cmd: str) -> str | None:
+            return f"/bin/{cmd}" if cmd in {"claude", "codex"} else None
+
+        def runner(args, **kwargs):
+            if args == ["claude", "--help"]:
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="-p --permission-mode --output-format --json-schema", stderr="")
+            if args == ["codex", "exec", "--help"]:
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="--json --sandbox --output-schema --output-last-message", stderr="")
+            if args == ["claude", "--version"]:
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="claude 1.0", stderr="")
+            if args == ["codex", "--version"]:
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="codex 1.0", stderr="")
+            if args == ["claude", "auth", "status", "--json"]:
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout=json.dumps({"loggedIn": True}), stderr="")
+            if args == ["codex", "login", "status"]:
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="Logged in using ChatGPT\n", stderr="")
+            if args[:2] == ["/bin/claude", "-p"]:
+                raise subprocess.TimeoutExpired(args, kwargs["timeout"], output="", stderr="slow")
+            if args[:2] == ["/bin/codex", "exec"]:
+                last_message = Path(args[args.index("--output-last-message") + 1])
+                last_message.parent.mkdir(parents=True, exist_ok=True)
+                last_message.write_text(json.dumps({"findings": []}), encoding="utf-8")
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout='{"event":"done"}\n', stderr="")
+            raise AssertionError(args)
+
+        def resolver_factory():
+            return ReviewProviderResolver(
+                which=which,
+                runner=runner,
+                claude_read_only_probe=ReviewProviderProbeCheck("ok", True, "Claude read-only proof green"),
+                codex_schema_probe=ReviewProviderProbeCheck("ok", True, "Codex schema proof green"),
+                codex_read_only_probe=ReviewProviderProbeCheck("ok", True, "Codex read-only proof green"),
+            )
+
+        code, artifact, sidecars = self._run_realish_stage(("claude", "codex"), runner=runner, resolver_factory=resolver_factory)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(artifact["status"], "partial")
+        self.assertEqual(artifact["provider_count"], 1)
+        self.assertEqual(artifact["provider_errors"][0]["provider"], "claude")
+        self.assertEqual(artifact["provider_errors"][0]["provider_error_class"], "timeout")
+        self.assertEqual(sidecars["codex"]["meta"]["status"], "ok")
+        self.assertEqual(sidecars["claude"]["meta"]["error_class"], "timeout")
 
     def test_run_stage_writes_skipped_artifact_when_selection_is_off(self) -> None:
         artifact = self._run_fake_stage(
