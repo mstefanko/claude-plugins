@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 from swarm_do.pipeline.permissions import (
+    ROLE_NAMES,
     diff_role,
     load_fragment,
     load_settings,
@@ -16,6 +17,12 @@ from swarm_do.pipeline.permissions import (
 
 
 class PermissionPresetTests(unittest.TestCase):
+    def test_all_registered_fragments_load(self) -> None:
+        for role in sorted(ROLE_NAMES):
+            with self.subTest(role=role):
+                fragment = load_fragment(role)
+                self.assertEqual(fragment["role"], role)
+
     def test_writer_fragment_reports_missing_rules_then_merges(self) -> None:
         fragment = load_fragment("writer")
         settings = {"permissions": {"allow": ["Read"]}}

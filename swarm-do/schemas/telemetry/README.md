@@ -52,9 +52,10 @@ issues, etc.). Each finding references its parent run via `run_id` and carries a
 
 **Write path (Phase 9b + 9b-claude):** `bin/extract-phase.sh` reads
 `agent-codex-review` JSON findings and Claude-style `agent-review` /
-`agent-code-review` markdown, then appends one row per finding. The extractor is
-fail-open (`exit 0` on any error) and is wired into `swarm-run` after supported
-review roles with a non-blocking guard. Unsupported roles are skipped with a logged
+`agent-code-review` markdown, and `swarm-review` provider-findings v2
+artifacts, then appends one row per finding. The extractor is fail-open
+(`exit 0` on any error) and is wired into `swarm-run` after supported review
+roles with a non-blocking guard. Unsupported roles are skipped with a logged
 warning.
 
 **Stable hash algorithm (`stable_finding_hash_v1`):**
@@ -148,6 +149,10 @@ Use `bin/swarm providers evidence <provider-findings.json>` to render the
 bounded downstream review summary. It includes normalized finding and provider
 error metadata while avoiding raw stdout, stderr, last-message text, and
 provider evidence snippets.
+
+For telemetry continuity, `bin/extract-phase.sh <provider-findings.json>
+<run-id> swarm-review <issue-id>` down-converts the normalized v2 findings into
+standard `findings.jsonl` rows. Consensus fields stay in the per-run artifact.
 
 Raw provider sidecars for `swarm-review` stay under the run stage artifact
 directory and are classified as local sensitive run artifacts. They are retained

@@ -651,6 +651,12 @@ whether this can replace any older lanes.
   records `provider_schema_modes` and `parser_fallbacks` in the normalized v2
   artifact, caps fallback confidence at `0.65`, and keeps fallback-capped
   findings at `unverified` consensus.
+- **Post-R12 hardening:** normalized `swarm-review` artifacts now cap the
+  ledger-facing finding set at five priority-sorted findings, redact
+  secret-shaped evidence and diagnostic snippets, redact stored Claude
+  `--json-schema` argv payloads, provide a `provider-review` permission
+  profile, and let `bin/extract-phase.sh` down-convert
+  `provider-findings.v2-draft` artifacts into ordinary `findings.jsonl` rows.
 
 ### Remaining Phases
 
@@ -741,7 +747,7 @@ stores raw sidecars; it is not optional future research.
 | Non-spend auth probing for Claude/Codex | Initial probes are implemented with `claude auth status --json` and `codex login status`. Doctor distinguishes installed, route mismatch, not authenticated, launch unavailable, and spend-probe-required without running a full review. Unsupported status surfaces are reported as explicit bounded-spend follow-up work. | Complete for initial Claude/Codex R4 gate; tune as provider CLIs drift. |
 | Consensus clustering quality | Exact-hash consensus and conservative secondary clustering are implemented. R9 added a labeled-sample calibration harness for measuring false merge and false split rates. Secondary clusters remain `needs-verification` until captured real Claude/Codex samples justify any promotion policy. | Harness complete; captured real samples still required before secondary-cluster `confirmed` confidence. |
 | Parser-fallback default policy | No more research is needed for v1 policy. Parser fallback is off for stock automatic provider review and allowed only for doctor diagnostics or explicit experiment-mode runs, with confidence caps. | Resolved for v1; optional Phase R12 only if fallback is implemented. |
-| Provider artifact retention/redaction | Minimum policy is implemented in the manifest: raw sidecars are sensitive local run artifacts, retained or purged with the run directory, and excluded from telemetry. Real-shim meta sidecars include redacted argv only. | Complete for fake and gated real-shim runner paths; revisit before stock real-shim enablement. |
+| Provider artifact retention/redaction | Minimum policy is implemented in the manifest: raw sidecars are sensitive local run artifacts, retained or purged with the run directory, and excluded from telemetry. Real-shim meta sidecars include redacted argv only, Claude `--json-schema` payloads are redacted from stored argv, normalized evidence/recommendation snippets are secret-redacted, and doctor stdout/stderr snippets are marked sensitive diagnostics. | Complete for fake and gated real-shim runner paths; revisit before stock real-shim enablement. |
 | End-to-end fake and simulated real-shim tests | Fake-shim runner and normalizer tests cover no eligible providers, selection off, partial provider failure, malformed output, timeout, no findings, duplicate findings, minimum-success enforcement, and bounded downstream evidence summaries for MCO v1 plus swarm-review v2. Simulated native-schema tests cover gated real Codex/Claude execution, malformed output, and timeout handling without launching provider CLIs. | Complete for current harnesses; add captured real CLI samples after local proof runs. |
 
 Remaining research after the v1 runner:

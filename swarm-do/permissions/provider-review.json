@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "role": "provider-review",
+  "merge_policy": "deny-wins",
+  "permissions": {
+    "allow": [
+      "Read",
+      "Bash(bin/swarm providers doctor:*)",
+      "Bash(bin/swarm providers evidence:*)",
+      "Bash(bin/swarm-provider-review:*)",
+      "Bash(claude --help:*)",
+      "Bash(claude --version:*)",
+      "Bash(claude -p:*)",
+      "Bash(claude auth status:*)",
+      "Bash(codex --version:*)",
+      "Bash(codex exec:*)",
+      "Bash(codex login status:*)",
+      "Bash(git diff:*)",
+      "Bash(git show:*)",
+      "Bash(rg:*)"
+    ],
+    "deny": []
+  }
+}

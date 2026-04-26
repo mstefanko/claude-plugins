@@ -13,7 +13,16 @@ from typing import Any, Mapping
 from .paths import REPO_ROOT
 
 
-ROLE_NAMES = {"writer", "spec-review", "review", "research", "clarify", "codex-review", "brainstorm"}
+ROLE_NAMES = {
+    "writer",
+    "spec-review",
+    "review",
+    "research",
+    "clarify",
+    "codex-review",
+    "provider-review",
+    "brainstorm",
+}
 MERGE_POLICIES = {"deny-wins"}
 
 

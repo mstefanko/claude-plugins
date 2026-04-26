@@ -301,6 +301,8 @@ bin/swarm permissions install --role writer --scope repo --dry-run
 bin/swarm permissions install --role writer --scope repo
 ```
 
+Use `--role provider-review` for the internal read-only provider runner profile.
+
 `--rollback` removes that role fragment's rules from the target settings file.
 
 ## TUI

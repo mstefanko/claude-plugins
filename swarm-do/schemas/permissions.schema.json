@@ -9,7 +9,7 @@
     "schema_version": { "type": "integer", "enum": [1] },
     "role": {
       "type": "string",
-      "enum": ["writer", "spec-review", "review", "research", "clarify", "codex-review"]
+      "enum": ["writer", "spec-review", "review", "research", "clarify", "codex-review", "provider-review", "brainstorm"]
     },
     "merge_policy": { "type": "string", "enum": ["deny-wins"] },
     "permissions": {

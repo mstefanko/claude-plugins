@@ -16,6 +16,7 @@ alongside the Phase 9b codex_review port. The dispatcher recognizes:
 
   agent-codex-review                    -> codex_review.extract
   agent-review, agent-code-review       -> claude_review.extract
+  swarm-review, provider-review         -> provider_review.extract
   any other role                        -> skipped (fail-open, stderr warn)
 
 The extractor is fail-open so reviewer telemetry never changes pipeline status.
@@ -33,6 +34,7 @@ from typing import List, Sequence
 
 CLAUDE_EXTRACTOR_ROLES = frozenset({"agent-review", "agent-code-review"})
 CODEX_EXTRACTOR_ROLES = frozenset({"agent-codex-review"})
+PROVIDER_REVIEW_EXTRACTOR_ROLES = frozenset({"swarm-review", "provider-review"})
 
 
 def _write_rows(rows: List[dict]) -> int:
@@ -121,6 +123,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         from .codex_review import extract as _extract
     elif ns.role in CLAUDE_EXTRACTOR_ROLES:
         from .claude_review import extract as _extract
+    elif ns.role in PROVIDER_REVIEW_EXTRACTOR_ROLES:
+        from .provider_review import extract as _extract
     else:
         print(
             f"extract-phase: role {ns.role!r} not recognized — skipping (fail-open)",

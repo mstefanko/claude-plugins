@@ -19,6 +19,7 @@ from swarm_do.pipeline.provider_review import (
     DEFAULT_CLAUDE_R3_TIMEOUT_SECONDS,
     DEFAULT_CODEX_R2_TIMEOUT_SECONDS,
     ProviderReviewError,
+    ProviderFixtureResult,
     ReviewProviderResolver,
     ReviewProviderProbeCheck,
     calibrate_consensus_samples,
@@ -965,6 +966,79 @@ enabled = false
         self.assertIsNotNone(row["duplicate_cluster_id"])
         validate_provider_findings_v2_artifact(artifact)
 
+    def test_normalized_artifact_keeps_top_five_findings_by_review_priority(self) -> None:
+        findings = [
+            {
+                "severity": severity,
+                "category": "logic",
+                "summary": f"Finding {idx}",
+                "file_path": f"pkg/file_{idx}.py",
+                "line_start": idx + 1,
+                "line_end": idx + 1,
+                "confidence": 0.9,
+            }
+            for idx, severity in enumerate(("info", "low", "medium", "high", "critical", "high", "medium"))
+        ]
+        artifact = normalize_provider_review_results(
+            [ProviderRunResult("claude", {"findings": findings}, "{}\n", "")],
+            run_id="RUN_PROVIDER",
+            issue_id="issue-1",
+            stage_id="provider-review",
+            configured_providers=("claude",),
+            selected_providers=("claude",),
+            source_artifact_path="/tmp/provider-findings.json",
+            manifest_path="/tmp/provider-review.manifest.json",
+            timestamp="2026-04-25T00:00:00Z",
+        )
+
+        self.assertEqual(len(artifact["findings"]), 5)
+        severities = [row["severity"] for row in artifact["findings"]]
+        self.assertEqual(severities, ["critical", "high", "high", "medium", "medium"])
+        validate_provider_findings_v2_artifact(artifact)
+
+    def test_normalized_artifact_redacts_secret_like_evidence(self) -> None:
+        finding = {
+            "severity": "high",
+            "category": "security",
+            "summary": "Logs credential material",
+            "file_path": "pkg/auth.py",
+            "line_start": 10,
+            "line_end": 10,
+            "confidence": 0.9,
+            "evidence": "api_key = sk-abcdefghijklmnopqrstuvwxyz",
+            "recommendation": "Remove Bearer abcdefghijklmnopqrstuvwxyz from logs",
+        }
+        artifact = normalize_provider_review_results(
+            [ProviderRunResult("claude", {"findings": [finding]}, "{}\n", "")],
+            run_id="RUN_PROVIDER",
+            issue_id="issue-1",
+            stage_id="provider-review",
+            configured_providers=("claude",),
+            selected_providers=("claude",),
+            source_artifact_path="/tmp/provider-findings.json",
+            manifest_path="/tmp/provider-review.manifest.json",
+            timestamp="2026-04-25T00:00:00Z",
+        )
+
+        row = artifact["findings"][0]
+        self.assertEqual(row["evidence"], "api_key=<redacted>")
+        self.assertEqual(row["recommendation"], "Remove Bearer <redacted> from logs")
+        validate_provider_findings_v2_artifact(artifact)
+
+    def test_probe_snippets_are_redacted_and_marked_sensitive(self) -> None:
+        check = ProviderFixtureResult(
+            "fixture",
+            "error",
+            False,
+            "failed",
+            stdout_text="api_key=sk-abcdefghijklmnopqrstuvwxyz",
+            stderr_text="Bearer abcdefghijklmnopqrstuvwxyz",
+        ).as_probe_check()
+
+        self.assertTrue(check.data["diagnostic_snippets_sensitive"])
+        self.assertEqual(check.data["stdout_snippet"], "api_key=<redacted>")
+        self.assertEqual(check.data["stderr_snippet"], "Bearer <redacted>")
+
     def test_consensus_calibration_measures_cluster_errors_and_keeps_policy_conservative(self) -> None:
         same_anchor_first = {
             "severity": "high",
@@ -1382,6 +1456,8 @@ enabled = false
         self.assertEqual(artifact["findings"][0]["detected_by"], ["claude"])
         self.assertEqual(artifact["findings"][0]["summary"], "Rejects valid output")
         self.assertEqual(sidecars["claude"]["meta"]["command_argv"][:5], ["/bin/claude", "-p", "--permission-mode", "plan", "--output-format"])
+        schema_arg_index = sidecars["claude"]["meta"]["command_argv"].index("--json-schema")
+        self.assertEqual(sidecars["claude"]["meta"]["command_argv"][schema_arg_index + 1], "<redacted>")
 
     def test_run_stage_records_malformed_real_claude_output_without_crashing(self) -> None:
         def which(cmd: str) -> str | None:

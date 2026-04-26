@@ -51,6 +51,7 @@ PARSER_FALLBACK_CONFIDENCE_CAP = 0.65
 DEFAULT_CODEX_R2_TIMEOUT_SECONDS = 90
 DEFAULT_CLAUDE_R3_TIMEOUT_SECONDS = 90
 DEFAULT_AUTH_PROBE_TIMEOUT_SECONDS = 10
+MAX_NORMALIZED_FINDINGS = 5
 CODEX_WRITE_DENIAL_CREATE_PATH = "codex-created.txt"
 CODEX_WRITE_DENIAL_EDIT_PATH = "codex-edit-target.txt"
 CODEX_WRITE_DENIAL_DELETE_PATH = "codex-delete-target.txt"
@@ -79,6 +80,20 @@ _FALLBACK_LINE_RE = re.compile(
     r"(?:\[(?P<severity>[A-Za-z]+)(?:\s*\|\s*[A-Za-z]+)?\]\s*)?"
     r"(?P<location>[^:\n]+:\d+(?:-\d+)?)\s*(?:-|:)\s*(?P<summary>.+?)\s*$"
 )
+_PRIVATE_KEY_RE = re.compile(
+    r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----",
+    re.DOTALL,
+)
+_SECRET_ASSIGNMENT_RE = re.compile(
+    r"\b(api[_-]?key|access[_-]?token|auth[_-]?token|credential|password|passwd|secret)\b"
+    r"\s*[:=]\s*([\"']?)[^\s,\"';]+",
+    re.IGNORECASE,
+)
+_BEARER_TOKEN_RE = re.compile(r"\bbearer\s+[A-Za-z0-9._~+/=-]{8,}", re.IGNORECASE)
+_OPENAI_TOKEN_RE = re.compile(r"\bsk-[A-Za-z0-9_-]{8,}\b")
+_GITHUB_TOKEN_RE = re.compile(r"\bgh[pousr]_[A-Za-z0-9_]{16,}\b")
+_AWS_ACCESS_KEY_RE = re.compile(r"\bA(?:KIA|SIA)[0-9A-Z]{16}\b")
+_SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 
 
 class ProviderReviewError(ValueError):
@@ -267,6 +282,8 @@ class ProviderFixtureResult:
             data["stdout_snippet"] = _text_snippet(self.stdout_text)
         if self.stderr_text:
             data["stderr_snippet"] = _text_snippet(self.stderr_text)
+        if self.stdout_text or self.stderr_text:
+            data["diagnostic_snippets_sensitive"] = True
         return ReviewProviderProbeCheck(
             status=self.status,
             ready=self.ready,
@@ -284,7 +301,17 @@ def _iso_utc_now() -> str:
 
 
 def _text_snippet(text: str, limit: int = 1000) -> str:
-    return text[:limit]
+    return _redact_sensitive_text(text)[:limit]
+
+
+def _redact_sensitive_text(text: str) -> str:
+    redacted = _PRIVATE_KEY_RE.sub("<redacted-private-key>", text)
+    redacted = _SECRET_ASSIGNMENT_RE.sub(lambda match: f"{match.group(1)}=<redacted>", redacted)
+    redacted = _BEARER_TOKEN_RE.sub("Bearer <redacted>", redacted)
+    redacted = _OPENAI_TOKEN_RE.sub("sk-<redacted>", redacted)
+    redacted = _GITHUB_TOKEN_RE.sub("gh<redacted>", redacted)
+    redacted = _AWS_ACCESS_KEY_RE.sub("<redacted-aws-access-key>", redacted)
+    return redacted
 
 
 def _load_json_schema(path: Path) -> dict[str, Any]:
@@ -1690,7 +1717,7 @@ def _short_summary(summary: str) -> str:
 def _bounded_text(value: Any, limit: int = 1000) -> str | None:
     if value is None:
         return None
-    text = str(value)
+    text = _redact_sensitive_text(str(value))
     return text[:limit]
 
 
@@ -1756,6 +1783,25 @@ def _finding_candidate(provider_id: str, schema_mode: str, raw: Mapping[str, Any
         "evidence": _bounded_text(raw.get("evidence")),
         "recommendation": _bounded_text(raw.get("recommendation")),
     }
+
+
+def _normalized_finding_sort_key(finding: Mapping[str, Any]) -> tuple[int, float, float, str, int, str, str]:
+    severity = str(finding.get("severity") or "info").lower()
+    score = finding.get("consensus_score")
+    confidence = finding.get("max_confidence")
+    return (
+        _SEVERITY_RANK.get(severity, 99),
+        -(float(score) if isinstance(score, (int, float)) and not isinstance(score, bool) else 0.0),
+        -(float(confidence) if isinstance(confidence, (int, float)) and not isinstance(confidence, bool) else 0.0),
+        str(finding.get("file_path") or ""),
+        int(finding.get("line_start") or 0),
+        str(finding.get("summary") or "").lower(),
+        str(finding.get("finding_id") or ""),
+    )
+
+
+def _cap_normalized_findings(findings: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(findings, key=_normalized_finding_sort_key)[:MAX_NORMALIZED_FINDINGS]
 
 
 def normalize_provider_review_results(
@@ -1882,6 +1928,7 @@ def normalize_provider_review_results(
                 "recommendation": representative["recommendation"],
             }
         )
+    findings = _cap_normalized_findings(findings)
 
     status, status_reason = _provider_review_status(
         selected_count=len(selected_providers),
@@ -2182,6 +2229,7 @@ def _write_text(path: Path, text: str) -> None:
 
 def _redacted_argv(argv: Sequence[str]) -> list[str]:
     secret_markers = ("token", "key", "secret", "credential", "password")
+    value_flags = {"--json-schema"}
     redacted: list[str] = []
     redact_next = False
     for item in argv:
@@ -2189,6 +2237,14 @@ def _redacted_argv(argv: Sequence[str]) -> list[str]:
         if redact_next:
             redacted.append("<redacted>")
             redact_next = False
+            continue
+        if item in value_flags:
+            redacted.append(item)
+            redact_next = True
+            continue
+        if any(item.startswith(flag + "=") for flag in value_flags):
+            key, _, _ = item.partition("=")
+            redacted.append(key + "=<redacted>")
             continue
         if any(marker in lowered for marker in secret_markers):
             if "=" in item:
