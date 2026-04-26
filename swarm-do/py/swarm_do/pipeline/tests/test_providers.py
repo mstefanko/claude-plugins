@@ -179,6 +179,10 @@ class ProviderDoctorTests(unittest.TestCase):
                 stdout = "claude 1.0"
             elif args == ["codex", "--version"]:
                 stdout = "codex 1.0"
+            elif args == ["claude", "auth", "status", "--json"]:
+                stdout = json.dumps({"loggedIn": True, "authMethod": "oauth", "apiProvider": "firstParty"})
+            elif args == ["codex", "login", "status"]:
+                stdout = "Logged in using ChatGPT\n"
             else:
                 stdout = ""
             return subprocess.CompletedProcess(args=args, returncode=0, stdout=stdout, stderr="")
@@ -203,9 +207,47 @@ class ProviderDoctorTests(unittest.TestCase):
         codex_check = next(check for check in payload["checks"] if check["name"] == "provider-review:codex")
         self.assertEqual(codex_check["data"]["probe"]["schema"]["status"], "warning")
         self.assertEqual(codex_check["data"]["probe"]["read_only"]["status"], "warning")
+        self.assertEqual(codex_check["data"]["probe"]["auth"]["status"], "ok")
         self.assertIn("schema", codex_check["data"]["probe"]["blockers"])
         self.assertIn("read_only", codex_check["data"]["probe"]["blockers"])
-        self.assertIn("auth", codex_check["data"]["probe"]["blockers"])
+        self.assertNotIn("auth", codex_check["data"]["probe"]["blockers"])
+
+    def test_review_doctor_reports_r4_auth_failures_without_running_reviews(self) -> None:
+        def which(cmd: str) -> str | None:
+            return f"/bin/{cmd}" if cmd in {"claude", "codex"} else None
+
+        def runner(args, **kwargs):
+            if args == ["claude", "--help"]:
+                stdout = "Usage: claude -p --permission-mode --output-format --json-schema"
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout=stdout, stderr="")
+            if args == ["codex", "exec", "--help"]:
+                stdout = "Usage: codex exec --json --sandbox --output-schema --output-last-message"
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout=stdout, stderr="")
+            if args == ["claude", "--version"]:
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="claude 1.0", stderr="")
+            if args == ["codex", "--version"]:
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="codex 1.0", stderr="")
+            if args == ["claude", "auth", "status", "--json"]:
+                stdout = json.dumps({"loggedIn": False, "authMethod": "none", "apiProvider": "firstParty"})
+                return subprocess.CompletedProcess(args=args, returncode=1, stdout=stdout, stderr="")
+            if args == ["codex", "login", "status"]:
+                return subprocess.CompletedProcess(args=args, returncode=2, stdout="", stderr="unknown command: status")
+            raise AssertionError(args)
+
+        old_data = os.environ.get("CLAUDE_PLUGIN_DATA")
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["CLAUDE_PLUGIN_DATA"] = td
+            try:
+                report = provider_doctor(run_review=True, which=which, runner=runner)
+            finally:
+                _restore_env("CLAUDE_PLUGIN_DATA", old_data)
+
+        payload = report.as_dict()
+        claude_check = next(check for check in payload["checks"] if check["name"] == "provider-review:claude")
+        codex_check = next(check for check in payload["checks"] if check["name"] == "provider-review:codex")
+        self.assertEqual(claude_check["data"]["probe"]["auth"]["data"]["failure_class"], "not_authenticated")
+        self.assertEqual(codex_check["data"]["probe"]["auth"]["data"]["failure_class"], "spend_probe_required")
+        self.assertEqual(payload["selected_review_providers"], [])
 
     def test_review_and_mco_doctor_contracts_can_be_combined(self) -> None:
         def which(cmd: str) -> str | None:

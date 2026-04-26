@@ -10,6 +10,10 @@ from pathlib import Path
 from typing import Any
 
 from swarm_do.pipeline.provider_review import (
+    CLAUDE_WRITE_DENIAL_CREATE_PATH,
+    CLAUDE_WRITE_DENIAL_DELETE_PATH,
+    CLAUDE_WRITE_DENIAL_EDIT_PATH,
+    DEFAULT_CLAUDE_R3_TIMEOUT_SECONDS,
     DEFAULT_CODEX_R2_TIMEOUT_SECONDS,
     ReviewProviderResolver,
     ReviewProviderProbeCheck,
@@ -17,6 +21,9 @@ from swarm_do.pipeline.provider_review import (
     build_codex_review_command,
     load_emission_schema,
     normalize_provider_review_results,
+    run_claude_auth_status_probe,
+    run_claude_write_denial_fixture,
+    run_codex_auth_status_probe,
     run_codex_structured_output_smoke_fixture,
     run_codex_write_denial_fixture,
     run_stage,
@@ -145,6 +152,72 @@ class ProviderReviewTests(unittest.TestCase):
             ],
         )
 
+    def test_claude_write_denial_fixture_uses_exact_plan_command_and_passes_fail_closed(self) -> None:
+        captured: list[tuple[list[str], Path | None]] = []
+
+        def runner(args, **kwargs):
+            captured.append((list(args), kwargs.get("cwd")))
+            return subprocess.CompletedProcess(args=args, returncode=1, stdout="", stderr="plan mode denied")
+
+        with tempfile.TemporaryDirectory() as td:
+            result = run_claude_write_denial_fixture(
+                claude_bin="/bin/claude",
+                runner=runner,
+                timeout_seconds=5,
+                work_root=Path(td),
+            )
+
+        self.assertTrue(result.ready, result.reason)
+        self.assertEqual(result.status, "ok")
+        command = captured[0][0]
+        self.assertEqual(command[:5], ["/bin/claude", "-p", "--permission-mode", "plan", "--output-format"])
+        self.assertIn("--json-schema", command)
+        self.assertIsNotNone(captured[0][1])
+        self.assertEqual(result.data["mutation_checks"], {"create_denied": True, "edit_denied": True, "delete_denied": True})
+
+    def test_claude_write_denial_fixture_fails_when_plan_mode_allows_mutation(self) -> None:
+        def runner(args, **kwargs):
+            repo = Path(kwargs["cwd"])
+            (repo / CLAUDE_WRITE_DENIAL_CREATE_PATH).write_text("created", encoding="utf-8")
+            (repo / CLAUDE_WRITE_DENIAL_EDIT_PATH).write_text("edited", encoding="utf-8")
+            (repo / CLAUDE_WRITE_DENIAL_DELETE_PATH).unlink()
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout=json.dumps({"findings": []}), stderr="")
+
+        with tempfile.TemporaryDirectory() as td:
+            result = run_claude_write_denial_fixture(
+                claude_bin="/bin/claude",
+                runner=runner,
+                timeout_seconds=5,
+                work_root=Path(td),
+            )
+
+        self.assertFalse(result.ready)
+        self.assertEqual(result.status, "error")
+        self.assertIn("allowed repo mutations", result.reason)
+        self.assertEqual(result.data["mutation_checks"], {"create_denied": False, "edit_denied": False, "delete_denied": False})
+
+    def test_claude_write_denial_fixture_validates_schema_when_command_succeeds(self) -> None:
+        def runner(args, **kwargs):
+            return subprocess.CompletedProcess(
+                args=args,
+                returncode=0,
+                stdout=json.dumps({"result": json.dumps({"findings": []})}),
+                stderr="",
+            )
+
+        with tempfile.TemporaryDirectory() as td:
+            result = run_claude_write_denial_fixture(
+                claude_bin="/bin/claude",
+                runner=runner,
+                timeout_seconds=5,
+                work_root=Path(td),
+            )
+
+        self.assertTrue(result.ready, result.reason)
+        self.assertEqual(result.status, "ok")
+        self.assertEqual(result.data["schema_mode"], "native")
+        self.assertEqual(result.data["finding_count"], 0)
+
     def test_codex_write_denial_fixture_uses_exact_read_only_command_and_passes_fail_closed(self) -> None:
         captured: list[list[str]] = []
 
@@ -226,6 +299,63 @@ class ProviderReviewTests(unittest.TestCase):
         self.assertTrue(schema_result.ready, schema_result.as_probe_check().as_dict())
         self.assertTrue(read_only_result.ready, read_only_result.as_probe_check().as_dict())
 
+    @unittest.skipUnless(
+        os.environ.get("SWARM_RUN_CLAUDE_R3_FIXTURE") == "1",
+        "set SWARM_RUN_CLAUDE_R3_FIXTURE=1 to launch the real bounded Claude R3 fixture",
+    )
+    def test_local_claude_r3_fixture_passes_when_explicitly_enabled(self) -> None:
+        timeout = int(os.environ.get("SWARM_CLAUDE_R3_TIMEOUT_SECONDS", str(DEFAULT_CLAUDE_R3_TIMEOUT_SECONDS)))
+        claude_bin = os.environ.get("SWARM_CLAUDE_BIN", "claude")
+
+        read_only_result = run_claude_write_denial_fixture(claude_bin=claude_bin, timeout_seconds=timeout)
+
+        self.assertTrue(read_only_result.ready, read_only_result.as_probe_check().as_dict())
+
+    def test_r4_auth_status_probes_distinguish_authenticated_and_not_authenticated(self) -> None:
+        def runner(args, **kwargs):
+            if args == ["claude", "auth", "status", "--json"]:
+                return subprocess.CompletedProcess(
+                    args=args,
+                    returncode=1,
+                    stdout=json.dumps({"loggedIn": False, "authMethod": "none", "apiProvider": "firstParty"}),
+                    stderr="",
+                )
+            if args == ["codex", "login", "status"]:
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="Logged in using ChatGPT\n", stderr="")
+            raise AssertionError(args)
+
+        claude = run_claude_auth_status_probe(runner=runner)
+        codex = run_codex_auth_status_probe(runner=runner)
+        codex_not_ready = run_codex_auth_status_probe(
+            runner=lambda args, **kwargs: subprocess.CompletedProcess(
+                args=args,
+                returncode=0,
+                stdout="Not currently logged in\n",
+                stderr="",
+            )
+        )
+
+        self.assertFalse(claude.ready)
+        self.assertEqual(claude.status, "warning")
+        self.assertEqual(claude.data["failure_class"], "not_authenticated")
+        self.assertTrue(codex.ready)
+        self.assertEqual(codex.status, "ok")
+        self.assertFalse(codex_not_ready.ready)
+        self.assertEqual(codex_not_ready.data["failure_class"], "not_authenticated")
+
+    def test_r4_auth_status_probe_reports_spend_probe_required_when_status_command_is_absent(self) -> None:
+        def runner(args, **kwargs):
+            return subprocess.CompletedProcess(args=args, returncode=2, stdout="", stderr="unknown command: status")
+
+        claude = run_claude_auth_status_probe(runner=runner)
+        codex = run_codex_auth_status_probe(runner=runner)
+
+        self.assertFalse(claude.ready)
+        self.assertEqual(claude.data["failure_class"], "spend_probe_required")
+        self.assertIn("bounded spend probe required", claude.reason)
+        self.assertFalse(codex.ready)
+        self.assertEqual(codex.data["failure_class"], "spend_probe_required")
+
     def test_real_resolver_reports_exact_detected_cli_flags_but_stays_ineligible(self) -> None:
         def which(cmd: str) -> str | None:
             return f"/bin/{cmd}" if cmd in {"claude", "codex"} else None
@@ -239,6 +369,11 @@ class ProviderReviewTests(unittest.TestCase):
                 stdout = "claude 1.0"
             elif args == ["codex", "--version"]:
                 stdout = "codex 1.0"
+            elif args == ["claude", "auth", "status", "--json"]:
+                stdout = json.dumps({"loggedIn": False, "authMethod": "none", "apiProvider": "firstParty"})
+                return argparse.Namespace(args=args, returncode=1, stdout=stdout, stderr="")
+            elif args == ["codex", "login", "status"]:
+                stdout = "Logged in using ChatGPT\n"
             else:
                 stdout = ""
             return argparse.Namespace(args=args, returncode=0, stdout=stdout, stderr="")
@@ -267,9 +402,10 @@ class ProviderReviewTests(unittest.TestCase):
         self.assertEqual(by_id["codex"].probe.read_only.status, "warning")
         self.assertIn("schema", by_id["codex"].probe.blockers)
         self.assertIn("read_only", by_id["codex"].probe.blockers)
-        self.assertIn("auth", by_id["codex"].probe.blockers)
+        self.assertNotIn("auth", by_id["codex"].probe.blockers)
         self.assertIn("Phase R2 schema smoke proof not complete", by_id["codex"].reason)
         self.assertIn("Phase R2 write-denial proof not complete", by_id["codex"].reason)
+        self.assertEqual(by_id["claude"].probe.auth.data["failure_class"], "not_authenticated")
 
     def test_codex_r2_proofs_clear_schema_and_read_only_gates_but_not_auth(self) -> None:
         def which(cmd: str) -> str | None:
@@ -319,7 +455,103 @@ class ProviderReviewTests(unittest.TestCase):
         self.assertTrue(codex.probe.read_only.ready)
         self.assertEqual(codex.probe.blockers, ("auth",))
         self.assertFalse(codex.eligible)
-        self.assertIn("Phase R4 pending", codex.reason)
+        self.assertIn("Codex login status did not prove authentication readiness", codex.reason)
+
+    def test_codex_becomes_eligible_when_r2_and_r4_proofs_are_ready(self) -> None:
+        def which(cmd: str) -> str | None:
+            return f"/bin/{cmd}" if cmd == "codex" else None
+
+        def runner(args, **kwargs):
+            if args == ["codex", "exec", "--help"]:
+                stdout = "Usage: codex exec --json --sandbox --output-schema --output-last-message"
+            elif args == ["codex", "--version"]:
+                stdout = "codex 1.0"
+            elif args == ["codex", "login", "status"]:
+                stdout = "Logged in using ChatGPT\n"
+            else:
+                stdout = ""
+            return argparse.Namespace(args=args, returncode=0, stdout=stdout, stderr="")
+
+        old_data = os.environ.get("CLAUDE_PLUGIN_DATA")
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["CLAUDE_PLUGIN_DATA"] = td
+            try:
+                codex = next(
+                    status
+                    for status in ReviewProviderResolver(
+                        which=which,
+                        runner=runner,
+                        codex_schema_probe=ReviewProviderProbeCheck(
+                            "ok",
+                            True,
+                            "Codex structured-output smoke produced schema-valid provider emission",
+                        ),
+                        codex_read_only_probe=ReviewProviderProbeCheck(
+                            "ok",
+                            True,
+                            "Codex write-denial fixture completed without repo mutations",
+                        ),
+                    ).statuses()
+                    if status.provider_id == "codex"
+                )
+            finally:
+                if old_data is None:
+                    os.environ.pop("CLAUDE_PLUGIN_DATA", None)
+                else:
+                    os.environ["CLAUDE_PLUGIN_DATA"] = old_data
+
+        self.assertTrue(codex.eligible, codex.reason)
+        self.assertIsNotNone(codex.probe)
+        self.assertTrue(codex.probe.auth.ready)
+        self.assertEqual(codex.probe.blockers, ())
+
+    def test_claude_r3_proof_clears_read_only_gate_but_auth_still_blocks(self) -> None:
+        def which(cmd: str) -> str | None:
+            return f"/bin/{cmd}" if cmd == "claude" else None
+
+        def runner(args, **kwargs):
+            if args == ["claude", "--help"]:
+                stdout = "Usage: claude -p --permission-mode --output-format --json-schema"
+            elif args == ["claude", "--version"]:
+                stdout = "claude 1.0"
+            elif args == ["claude", "auth", "status", "--json"]:
+                stdout = json.dumps({"loggedIn": False, "authMethod": "none", "apiProvider": "firstParty"})
+                return argparse.Namespace(args=args, returncode=1, stdout=stdout, stderr="")
+            else:
+                stdout = ""
+            return argparse.Namespace(args=args, returncode=0, stdout=stdout, stderr="")
+
+        old_data = os.environ.get("CLAUDE_PLUGIN_DATA")
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["CLAUDE_PLUGIN_DATA"] = td
+            try:
+                claude = next(
+                    status
+                    for status in ReviewProviderResolver(
+                        which=which,
+                        runner=runner,
+                        claude_read_only_probe=ReviewProviderProbeCheck(
+                            "ok",
+                            True,
+                            "Claude write-denial fixture completed without repo mutations",
+                        ),
+                    ).statuses()
+                    if status.provider_id == "claude"
+                )
+            finally:
+                if old_data is None:
+                    os.environ.pop("CLAUDE_PLUGIN_DATA", None)
+                else:
+                    os.environ["CLAUDE_PLUGIN_DATA"] = old_data
+
+        self.assertEqual(claude.schema_mode, "native")
+        self.assertEqual(claude.read_only_mode, "confirmed")
+        self.assertIsNotNone(claude.probe)
+        self.assertTrue(claude.probe.schema.ready)
+        self.assertTrue(claude.probe.read_only.ready)
+        self.assertEqual(claude.probe.blockers, ("auth",))
+        self.assertFalse(claude.eligible)
+        self.assertIn("not authenticated", claude.reason)
 
     def test_real_resolver_fails_command_surface_closed_when_required_flag_is_missing(self) -> None:
         def which(cmd: str) -> str | None:
