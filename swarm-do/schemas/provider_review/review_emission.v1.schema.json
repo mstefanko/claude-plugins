@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/07/schema#",
-  "$id": "https://mstefanko-plugins/swarm-do/provider_review/review_emission.v1.schema.json#v1",
+  "$id": "https://mstefanko-plugins/swarm-do/provider_review/review_emission.v1.schema.json",
   "title": "swarm-do provider review model emission v1",
   "description": "Small model-facing schema for read-only provider review output. Swarm-owned provenance, run ids, hashes, provider counts, and consensus fields are added only after local validation.",
   "type": "object",
