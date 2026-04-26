@@ -61,6 +61,16 @@ class PipelineValidationTests(unittest.TestCase):
                 review = next(stage for stage in pipeline["stages"] if stage["id"] == "review")
                 self.assertIn("provider-review", review.get("depends_on") or [])
 
+    def test_stock_review_presets_allow_single_provider_evidence_with_conservative_confidence(self) -> None:
+        for name in ("balanced", "claude-only", "codex-only", "lightweight", "review", "ultra-plan"):
+            with self.subTest(name=name):
+                result, preset, *_ = validate_preset_and_pipeline(name)
+                self.assertTrue(result.ok, result.errors)
+                policy = preset.get("review_providers")
+                self.assertEqual(policy["selection"], "auto")
+                self.assertEqual(policy["min_success"], 1)
+                self.assertEqual(policy["max_parallel"], 4)
+
     def test_hybrid_review_adds_codex_review_after_spec_review(self) -> None:
         item = find_pipeline("hybrid-review")
         self.assertIsNotNone(item)

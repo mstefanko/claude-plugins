@@ -161,6 +161,7 @@ class ProviderDoctorTests(unittest.TestCase):
         self.assertTrue(report.ok)
         payload = report.as_dict()
         self.assertTrue(payload["review_required"])
+        self.assertEqual(payload["review_policy"]["min_success"], 1)
         self.assertEqual(payload["selected_review_providers"], ["claude", "codex"])
         rendered = format_provider_report(report)
         self.assertIn("provider-review:claude", rendered)

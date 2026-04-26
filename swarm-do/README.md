@@ -27,7 +27,9 @@ The plugin has two main modes:
   Internal `swarm-review` provider shims use the same local CLIs but are
   eligible only after their read-only Phase 0 checks pass. Stock review-capable
   pipelines include the internal provider-review stage; it records a clean
-  skipped artifact when no shim is eligible.
+  skipped artifact when no shim is eligible. Once a shim is eligible, one
+  provider is enough to collect evidence, but single-provider findings stay
+  `needs-verification`.
 - Optional TUI dependencies are managed by `bin/swarm-tui` on first launch.
 
 The plugin never initializes Beads implicitly. Run `/swarmdaddy:init-beads` only
@@ -192,6 +194,7 @@ bin/swarm pipeline drift <name>
 
 bin/swarm mode claude-only|codex-only|balanced|brainstorm|research|design|review|custom
 bin/swarm providers doctor [--preset <name|current>] [--review] [--mco] [--mco-timeout-seconds N] [--json]
+bin/swarm providers calibrate-consensus <samples.json> [--output <report.json>] [--json]
 bin/swarm permissions check [--role <role>] [--scope repo|user] [--path <settings.json>]
 bin/swarm permissions install --role <role> [--dry-run] [--rollback] [--scope repo|user] [--path <settings.json>]
 
@@ -240,6 +243,8 @@ Additional helpers:
 - `bin/swarm-provider-review`: internal read-only provider evidence runner.
 - `bin/swarm providers evidence <provider-findings.json>`: bounded downstream
   prompt summary for provider-review artifacts.
+- `bin/swarm providers calibrate-consensus <samples.json>`: measures labeled
+  provider-review samples for secondary-cluster false merges/splits.
 - `bin/swarm-stage-mco`: provider-stage helper used by MCO pipeline stages.
 - `bin/extract-phase.sh`: findings extraction shim.
 - `bin/swarm-telemetry`: telemetry inspection and maintenance CLI.

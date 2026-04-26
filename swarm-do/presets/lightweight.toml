@@ -3,6 +3,11 @@ description = "Small-change pipeline that drops spec-review and docs."
 pipeline = "lightweight"
 origin = "stock"
 
+[review_providers]
+selection = "auto"
+min_success = 1
+max_parallel = 4
+
 [routing]
 "roles.agent-clarify" = { backend = "codex", model = "gpt-5.4-mini", effort = "medium" }
 "roles.agent-writer.simple" = { backend = "codex", model = "gpt-5.4-mini", effort = "medium" }

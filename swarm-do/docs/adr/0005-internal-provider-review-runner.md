@@ -34,6 +34,12 @@ Build a small swarm-owned `swarm-provider-review` runner and keep
   commands.
 - Fail closed for real provider eligibility until Phase 0 proves structured
   output, non-spend readiness checks, and read-only write denial.
+- Let stock automatic review collect one eligible provider as evidence after
+  its proof gates are green. Single-provider findings remain
+  `needs-verification`; only exact stable-hash agreement from at least two
+  schema-valid providers can produce `confirmed`.
+- Keep secondary anchored clusters at `needs-verification` unless labeled
+  captured samples show acceptable false merge and false split rates.
 - Allow fake shims for deterministic runner, doctor, and DSL tests.
 
 ## Phase 0 Gates

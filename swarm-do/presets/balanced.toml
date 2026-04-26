@@ -3,6 +3,11 @@ description = "Default pipeline with measured low-risk Codex promotions availabl
 pipeline = "default"
 origin = "stock"
 
+[review_providers]
+selection = "auto"
+min_success = 1
+max_parallel = 4
+
 [routing]
 "roles.agent-docs" = { backend = "codex", model = "gpt-5.4-mini", effort = "medium" }
 "roles.agent-spec-review" = { backend = "codex", model = "gpt-5.4-mini", effort = "medium" }

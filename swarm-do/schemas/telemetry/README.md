@@ -141,8 +141,8 @@ Schemas: `provider_findings.schema.json#v1-draft` for MCO,
 
 Key provider fields: `provider`, `provider_count`, `selected_providers`,
 `launched_providers`, `schema_valid_providers`, `min_success`, `status_reason`,
-`detected_by`, `consensus_score`, `consensus_level`, `source_artifact_path`,
-and `provider_error_class`.
+`consensus_policy`, `detected_by`, `consensus_score`, `consensus_level`,
+`source_artifact_path`, and `provider_error_class`.
 
 Use `bin/swarm providers evidence <provider-findings.json>` to render the
 bounded downstream review summary. It includes normalized finding and provider
@@ -152,6 +152,15 @@ provider evidence snippets.
 Raw provider sidecars for `swarm-review` stay under the run stage artifact
 directory and are classified as local sensitive run artifacts. They are retained
 or purged with that run directory and are not promoted into telemetry ledgers.
+
+Use `bin/swarm providers calibrate-consensus <samples.json>` with labeled
+captured native-schema outputs to measure secondary-cluster false merges and
+false splits. Until those samples justify promotion, v2 artifacts record the
+conservative policy: secondary clusters stay `needs-verification`, and stock
+automatic review may collect a single eligible provider as evidence only.
+Calibration inputs set `schema_version` to
+`provider-review.consensus-calibration.samples.v1`; each finding wraps the model
+emission under `emission` plus an optional `expected_cluster_id` label.
 
 ---
 

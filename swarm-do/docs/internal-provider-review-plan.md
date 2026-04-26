@@ -632,6 +632,16 @@ whether this can replace any older lanes.
   MCO v1 and swarm-review v2 artifacts, including artifact path, status,
   provider counts, top normalized findings, and provider errors while omitting
   raw provider text.
+- **R9 consensus calibration harness:** `bin/swarm providers
+  calibrate-consensus <samples.json>` now accepts labeled captured
+  native-schema provider outputs, measures secondary-cluster false merges and
+  false splits, and emits a calibration report. The normalized v2 artifact also
+  records the active conservative consensus policy.
+- **R10 stock enablement decision:** stock review-capable presets explicitly
+  keep `review_providers.selection = "auto"`, `min_success = 1`, and
+  `max_parallel = 4`. A single eligible provider may run as evidence after its
+  local proof gates are green, but single-provider findings remain
+  `needs-verification` and secondary clusters cannot promote confidence.
 
 ### Remaining Phases
 
@@ -657,26 +667,6 @@ whether this can replace any older lanes.
   `--tools`/`--disallowedTools` restrictions before eligibility.
 - Definition of done: the code gate is implemented; real Claude eligibility
   still requires a green local proof plus R4 auth readiness.
-
-**Phase R9: Consensus Calibration**
-
-- Capture real Claude/Codex native-schema outputs for representative review
-  cases.
-- Measure false merges and false splits for the secondary anchored cluster key.
-- Keep secondary clusters at `needs-verification` until the calibration supports
-  any promotion policy.
-- Definition of done: the confidence policy for secondary clusters is backed by
-  measured samples or explicitly kept conservative.
-
-**Phase R10: Stock Enablement Decision**
-
-- Decide whether stock automatic review may run one eligible provider or should
-  skip until at least two providers are eligible.
-- Run the stock pipelines with real shims enabled only after R2-R8 are green.
-- Update ADR 0005 status and ADR 0003 supersession language only after the
-  preferred path is validated.
-- Definition of done: stock provider review is either promoted with documented
-  gates or remains skipped-by-default with clear operator messaging.
 
 **Phase R11: Codex Lane Retirement Inventory**
 
@@ -715,6 +705,9 @@ Validation still needed for future phases:
   non-spend status surface.
 - Captured real CLI output samples for Codex and Claude, after local proof runs
   are acceptable on an operator machine.
+- `bin/swarm providers calibrate-consensus <samples.json>` on those captured
+  labeled samples before secondary clusters are considered for confidence
+  promotion.
 - Parser fallback confidence-cap tests if fallback mode is implemented.
 - Duplicate consensus tests using captured real Claude/Codex outputs.
 - Additional end-to-end provider evidence summary tests using captured real CLI
@@ -755,7 +748,7 @@ stores raw sidecars; it is not optional future research.
 | Claude read-only flags | Validate locally with the write-denial fixture, not broad research. The installed CLI exposes `--permission-mode plan`, `--json-schema`, `--tools`, and `--disallowedTools`; the fixture and resolver gate are implemented, but eligibility still requires a green local proof. | Harness complete; opt-in local proof pending before Claude can be marked `read-only-confirmed` or eligible. |
 | Codex read-only and CLI drift | Exact command-builder tests and flag diagnostics are in place. Eligibility still requires a local write-denial fixture. Non-spend readiness probing is now implemented separately. | Pending Phase R2 local proof before Codex can be marked eligible. |
 | Non-spend auth probing for Claude/Codex | Initial probes are implemented with `claude auth status --json` and `codex login status`. Doctor distinguishes installed, route mismatch, not authenticated, launch unavailable, and spend-probe-required without running a full review. Unsupported status surfaces are reported as explicit bounded-spend follow-up work. | Complete for initial Claude/Codex R4 gate; tune as provider CLIs drift. |
-| Consensus clustering quality | Exact-hash consensus and conservative secondary clustering are implemented. Real Claude/Codex outputs must still be sampled for false merge and false split rates before secondary clusters affect stock/default confidence. | Pending Phase R9 before promoting secondary-cluster `confirmed` confidence. |
+| Consensus clustering quality | Exact-hash consensus and conservative secondary clustering are implemented. R9 added a labeled-sample calibration harness for measuring false merge and false split rates. Secondary clusters remain `needs-verification` until captured real Claude/Codex samples justify any promotion policy. | Harness complete; captured real samples still required before secondary-cluster `confirmed` confidence. |
 | Parser-fallback default policy | No more research is needed for v1 policy. Parser fallback is off for stock automatic provider review and allowed only for doctor diagnostics or explicit experiment-mode runs, with confidence caps. | Resolved for v1; optional Phase R12 only if fallback is implemented. |
 | Provider artifact retention/redaction | Minimum policy is implemented in the manifest: raw sidecars are sensitive local run artifacts, retained or purged with the run directory, and excluded from telemetry. Real-shim meta sidecars include redacted argv only. | Complete for fake and gated real-shim runner paths; revisit before stock real-shim enablement. |
 | End-to-end fake and simulated real-shim tests | Fake-shim runner and normalizer tests cover no eligible providers, selection off, partial provider failure, malformed output, timeout, no findings, duplicate findings, minimum-success enforcement, and bounded downstream evidence summaries for MCO v1 plus swarm-review v2. Simulated native-schema tests cover gated real Codex/Claude execution, malformed output, and timeout handling without launching provider CLIs. | Complete for current harnesses; add captured real CLI samples after local proof runs. |
@@ -785,11 +778,12 @@ Remaining research after the v1 runner:
 - Parser fallback is not enabled for stock automatic provider review in v1. It
   is limited to doctor diagnostics or explicit experiment-mode runs until real
   data justifies promotion.
+- Stock automatic provider review may run one eligible provider after its local
+  proof gates are green; that output is evidence only, with findings capped at
+  `needs-verification` unless exact stable-hash agreement from two providers
+  confirms them.
 
 ## Open Decisions
 
-- Whether the first stock default should run a single eligible provider or skip
-  until at least two providers are available. Single-provider output is still
-  useful, but it should be labeled `needs-verification`.
 - Whether output-only `/swarmdaddy:review` should always run provider review or
   only when the target is a diff/branch rather than a broad question.

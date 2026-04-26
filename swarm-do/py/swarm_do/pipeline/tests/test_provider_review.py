@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import subprocess
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from typing import Any
 
+from swarm_do.pipeline.cli import cmd_providers_calibrate_consensus
 from swarm_do.pipeline.provider_review import (
     CLAUDE_WRITE_DENIAL_CREATE_PATH,
     CLAUDE_WRITE_DENIAL_DELETE_PATH,
@@ -17,8 +20,10 @@ from swarm_do.pipeline.provider_review import (
     DEFAULT_CODEX_R2_TIMEOUT_SECONDS,
     ReviewProviderResolver,
     ReviewProviderProbeCheck,
+    calibrate_consensus_samples,
     build_claude_review_command,
     build_codex_review_command,
+    format_consensus_calibration_report,
     load_emission_schema,
     normalize_provider_review_results,
     run_claude_auth_status_probe,
@@ -852,6 +857,119 @@ enabled = false
         self.assertEqual(row["consensus_level"], "needs-verification")
         self.assertIsNotNone(row["duplicate_cluster_id"])
         validate_provider_findings_v2_artifact(artifact)
+
+    def test_consensus_calibration_measures_cluster_errors_and_keeps_policy_conservative(self) -> None:
+        same_anchor_first = {
+            "severity": "high",
+            "category": "logic",
+            "summary": "Rejects valid provider output",
+            "file_path": "py/swarm_do/pipeline/provider_review.py",
+            "line_start": 42,
+            "line_end": 42,
+            "confidence": 0.9,
+        }
+        same_anchor_second = {
+            **same_anchor_first,
+            "summary": "Drops schema-valid provider responses",
+        }
+        split_anchor_first = {
+            "severity": "medium",
+            "category": "test",
+            "summary": "Missing first assertion",
+            "file_path": "tests/test_provider_review.py",
+            "line_start": 10,
+            "line_end": 10,
+            "confidence": 0.8,
+        }
+        split_anchor_second = {
+            **split_anchor_first,
+            "summary": "Missing second assertion",
+            "line_start": 20,
+            "line_end": 20,
+        }
+        report = calibrate_consensus_samples(
+            {
+                "schema_version": "provider-review.consensus-calibration.samples.v1",
+                "samples": [
+                    {
+                        "sample_id": "false-merge",
+                        "provider_outputs": [
+                            {
+                                "provider_id": "claude",
+                                "findings": [
+                                    {"expected_cluster_id": "logic-a", "emission": same_anchor_first},
+                                ],
+                            },
+                            {
+                                "provider_id": "codex",
+                                "findings": [
+                                    {"expected_cluster_id": "logic-b", "emission": same_anchor_second},
+                                ],
+                            },
+                        ],
+                    },
+                    {
+                        "sample_id": "false-split",
+                        "provider_outputs": [
+                            {
+                                "provider_id": "claude",
+                                "findings": [
+                                    {"expected_cluster_id": "test-a", "emission": split_anchor_first},
+                                ],
+                            },
+                            {
+                                "provider_id": "codex",
+                                "findings": [
+                                    {"expected_cluster_id": "test-a", "emission": split_anchor_second},
+                                ],
+                            },
+                        ],
+                    },
+                ],
+            },
+            timestamp="2026-04-25T00:00:00Z",
+        )
+
+        self.assertEqual(report["schema_version"], "provider-review.consensus-calibration.v1")
+        self.assertEqual(report["sample_count"], 2)
+        self.assertEqual(report["false_merge_count"], 1)
+        self.assertEqual(report["false_split_count"], 1)
+        self.assertEqual(report["consensus_policy"]["secondary_cluster_promotion"], "disabled")
+        self.assertEqual(report["consensus_policy"]["single_provider_findings"], "needs-verification")
+        self.assertEqual(report["consensus_policy"]["stock_auto_min_success"], 1)
+        rendered = format_consensus_calibration_report(report)
+        self.assertIn("secondary_cluster_promotion: disabled", rendered)
+        self.assertIn("stock_auto_min_success: 1", rendered)
+
+    def test_consensus_calibration_cli_writes_report_and_renders_summary(self) -> None:
+        sample = {
+            "schema_version": "provider-review.consensus-calibration.samples.v1",
+            "samples": [
+                {
+                    "sample_id": "empty",
+                    "provider_outputs": [
+                        {"provider_id": "claude", "findings": []},
+                    ],
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            samples_path = root / "samples.json"
+            report_path = root / "report.json"
+            samples_path.write_text(json.dumps(sample), encoding="utf-8")
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                code = cmd_providers_calibrate_consensus(
+                    argparse.Namespace(samples=str(samples_path), output=str(report_path), json=False)
+                )
+
+            self.assertEqual(code, 0)
+            self.assertTrue(report_path.is_file())
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertEqual(report["schema_version"], "provider-review.consensus-calibration.v1")
+            self.assertIn("Provider review consensus calibration", stdout.getvalue())
+            self.assertIn(str(report_path), stdout.getvalue())
 
     def test_malformed_provider_output_is_partial_when_another_provider_is_valid(self) -> None:
         artifact = normalize_provider_review_results(

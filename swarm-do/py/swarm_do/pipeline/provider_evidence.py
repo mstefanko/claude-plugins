@@ -81,6 +81,21 @@ def provider_evidence_summary(
         provider_bits.append(f"min_success={min_success}")
     lines.append("- providers: " + "; ".join(provider_bits))
 
+    policy = artifact.get("consensus_policy")
+    if isinstance(policy, Mapping):
+        policy_bits = []
+        secondary = _text(policy.get("secondary_cluster_promotion"), "")
+        single = _text(policy.get("single_provider_findings"), "")
+        stock_min = policy.get("stock_auto_min_success")
+        if secondary:
+            policy_bits.append(f"secondary_cluster_promotion={secondary}")
+        if single:
+            policy_bits.append(f"single_provider_findings={single}")
+        if isinstance(stock_min, int):
+            policy_bits.append(f"stock_auto_min_success={stock_min}")
+        if policy_bits:
+            lines.append("- consensus_policy: " + "; ".join(policy_bits))
+
     findings = [item for item in artifact.get("findings") or [] if isinstance(item, Mapping)]
     sorted_findings = sorted(findings, key=_finding_sort_key)
     shown_findings = sorted_findings[:max_findings]

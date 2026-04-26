@@ -524,6 +524,31 @@ def cmd_providers_evidence(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_providers_calibrate_consensus(args: argparse.Namespace) -> int:
+    from .provider_review import calibrate_consensus_samples, format_consensus_calibration_report
+
+    try:
+        sample_path = Path(args.samples)
+        samples = json.loads(sample_path.read_text(encoding="utf-8"))
+        if not isinstance(samples, dict):
+            raise ValueError("calibration sample root must be an object")
+        report = calibrate_consensus_samples(samples)
+        if args.output:
+            output_path = Path(args.output)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        if args.json:
+            print(json.dumps(report, indent=2, sort_keys=True))
+        else:
+            print(format_consensus_calibration_report(report))
+            if args.output:
+                print(f"  report: {args.output}")
+    except Exception as exc:
+        print(f"swarm: providers calibrate-consensus: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def cmd_mode(args: argparse.Namespace) -> int:
     if args.name == "custom":
         return cmd_preset_clear(args)
@@ -924,6 +949,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-findings", type=int, default=5)
     p.add_argument("--max-errors", type=int, default=5)
     p.set_defaults(func=cmd_providers_evidence)
+    p = providers_sub.add_parser("calibrate-consensus")
+    p.add_argument("samples", help="provider-review consensus calibration sample JSON")
+    p.add_argument("--output", help="write the full calibration report JSON to this path")
+    p.add_argument("--json", action="store_true", help="print the full calibration report JSON")
+    p.set_defaults(func=cmd_providers_calibrate_consensus)
 
     mode = sub.add_parser("mode")
     mode.add_argument("name", choices=["claude-only", "codex-only", "balanced", "brainstorm", "research", "design", "review", "custom"])

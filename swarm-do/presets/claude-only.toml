@@ -3,6 +3,11 @@ description = "Route every role through Claude."
 pipeline = "default"
 origin = "stock"
 
+[review_providers]
+selection = "auto"
+min_success = 1
+max_parallel = 4
+
 [routing]
 "roles.agent-research" = { backend = "claude", model = "claude-sonnet-4-6", effort = "high" }
 "roles.agent-analysis" = { backend = "claude", model = "claude-opus-4-7", effort = "xhigh" }

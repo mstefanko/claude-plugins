@@ -57,6 +57,7 @@ class ProviderEvidenceTests(unittest.TestCase):
         self.assertIn("status: swarm-review partial", summary)
         self.assertIn("provider_count=1", summary)
         self.assertIn("min_success=2", summary)
+        self.assertIn("single_provider_findings=needs-verification", summary)
         self.assertIn("high/logic swarm-do/py/swarm_do/pipeline/provider_review.py:42", summary)
         self.assertIn("codex timeout", summary)
         self.assertNotIn("raw provider evidence snippet", summary)

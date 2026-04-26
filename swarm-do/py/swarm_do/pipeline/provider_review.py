@@ -34,6 +34,9 @@ from .resolver import BackendResolver, Route
 
 
 SCHEMA_VERSION = "provider-findings.v2-draft"
+CONSENSUS_POLICY_VERSION = "provider-review.consensus-policy.v1"
+CONSENSUS_CALIBRATION_SAMPLE_SCHEMA_VERSION = "provider-review.consensus-calibration.samples.v1"
+CONSENSUS_CALIBRATION_REPORT_SCHEMA_VERSION = "provider-review.consensus-calibration.v1"
 EMISSION_SCHEMA_PATH = REPO_ROOT / "schemas" / "provider_review" / "review_emission.v1.schema.json"
 PROVIDER_FINDINGS_V2_SCHEMA_PATH = REPO_ROOT / "schemas" / "telemetry" / "provider_findings.v2.schema.json"
 KNOWN_REVIEW_SHIMS = ("claude", "codex", "gemini")
@@ -306,6 +309,17 @@ def validate_provider_findings_v2_artifact(payload: Mapping[str, Any]) -> None:
     errors = validate_value(dict(payload), load_provider_findings_v2_schema())
     if errors:
         raise ProviderReviewSchemaError("provider-findings v2 schema violation: " + "; ".join(errors[:5]))
+
+
+def consensus_policy() -> dict[str, Any]:
+    return {
+        "policy_version": CONSENSUS_POLICY_VERSION,
+        "confirmed_requires": "exact stable-hash agreement from at least two schema-valid providers with consensus_score >= 0.75",
+        "secondary_cluster_promotion": "disabled",
+        "single_provider_findings": "needs-verification",
+        "stock_auto_min_success": DEFAULT_MIN_SUCCESS,
+        "calibration_status": "conservative-no-secondary-promotion",
+    }
 
 
 def parse_provider_csv(raw: str | None) -> tuple[str, ...]:
@@ -1549,6 +1563,35 @@ def _provider_error(provider_id: str | None, error_class: str, message: str | No
     }
 
 
+def _finding_candidate(provider_id: str, schema_mode: str, raw: Mapping[str, Any]) -> dict[str, Any]:
+    summary = str(raw.get("summary") or "")
+    short = _short_summary(summary)
+    category = _category(raw.get("category"))
+    file_raw = raw.get("file_path")
+    file_path = normalize_path(str(file_raw)) if file_raw else None
+    line_start = _to_int(raw.get("line_start"))
+    line_end = _to_int(raw.get("line_end")) or line_start
+    anchored = bool(file_path and line_start is not None)
+    confidence = _confidence(raw.get("confidence"), schema_mode=schema_mode, anchored=anchored)
+    hash_v1 = stable_finding_hash_v1(file_path, category, line_start, short) if anchored else None
+    return {
+        "provider_id": provider_id,
+        "schema_mode": schema_mode,
+        "severity": _map_severity(raw.get("severity")),
+        "category": category,
+        "summary": summary,
+        "short_summary": short,
+        "file_path": file_path,
+        "line_start": line_start,
+        "line_end": line_end,
+        "stable_finding_hash_v1": hash_v1,
+        "cluster_key": _cluster_key(file_path, line_start, line_end, category),
+        "confidence": confidence,
+        "evidence": _bounded_text(raw.get("evidence")),
+        "recommendation": _bounded_text(raw.get("recommendation")),
+    }
+
+
 def normalize_provider_review_results(
     results: Sequence[ProviderRunResult],
     *,
@@ -1605,34 +1648,7 @@ def normalize_provider_review_results(
                     _provider_error(result.provider_id, "malformed_finding", f"finding[{idx}] is not an object", schema_mode=result.schema_mode, sidecar_path=result.sidecar_path)
                 )
                 continue
-            summary = str(raw.get("summary") or "")
-            short = _short_summary(summary)
-            category = _category(raw.get("category"))
-            file_raw = raw.get("file_path")
-            file_path = normalize_path(str(file_raw)) if file_raw else None
-            line_start = _to_int(raw.get("line_start"))
-            line_end = _to_int(raw.get("line_end")) or line_start
-            anchored = bool(file_path and line_start is not None)
-            confidence = _confidence(raw.get("confidence"), schema_mode=result.schema_mode, anchored=anchored)
-            hash_v1 = stable_finding_hash_v1(file_path, category, line_start, short) if anchored else None
-            candidates.append(
-                {
-                    "provider_id": result.provider_id,
-                    "schema_mode": result.schema_mode,
-                    "severity": _map_severity(raw.get("severity")),
-                    "category": category,
-                    "summary": summary,
-                    "short_summary": short,
-                    "file_path": file_path,
-                    "line_start": line_start,
-                    "line_end": line_end,
-                    "stable_finding_hash_v1": hash_v1,
-                    "cluster_key": _cluster_key(file_path, line_start, line_end, category),
-                    "confidence": confidence,
-                    "evidence": _bounded_text(raw.get("evidence")),
-                    "recommendation": _bounded_text(raw.get("recommendation")),
-                }
-            )
+            candidates.append(_finding_candidate(result.provider_id, result.schema_mode, raw))
 
     groups = _consensus_groups(candidates)
 
@@ -1699,6 +1715,7 @@ def normalize_provider_review_results(
         "command": "review",
         "status": status,
         "status_reason": status_reason,
+        "consensus_policy": consensus_policy(),
         "run_id": run_id,
         "issue_id": issue_id,
         "stage_id": stage_id,
@@ -1786,6 +1803,157 @@ def _consensus_groups(candidates: Sequence[Mapping[str, Any]]) -> dict[str, list
 
     groups.update(passthrough)
     return groups
+
+
+def calibrate_consensus_samples(payload: Mapping[str, Any], *, timestamp: str | None = None) -> dict[str, Any]:
+    """Measure current grouping behavior against labeled provider output samples.
+
+    Calibration samples intentionally wrap, rather than mutate, model emission
+    findings so the normal emission schema remains swarm-owned and small.
+    """
+
+    if payload.get("schema_version") != CONSENSUS_CALIBRATION_SAMPLE_SCHEMA_VERSION:
+        raise ProviderReviewError(
+            f"consensus calibration samples must use schema_version {CONSENSUS_CALIBRATION_SAMPLE_SCHEMA_VERSION}"
+        )
+    raw_samples = payload.get("samples")
+    if not isinstance(raw_samples, list):
+        raise ProviderReviewError("consensus calibration samples must contain a samples array")
+
+    sample_reports: list[dict[str, Any]] = []
+    totals = {
+        "finding_count": 0,
+        "labeled_finding_count": 0,
+        "expected_group_count": 0,
+        "actual_group_count": 0,
+        "secondary_group_count": 0,
+        "false_merge_count": 0,
+        "false_split_count": 0,
+    }
+
+    for sample_index, raw_sample in enumerate(raw_samples):
+        if not isinstance(raw_sample, Mapping):
+            raise ProviderReviewError(f"samples[{sample_index}] must be an object")
+        sample_id = str(raw_sample.get("sample_id") or f"sample-{sample_index + 1}")
+        provider_outputs = raw_sample.get("provider_outputs")
+        if not isinstance(provider_outputs, list):
+            raise ProviderReviewError(f"sample {sample_id}: provider_outputs must be an array")
+
+        candidates: list[dict[str, Any]] = []
+        for output_index, raw_output in enumerate(provider_outputs):
+            if not isinstance(raw_output, Mapping):
+                raise ProviderReviewError(f"sample {sample_id}: provider_outputs[{output_index}] must be an object")
+            provider_id = str(raw_output.get("provider_id") or "").strip()
+            if not _SAFE_PROVIDER_RE.fullmatch(provider_id):
+                raise ProviderReviewError(f"sample {sample_id}: invalid provider_id {provider_id!r}")
+            schema_mode = str(raw_output.get("schema_mode") or "native")
+            findings = raw_output.get("findings")
+            if not isinstance(findings, list):
+                raise ProviderReviewError(f"sample {sample_id}: provider output {provider_id} findings must be an array")
+            for finding_index, wrapped in enumerate(findings):
+                if not isinstance(wrapped, Mapping):
+                    raise ProviderReviewError(
+                        f"sample {sample_id}: {provider_id} finding[{finding_index}] must be an object"
+                    )
+                emission = wrapped.get("emission")
+                if not isinstance(emission, Mapping):
+                    raise ProviderReviewError(
+                        f"sample {sample_id}: {provider_id} finding[{finding_index}].emission must be an object"
+                    )
+                validate_emission_payload({"findings": [dict(emission)]})
+                row = _finding_candidate(provider_id, schema_mode, emission)
+                expected_cluster_id = wrapped.get("expected_cluster_id")
+                if expected_cluster_id is not None:
+                    expected_cluster_id = str(expected_cluster_id)
+                row["calibration_instance_id"] = f"{provider_id}:{output_index}:{finding_index}"
+                row["expected_cluster_id"] = expected_cluster_id
+                candidates.append(row)
+
+        groups = _consensus_groups(candidates)
+        actual_groups: list[dict[str, Any]] = []
+        expected_to_actual: dict[str, set[str]] = {}
+        for actual_key in sorted(groups):
+            group = groups[actual_key]
+            expected_ids = sorted(
+                {
+                    str(item["expected_cluster_id"])
+                    for item in group
+                    if item.get("expected_cluster_id") not in (None, "")
+                }
+            )
+            for expected_id in expected_ids:
+                expected_to_actual.setdefault(expected_id, set()).add(actual_key)
+            actual_groups.append(
+                {
+                    "actual_group_key": actual_key,
+                    "group_kind": actual_key.split(":", 1)[0],
+                    "provider_ids": sorted({str(item["provider_id"]) for item in group}),
+                    "instance_ids": sorted(str(item["calibration_instance_id"]) for item in group),
+                    "expected_cluster_ids": expected_ids,
+                    "is_false_merge": len(expected_ids) > 1,
+                }
+            )
+
+        false_merges = [group for group in actual_groups if group["is_false_merge"]]
+        false_splits = [
+            {
+                "expected_cluster_id": expected_id,
+                "actual_group_keys": sorted(actual_keys),
+            }
+            for expected_id, actual_keys in sorted(expected_to_actual.items())
+            if len(actual_keys) > 1
+        ]
+        labeled_finding_count = sum(1 for item in candidates if item.get("expected_cluster_id") not in (None, ""))
+        sample_report = {
+            "sample_id": sample_id,
+            "finding_count": len(candidates),
+            "labeled_finding_count": labeled_finding_count,
+            "expected_group_count": len(expected_to_actual),
+            "actual_group_count": len(actual_groups),
+            "secondary_group_count": sum(1 for group in actual_groups if group["group_kind"] == "cluster"),
+            "false_merge_count": len(false_merges),
+            "false_split_count": len(false_splits),
+            "false_merges": false_merges,
+            "false_splits": false_splits,
+            "actual_groups": actual_groups,
+        }
+        sample_reports.append(sample_report)
+        for key in totals:
+            totals[key] += int(sample_report[key])
+
+    report = {
+        "schema_version": CONSENSUS_CALIBRATION_REPORT_SCHEMA_VERSION,
+        "timestamp": timestamp or _iso_utc_now(),
+        "sample_count": len(sample_reports),
+        **totals,
+        "false_merge_rate": _rate(totals["false_merge_count"], totals["actual_group_count"]),
+        "false_split_rate": _rate(totals["false_split_count"], totals["expected_group_count"]),
+        "consensus_policy": consensus_policy(),
+        "recommendation": "keep secondary clusters at needs-verification; do not promote them to confirmed confidence",
+        "samples": sample_reports,
+    }
+    return report
+
+
+def format_consensus_calibration_report(report: Mapping[str, Any]) -> str:
+    policy = report.get("consensus_policy") if isinstance(report.get("consensus_policy"), Mapping) else {}
+    lines = [
+        "Provider review consensus calibration",
+        f"  samples: {report.get('sample_count', 0)}",
+        f"  findings: {report.get('finding_count', 0)} labeled={report.get('labeled_finding_count', 0)}",
+        f"  groups: expected={report.get('expected_group_count', 0)} actual={report.get('actual_group_count', 0)} secondary={report.get('secondary_group_count', 0)}",
+        f"  false_merges: {report.get('false_merge_count', 0)} rate={report.get('false_merge_rate', 0)}",
+        f"  false_splits: {report.get('false_split_count', 0)} rate={report.get('false_split_rate', 0)}",
+        f"  secondary_cluster_promotion: {policy.get('secondary_cluster_promotion', 'unknown')}",
+        f"  single_provider_findings: {policy.get('single_provider_findings', 'unknown')}",
+        f"  stock_auto_min_success: {policy.get('stock_auto_min_success', 'unknown')}",
+        f"  recommendation: {report.get('recommendation', '')}",
+    ]
+    return "\n".join(lines)
+
+
+def _rate(numerator: int, denominator: int) -> float:
+    return round(numerator / denominator, 6) if denominator else 0.0
 
 
 def skipped_result(

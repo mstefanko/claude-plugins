@@ -3,6 +3,11 @@ description = "Route delegatable roles through Codex while preserving Claude str
 pipeline = "default"
 origin = "stock"
 
+[review_providers]
+selection = "auto"
+min_success = 1
+max_parallel = 4
+
 [routing]
 "roles.agent-research" = { backend = "codex", model = "gpt-5.4", effort = "high" }
 "roles.agent-analysis" = { backend = "codex", model = "gpt-5.4", effort = "xhigh" }

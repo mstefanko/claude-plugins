@@ -3,6 +3,11 @@ description = "Output-only review profile that produces a findings/evidence summ
 pipeline = "review"
 origin = "stock"
 
+[review_providers]
+selection = "auto"
+min_success = 1
+max_parallel = 4
+
 [routing]
 "roles.agent-review" = { backend = "claude", model = "claude-opus-4-7", effort = "high" }
 

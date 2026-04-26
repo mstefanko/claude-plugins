@@ -10,6 +10,7 @@
     "command",
     "status",
     "status_reason",
+    "consensus_policy",
     "run_id",
     "issue_id",
     "stage_id",
@@ -45,6 +46,42 @@
     },
     "status_reason": {
       "type": "string"
+    },
+    "consensus_policy": {
+      "type": "object",
+      "required": [
+        "policy_version",
+        "confirmed_requires",
+        "secondary_cluster_promotion",
+        "single_provider_findings",
+        "stock_auto_min_success",
+        "calibration_status"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "policy_version": {
+          "type": "string",
+          "enum": ["provider-review.consensus-policy.v1"]
+        },
+        "confirmed_requires": {
+          "type": "string"
+        },
+        "secondary_cluster_promotion": {
+          "type": "string",
+          "enum": ["disabled"]
+        },
+        "single_provider_findings": {
+          "type": "string",
+          "enum": ["needs-verification"]
+        },
+        "stock_auto_min_success": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "calibration_status": {
+          "type": "string"
+        }
+      }
     },
     "run_id": {
       "type": "string",

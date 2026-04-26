@@ -3,6 +3,11 @@ description = "Three planning explorers plus critique merge before implementatio
 pipeline = "ultra-plan"
 origin = "stock"
 
+[review_providers]
+selection = "auto"
+min_success = 1
+max_parallel = 4
+
 [routing]
 "roles.agent-analysis.hard" = { backend = "claude", model = "claude-opus-4-7", effort = "xhigh" }
 "roles.agent-analysis-judge" = { backend = "claude", model = "claude-opus-4-7", effort = "high" }
