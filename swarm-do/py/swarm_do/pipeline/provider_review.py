@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import re
+import signal
 import shutil
 import subprocess
 import sys
@@ -52,6 +53,7 @@ DEFAULT_CODEX_R2_TIMEOUT_SECONDS = 90
 DEFAULT_CLAUDE_R3_TIMEOUT_SECONDS = 90
 DEFAULT_AUTH_PROBE_TIMEOUT_SECONDS = 10
 MAX_NORMALIZED_FINDINGS = 5
+_PROVIDER_ENV_STRIP = ("CLAUDECODE",)
 CODEX_WRITE_DENIAL_CREATE_PATH = "codex-created.txt"
 CODEX_WRITE_DENIAL_EDIT_PATH = "codex-edit-target.txt"
 CODEX_WRITE_DENIAL_DELETE_PATH = "codex-delete-target.txt"
@@ -254,10 +256,27 @@ class ProviderRunResult:
     last_message_text: str | None = None
     command_argv: tuple[str, ...] = ()
     returncode: int | None = None
+    cancelled: bool = False
+    cancel_reason: str | None = None
+    killed_process_group: bool = False
 
     @property
     def ok(self) -> bool:
         return self.error_class is None
+
+
+@dataclasses.dataclass(frozen=True)
+class ProviderProcessResult:
+    command_argv: tuple[str, ...]
+    stdout_path: Path
+    stderr_path: Path
+    returncode: int | None
+    elapsed_seconds: float
+    cancelled: bool = False
+    cancel_reason: str | None = None
+    killed_process_group: bool = False
+    stdout_text: str = ""
+    stderr_text: str = ""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -2272,6 +2291,142 @@ def _read_text_if_exists(path: Path) -> str | None:
     return path.read_text(encoding="utf-8")
 
 
+def _provider_subprocess_env() -> dict[str, str]:
+    """Return the provider subprocess environment with session-local control vars removed."""
+
+    env = dict(os.environ)
+    for name in _PROVIDER_ENV_STRIP:
+        env.pop(name, None)
+    return env
+
+
+def _read_output_tail_snippet(path: Path, max_bytes: int) -> str:
+    if not path.is_file():
+        return ""
+    size = path.stat().st_size
+    with path.open("rb") as fh:
+        fh.seek(max(0, size - max_bytes))
+        text = fh.read().decode("utf-8", errors="replace")
+    return _text_snippet(text)
+
+
+def _signal_provider_process_group(process: subprocess.Popen[str], sig: signal.Signals) -> bool:
+    if not (hasattr(os, "getpgid") and hasattr(os, "killpg")):
+        return False
+    try:
+        os.killpg(os.getpgid(process.pid), sig)
+    except OSError:
+        return False
+    return True
+
+
+def _cancel_provider_process(
+    process: subprocess.Popen[str],
+    *,
+    started_new_session: bool,
+    grace_seconds: float,
+) -> bool:
+    killed_process_group = False
+    if started_new_session:
+        killed_process_group = _signal_provider_process_group(process, signal.SIGTERM)
+    if not killed_process_group:
+        try:
+            process.terminate()
+        except OSError:
+            pass
+    try:
+        process.wait(timeout=grace_seconds)
+        return killed_process_group
+    except subprocess.TimeoutExpired:
+        pass
+
+    sent_sigkill_group = False
+    if started_new_session:
+        sent_sigkill_group = _signal_provider_process_group(process, signal.SIGKILL)
+        killed_process_group = sent_sigkill_group or killed_process_group
+    if not sent_sigkill_group:
+        try:
+            process.kill()
+        except OSError:
+            pass
+    process.wait()
+    return killed_process_group
+
+
+def _run_provider_process(
+    command: Sequence[str],
+    *,
+    cwd: Path,
+    stdout_path: Path,
+    stderr_path: Path,
+    timeout_seconds: int,
+    popen_factory: Callable[..., subprocess.Popen[str]] = subprocess.Popen,
+    grace_seconds: float = 0.5,
+    output_snippet_bytes: int = 4096,
+) -> ProviderProcessResult:
+    """Run a provider CLI in its own process group when POSIX support is available.
+
+    The process-group cancellation path depends on POSIX `setsid`/`killpg`.
+    Non-POSIX runtimes fall back to terminating and killing only the direct
+    child process so timeout branches remain testable.
+    """
+
+    command_argv = tuple(str(part) for part in command)
+    stdout_path = stdout_path.resolve()
+    stderr_path = stderr_path.resolve()
+    stdout_path.parent.mkdir(parents=True, exist_ok=True)
+    stderr_path.parent.mkdir(parents=True, exist_ok=True)
+    started = time.monotonic()
+    returncode: int | None = None
+    cancelled = False
+    cancel_reason: str | None = None
+    killed_process_group = False
+    started_new_session = hasattr(os, "setsid")
+
+    with stdout_path.open("w", encoding="utf-8") as stdout_file, stderr_path.open("w", encoding="utf-8") as stderr_file:
+        try:
+            process = popen_factory(
+                command_argv,
+                cwd=str(cwd),
+                stdout=stdout_file,
+                stderr=stderr_file,
+                text=True,
+                env=_provider_subprocess_env(),
+                start_new_session=started_new_session,
+                close_fds=True,
+            )
+        except OSError as exc:
+            cancelled = True
+            cancel_reason = "spawn_error"
+            stderr_file.write(str(exc))
+        else:
+            try:
+                returncode = process.wait(timeout=timeout_seconds)
+            except subprocess.TimeoutExpired:
+                cancelled = True
+                cancel_reason = "timeout"
+                killed_process_group = _cancel_provider_process(
+                    process,
+                    started_new_session=started_new_session,
+                    grace_seconds=grace_seconds,
+                )
+                returncode = None
+
+    elapsed = time.monotonic() - started
+    return ProviderProcessResult(
+        command_argv=command_argv,
+        stdout_path=stdout_path,
+        stderr_path=stderr_path,
+        returncode=returncode,
+        elapsed_seconds=elapsed,
+        cancelled=cancelled,
+        cancel_reason=cancel_reason,
+        killed_process_group=killed_process_group,
+        stdout_text=_read_output_tail_snippet(stdout_path, output_snippet_bytes),
+        stderr_text=_read_output_tail_snippet(stderr_path, output_snippet_bytes),
+    )
+
+
 def _route_from_status(status: ReviewProviderStatus) -> Route | None:
     if not isinstance(status.route, Mapping):
         return None
@@ -2293,10 +2448,9 @@ def _run_codex_review_provider(
     prompt_text: str,
     provider_dir: Path,
     timeout_seconds: int,
-    runner: Callable[..., subprocess.CompletedProcess[str]],
+    popen_factory: Callable[..., subprocess.Popen[str]],
     allow_parser_fallback: bool = False,
 ) -> ProviderRunResult:
-    started = time.monotonic()
     last_message_file = provider_dir / "last-message.json"
     command = build_codex_review_command(
         codex_bin=status.executable or "codex",
@@ -2306,52 +2460,65 @@ def _run_codex_review_provider(
         last_message_file=last_message_file,
         route=_route_from_status(status),
     )
-    try:
-        completed = runner(command, text=True, capture_output=True, timeout=timeout_seconds)
-    except subprocess.TimeoutExpired as exc:
-        elapsed = time.monotonic() - started
+    process_result = _run_provider_process(
+        command,
+        cwd=repo,
+        stdout_path=provider_dir / "stdout.jsonl",
+        stderr_path=provider_dir / "stderr.txt",
+        timeout_seconds=timeout_seconds,
+        popen_factory=popen_factory,
+    )
+    last_message_text = _read_text_if_exists(last_message_file)
+    stdout_full = _read_text_if_exists(process_result.stdout_path) or ""
+    stderr_full = _read_text_if_exists(process_result.stderr_path) or ""
+    if process_result.cancelled and process_result.cancel_reason == "timeout":
         last_message_text = _read_text_if_exists(last_message_file)
         return ProviderRunResult(
             status.provider_id,
             None,
-            str(exc.stdout or ""),
-            str(exc.stderr or ""),
+            process_result.stdout_text,
+            process_result.stderr_text,
             "timeout",
             f"provider timed out after {timeout_seconds}s",
             schema_mode="native",
-            elapsed_seconds=elapsed,
+            elapsed_seconds=process_result.elapsed_seconds,
             last_message_text=last_message_text,
-            command_argv=tuple(command),
+            command_argv=process_result.command_argv,
+            returncode=process_result.returncode,
+            cancelled=True,
+            cancel_reason=process_result.cancel_reason,
+            killed_process_group=process_result.killed_process_group,
         )
-    except OSError as exc:
-        elapsed = time.monotonic() - started
+    if process_result.cancelled and process_result.cancel_reason == "spawn_error":
         return ProviderRunResult(
             status.provider_id,
             None,
             "",
-            str(exc),
+            process_result.stderr_text,
             "spawn_error",
-            f"provider failed to start: {exc}",
+            f"provider failed to start: {process_result.stderr_text}",
             schema_mode="native",
-            elapsed_seconds=elapsed,
-            command_argv=tuple(command),
+            elapsed_seconds=process_result.elapsed_seconds,
+            command_argv=process_result.command_argv,
+            returncode=process_result.returncode,
+            cancelled=True,
+            cancel_reason=process_result.cancel_reason,
+            killed_process_group=process_result.killed_process_group,
         )
 
-    elapsed = time.monotonic() - started
-    last_message_text = _read_text_if_exists(last_message_file)
-    if completed.returncode != 0:
+    if process_result.returncode != 0:
         return ProviderRunResult(
             status.provider_id,
             None,
-            completed.stdout or "",
-            completed.stderr or "",
+            process_result.stdout_text,
+            process_result.stderr_text,
             "provider_error",
-            f"provider exited {completed.returncode}",
+            f"provider exited {process_result.returncode}",
             schema_mode="native",
-            elapsed_seconds=elapsed,
+            elapsed_seconds=process_result.elapsed_seconds,
             last_message_text=last_message_text,
-            command_argv=tuple(command),
-            returncode=completed.returncode,
+            command_argv=process_result.command_argv,
+            returncode=process_result.returncode,
         )
     try:
         payload = _codex_output_payload(last_message_file)
@@ -2360,38 +2527,38 @@ def _run_codex_review_provider(
             fallback = _try_parser_fallback_result(
                 provider_id=status.provider_id,
                 native_error=exc,
-                raw_text=_fallback_raw_text(last_message_text, completed.stdout, completed.stderr),
-                stdout_text=completed.stdout or "",
-                stderr_text=completed.stderr or "",
-                elapsed_seconds=elapsed,
-                command_argv=command,
-                returncode=completed.returncode,
+                raw_text=_fallback_raw_text(last_message_text, stdout_full, stderr_full),
+                stdout_text=process_result.stdout_text,
+                stderr_text=process_result.stderr_text,
+                elapsed_seconds=process_result.elapsed_seconds,
+                command_argv=process_result.command_argv,
+                returncode=process_result.returncode,
             )
             if fallback is not None:
                 return fallback
         return ProviderRunResult(
             status.provider_id,
             None,
-            completed.stdout or "",
-            completed.stderr or "",
+            process_result.stdout_text,
+            process_result.stderr_text,
             "malformed_output",
             str(exc),
             schema_mode="native",
-            elapsed_seconds=elapsed,
+            elapsed_seconds=process_result.elapsed_seconds,
             last_message_text=last_message_text,
-            command_argv=tuple(command),
-            returncode=completed.returncode,
+            command_argv=process_result.command_argv,
+            returncode=process_result.returncode,
         )
     return ProviderRunResult(
         status.provider_id,
         payload,
-        completed.stdout or "",
-        completed.stderr or "",
+        process_result.stdout_text,
+        process_result.stderr_text,
         schema_mode="native",
-        elapsed_seconds=elapsed,
+        elapsed_seconds=process_result.elapsed_seconds,
         last_message_text=json.dumps(payload, sort_keys=True) + "\n",
-        command_argv=tuple(command),
-        returncode=completed.returncode,
+        command_argv=process_result.command_argv,
+        returncode=process_result.returncode,
     )
 
 
@@ -2400,97 +2567,110 @@ def _run_claude_review_provider(
     *,
     repo: Path,
     prompt_text: str,
+    provider_dir: Path,
     timeout_seconds: int,
-    runner: Callable[..., subprocess.CompletedProcess[str]],
+    popen_factory: Callable[..., subprocess.Popen[str]],
     allow_parser_fallback: bool = False,
 ) -> ProviderRunResult:
-    started = time.monotonic()
     command = build_claude_review_command(
         claude_bin=status.executable or "claude",
         prompt=prompt_text,
         schema_json=minified_emission_schema(),
     )
-    try:
-        completed = runner(command, cwd=repo, text=True, capture_output=True, timeout=timeout_seconds)
-    except subprocess.TimeoutExpired as exc:
-        elapsed = time.monotonic() - started
+    process_result = _run_provider_process(
+        command,
+        cwd=repo,
+        stdout_path=provider_dir / "stdout.jsonl",
+        stderr_path=provider_dir / "stderr.txt",
+        timeout_seconds=timeout_seconds,
+        popen_factory=popen_factory,
+    )
+    stdout_full = _read_text_if_exists(process_result.stdout_path) or ""
+    stderr_full = _read_text_if_exists(process_result.stderr_path) or ""
+    if process_result.cancelled and process_result.cancel_reason == "timeout":
         return ProviderRunResult(
             status.provider_id,
             None,
-            str(exc.stdout or ""),
-            str(exc.stderr or ""),
+            process_result.stdout_text,
+            process_result.stderr_text,
             "timeout",
             f"provider timed out after {timeout_seconds}s",
             schema_mode="native",
-            elapsed_seconds=elapsed,
-            command_argv=tuple(command),
+            elapsed_seconds=process_result.elapsed_seconds,
+            command_argv=process_result.command_argv,
+            returncode=process_result.returncode,
+            cancelled=True,
+            cancel_reason=process_result.cancel_reason,
+            killed_process_group=process_result.killed_process_group,
         )
-    except OSError as exc:
-        elapsed = time.monotonic() - started
+    if process_result.cancelled and process_result.cancel_reason == "spawn_error":
         return ProviderRunResult(
             status.provider_id,
             None,
             "",
-            str(exc),
+            process_result.stderr_text,
             "spawn_error",
-            f"provider failed to start: {exc}",
+            f"provider failed to start: {process_result.stderr_text}",
             schema_mode="native",
-            elapsed_seconds=elapsed,
-            command_argv=tuple(command),
+            elapsed_seconds=process_result.elapsed_seconds,
+            command_argv=process_result.command_argv,
+            returncode=process_result.returncode,
+            cancelled=True,
+            cancel_reason=process_result.cancel_reason,
+            killed_process_group=process_result.killed_process_group,
         )
 
-    elapsed = time.monotonic() - started
-    if completed.returncode != 0:
+    if process_result.returncode != 0:
         return ProviderRunResult(
             status.provider_id,
             None,
-            completed.stdout or "",
-            completed.stderr or "",
+            process_result.stdout_text,
+            process_result.stderr_text,
             "provider_error",
-            f"provider exited {completed.returncode}",
+            f"provider exited {process_result.returncode}",
             schema_mode="native",
-            elapsed_seconds=elapsed,
-            command_argv=tuple(command),
-            returncode=completed.returncode,
+            elapsed_seconds=process_result.elapsed_seconds,
+            command_argv=process_result.command_argv,
+            returncode=process_result.returncode,
         )
     try:
-        payload = _claude_output_payload(completed.stdout or "")
+        payload = _claude_output_payload(stdout_full)
     except (json.JSONDecodeError, ProviderReviewSchemaError) as exc:
         if allow_parser_fallback:
             fallback = _try_parser_fallback_result(
                 provider_id=status.provider_id,
                 native_error=exc,
-                raw_text=_fallback_raw_text(completed.stdout, completed.stderr),
-                stdout_text=completed.stdout or "",
-                stderr_text=completed.stderr or "",
-                elapsed_seconds=elapsed,
-                command_argv=command,
-                returncode=completed.returncode,
+                raw_text=_fallback_raw_text(stdout_full, stderr_full),
+                stdout_text=process_result.stdout_text,
+                stderr_text=process_result.stderr_text,
+                elapsed_seconds=process_result.elapsed_seconds,
+                command_argv=process_result.command_argv,
+                returncode=process_result.returncode,
             )
             if fallback is not None:
                 return fallback
         return ProviderRunResult(
             status.provider_id,
             None,
-            completed.stdout or "",
-            completed.stderr or "",
+            process_result.stdout_text,
+            process_result.stderr_text,
             "malformed_output",
             str(exc),
             schema_mode="native",
-            elapsed_seconds=elapsed,
-            command_argv=tuple(command),
-            returncode=completed.returncode,
+            elapsed_seconds=process_result.elapsed_seconds,
+            command_argv=process_result.command_argv,
+            returncode=process_result.returncode,
         )
     return ProviderRunResult(
         status.provider_id,
         payload,
-        completed.stdout or "",
-        completed.stderr or "",
+        process_result.stdout_text,
+        process_result.stderr_text,
         schema_mode="native",
-        elapsed_seconds=elapsed,
+        elapsed_seconds=process_result.elapsed_seconds,
         last_message_text=json.dumps(payload, sort_keys=True) + "\n",
-        command_argv=tuple(command),
-        returncode=completed.returncode,
+        command_argv=process_result.command_argv,
+        returncode=process_result.returncode,
     )
 
 
@@ -2502,7 +2682,7 @@ def _run_real_provider(
     prompt_text: str,
     output_dir: Path,
     timeout_seconds: int,
-    runner: Callable[..., subprocess.CompletedProcess[str]],
+    popen_factory: Callable[..., subprocess.Popen[str]],
     allow_parser_fallback: bool = False,
 ) -> ProviderRunResult:
     if status is None or not status.eligible:
@@ -2532,7 +2712,7 @@ def _run_real_provider(
             prompt_text=prompt_text,
             provider_dir=provider_dir,
             timeout_seconds=timeout_seconds,
-            runner=runner,
+            popen_factory=popen_factory,
             allow_parser_fallback=allow_parser_fallback,
         )
     if provider_id == "claude":
@@ -2540,8 +2720,9 @@ def _run_real_provider(
             status,
             repo=repo,
             prompt_text=prompt_text,
+            provider_dir=provider_dir,
             timeout_seconds=timeout_seconds,
-            runner=runner,
+            popen_factory=popen_factory,
             allow_parser_fallback=allow_parser_fallback,
         )
     return ProviderRunResult(
@@ -2607,8 +2788,10 @@ def _write_provider_sidecars(output_dir: Path, result: ProviderRunResult) -> Pro
     stderr_path = provider_dir / "stderr.txt"
     last_message_path = provider_dir / "last-message.json"
     meta_path = provider_dir / "meta.json"
-    _write_text(stdout_path, result.stdout_text)
-    _write_text(stderr_path, result.stderr_text)
+    if not stdout_path.exists():
+        _write_text(stdout_path, result.stdout_text)
+    if not stderr_path.exists():
+        _write_text(stderr_path, result.stderr_text)
     if result.last_message_text is None:
         _write_json(last_message_path, result.payload)
     else:
@@ -2620,9 +2803,11 @@ def _write_provider_sidecars(output_dir: Path, result: ProviderRunResult) -> Pro
         "message": result.message,
         "schema_mode": result.schema_mode,
         "elapsed_seconds": round(result.elapsed_seconds, 6),
+        "returncode": result.returncode,
+        "cancelled": result.cancelled,
+        "cancel_reason": result.cancel_reason,
+        "killed_process_group": result.killed_process_group,
     }
-    if result.returncode is not None:
-        meta["returncode"] = result.returncode
     if result.command_argv:
         meta["command_argv"] = _redacted_argv(result.command_argv)
     _write_json(
@@ -2673,7 +2858,7 @@ def _run_selected_real_providers(
     output_dir: Path,
     timeout_seconds: int,
     max_parallel: int,
-    runner: Callable[..., subprocess.CompletedProcess[str]],
+    popen_factory: Callable[..., subprocess.Popen[str]],
     allow_parser_fallback: bool = False,
 ) -> list[ProviderRunResult]:
     prompt_text = prompt_file.read_text(encoding="utf-8")
@@ -2689,7 +2874,7 @@ def _run_selected_real_providers(
                 prompt_text=prompt_text,
                 output_dir=output_dir,
                 timeout_seconds=timeout_seconds,
-                runner=runner,
+                popen_factory=popen_factory,
                 allow_parser_fallback=allow_parser_fallback,
             ): provider_id
             for provider_id in provider_ids
@@ -2733,6 +2918,9 @@ def write_manifest(
         "retention": {
             "class": "local-run-artifact-sensitive",
             "policy": "retained or purged with the run artifact directory; not promoted to telemetry",
+            "environment_sanitization": {
+                "strip": list(_PROVIDER_ENV_STRIP),
+            },
         },
     }
     _write_json(path, manifest)
@@ -2763,6 +2951,7 @@ def run_stage(args: argparse.Namespace) -> int:
     fake_result_dir = Path(args.fake_result_dir).resolve() if args.fake_result_dir else None
     fake_providers = explicit if fake_result_dir is not None and explicit else None
     runner = getattr(args, "runner", subprocess.run)
+    popen_factory = getattr(args, "popen_factory", subprocess.Popen)
     resolver = getattr(args, "resolver", None) or ReviewProviderResolver(fake_providers=fake_providers, runner=runner)
     selection = resolver.select(
         selection=args.selection,
@@ -2810,7 +2999,7 @@ def run_stage(args: argparse.Namespace) -> int:
             output_dir=output_dir,
             timeout_seconds=args.timeout_seconds,
             max_parallel=selection.policy.max_parallel,
-            runner=runner,
+            popen_factory=popen_factory,
             allow_parser_fallback=allow_parser_fallback,
         )
     else:

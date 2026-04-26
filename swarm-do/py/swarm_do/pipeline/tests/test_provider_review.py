@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -20,6 +21,7 @@ from swarm_do.pipeline.provider_review import (
     DEFAULT_CODEX_R2_TIMEOUT_SECONDS,
     ProviderReviewError,
     ProviderFixtureResult,
+    _run_provider_process,
     ReviewProviderResolver,
     ReviewProviderProbeCheck,
     calibrate_consensus_samples,
@@ -40,6 +42,82 @@ from swarm_do.pipeline.provider_review import (
 from swarm_do.pipeline.provider_review import ProviderRunResult
 from swarm_do.pipeline.resolver import Route
 from swarm_do.telemetry.schemas import validate_value
+
+
+class FakePopen:
+    def __init__(
+        self,
+        args,
+        *,
+        stdout,
+        stderr,
+        text: bool,
+        runner,
+        cwd=None,
+        env=None,
+        start_new_session: bool = False,
+        close_fds: bool = False,
+    ):
+        self.args = list(args)
+        self.stdout = stdout
+        self.stderr = stderr
+        self.text = text
+        self.runner = runner
+        self.cwd = cwd
+        self.env = env
+        self.start_new_session = start_new_session
+        self.close_fds = close_fds
+        self.pid = 999999
+        self.returncode: int | None = None
+        self._started = False
+        self._terminated = False
+        self._killed = False
+
+    def wait(self, timeout=None):
+        if self.returncode is not None:
+            return self.returncode
+        if self._terminated:
+            self.returncode = -15
+            return self.returncode
+        if self._killed:
+            self.returncode = -9
+            return self.returncode
+        if self._started:
+            raise subprocess.TimeoutExpired(self.args, timeout)
+        self._started = True
+        try:
+            completed = self.runner(
+                self.args,
+                cwd=self.cwd,
+                text=self.text,
+                capture_output=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            self.stdout.write(str(getattr(exc, "stdout", None) or getattr(exc, "output", None) or ""))
+            self.stderr.write(str(exc.stderr or ""))
+            self.stdout.flush()
+            self.stderr.flush()
+            raise
+        self.stdout.write(completed.stdout or "")
+        self.stderr.write(completed.stderr or "")
+        self.stdout.flush()
+        self.stderr.flush()
+        self.returncode = completed.returncode
+        return self.returncode
+
+    def terminate(self) -> None:
+        self._terminated = True
+
+    def kill(self) -> None:
+        self._killed = True
+
+
+def _fake_popen_factory(runner):
+    def factory(args, **kwargs):
+        return FakePopen(args, runner=runner, **kwargs)
+
+    return factory
 
 
 class ProviderReviewTests(unittest.TestCase):
@@ -100,6 +178,7 @@ class ProviderReviewTests(unittest.TestCase):
         providers: tuple[str, ...],
         *,
         runner,
+        popen_factory,
         resolver_factory,
         timeout_seconds: int = 30,
         allow_parser_fallback: bool = False,
@@ -130,6 +209,7 @@ class ProviderReviewTests(unittest.TestCase):
                         stage_id="provider-review",
                         fake_result_dir=None,
                         runner=runner,
+                        popen_factory=popen_factory,
                         resolver=resolver,
                         allow_parser_fallback=allow_parser_fallback,
                     )
@@ -153,6 +233,117 @@ class ProviderReviewTests(unittest.TestCase):
                     os.environ["CLAUDE_PLUGIN_DATA"] = old_data
         validate_provider_findings_v2_artifact(artifact)
         return code, artifact, sidecars
+
+    def _assert_pid_exits(self, pid: int, *, timeout_seconds: float = 5.0) -> None:
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return
+            time.sleep(0.05)
+        self.fail(f"process {pid} was still alive after provider cancellation")
+
+    @unittest.skipUnless(Path("/bin/sh").is_file(), "/bin/sh unavailable")
+    def test_provider_process_writes_sidecars_and_succeeds(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            result = _run_provider_process(
+                ["/bin/sh", "-c", "printf hi; printf err >&2"],
+                cwd=root,
+                stdout_path=root / "providers" / "codex" / "stdout.jsonl",
+                stderr_path=root / "providers" / "codex" / "stderr.txt",
+                timeout_seconds=5,
+            )
+
+            self.assertEqual(result.returncode, 0)
+            self.assertFalse(result.cancelled)
+            self.assertEqual(result.stdout_path.read_text(encoding="utf-8"), "hi")
+            self.assertEqual(result.stderr_path.read_text(encoding="utf-8"), "err")
+            self.assertEqual(result.stdout_text, "hi")
+            self.assertEqual(result.stderr_text, "err")
+
+    @unittest.skipUnless(Path("/bin/sh").is_file() and hasattr(os, "setsid"), "POSIX shell session support unavailable")
+    def test_provider_process_cancels_on_timeout_and_kills_process_group(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            result = _run_provider_process(
+                ["/bin/sh", "-c", "sleep 30"],
+                cwd=root,
+                stdout_path=root / "stdout.jsonl",
+                stderr_path=root / "stderr.txt",
+                timeout_seconds=1,
+                grace_seconds=0.2,
+            )
+
+            self.assertTrue(result.cancelled)
+            self.assertEqual(result.cancel_reason, "timeout")
+            self.assertIsNone(result.returncode)
+            self.assertTrue(result.killed_process_group)
+            self.assertLess(result.elapsed_seconds, 5)
+
+    @unittest.skipUnless(
+        Path("/bin/sh").is_file() and hasattr(os, "killpg") and hasattr(os, "setsid"),
+        "POSIX process-group cancellation unavailable",
+    )
+    def test_provider_process_cancels_a_child_process(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            child_pid_path = root / "child.pid"
+            result = _run_provider_process(
+                ["/bin/sh", "-c", 'sleep 30 & echo $! > "$1"; wait', "sh", str(child_pid_path)],
+                cwd=root,
+                stdout_path=root / "stdout.jsonl",
+                stderr_path=root / "stderr.txt",
+                timeout_seconds=1,
+                grace_seconds=0.2,
+            )
+
+            self.assertTrue(result.cancelled)
+            self.assertEqual(result.cancel_reason, "timeout")
+            self.assertTrue(result.killed_process_group)
+            child_pid = int(child_pid_path.read_text(encoding="utf-8").strip())
+            self._assert_pid_exits(child_pid)
+
+    @unittest.skipUnless(Path("/bin/sh").is_file(), "/bin/sh unavailable")
+    def test_provider_process_strips_claudecode_env(self) -> None:
+        old_value = os.environ.get("CLAUDECODE")
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            os.environ["CLAUDECODE"] = "1"
+            try:
+                result = _run_provider_process(
+                    ["/bin/sh", "-c", 'printf "%s" "${CLAUDECODE:-MISSING}"'],
+                    cwd=root,
+                    stdout_path=root / "stdout.jsonl",
+                    stderr_path=root / "stderr.txt",
+                    timeout_seconds=5,
+                )
+            finally:
+                if old_value is None:
+                    os.environ.pop("CLAUDECODE", None)
+                else:
+                    os.environ["CLAUDECODE"] = old_value
+
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(result.stdout_path.read_text(encoding="utf-8"), "MISSING")
+
+    def test_provider_process_handles_spawn_error(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            result = _run_provider_process(
+                [str(root / "missing-provider-binary")],
+                cwd=root,
+                stdout_path=root / "stdout.jsonl",
+                stderr_path=root / "stderr.txt",
+                timeout_seconds=5,
+            )
+
+            self.assertTrue(result.cancelled)
+            self.assertEqual(result.cancel_reason, "spawn_error")
+            self.assertIsNone(result.returncode)
+            self.assertEqual(result.stdout_path.stat().st_size, 0)
+            self.assertGreater(result.stderr_path.stat().st_size, 0)
 
     def test_emission_schema_accepts_no_findings_and_rejects_swarm_owned_fields(self) -> None:
         schema = load_emission_schema()
@@ -1274,7 +1465,12 @@ enabled = false
                 codex_read_only_probe=ReviewProviderProbeCheck("ok", True, "Codex read-only proof green"),
             )
 
-        code, artifact, sidecars = self._run_realish_stage(("codex",), runner=runner, resolver_factory=resolver_factory)
+        code, artifact, sidecars = self._run_realish_stage(
+            ("codex",),
+            runner=runner,
+            popen_factory=_fake_popen_factory(runner),
+            resolver_factory=resolver_factory,
+        )
 
         self.assertEqual(code, 0)
         self.assertEqual(artifact["status"], "ok")
@@ -1310,7 +1506,12 @@ enabled = false
                 codex_read_only_probe=ReviewProviderProbeCheck("ok", True, "Codex read-only proof green"),
             )
 
-        code, artifact, sidecars = self._run_realish_stage(("codex",), runner=runner, resolver_factory=resolver_factory)
+        code, artifact, sidecars = self._run_realish_stage(
+            ("codex",),
+            runner=runner,
+            popen_factory=_fake_popen_factory(runner),
+            resolver_factory=resolver_factory,
+        )
 
         self.assertEqual(code, 1)
         self.assertEqual(artifact["status"], "error")
@@ -1359,6 +1560,7 @@ enabled = false
         code, artifact, sidecars = self._run_realish_stage(
             ("codex",),
             runner=runner,
+            popen_factory=_fake_popen_factory(runner),
             resolver_factory=resolver_factory,
             allow_parser_fallback=True,
         )
@@ -1404,7 +1606,12 @@ enabled = false
                 codex_read_only_probe=ReviewProviderProbeCheck("ok", True, "Codex read-only proof green"),
             )
 
-        code, artifact, sidecars = self._run_realish_stage(("claude", "codex"), runner=runner, resolver_factory=resolver_factory)
+        code, artifact, sidecars = self._run_realish_stage(
+            ("claude", "codex"),
+            runner=runner,
+            popen_factory=_fake_popen_factory(runner),
+            resolver_factory=resolver_factory,
+        )
 
         self.assertEqual(code, 0)
         self.assertEqual(artifact["status"], "partial")
@@ -1438,7 +1645,12 @@ enabled = false
             if args == ["claude", "auth", "status", "--json"]:
                 return subprocess.CompletedProcess(args=args, returncode=0, stdout=json.dumps({"loggedIn": True}), stderr="")
             if args[:2] == ["/bin/claude", "-p"]:
-                return subprocess.CompletedProcess(args=args, returncode=0, stdout=json.dumps({"result": json.dumps({"findings": [finding]})}), stderr="")
+                return subprocess.CompletedProcess(
+                    args=args,
+                    returncode=0,
+                    stdout=json.dumps({"result": json.dumps({"findings": [finding]}), "padding": "x" * 2000}),
+                    stderr="",
+                )
             raise AssertionError(args)
 
         def resolver_factory():
@@ -1448,7 +1660,12 @@ enabled = false
                 claude_read_only_probe=ReviewProviderProbeCheck("ok", True, "Claude read-only proof green"),
             )
 
-        code, artifact, sidecars = self._run_realish_stage(("claude",), runner=runner, resolver_factory=resolver_factory)
+        code, artifact, sidecars = self._run_realish_stage(
+            ("claude",),
+            runner=runner,
+            popen_factory=_fake_popen_factory(runner),
+            resolver_factory=resolver_factory,
+        )
 
         self.assertEqual(code, 0)
         self.assertEqual(artifact["status"], "ok")
@@ -1481,7 +1698,12 @@ enabled = false
                 claude_read_only_probe=ReviewProviderProbeCheck("ok", True, "Claude read-only proof green"),
             )
 
-        code, artifact, sidecars = self._run_realish_stage(("claude",), runner=runner, resolver_factory=resolver_factory)
+        code, artifact, sidecars = self._run_realish_stage(
+            ("claude",),
+            runner=runner,
+            popen_factory=_fake_popen_factory(runner),
+            resolver_factory=resolver_factory,
+        )
 
         self.assertEqual(code, 1)
         self.assertEqual(artifact["status"], "error")
@@ -1524,7 +1746,12 @@ enabled = false
                 codex_read_only_probe=ReviewProviderProbeCheck("ok", True, "Codex read-only proof green"),
             )
 
-        code, artifact, sidecars = self._run_realish_stage(("claude", "codex"), runner=runner, resolver_factory=resolver_factory)
+        code, artifact, sidecars = self._run_realish_stage(
+            ("claude", "codex"),
+            runner=runner,
+            popen_factory=_fake_popen_factory(runner),
+            resolver_factory=resolver_factory,
+        )
 
         self.assertEqual(code, 0)
         self.assertEqual(artifact["status"], "partial")

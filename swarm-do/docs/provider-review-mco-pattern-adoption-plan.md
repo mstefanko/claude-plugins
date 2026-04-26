@@ -57,9 +57,9 @@ stock swarm-do provider review.
 
 ### Phase A — Provider Process Supervision And Environment Sanitization
 
-**Status:** ready to implement. Replaces the existing `subprocess.run(timeout=...)`
-calls inside `_run_codex_review_provider` (`provider_review.py:2289`) and
-`_run_claude_review_provider` (`provider_review.py:2398`).
+**Status:** implemented. Replaces the existing `subprocess.run(timeout=...)`
+calls inside `_run_codex_review_provider` and `_run_claude_review_provider`
+with `_run_provider_process(...)`.
 
 **MCO references:**
 
@@ -686,14 +686,12 @@ telemetry analysis feature outside the provider-review stage.
   Codex/Claude runs. Reject any Phase C work that does not cite captured
   R2/R3 data.
 
-## Open Questions
+## Closed Questions
 
-- After Phase A lands, should the existing `runner=` injection for probe
-  helpers (auth status, login status, version) also migrate to
-  `popen_factory`? Decision deferred — probe paths are short, time-bounded,
-  and produce small output, so `subprocess.run` is fine until a probe ever
-  needs to be cancellable.
-- After Phase B lands, do we want `bin/swarm providers evidence` to expose a
-  `--include-truncated` flag that surfaces the next N findings from the full
-  sidecar without inflating ledger rows? Defer until a downstream consumer
-  asks. Keep the surface small.
+- Keep the existing `runner=` injection for probe helpers (auth status, login
+  status, version). Probe paths are short, time-bounded, and produce small
+  output, so `subprocess.run` remains the right low-burden interface until a
+  probe needs process-group cancellation.
+- Do not add `bin/swarm providers evidence --include-truncated` in this plan.
+  The full sidecar is a local audit/debug artifact; exposing additional
+  findings through the CLI waits for a named downstream consumer.
