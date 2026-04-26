@@ -200,6 +200,10 @@ class ProviderDoctorTests(unittest.TestCase):
         self.assertEqual(payload["review_read_only_modes"]["codex"], "flag-detected")
         self.assertEqual(payload["review_missing_schema_flags"]["codex"], [])
         self.assertEqual(payload["selected_review_providers"], [])
+        codex_check = next(check for check in payload["checks"] if check["name"] == "provider-review:codex")
+        self.assertEqual(codex_check["data"]["probe"]["schema"]["status"], "ok")
+        self.assertEqual(codex_check["data"]["probe"]["read_only"]["status"], "warning")
+        self.assertIn("auth", codex_check["data"]["probe"]["blockers"])
 
     def test_review_and_mco_doctor_contracts_can_be_combined(self) -> None:
         def which(cmd: str) -> str | None:

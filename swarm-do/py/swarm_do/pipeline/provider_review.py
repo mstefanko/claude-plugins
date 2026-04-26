@@ -84,6 +84,57 @@ class ReviewProviderPolicy:
 
 
 @dataclasses.dataclass(frozen=True)
+class ReviewProviderProbeCheck:
+    status: str
+    ready: bool
+    reason: str
+    data: Mapping[str, Any] = dataclasses.field(default_factory=dict)
+
+    def as_dict(self) -> dict[str, Any]:
+        row: dict[str, Any] = {
+            "status": self.status,
+            "ready": self.ready,
+            "reason": self.reason,
+        }
+        if self.data:
+            row["data"] = dict(self.data)
+        return row
+
+
+@dataclasses.dataclass(frozen=True)
+class ReviewProviderProbe:
+    provider_id: str
+    configured: ReviewProviderProbeCheck
+    installed: ReviewProviderProbeCheck
+    schema: ReviewProviderProbeCheck
+    read_only: ReviewProviderProbeCheck
+    auth: ReviewProviderProbeCheck
+    blockers: tuple[str, ...] = ()
+
+    @property
+    def ready(self) -> bool:
+        return (
+            self.configured.ready
+            and self.installed.ready
+            and self.schema.ready
+            and self.read_only.ready
+            and self.auth.ready
+        )
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "provider_id": self.provider_id,
+            "ready": self.ready,
+            "configured": self.configured.as_dict(),
+            "installed": self.installed.as_dict(),
+            "schema": self.schema.as_dict(),
+            "read_only": self.read_only.as_dict(),
+            "auth": self.auth.as_dict(),
+            "blockers": list(self.blockers),
+        }
+
+
+@dataclasses.dataclass(frozen=True)
 class ReviewProviderStatus:
     provider_id: str
     status: str
@@ -99,6 +150,7 @@ class ReviewProviderStatus:
     missing_schema_flags: tuple[str, ...] = ()
     missing_read_only_flags: tuple[str, ...] = ()
     fake: bool = False
+    probe: ReviewProviderProbe | None = None
 
     def as_dict(self) -> dict[str, Any]:
         row: dict[str, Any] = {
@@ -120,6 +172,8 @@ class ReviewProviderStatus:
             row["executable"] = self.executable
         if self.cli_version:
             row["cli_version"] = self.cli_version
+        if self.probe is not None:
+            row["probe"] = self.probe.as_dict()
         return row
 
 
@@ -252,6 +306,70 @@ def _merge_policy(base: Mapping[str, Any] | None, preset: Mapping[str, Any] | No
     return ReviewProviderPolicy(selection, min_success, max_parallel, include, exclude, enabled)
 
 
+def _probe_check(status: str, ready: bool, reason: str, data: Mapping[str, Any] | None = None) -> ReviewProviderProbeCheck:
+    return ReviewProviderProbeCheck(status=status, ready=ready, reason=reason, data=dict(data or {}))
+
+
+def _skipped_probe_check(reason: str) -> ReviewProviderProbeCheck:
+    return _probe_check("skipped", False, reason)
+
+
+def _probe_blockers(
+    *,
+    configured: ReviewProviderProbeCheck,
+    installed: ReviewProviderProbeCheck,
+    schema: ReviewProviderProbeCheck,
+    read_only: ReviewProviderProbeCheck,
+    auth: ReviewProviderProbeCheck,
+) -> tuple[str, ...]:
+    blockers: list[str] = []
+    for name, check in (
+        ("configured", configured),
+        ("installed", installed),
+        ("schema", schema),
+        ("read_only", read_only),
+        ("auth", auth),
+    ):
+        if not check.ready:
+            blockers.append(name)
+    return tuple(blockers)
+
+
+def _probe_reason(probe: ReviewProviderProbe) -> str:
+    reasons = []
+    for name in ("configured", "installed", "schema", "read_only", "auth"):
+        check = getattr(probe, name)
+        if not check.ready:
+            reasons.append(check.reason)
+    return "; ".join(reasons) or "ready"
+
+
+def _make_probe(
+    provider_id: str,
+    *,
+    configured: ReviewProviderProbeCheck,
+    installed: ReviewProviderProbeCheck,
+    schema: ReviewProviderProbeCheck,
+    read_only: ReviewProviderProbeCheck,
+    auth: ReviewProviderProbeCheck,
+) -> ReviewProviderProbe:
+    return ReviewProviderProbe(
+        provider_id=provider_id,
+        configured=configured,
+        installed=installed,
+        schema=schema,
+        read_only=read_only,
+        auth=auth,
+        blockers=_probe_blockers(
+            configured=configured,
+            installed=installed,
+            schema=schema,
+            read_only=read_only,
+            auth=auth,
+        ),
+    )
+
+
 def _fake_provider_ids_from_env() -> tuple[str, ...]:
     return parse_provider_csv(os.environ.get("SWARM_PROVIDER_REVIEW_FAKE_PROVIDERS"))
 
@@ -351,6 +469,14 @@ class ReviewProviderResolver:
 
     def _status_for(self, provider_id: str) -> ReviewProviderStatus:
         if provider_id in self.fake_providers:
+            probe = _make_probe(
+                provider_id,
+                configured=_probe_check("ok", True, "fake shim enabled for deterministic provider-review tests"),
+                installed=_probe_check("ok", True, "fake shim does not require a local executable"),
+                schema=_probe_check("ok", True, "fake shim emits native test fixtures", {"schema_mode": "native"}),
+                read_only=_probe_check("ok", True, "fake shim reads local fixture files only", {"read_only_mode": "confirmed"}),
+                auth=_probe_check("ok", True, "fake shim does not require provider authentication"),
+            )
             return ReviewProviderStatus(
                 provider_id=provider_id,
                 status="eligible",
@@ -361,9 +487,18 @@ class ReviewProviderResolver:
                 schema_mode="native",
                 read_only_mode="confirmed",
                 fake=True,
+                probe=probe,
             )
         if self.policy.enabled.get(provider_id) is False:
-            return ReviewProviderStatus(provider_id, "skipped", "disabled by review_providers config", False)
+            probe = _make_probe(
+                provider_id,
+                configured=_probe_check("skipped", False, "disabled by review_providers config"),
+                installed=_skipped_probe_check("not checked because provider is disabled"),
+                schema=_skipped_probe_check("not checked because provider is disabled"),
+                read_only=_skipped_probe_check("not checked because provider is disabled"),
+                auth=_skipped_probe_check("not checked because provider is disabled"),
+            )
+            return ReviewProviderStatus(provider_id, "skipped", _probe_reason(probe), False, probe=probe)
         if provider_id == "claude":
             return self._real_cli_status(
                 provider_id="claude",
@@ -382,14 +517,36 @@ class ReviewProviderResolver:
             )
         if provider_id == "gemini":
             path = self.which("gemini")
+            installed = (
+                _probe_check("ok", True, "gemini found on PATH", {"path": path})
+                if path
+                else _probe_check("skipped", False, "gemini not found on PATH")
+            )
+            probe = _make_probe(
+                provider_id,
+                configured=_probe_check("skipped", False, "gemini shim is reserved but not implemented"),
+                installed=installed,
+                schema=_probe_check("error", False, "native schema mode unavailable; gemini shim not implemented", {"schema_mode": "unavailable"}),
+                read_only=_skipped_probe_check("not checked because gemini shim is not implemented"),
+                auth=_skipped_probe_check("not checked because gemini shim is not implemented"),
+            )
             return ReviewProviderStatus(
                 provider_id,
                 "skipped",
-                "gemini shim is reserved but not implemented",
+                _probe_reason(probe),
                 False,
                 executable=path,
+                probe=probe,
             )
-        return ReviewProviderStatus(provider_id, "skipped", "no shim registered for provider", False)
+        probe = _make_probe(
+            provider_id,
+            configured=_probe_check("skipped", False, "no shim registered for provider"),
+            installed=_skipped_probe_check("not checked because no shim is registered"),
+            schema=_skipped_probe_check("not checked because no shim is registered"),
+            read_only=_skipped_probe_check("not checked because no shim is registered"),
+            auth=_skipped_probe_check("not checked because no shim is registered"),
+        )
+        return ReviewProviderStatus(provider_id, "skipped", _probe_reason(probe), False, probe=probe)
 
     def _real_cli_status(
         self,
@@ -400,49 +557,99 @@ class ReviewProviderResolver:
         required_schema_flags: Sequence[str],
         required_read_only_flags: Sequence[str],
     ) -> ReviewProviderStatus:
+        route: Route | None = None
         try:
             route = self.backend_resolver.resolve(role, "hard")
         except Exception as exc:
-            return ReviewProviderStatus(provider_id, "warning", f"route resolution failed: {exc}", False)
-        if route.backend != provider_id:
-            return ReviewProviderStatus(
-                provider_id,
-                "skipped",
-                f"role route resolves to backend {route.backend}, not {provider_id}",
-                False,
-                route=route.as_dict(),
+            configured = _probe_check("error", False, f"route resolution failed: {exc}")
+        else:
+            configured = (
+                _probe_check("ok", True, f"{role} route resolves to {provider_id}", {"route": route.as_dict()})
+                if route.backend == provider_id
+                else _probe_check(
+                    "skipped",
+                    False,
+                    f"role route resolves to backend {route.backend}, not {provider_id}",
+                    {"route": route.as_dict()},
+                )
             )
+
         path = self.which(executable_name)
         if not path:
-            return ReviewProviderStatus(
-                provider_id,
-                "skipped",
-                f"{executable_name} not found on PATH",
-                False,
-                route=route.as_dict(),
-            )
-        help_text = self._help_text(executable_name)
-        version = self._version_text(executable_name)
-        schema_flags = _detected_required_flags(help_text, required_schema_flags)
-        read_only_flags = _detected_required_flags(help_text, required_read_only_flags)
+            installed = _probe_check("skipped", False, f"{executable_name} not found on PATH")
+            help_text = ""
+            version = None
+        else:
+            installed = _probe_check("ok", True, f"{executable_name} found on PATH", {"path": path})
+            help_text = self._help_text(executable_name)
+            version = self._version_text(executable_name)
+
+        schema_flags = _detected_required_flags(help_text, required_schema_flags) if path else ()
+        read_only_flags = _detected_required_flags(help_text, required_read_only_flags) if path else ()
         missing_schema_flags = tuple(flag for flag in required_schema_flags if flag not in schema_flags)
         missing_read_only_flags = tuple(flag for flag in required_read_only_flags if flag not in read_only_flags)
         schema_ok = not missing_schema_flags
         read_only_ok = not missing_read_only_flags
         schema_mode = "native" if schema_ok else "unavailable"
         read_only_mode = "flag-detected" if read_only_ok else "unavailable"
-        reason_parts: list[str] = []
-        if missing_schema_flags:
-            reason_parts.append("structured-output flags not detected: " + ", ".join(missing_schema_flags))
-        if missing_read_only_flags:
-            reason_parts.append("read-only flags not detected: " + ", ".join(missing_read_only_flags))
-        reason_parts.append("Phase 0 write-denial proof not complete")
+
+        if not path:
+            schema = _skipped_probe_check("not checked because provider executable is unavailable")
+            read_only = _skipped_probe_check("not checked because provider executable is unavailable")
+        else:
+            schema = (
+                _probe_check(
+                    "ok",
+                    True,
+                    "native structured-output flags detected",
+                    {"schema_mode": schema_mode, "flags": list(schema_flags), "missing_flags": []},
+                )
+                if schema_ok
+                else _probe_check(
+                    "error",
+                    False,
+                    "structured-output flags not detected: " + ", ".join(missing_schema_flags),
+                    {"schema_mode": schema_mode, "flags": list(schema_flags), "missing_flags": list(missing_schema_flags)},
+                )
+            )
+            read_only = (
+                _probe_check(
+                    "warning",
+                    False,
+                    "read-only flags detected but Phase 0 write-denial proof not complete",
+                    {"read_only_mode": read_only_mode, "flags": list(read_only_flags), "missing_flags": []},
+                )
+                if read_only_ok
+                else _probe_check(
+                    "error",
+                    False,
+                    "read-only flags not detected: " + ", ".join(missing_read_only_flags),
+                    {"read_only_mode": read_only_mode, "flags": list(read_only_flags), "missing_flags": list(missing_read_only_flags)},
+                )
+            )
+        auth = (
+            _probe_check("warning", False, "auth readiness probe not implemented; Phase R4 pending")
+            if path
+            else _skipped_probe_check("not checked because provider executable is unavailable")
+        )
+        probe = _make_probe(
+            provider_id,
+            configured=configured,
+            installed=installed,
+            schema=schema,
+            read_only=read_only,
+            auth=auth,
+        )
+        if not configured.ready or not installed.ready:
+            status = "skipped"
+        else:
+            status = "eligible" if probe.ready else "warning"
         return ReviewProviderStatus(
             provider_id,
-            "warning",
-            "; ".join(reason_parts),
-            False,
-            route=route.as_dict(),
+            status,
+            _probe_reason(probe),
+            probe.ready,
+            route=route.as_dict() if route is not None else None,
             executable=path,
             cli_version=version,
             schema_mode=schema_mode,
@@ -451,6 +658,7 @@ class ReviewProviderResolver:
             read_only_flags=read_only_flags,
             missing_schema_flags=missing_schema_flags,
             missing_read_only_flags=missing_read_only_flags,
+            probe=probe,
         )
 
     def _help_text(self, executable_name: str) -> str:

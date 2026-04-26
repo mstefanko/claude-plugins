@@ -576,6 +576,11 @@ calibrating whether this can replace any older lanes.
   missing schema/read-only flags for real Claude/Codex command surfaces. Real
   providers still remain ineligible until write-denial and readiness probes are
   green.
+- **Eligibility probe model:** Resolver statuses now carry a structured probe
+  with configured, installed, schema, read-only, and auth readiness gates.
+  Doctor exposes that probe under provider rows while preserving the top-level
+  contract, and fixtures cover route mismatch, missing flags, unsupported schema
+  mode, and disabled-by-policy cases.
 - **Pipeline DSL:** `provider.type = "swarm-review"` supports `selection:
   auto|explicit|off`; stock pipelines reject hardcoded provider lists; graph,
   budget, validation, editing, and action helpers understand both `swarm-review`
@@ -592,17 +597,6 @@ calibrating whether this can replace any older lanes.
   provider-review aware, including configured versus selected provider preview.
 
 ### Remaining Phases
-
-**Phase R1: Eligibility Probe Model**
-
-- Add a small internal probe result shape for installed/configured/schema/read-
-  only/auth readiness, reused by doctor and eventual shim execution.
-- Keep the current top-level doctor contract stable while adding probe detail
-  under provider rows.
-- Add fixtures for installed-but-route-mismatch, missing flags, unsupported
-  schema mode, and disabled-by-policy.
-- Definition of done: `swarm providers doctor --review --json` can explain why
-  each real shim is not eligible without launching a full review.
 
 **Phase R2: Codex Read-Only And CLI-Drift Gate**
 

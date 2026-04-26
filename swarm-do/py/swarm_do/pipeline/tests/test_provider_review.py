@@ -208,8 +208,103 @@ class ProviderReviewTests(unittest.TestCase):
 
         self.assertEqual(codex.schema_mode, "unavailable")
         self.assertEqual(codex.missing_schema_flags, ("--json",))
+        self.assertIsNotNone(codex.probe)
+        self.assertFalse(codex.probe.schema.ready)
+        self.assertEqual(codex.probe.schema.status, "error")
+        self.assertEqual(codex.probe.schema.data["missing_flags"], ["--json"])
         self.assertIn("structured-output flags not detected: --json", codex.reason)
         self.assertFalse(codex.eligible)
+
+    def test_real_resolver_probe_reports_installed_but_route_mismatch(self) -> None:
+        def which(cmd: str) -> str | None:
+            return f"/bin/{cmd}" if cmd == "codex" else None
+
+        def runner(args, **kwargs):
+            if args == ["codex", "exec", "--help"]:
+                stdout = "Usage: codex exec --json --sandbox --output-schema --output-last-message"
+            elif args == ["codex", "--version"]:
+                stdout = "codex 1.0"
+            else:
+                stdout = ""
+            return argparse.Namespace(args=args, returncode=0, stdout=stdout, stderr="")
+
+        old_data = os.environ.get("CLAUDE_PLUGIN_DATA")
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "backends.toml").write_text(
+                """
+[roles.agent-codex-review]
+backend = "claude"
+model = "claude-opus-4-7"
+effort = "high"
+""".lstrip(),
+                encoding="utf-8",
+            )
+            os.environ["CLAUDE_PLUGIN_DATA"] = td
+            try:
+                codex = next(
+                    status
+                    for status in ReviewProviderResolver(which=which, runner=runner).statuses()
+                    if status.provider_id == "codex"
+                )
+            finally:
+                if old_data is None:
+                    os.environ.pop("CLAUDE_PLUGIN_DATA", None)
+                else:
+                    os.environ["CLAUDE_PLUGIN_DATA"] = old_data
+
+        self.assertEqual(codex.status, "skipped")
+        self.assertEqual(codex.executable, "/bin/codex")
+        self.assertIsNotNone(codex.probe)
+        self.assertFalse(codex.probe.configured.ready)
+        self.assertTrue(codex.probe.installed.ready)
+        self.assertIn("role route resolves to backend claude, not codex", codex.probe.configured.reason)
+        self.assertIn("configured", codex.probe.blockers)
+        self.assertFalse(codex.eligible)
+
+    def test_real_resolver_probe_reports_disabled_by_policy(self) -> None:
+        old_data = os.environ.get("CLAUDE_PLUGIN_DATA")
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "backends.toml").write_text(
+                """
+[review_providers.codex]
+enabled = false
+""".lstrip(),
+                encoding="utf-8",
+            )
+            os.environ["CLAUDE_PLUGIN_DATA"] = td
+            try:
+                codex = next(
+                    status
+                    for status in ReviewProviderResolver(which=lambda cmd: f"/bin/{cmd}").statuses()
+                    if status.provider_id == "codex"
+                )
+            finally:
+                if old_data is None:
+                    os.environ.pop("CLAUDE_PLUGIN_DATA", None)
+                else:
+                    os.environ["CLAUDE_PLUGIN_DATA"] = old_data
+
+        self.assertEqual(codex.status, "skipped")
+        self.assertIsNotNone(codex.probe)
+        self.assertEqual(codex.probe.configured.status, "skipped")
+        self.assertFalse(codex.probe.configured.ready)
+        self.assertIn("disabled by review_providers config", codex.reason)
+
+    def test_reserved_gemini_probe_reports_unsupported_schema_mode(self) -> None:
+        gemini = next(
+            status
+            for status in ReviewProviderResolver(which=lambda cmd: "/bin/gemini" if cmd == "gemini" else None).statuses()
+            if status.provider_id == "gemini"
+        )
+
+        self.assertEqual(gemini.status, "skipped")
+        self.assertEqual(gemini.schema_mode, "unavailable")
+        self.assertIsNotNone(gemini.probe)
+        self.assertTrue(gemini.probe.installed.ready)
+        self.assertEqual(gemini.probe.schema.status, "error")
+        self.assertIn("native schema mode unavailable", gemini.probe.schema.reason)
 
     def test_real_resolver_does_not_count_cli_flag_substrings_as_detected(self) -> None:
         def which(cmd: str) -> str | None:
