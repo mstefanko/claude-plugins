@@ -456,16 +456,26 @@ emits no error.
 
 ### Phase C — Decision Gate For Deferred Runtime Polish
 
-**Status:** implemented as a decision gate. No runtime-polish code changes are
-triggered until inputs from Phase R2/R3 local proof runs land.
+**Status:** closed on 2026-04-26 as a decision gate. No runtime-polish code
+changes were adopted.
 
 Phase C is a recorded decision protocol, not a queued implementation. Add no
 code from the deferred items unless the trigger criteria below are met. The
 internal-provider-review-plan.md already lists R2/R3 as the prerequisite local
 proof runs for real Codex/Claude eligibility — Phase C reuses that evidence.
-As of this implementation pass, no captured R2/R3 proof data is present in the
-repo, so the deferred MCO features remain rejected/deferred by the criteria
-below.
+The redacted 2026-04-26 R2/R3 proof record is
+`docs/provider-review-r2-r3-proof-2026-04-26.md`.
+
+Decision from that proof:
+
+- Trigger A does not pass. The captured proof shows bounded successful real
+  provider fixtures, but it does not show repeated no-output hangs,
+  hard-deadline cancellation discarding parsed successful work, or stdout/stderr
+  liveness growth meeting the threshold below.
+- Trigger B does not pass. No named PR-bot, CI integration, or operator
+  workflow requires SARIF or Markdown-PR output.
+- Trigger C remains rejected. No new ADR moves synthesis, memory, perspectives,
+  or reliability scoring into the provider-review evidence stage.
 
 **Trigger A — Progress-aware stall timeout** (MCO `runtime/formatters.py`
 `provider_progress` event handling, `error_kind in {"stall_timeout",
@@ -581,9 +591,8 @@ documented future option, not an in-scope deliverable.
    Land tests B4, B5.
 7. Phase B green: rerun the same focused suites; rerun
    `py.swarm_do.pipeline.tests.test_provider_evidence`.
-8. After R2/R3 local proof runs land (separate gate documented in
-   internal-provider-review-plan.md), revisit Phase C using the criteria
-   above. Phase C produces no code without an explicit decision pass.
+8. R2/R3 local proof runs landed on 2026-04-26; Phase C was evaluated against
+   the criteria above and produced no runtime-polish code.
 
 ## Validation Commands
 
@@ -602,7 +611,7 @@ PYTHONPATH=py python3 -m unittest discover -s py
 ```
 
 Before enabling real provider review in stock runs (unchanged from the
-internal plan):
+internal plan; re-run after material provider CLI or command-contract drift):
 
 ```bash
 SWARM_RUN_CODEX_R2_FIXTURE=1 PYTHONPATH=py python3 -m unittest py.swarm_do.pipeline.tests.test_provider_review.ProviderReviewTests.test_local_codex_r2_fixtures_pass_when_explicitly_enabled

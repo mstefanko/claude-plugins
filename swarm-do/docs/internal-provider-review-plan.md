@@ -354,22 +354,22 @@ Confidence caps:
   `confirmed` confidence in stock pipelines; anchored clusters remain
   `needs-verification` evidence.
 
-## Pre-Implementation Validation Gates
+## Validation Gates
 
-Complete these before implementation begins:
+Current gate status:
 
-- **Claude read-only flags:** validate locally with a write-denial fixture, not
-  broad research. The fixture must prove the selected Claude read-only flags
-  deny create, edit, and delete attempts in a temporary repo before Claude can
-  become eligible.
-- **Non-spend auth probing:** run a small prototype investigation for Claude and
-  Codex. The result should identify the lowest-cost installed/authenticated/
-  launchable probe shape for doctor, or document that no true non-spend probe
-  exists and the fallback must be explicit and bounded.
-- **Consensus clustering:** run empirical clustering research before any
-  secondary cluster contributes stock/default confidence. Use real or captured
-  Claude/Codex native-schema outputs to estimate false merge and false split
-  rates, then set the initial confidence policy.
+- **Claude read-only flags:** closed for the 2026-04-26 local CLI state by the
+  R3 schema-smoke and write-denial proof record. The fixture proved
+  `--permission-mode plan` alone was insufficient, so eligibility now requires
+  explicit `--disallowedTools Write,Edit,NotebookEdit,Bash`.
+- **Codex read-only and schema flags:** closed for the 2026-04-26 local CLI
+  state by the R2 schema-smoke and write-denial proof record.
+- **Non-spend auth probing:** implemented for Claude and Codex with
+  `claude auth status --json` and `codex login status`.
+- **Consensus clustering:** still requires empirical calibration before any
+  secondary cluster contributes stock/default confidence. Use separate labeled
+  captured Claude/Codex native-schema outputs to estimate false merge and false
+  split rates, then set the initial confidence policy.
 
 ## Artifact Contract
 
@@ -574,7 +574,8 @@ whether this can replace any older lanes.
   Unit fixtures cover Codex ok/no-findings, Codex malformed output, Codex
   timeout with partial success, Claude no-findings, Claude one finding, Claude
   malformed output, and Claude timeout with partial success. Actual local
-  eligibility still requires green R2/R3/R4 gates.
+  eligibility requires current green R2/R3/R4 gates; the 2026-04-26 proof
+  record covers R2/R3 for this CLI state.
 - **Normalizer:** Provider emissions are validated, normalized to
   `provider-findings.v2-draft`, deduped by exact stable hash, conservatively
   clustered by anchored location/category, and scored without promoting
@@ -595,12 +596,17 @@ whether this can replace any older lanes.
   write-denial fixtures using the exact planned command builder
   (`codex exec --json --sandbox read-only --output-schema --output-last-message`).
   The resolver treats Codex schema output and read-only proof as separate
-  warning blockers until those probe results are green.
+  warning blockers until those probe results are green. The 2026-04-26 local
+  proof run is recorded in
+  `docs/provider-review-r2-r3-proof-2026-04-26.md`.
 - **Claude R3 fixture harness:** Claude now has a bounded write-denial fixture
   using the exact planned native-schema command
-  (`claude -p --permission-mode plan --output-format json --json-schema`).
-  The resolver treats Claude read-only confirmation as a separate gate and does
-  not mark Claude eligible from installed CLI presence alone.
+  (`claude -p --permission-mode plan --disallowedTools
+  Write,Edit,NotebookEdit,Bash --output-format json --json-schema`). The
+  resolver treats Claude schema output and read-only confirmation as separate
+  gates and does not mark Claude eligible from installed CLI presence alone.
+  The 2026-04-26 local proof run is recorded in
+  `docs/provider-review-r2-r3-proof-2026-04-26.md`.
 - **R4 non-spend readiness probes:** Doctor and resolver now use
   `claude auth status --json` and `codex login status` as the initial
   non-spend auth/readiness probes. The probe model distinguishes
@@ -662,26 +668,27 @@ whether this can replace any older lanes.
 
 **Phase R2: Codex Local Proof Run**
 
-- Run the opt-in real Codex fixtures on a machine where launching Codex is
-  acceptable:
+- Completed on 2026-04-26. Redacted proof record:
+  `docs/provider-review-r2-r3-proof-2026-04-26.md`.
+- Re-run the opt-in real Codex fixtures only when the local Codex CLI or command
+  contract changes materially:
   `SWARM_RUN_CODEX_R2_FIXTURE=1 PYTHONPATH=py python3 -m unittest py.swarm_do.pipeline.tests.test_provider_review.ProviderReviewTests.test_local_codex_r2_fixtures_pass_when_explicitly_enabled`.
-- Record the local pass/fail result before using Codex as a real internal
-  provider shim.
 - Definition of done: Codex may become eligible only when command flags,
   schema output, sandbox write denial, and readiness probing all pass. The code
-  enforces this gate; local proof evidence is still operator-run.
+  enforces this gate; local proof evidence remains operator-run.
 
 **Phase R3: Claude Local Proof Run**
 
-- Run the opt-in real Claude fixture on a machine where launching Claude is
-  acceptable:
+- Completed on 2026-04-26. Redacted proof record:
+  `docs/provider-review-r2-r3-proof-2026-04-26.md`.
+- Re-run the opt-in real Claude fixture only when the local Claude CLI or
+  command contract changes materially:
   `SWARM_RUN_CLAUDE_R3_FIXTURE=1 PYTHONPATH=py python3 -m unittest py.swarm_do.pipeline.tests.test_provider_review.ProviderReviewTests.test_local_claude_r3_fixture_passes_when_explicitly_enabled`.
-- Record the local pass/fail result before using Claude as a real internal
-  provider shim.
-- If `--permission-mode plan` is insufficient, add explicit
-  `--tools`/`--disallowedTools` restrictions before eligibility.
+- `--permission-mode plan` was insufficient in the local proof harness; Claude
+  eligibility now requires explicit `--disallowedTools
+  Write,Edit,NotebookEdit,Bash`.
 - Definition of done: the code gate is implemented; real Claude eligibility
-  still requires a green local proof plus R4 auth readiness.
+  requires a green local proof plus R4 auth readiness.
 
 ## Test Matrix
 
@@ -697,12 +704,14 @@ Current passing focused suites:
 
 Validation still needed for future phases:
 
-- Opt-in real Codex R2 schema-smoke and write-denial fixture run.
-- Opt-in real Claude R3 write-denial fixture run.
+- Re-run opt-in real Codex R2 schema-smoke and write-denial fixtures after
+  material Codex CLI or command-contract drift.
+- Re-run opt-in real Claude R3 schema-smoke and write-denial fixtures after
+  material Claude CLI or command-contract drift.
 - Bounded-spend readiness probe tests only if a future provider loses a
   non-spend status surface.
-- Captured real CLI output samples for Codex and Claude, after local proof runs
-  are acceptable on an operator machine.
+- Separate labeled captured real CLI output samples for Codex and Claude, for
+  calibration and duplicate-consensus work beyond the R2/R3 proof fixtures.
 - `bin/swarm providers calibrate-consensus <samples.json>` on those captured
   labeled samples before secondary clusters are considered for confidence
   promotion.
@@ -742,8 +751,8 @@ stores raw sidecars; it is not optional future research.
 
 | Topic | Decision | Timing |
 | --- | --- | --- |
-| Claude read-only flags | Validate locally with the write-denial fixture, not broad research. The installed CLI exposes `--permission-mode plan`, `--json-schema`, `--tools`, and `--disallowedTools`; the fixture and resolver gate are implemented, but eligibility still requires a green local proof. | Harness complete; opt-in local proof pending before Claude can be marked `read-only-confirmed` or eligible. |
-| Codex read-only and CLI drift | Exact command-builder tests and flag diagnostics are in place. Eligibility still requires a local write-denial fixture. Non-spend readiness probing is now implemented separately. | Pending Phase R2 local proof before Codex can be marked eligible. |
+| Claude read-only flags | Validate locally with the schema-smoke and write-denial fixtures, not broad research. The installed CLI exposes `--permission-mode plan`, `--json-schema`, `--tools`, and `--disallowedTools`; local proof showed plan mode alone was insufficient, so the command builder and resolver now require explicit `--disallowedTools Write,Edit,NotebookEdit,Bash`. | Closed by the 2026-04-26 R3 proof record. Re-run only after material Claude CLI or command-contract drift. |
+| Codex read-only and CLI drift | Exact command-builder tests and flag diagnostics are in place. Non-spend readiness probing is implemented separately, and the local R2 schema-smoke plus write-denial proof is recorded. | Closed by the 2026-04-26 R2 proof record. Re-run only after material Codex CLI or command-contract drift. |
 | Non-spend auth probing for Claude/Codex | Initial probes are implemented with `claude auth status --json` and `codex login status`. Doctor distinguishes installed, route mismatch, not authenticated, launch unavailable, and spend-probe-required without running a full review. Unsupported status surfaces are reported as explicit bounded-spend follow-up work. | Complete for initial Claude/Codex R4 gate; tune as provider CLIs drift. |
 | Consensus clustering quality | Exact-hash consensus and conservative secondary clustering are implemented. R9 added a labeled-sample calibration harness for measuring false merge and false split rates. Secondary clusters remain `needs-verification` until captured real Claude/Codex samples justify any promotion policy. | Harness complete; captured real samples still required before secondary-cluster `confirmed` confidence. |
 | Parser-fallback default policy | No more research is needed for v1 policy. Parser fallback is off for stock automatic provider review and allowed only for doctor diagnostics or explicit experiment-mode runs, with confidence caps. | Resolved for v1; optional Phase R12 only if fallback is implemented. |
