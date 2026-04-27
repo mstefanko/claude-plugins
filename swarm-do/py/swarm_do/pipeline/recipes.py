@@ -994,6 +994,7 @@ def list_preset_recipes() -> list[PresetRecipeSpec]:
 
 
 def get_preset_recipe(recipe_id: str) -> PresetRecipeSpec:
+    """Return the recipe with the given id or raise ``KeyError``."""
     for recipe in _RECIPES:
         if recipe.recipe_id == recipe_id:
             return recipe
@@ -1001,10 +1002,12 @@ def get_preset_recipe(recipe_id: str) -> PresetRecipeSpec:
 
 
 def list_routing_packages() -> list[RoutingPackageSpec]:
+    """Return all registered routing packages (registration order)."""
     return list(_ROUTING_PACKAGES)
 
 
 def get_routing_package(package_id: str) -> RoutingPackageSpec:
+    """Return the routing package with the given id or raise ``KeyError``."""
     for package in _ROUTING_PACKAGES:
         if package.package_id == package_id:
             return package
@@ -1012,10 +1015,12 @@ def get_routing_package(package_id: str) -> RoutingPackageSpec:
 
 
 def list_graph_stacks() -> list[GraphStackSpec]:
+    """Return all registered graph stacks (registration order)."""
     return list(_GRAPH_STACKS)
 
 
 def get_graph_stack(stack_id: str) -> GraphStackSpec:
+    """Return the graph stack with the given id or raise ``KeyError``."""
     for stack in _GRAPH_STACKS:
         if stack.stack_id == stack_id:
             return stack
