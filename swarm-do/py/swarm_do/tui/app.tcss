@@ -48,12 +48,20 @@ DataTable {
 }
 
 #pipeline-main {
-    height: 2fr;
+    height: 1fr;
 }
 
 #pipeline-gallery {
     width: 36;
     border: solid $primary;
+}
+
+#pipeline-content {
+    width: 1fr;
+}
+
+#pipeline-details {
+    height: 10;
 }
 
 #presets {
@@ -62,15 +70,23 @@ DataTable {
 }
 
 #pipeline-graph {
-    width: 2fr;
+    width: 1fr;
+    height: 1fr;
     border: solid $primary;
     padding: 1;
     overflow-x: auto;
     overflow-y: auto;
 }
 
-#preview, #stage-inspector {
+#preview {
     width: 42;
+    border: solid $primary;
+    padding: 1;
+    overflow-y: auto;
+}
+
+#stage-inspector {
+    width: 1fr;
     border: solid $primary;
     padding: 1;
     overflow-y: auto;
@@ -81,9 +97,11 @@ DataTable {
 }
 
 #validation-rail {
-    height: 10;
+    width: 2fr;
+    height: 100%;
     border: solid $primary;
     padding: 1;
+    overflow-y: auto;
 }
 
 StatusBar {

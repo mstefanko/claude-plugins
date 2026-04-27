@@ -502,7 +502,8 @@ def pipeline_graph_legend_lines(model: PipelineGraphModel, *, ascii_only: bool =
         lines.append("  (stage) provider/evidence" if ascii_only else "  ╭ stage ╮ provider/evidence")
     if "terminal" in shapes:
         lines.append("  [[stage]] terminal answer/docs" if ascii_only else "  ╔ stage ╗ terminal answer/docs")
-    lines.append("  >stage< selected  !dirty changed draft  !critical longest path  [status] live")
+    lines.append("  >stage< selected  Δ dirty draft  ◆ critical path  [status] live")
+    lines.append("  + join/fork" if ascii_only else "  ⊙ join/fork")
     return lines
 
 
@@ -782,25 +783,38 @@ def _render_node(
     badges: list[str] = []
     status = overlay.stage_statuses.get(node.stage_id)
     if status:
-        badges.append(f"[{status}]")
+        badges.append(f"[{_short_graph_status(status)}]")
     if node.stage_id in overlay.dirty_stage_ids:
-        badges.append("!dirty")
+        badges.append("!d" if ascii_only else "Δ")
     if node.stage_id in overlay.critical_stage_ids:
-        badges.append("!critical")
+        badges.append("*" if ascii_only else "◆")
     if node.stage_id in overlay.highlighted_stage_ids:
-        badges.append("*highlight")
+        badges.append("+")
     if node.warnings:
-        badges.append("!warn")
+        badges.append("!")
     if badges:
         rendered += " " + " ".join(badges)
     return rendered
 
 
-def _join_label(node: PipelineGraphNode, *, first: bool = True) -> str:
+def _short_graph_status(status: str) -> str:
+    normalized = status.strip().lower().replace("_", "-")
+    aliases = {
+        "running": "run",
+        "checkpoint-written": "ckpt",
+        "writer-exit": "done",
+        "queued": "queued",
+        "done": "done",
+        "failed": "failed",
+    }
+    return aliases.get(normalized, normalized[:10])
+
+
+def _join_label(node: PipelineGraphNode, *, first: bool = True, verbose: bool = True) -> str:
     deps = [dep for dep in node.depends_on if dep]
     if len(deps) < 2:
         return ""
-    if first:
+    if first and verbose:
         return f" (join: {' + '.join(deps)})"
     return " (join)"
 
@@ -853,12 +867,12 @@ def _compact_graph_lines(
     for layer_index, layer in enumerate(model.layers, 1):
         nodes = [node_by_id[stage_id] for stage_id in layer if stage_id in node_by_id]
         rendered_nodes = [
-            _render_node(node, overlay, ascii_only=ascii_only, compact=True) + _join_label(node)
+            _render_node(node, overlay, ascii_only=ascii_only, compact=True) + _join_label(node, verbose=False)
             for node in nodes
         ]
         line = f"L{layer_index}: " + "  ".join(rendered_nodes)
         if width is not None and len(line) > width:
-            compact_nodes = [node.stage_id + _join_label(node) for node in nodes]
+            compact_nodes = [node.stage_id + _join_label(node, verbose=False) for node in nodes]
             line = f"L{layer_index}: " + " | ".join(compact_nodes)
         lines.append(line)
     return lines
@@ -875,28 +889,241 @@ def _wide_graph_lines(
     if not model.nodes:
         return lines + ["graph: empty"]
 
-    lines.append("Layers:")
-    for layer_index, layer in enumerate(model.layers, 1):
-        rendered = [
-            _render_node(node_by_id[stage_id], overlay, ascii_only=ascii_only, compact=True)
-            for stage_id in layer
-            if stage_id in node_by_id
-        ]
-        lines.append(f"  L{layer_index}: " + "  ".join(rendered))
+    rendered_by_id = {
+        node.stage_id: _render_node(node, overlay, ascii_only=ascii_only, compact=True)
+        for node in model.nodes
+    }
+    layer_widths = [
+        max(
+            (len(rendered_by_id[stage_id]) for stage_id in layer if stage_id in rendered_by_id),
+            default=1,
+        )
+        for layer in model.layers
+    ]
+    gutter = 6 if not ascii_only else 5
+    layer_xs: list[int] = []
+    cursor = 0
+    for width in layer_widths:
+        layer_xs.append(cursor)
+        cursor += width + gutter
 
-    lines.append("Edges:")
-    arrow = "-->" if ascii_only else "──▶"
-    branch = "+-->" if ascii_only else "├──▶"
-    last_branch = "`-->" if ascii_only else "└──▶"
-    for node in model.nodes:
-        targets = [node_by_id[target] for target in node.outgoing if target in node_by_id]
-        for target_index, target in enumerate(targets):
-            connector = arrow if len(targets) == 1 else (last_branch if target_index == len(targets) - 1 else branch)
-            source = _render_node(node, overlay, ascii_only=ascii_only, compact=True)
-            rendered_target = _render_node(target, overlay, ascii_only=ascii_only, compact=True)
-            first_join = target.depends_on and target.depends_on[0] == node.stage_id
-            lines.append(f"  {source} {connector} {rendered_target}{_join_label(target, first=bool(first_join))}")
-    return lines
+    y_by_id = _layered_graph_y_positions(model)
+    height = max(y_by_id.values(), default=0) + 1
+    width = max(
+        (
+            layer_xs[layer_index] + len(rendered_by_id[stage_id])
+            for layer_index, layer in enumerate(model.layers)
+            for stage_id in layer
+            if stage_id in rendered_by_id
+        ),
+        default=1,
+    )
+    canvas = [[" " for _column in range(width + 1)] for _row in range(height)]
+
+    placements = {
+        stage_id: (layer_xs[layer_index], y_by_id[stage_id], rendered_by_id[stage_id])
+        for layer_index, layer in enumerate(model.layers)
+        for stage_id in layer
+        if stage_id in rendered_by_id and stage_id in y_by_id
+    }
+
+    positions = _graph_stage_positions(model)
+    for edge in sorted(
+        model.edges,
+        key=lambda item: (positions.get(item.source, (999, 999)), item.target),
+    ):
+        if edge.source not in placements or edge.target not in placements:
+            continue
+        source = node_by_id.get(edge.source)
+        target = node_by_id.get(edge.target)
+        if source is None or target is None:
+            continue
+        _draw_layered_edge(
+            canvas,
+            placements[edge.source],
+            placements[edge.target],
+            target,
+            ascii_only=ascii_only,
+        )
+
+    for _stage_id, (x, y, rendered) in placements.items():
+        _write_graph_text(canvas, x, y, rendered)
+
+    rendered_lines = ["".join(row).rstrip() for row in canvas]
+    return lines + [line for line in rendered_lines if line]
+
+
+def _layered_graph_y_positions(model: PipelineGraphModel) -> dict[str, int]:
+    """Assign stable row coordinates for a compact layered DAG drawing."""
+
+    node_by_id = _node_by_id(model)
+    y_by_id: dict[str, int] = {}
+    fixed_ids: set[str] = set()
+
+    for layer in model.layers:
+        if len(layer) > 1:
+            for index, stage_id in enumerate(layer):
+                if stage_id in node_by_id:
+                    y_by_id[stage_id] = index * 2
+                    fixed_ids.add(stage_id)
+
+    for _pass in range(3):
+        for layer in model.layers:
+            occupied: set[int] = set()
+            desired: list[tuple[int, int, str]] = []
+            for index, stage_id in enumerate(layer):
+                if stage_id not in node_by_id:
+                    continue
+                if stage_id in fixed_ids:
+                    occupied.add(y_by_id[stage_id])
+                    continue
+                preferred = _preferred_graph_y(node_by_id[stage_id], node_by_id, y_by_id)
+                if preferred is None:
+                    preferred = y_by_id.get(stage_id, index * 2)
+                desired.append((preferred, index, stage_id))
+            for preferred, _index, stage_id in sorted(desired):
+                y_by_id[stage_id] = _nearest_free_row(preferred, occupied)
+
+    return y_by_id
+
+
+def _preferred_graph_y(
+    node: PipelineGraphNode,
+    node_by_id: Mapping[str, PipelineGraphNode],
+    y_by_id: Mapping[str, int],
+) -> int | None:
+    connected_rows = [
+        y_by_id[stage_id]
+        for stage_id in (*node.depends_on, *node.outgoing)
+        if stage_id in node_by_id and stage_id in y_by_id
+    ]
+    if not connected_rows:
+        return None
+    return int(round(sum(connected_rows) / len(connected_rows)))
+
+
+def _nearest_free_row(preferred: int, occupied: set[int]) -> int:
+    if preferred not in occupied:
+        occupied.add(preferred)
+        return preferred
+    for delta in range(1, 64):
+        for candidate in (preferred + delta, preferred - delta):
+            if candidate >= 0 and candidate not in occupied:
+                occupied.add(candidate)
+                return candidate
+    candidate = max(occupied, default=preferred) + 1
+    occupied.add(candidate)
+    return candidate
+
+
+def _draw_layered_edge(
+    canvas: list[list[str]],
+    source: tuple[int, int, str],
+    target: tuple[int, int, str],
+    target_node: PipelineGraphNode,
+    *,
+    ascii_only: bool,
+) -> None:
+    source_x, source_y, source_text = source
+    target_x, target_y, _target_text = target
+    start_x = source_x + len(source_text)
+    arrow_x = max(start_x + 2, target_x - 1)
+    has_join = len([dep for dep in target_node.depends_on if dep]) > 1
+    join_x = max(start_x + 2, target_x - 4) if has_join else None
+    end_x = (join_x - 1) if join_x is not None else (arrow_x - 1)
+    mid_x = max(start_x + 1, min(end_x, (start_x + end_x) // 2))
+
+    if source_y == target_y:
+        _draw_graph_hline(canvas, source_y, start_x, end_x, ascii_only=ascii_only)
+    else:
+        _draw_graph_hline(canvas, source_y, start_x, mid_x - 1, ascii_only=ascii_only)
+        source_corner = "+" if ascii_only else ("┐" if target_y > source_y else "┘")
+        target_corner = "+" if ascii_only else ("└" if target_y > source_y else "┌")
+        _put_graph_char(canvas, mid_x, source_y, source_corner, ascii_only=ascii_only)
+        _draw_graph_vline(
+            canvas,
+            mid_x,
+            min(source_y, target_y) + 1,
+            max(source_y, target_y) - 1,
+            ascii_only=ascii_only,
+        )
+        _put_graph_char(canvas, mid_x, target_y, target_corner, ascii_only=ascii_only)
+        _draw_graph_hline(canvas, target_y, mid_x + 1, end_x, ascii_only=ascii_only)
+
+    if join_x is not None:
+        _put_graph_char(canvas, join_x, target_y, "+" if ascii_only else "⊙", ascii_only=ascii_only)
+        _draw_graph_hline(canvas, target_y, join_x + 1, arrow_x - 1, ascii_only=ascii_only)
+    _put_graph_char(canvas, arrow_x, target_y, ">" if ascii_only else "▶", ascii_only=ascii_only)
+
+
+def _draw_graph_hline(
+    canvas: list[list[str]],
+    y: int,
+    x_start: int,
+    x_end: int,
+    *,
+    ascii_only: bool,
+) -> None:
+    if x_end < x_start:
+        return
+    for x in range(x_start, x_end + 1):
+        _put_graph_char(canvas, x, y, "-" if ascii_only else "─", ascii_only=ascii_only)
+
+
+def _draw_graph_vline(
+    canvas: list[list[str]],
+    x: int,
+    y_start: int,
+    y_end: int,
+    *,
+    ascii_only: bool,
+) -> None:
+    if y_end < y_start:
+        return
+    for y in range(y_start, y_end + 1):
+        _put_graph_char(canvas, x, y, "|" if ascii_only else "│", ascii_only=ascii_only)
+
+
+def _put_graph_char(
+    canvas: list[list[str]],
+    x: int,
+    y: int,
+    char: str,
+    *,
+    ascii_only: bool,
+) -> None:
+    if y < 0 or y >= len(canvas) or x < 0 or x >= len(canvas[y]):
+        return
+    existing = canvas[y][x]
+    if existing == " " or existing == char:
+        canvas[y][x] = char
+        return
+    if existing in {"▶", ">", "⊙", "+"}:
+        return
+    if char in {"▶", ">", "⊙", "+"}:
+        canvas[y][x] = char
+        return
+    horizontal = {"─", "-"}
+    vertical = {"│", "|"}
+    if ascii_only:
+        canvas[y][x] = "+"
+    elif (existing in horizontal and char in vertical) or (existing in vertical and char in horizontal):
+        canvas[y][x] = "┼"
+    elif existing in horizontal and char not in horizontal:
+        canvas[y][x] = char
+    elif existing in vertical and char not in vertical:
+        canvas[y][x] = char
+    else:
+        canvas[y][x] = char
+
+
+def _write_graph_text(canvas: list[list[str]], x: int, y: int, text: str) -> None:
+    if y < 0 or y >= len(canvas):
+        return
+    for offset, char in enumerate(text):
+        column = x + offset
+        if 0 <= column < len(canvas[y]):
+            canvas[y][column] = char
 
 
 def _narrow_graph_lines(
@@ -929,17 +1156,30 @@ def _narrow_node_lines(
     *,
     ascii_only: bool,
 ) -> list[str]:
-    lines = [prefix + _render_node(node, overlay, ascii_only=ascii_only, compact=True) + _join_label(node)]
+    lines = [
+        prefix
+        + _render_node(node, overlay, ascii_only=ascii_only, compact=True)
+        + _join_label(node, verbose=False)
+    ]
     if node.stage_id in expanded:
         return lines
     expanded.add(node.stage_id)
     children = [node_by_id[stage_id] for stage_id in node.outgoing if stage_id in node_by_id]
     for index, child in enumerate(children):
         is_last = index == len(children) - 1
-        edge = "`--> " if ascii_only and is_last else "+--> " if ascii_only else "└──▶ " if is_last else "├──▶ "
+        edge = (
+            "`--> "
+            if ascii_only and is_last
+            else "+--> " if ascii_only else "└──▶ " if is_last else "├──▶ "
+        )
         child_prefix = prefix + ("    " if is_last else "│   ")
         child_lines = _narrow_node_lines(child, node_by_id, overlay, expanded, child_prefix, ascii_only=ascii_only)
-        child_lines[0] = prefix + edge + child_lines[0].lstrip()
+        first_child_line = child_lines[0]
+        if first_child_line.startswith(child_prefix):
+            first_child_line = first_child_line[len(child_prefix):]
+        else:
+            first_child_line = first_child_line.lstrip()
+        child_lines[0] = prefix + edge + first_child_line
         lines.extend(child_lines)
     return lines
 

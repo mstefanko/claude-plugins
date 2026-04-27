@@ -330,10 +330,13 @@ class TuiStateTests(EnvTestCase):
         )
         rendered = "\n".join(pipeline_graph_lines(pipeline_graph_model(default), overlay, width=120))
 
-        self.assertIn("┌ research ┐ ├──▶ ┌ analysis ┐ !dirty", rendered)
-        self.assertIn("┌ analysis ┐ !dirty ──▶ >┌ writer ┐< !critical (join: analysis + clarify)", rendered)
+        self.assertIn("┌ research ┐", rendered)
+        self.assertIn("┌ analysis ┐ Δ", rendered)
+        self.assertIn("⊙──▶>┌ writer ┐< ◆", rendered)
         self.assertIn("╭ provider-review ╮ [queued]", rendered)
         self.assertIn("╔ review ╗", rendered)
+        self.assertNotIn("Layers:", rendered)
+        self.assertNotIn("(join: analysis + clarify)", rendered)
 
         ultra = load_pipeline(find_pipeline("ultra-plan").path)
         linear = "\n".join(pipeline_graph_lines(pipeline_graph_model(ultra), linear=True, ascii_only=True))
@@ -345,8 +348,8 @@ class TuiStateTests(EnvTestCase):
         model = pipeline_graph_model(pipeline)
 
         narrow = "\n".join(pipeline_graph_lines(model, width=64))
-        self.assertIn("(join: analysis + clarify)", narrow)
-        self.assertIn("(join: spec-review + provider-review)", narrow)
+        self.assertIn("(join)", narrow)
+        self.assertNotIn("│   ┌ analysis", narrow)
 
         linear = "\n".join(pipeline_graph_lines(model, width=36))
         self.assertIn("1. ┌ research ┐ [agents]", linear)
@@ -433,6 +436,7 @@ class TuiStateTests(EnvTestCase):
         self.assertIn("┌ stage ┐ agents", legend)
         self.assertIn("╭ stage ╮ provider/evidence", legend)
         self.assertIn("╔ stage ╗ terminal answer/docs", legend)
+        self.assertIn("⊙ join/fork", legend)
 
     def test_output_profiles_are_runnable_while_unknown_output_only_is_preview_only(self) -> None:
         for name in ("brainstorm", "research", "design", "review"):

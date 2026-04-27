@@ -212,32 +212,55 @@ Command palette entries:
 
 This is the main redesign.
 
+Implementation note: the remaining graph readability work is tracked as the
+focused executable plan in `docs/tui-layer-board-execution-plan.md`. This
+section remains useful as design background and rationale.
+
 ### Long-Term Workbench Direction
 
-The path that gives the best long-term result is a layered text workbench, not
-an immediate canvas editor.
+The path that gives the best long-term result is a native Textual
+**layer-board workbench**, not a denser box-drawing graph and not an immediate
+image/canvas renderer.
+
+The v3 text graph proved that the underlying graph semantics are useful, but
+also exposed the main comprehension problem: edge syntax and box-drawing glyphs
+compete with the workflow. Operators should not have to decode branch art before
+they can answer "what runs next?" or "what waits for what?"
+
+The next iteration should treat the graph as a board of topological layers:
+
+- columns show execution order;
+- cards show stages;
+- cards stacked in the same column show parallel work;
+- join badges show stages with multiple dependencies;
+- provider, fan-out, terminal, dirty, warning, live, and critical-path states
+  are card badges/classes;
+- detailed dependencies move into the selected card and inspector instead of
+  being encoded primarily as crossing edge lines.
 
 Recommended renderer progression:
 
-1. **V1: semantic layered text renderer.**
+1. **V1: native layer-board component.**
 
-   Build a pure graph model, then render it with a Sugiyama-style layered
-   layout: topological layer assignment from the existing engine, deterministic
-   barycentric reordering within layers to reduce crossings, box-drawing edges,
-   pinned semantic node shapes, compact mode, and a numbered linear fallback.
+   Use the pure graph model as the source of truth, then render topological
+   layers as Textual columns and stages as focusable cards. Make joins explicit
+   with badges/chips. Keep the visual grammar stable across themes by relying
+   on shape, labels, and badges first, color second.
 
-2. **V2: focusable graph with overlays.**
+2. **V2: richer overlays and optional lightweight connectors.**
 
-   Make the graph navigable and reusable across Pipelines and Dashboard. Add
-   selection, live status badges, dirty/diff overlays, provider/evidence
-   styling, copy-to-clipboard, and critical-path highlighting.
+   Add selection, live status badges, dirty/diff overlays, provider/evidence
+   styling, copy-to-clipboard, and critical-path highlighting. Add simple
+   connector hints only where they improve comprehension. Do not recreate the
+   dense edge-rendering problem inside the board.
 
 3. **V3: navigation aids and optional image renderer.**
 
    Add mini-map/"you are here" support if graphs exceed the terminal width.
-   If text rendering proves insufficient for dense pipelines, render Graphviz
-   to PNG and display it through `textual-image` or terminal image protocols on
-   capable terminals. Keep the text renderer as the always-available path.
+   If native Textual rendering proves insufficient for dense pipelines, render
+   Graphviz/SVG/PNG as an optional visual preview through `textual-image` or
+   terminal image protocols on capable terminals. Keep the layer board and
+   plain-text output as the always-available path.
 
 This keeps the first implementation testable while leaving a credible upgrade
 path. `textual-canvas` is still a possible future choice if direct interactive
@@ -245,16 +268,16 @@ canvas gestures become necessary, but it should not be the first escalation.
 
 Highest-leverage first-pass additions:
 
-- Sugiyama-style layer reordering, so a 6+ stage DAG does not devolve into
-  crossing list art.
-- Box-drawing edges and joins, with ASCII fallback for `LANG=C`, dumb
-  terminals, or explicit monochrome mode.
-- Shape-based node semantics:
-  - agents: square box, `┌─┐`
-  - provider work: rounded box, `╭─╮`
-  - evidence/answer-producing stages: double-line box, `╔═╗`
-- Compact and linear modes from the start, so Dashboard reuse and narrow cmux
-  panes do not become special cases later.
+- Board columns from topological layers, so execution order is visible before
+  edge details.
+- Focusable stage cards, so mouse/keyboard selection can use Textual widgets
+  instead of parsing x/y positions in a rendered text canvas.
+- Explicit `JOIN`, `FAN-OUT`, `PROVIDER`, `OUTPUT`, `WARN`, `DIRTY`, `RUN`,
+  `DONE`, and `CRITICAL` badges.
+- Dependency chips such as `after: analysis + clarify` on selected or joined
+  cards.
+- Compact and linear fallbacks from the start, so Dashboard reuse, narrow cmux
+  panes, and screen-reader-friendly views do not become special cases later.
 
 ### Target Layout
 
@@ -263,16 +286,16 @@ SwarmDaddy   [1 Dashboard] [2 Runs] [3 Pipelines] [4 Presets] [5 Settings]   ^p 
 preset=balanced  pipeline=default  draft=none  validation=OK
 
 +--------------------------+ +----------------------------------------------------------+ +--------------------------+
-| Pipelines                | | Execution Graph: default                                 | | Stage Inspector          |
-| implement                | |                                                          | | research                 |
-|   default [stock]        | | ┌ research ┐                                             | | kind: agents             |
-|   lightweight [stock]    | |      ├──▶ ┌ analysis ┐ ──┐                               | | role: agent-research     |
-|   ultra-plan [stock]     | |      └──▶ ┌ clarify  ┐ ──┴──▶ ┌ writer ┐                 | | deps: none               |
-| review                   | |                              │                           | | route: preset/hard       |
-|   review [stock]         | |                              ├──▶ ┌ spec-review ┐        | |                          |
-| design                   | |                              │        ├──▶ ┌ review ┐    | | actions                  |
-|   design [stock]         | |                              │        └──▶ ┌ docs ┐      | | enter edit/fork          |
-| custom                   | |                              └──▶ ╭ provider-review ╮    | | r route  o provider      |
+| Pipelines                | | Execution Board: default                                 | | Stage Inspector          |
+| implement                | | [1 Research]   [2 Parallel]   [3 Build]   [4 Verify]     | | review                   |
+|   default [stock]        | | ┌───────────┐ ┌───────────┐ ┌──────────┐ ┌────────────┐ | | kind: agents             |
+|   lightweight [stock]    | | │ research  │ │ analysis  │ │ writer   │ │ spec-review│ | | deps: spec-review,       |
+|   ultra-plan [stock]     | | │           │ │ clarify   │ │ JOIN     │ │ provider   │ | |       provider-review    |
+| review                   | | └───────────┘ └───────────┘ └──────────┘ └────────────┘ | | route: preset/hard       |
+|   review [stock]         | |                                      [5 Outputs]          | |                          |
+| design                   | |                                      ┌────────────┐       | | actions                  |
+|   design [stock]         | |                                      │ review JOIN│       | | enter edit/fork          |
+| custom                   | |                                      │ docs OUTPUT│       | | r route  o provider      |
 +--------------------------+ +----------------------------------------------------------+ +--------------------------+
 
 +--------------------------------------------------------------------------------------------------------------------+
@@ -281,7 +304,7 @@ preset=balanced  pipeline=default  draft=none  validation=OK
 +--------------------------------------------------------------------------------------------------------------------+
 ```
 
-The visual graph pane must be the largest object on the screen. The stage list
+The visual board pane must be the largest object on the screen. The stage list
 is not the center of gravity anymore.
 
 ### Required Graph Semantics
@@ -289,7 +312,9 @@ is not the center of gravity anymore.
 The graph must make these concepts visible:
 
 - **Stage order:** left-to-right or top-to-bottom by topological layer.
-- **Dependencies:** edges from each dependency to the dependent stage.
+- **Dependencies:** relationship from each dependency to the dependent stage,
+  visible through layer order, selected-card chips, and inspector details; full
+  edge drawing is optional.
 - **Parallel branches:** multiple stages in the same layer should read as
   parallel work.
 - **Fan-out stages:** show branch count and variation mode inside the node.
@@ -297,26 +322,302 @@ The graph must make these concepts visible:
 - **Merge stages:** show synthesize merge agent inside the fan-out node.
   Example: `merge: agent-analysis-judge`.
 - **Provider stages:** visually distinguish evidence/provider work from normal
-  agent work by shape first and color second.
+  agent work by badge/shape first and color second.
   Example: `provider-review (swarm-review, best-effort)`.
-- **Join points:** when a stage has multiple dependencies, the incoming edges
-  must make the join obvious.
+- **Join points:** when a stage has multiple dependencies, `JOIN`/`AND` badges
+  and dependency chips must make the wait obvious.
 - **Terminal outputs:** final review/docs stages should be visually findable.
 - **Draft/validation status:** invalid stages or graph errors should be marked
-  directly on the node when possible.
-- **Selection:** selected graph node and inspector must stay synchronized.
+  directly on the card when possible.
+- **Selection:** selected stage card and inspector must stay synchronized.
 - **Live run status:** the same renderer should be able to add `running`,
   `done`, `failed`, and `queued` badges when Dashboard shows active runs.
 - **Route diff status:** draft route overrides should tint or mark affected
   nodes so edits feel concrete.
-- **Critical path:** when budget/wall-clock estimates are available, the graph
+- **Critical path:** when budget/wall-clock estimates are available, the board
   should be able to emphasize the longest estimated path through the DAG.
 - **Swimlanes:** when width allows, stage kinds should align into stable lanes
   so provider/evidence work is structurally visible even without color.
 
-### V1 Graph Rendering Strategy
+### Native Layer-Board Component Plan
 
-Implement a deterministic dependency-free renderer first.
+The default Pipelines graph should be a custom Textual component composed from
+normal Textual widgets. It should feel like a workbench, not an image embedded
+in a terminal.
+
+#### Component Structure
+
+Keep topology and overlay computation pure in `py/swarm_do/tui/state.py`.
+Textual widgets should receive a prepared model and render it; they should not
+recompute pipeline semantics.
+
+Recommended classes:
+
+```python
+class PipelineLayerBoard(Widget):
+    """Focusable board that owns keyboard movement and board refresh."""
+
+class PipelineLayerColumn(Vertical):
+    """One topological layer rendered as a column."""
+
+class PipelineStageCard(Static):
+    """Focusable/clickable stage card with badges and selection state."""
+
+class PipelineJoinBadge(Static):
+    """Small semantic marker for multi-dependency stages."""
+```
+
+`PipelineLayerBoard` responsibilities:
+
+- Accept `PipelineGraphModel` and `PipelineGraphOverlay`.
+- Decide render mode from available size:
+  - board mode for wide enough panes;
+  - compact layer-list mode for medium panes;
+  - linear topological fallback for narrow panes.
+- Compose or refresh one `PipelineLayerColumn` per layer.
+- Own graph-level bindings:
+  - `left/right`: move to previous/next layer or connected dependency/dependent.
+  - `up/down`: move within the current layer.
+  - `home/end`: first/last stage in topological order.
+  - `enter`: launch the existing edit/fork flow for the selected stage.
+  - `y`: copy the plain-text fallback graph.
+  - `t`: focus the inspector/details pane.
+- Emit stage selection through the existing `PipelinesScreen.select_graph_stage`
+  flow rather than owning app state.
+- Keep the board scrollable horizontally and vertically when it exceeds the
+  available pane.
+
+`PipelineLayerColumn` responsibilities:
+
+- Render a short layer header: `1 Research`, `2 Parallel prep`, `3 Build`, or a
+  neutral `Layer N` when no semantic label is available.
+- Render all cards in the layer in deterministic order from the graph model.
+- Group or visually separate provider/evidence cards when there is room, but do
+  not require swimlanes for comprehension.
+- Preserve stable spacing so focus rings and status badges do not move other
+  columns around.
+
+`PipelineStageCard` responsibilities:
+
+- Render the stage title.
+- Render one short subtitle, selected from:
+  - first agent role;
+  - fan-out role/count/variant;
+  - provider type and tolerance;
+  - terminal artifact role.
+- Render badges:
+  - `JOIN` when `len(depends_on) > 1`;
+  - `FAN xN` when `fan_out_count` exists;
+  - `PROVIDER` for provider/evidence work;
+  - `OUTPUT` for terminal answer/docs;
+  - `WARN` or `ERROR` when warnings are present;
+  - `DIRTY` for draft changes;
+  - `CRITICAL` for critical-path overlays;
+  - live status badges such as `QUEUED`, `RUN`, `DONE`, `FAILED`.
+- In selected state, render the dependency chip:
+  `after: analysis + clarify`.
+- In selected state, render outgoing summary when useful:
+  `next: spec-review, provider-review`.
+- On click or keyboard activation, call back to the screen with `stage_id`.
+
+`PipelineJoinBadge` responsibilities:
+
+- Make multi-dependency waits obvious without edge spaghetti.
+- Render near the joined card or immediately above it:
+  `AND analysis + clarify`.
+- Collapse to a simple `JOIN` chip in narrow board mode.
+
+#### Board View Model
+
+Add a small pure view-model layer in `state.py` so tests do not need Textual:
+
+```python
+@dataclass(frozen=True)
+class PipelineBoardCard:
+    stage_id: str
+    layer: int
+    title: str
+    subtitle: str
+    badges: tuple[str, ...]
+    dependency_label: str | None
+    outgoing_label: str | None
+    kind: str
+    lane: str
+    selected: bool
+    dirty: bool
+    critical: bool
+    status: str | None
+    warnings: tuple[str, ...]
+
+@dataclass(frozen=True)
+class PipelineBoardColumn:
+    index: int
+    label: str
+    cards: tuple[PipelineBoardCard, ...]
+
+@dataclass(frozen=True)
+class PipelineBoardModel:
+    columns: tuple[PipelineBoardColumn, ...]
+    fallback_lines: tuple[str, ...]
+    warnings: tuple[str, ...]
+```
+
+Add:
+
+- `pipeline_board_model(model, overlay=None, width=None) -> PipelineBoardModel`
+- `pipeline_board_mode(width, height, columns) -> Literal["board",
+  "compact", "linear"]`
+- `pipeline_board_plain_text(board) -> list[str]`
+
+The board model should be derived from `PipelineGraphModel`; it must not become
+a second topology model.
+
+#### Render Modes
+
+Board mode:
+
+- Use when the board pane is wide enough to show at least three readable
+  columns, initially around `>= 96` columns.
+- Columns scroll horizontally if the whole pipeline is wider than the pane.
+- Cards have stable width, initially around 22-30 terminal columns.
+- Multi-line cards are acceptable; overflowing long stage names should wrap or
+  elide after preserving a usable stage id in the inspector.
+
+Compact mode:
+
+- Use when board mode would become cramped, initially around `72-95` columns.
+- Render one line per layer:
+  `L2  analysis  clarify`
+- Preserve badges:
+  `writer JOIN after: analysis + clarify`
+- Keep selection and inspector synchronization.
+
+Linear mode:
+
+- Use below the compact threshold or when screen-reader/plain output is
+  requested.
+- Render numbered topological order with `depends_on=...`.
+- This can reuse `pipeline_graph_lines(..., linear=True)`.
+
+Dashboard mode:
+
+- Reuse the same board model, but render compact-only by default.
+- Show only active pipeline shape and live status; do not expose editing
+  affordances on Dashboard.
+
+#### Connector Policy
+
+V1 should not try to draw every edge. The key UX signal is:
+
+- layer order;
+- parallel cards in the same layer;
+- explicit join badges;
+- selected-card dependency/outgoing chips;
+- inspector dependency details.
+
+Optional lightweight connector hints may be added later:
+
+- short right-arrow glyph between adjacent columns;
+- connector only for the selected card's incoming/outgoing edges;
+- connector only for critical path.
+
+Avoid full-board crossing edge lines in V1. That is the path that made the v3
+workbench hard to read.
+
+#### Textual Validity
+
+This approach is valid for the current Textual dependency range because it uses
+core primitives already present in the app:
+
+- `Widget`/`Static` for board and cards;
+- `Horizontal`/`Vertical` containers for columns and layout;
+- focusable widgets and `Binding` for keyboard navigation;
+- `on_click`/message callbacks for mouse selection;
+- TCSS classes for selected/dirty/provider/warning/live styling;
+- existing `Reactive[str | None] selected_stage_id` ownership on
+  `PipelinesScreen`.
+
+It avoids relying on optional terminal image protocols, browser rendering,
+Graphviz binaries, or canvas packages.
+
+#### Styling Rules
+
+- Color is reinforcement, not the primary signal.
+- Every semantic state must have a text/glyph badge.
+- Card borders/focus styles must not change dimensions when selection changes.
+- Use short labels inside cards; move long YAML/provider details to the
+  inspector.
+- Provider/evidence cards should have a distinct class and badge even in
+  monochrome.
+- Terminal/output stages should be findable through an `OUTPUT` badge and
+  stable placement near the final layer.
+
+Initial TCSS classes:
+
+- `.stage-card`
+- `.stage-card--selected`
+- `.stage-card--agents`
+- `.stage-card--provider`
+- `.stage-card--fanout`
+- `.stage-card--terminal`
+- `.stage-card--dirty`
+- `.stage-card--critical`
+- `.stage-card--warning`
+- `.stage-card--running`
+- `.stage-card--failed`
+- `.join-badge`
+- `.layer-column`
+- `.layer-column-title`
+
+#### Interaction Contract
+
+The board does not edit directly. It selects, explains, and launches explicit
+workflows.
+
+- Selection updates the inspector and validation rail.
+- `Enter`/`f` opens fork/edit using the existing modal flow.
+- `r`, `b`, `n`, `o`, `m`, `delete`, and route reset continue to operate on the
+  selected stage.
+- `y` copies a plain-text representation, not a widget dump.
+- `?` explains board navigation and badge meanings.
+- Pipeline changes preserve selection only when the stage id still exists.
+
+#### Testing Strategy
+
+Pure tests:
+
+- Board model columns match graph model layers for default, design, review, and
+  competitive pipelines.
+- Join cards include dependency labels.
+- Provider/fan-out/terminal stages emit the expected badges.
+- Overlay states produce `DIRTY`, live status, and critical badges without
+  changing topology.
+- Compact and linear modes are selected at the expected width thresholds.
+
+Textual/manual tests:
+
+- Wide terminal: default pipeline shows five readable columns and selected card
+  drives inspector.
+- Narrow terminal: board falls back to compact or linear mode without
+  unreadable wrapping.
+- cmux pane: horizontal scroll works when columns exceed width.
+- Keyboard-only walkthrough:
+  focus board, move through layers, edit/fork selected stage, validate,
+  discard.
+- Monochrome/low-color check: badges still explain kind/status.
+
+### Plain Text Fallback Rendering Strategy
+
+Keep a deterministic dependency-free renderer as fallback and export format.
+
+The plain-text renderer remains important, but it is no longer the primary
+Pipelines workbench. It should serve:
+
+- copy/yank output;
+- Dashboard compact fallback when the board cannot fit;
+- narrow/screen-reader-friendly linear mode;
+- non-Textual tests of topology and overlay semantics;
+- emergency fallback if widget rendering fails.
 
 Add pure model helpers in `py/swarm_do/tui/state.py`:
 
@@ -372,21 +673,22 @@ Use the existing `topological_layers()` as the source of truth. Do not create a
 new graph algorithm for execution order. Layer reordering is allowed only
 within a topological layer and must remain deterministic.
 
-Layered text layout algorithm:
+Fallback text layout algorithm:
 
 1. Build layer columns from `topological_layers()`.
 2. Assign each node a semantic lane and shape.
 3. Apply barycentric reordering within layers to reduce edge crossings.
-4. Route orthogonal box-drawing edges with explicit join markers.
+4. Route orthogonal box-drawing edges with explicit join markers for fallback
+   wide text output.
 5. Prefer wide layered mode when it fits.
 6. Use `compact=True` for Dashboard and small panels.
 7. Use numbered linear topological mode for very narrow panes and screen
    readers.
 
-Initial renderer requirements:
+Fallback renderer requirements:
 
 - Render a compact DAG map that fits the current terminal width where possible.
-- Use box-drawing edges and joins by default.
+- Use box-drawing edges and joins in fallback wide mode.
 - Fall back to ASCII edges when terminal capabilities are unknown or explicitly
   plain.
 - Fall back gracefully to a vertical tree/DAG projection on narrow terminals.
@@ -406,7 +708,7 @@ Initial renderer requirements:
   style-span data from `state.py` and let the Textual widget convert that into
   Rich `Text`.
 
-Acceptable v1 visual forms:
+Acceptable fallback visual forms:
 
 1. Wide terminal:
 
@@ -452,33 +754,28 @@ joins. It must not hide the fact that `writer` waits for both `analysis` and
 `clarify`, or that `review` waits for both `spec-review` and
 `provider-review`.
 
-### V2 Graph Interaction
+### Post-V1 Board Interaction
 
-After v1 proves useful, make the graph itself focusable.
+After the first board lands, improve interaction only where it helps the
+operator answer workflow questions faster.
 
-Add `PipelineGraphView(Static)` or a custom `Widget` with:
+Candidate additions:
 
-- `selected_stage_id` passed from `PipelinesScreen`; the screen owns a single
-  `Reactive[str | None]` selected stage id and all panels watch it.
-- Arrow-key movement between connected stages:
-  - `left/right`: previous/next topological layer.
-  - `up/down`: previous/next node within a layer.
-  - `enter`: open the existing edit/fork modal for the selected stage.
-- `g`: focus graph.
-- `t`: focus stage table/details.
-- `y`: copy/yank the current graph as plain text through
-  `App.copy_to_clipboard`.
-- Mouse click selection if Textual event handling is straightforward.
-- Scroll support for large graphs.
-- Optional corner mini-map when horizontal scroll is introduced.
+- selected-edge hints for the selected card's incoming and outgoing
+  dependencies;
+- a small "you are here" indicator when horizontal scrolling hides columns;
+- optional provider/evidence lane grouping when wide terminals have room;
+- command palette actions that operate on the selected stage;
+- richer live status badges when active-run events map cleanly to stage ids.
 
-The graph must never become the edit form itself. Route/provider edits, fork,
+The board must never become the edit form itself. Route/provider edits, fork,
 save, discard, and raw YAML stay modal or secondary-detail workflows.
 
-If the graph becomes too awkward as text, first evaluate Graphviz-to-PNG through
-`textual-image` on capable terminals while keeping the text renderer as
-fallback. Evaluate `textual-canvas` only if the product needs direct
-interactive canvas behavior that an image cannot provide.
+If the native board proves insufficient for dense pipelines, first evaluate
+Graphviz/SVG/PNG as an optional preview/export path through `textual-image` on
+capable terminals while keeping the board and text fallback available. Evaluate
+`textual-canvas` only if the product needs direct canvas interaction that
+normal Textual widgets cannot provide.
 
 ### Workbench Panels
 
@@ -489,11 +786,11 @@ Left panel: Pipeline Gallery
 - Keep labels short. Move long descriptions to preview/inspector.
 - Add a filter/search later if the list grows.
 
-Center panel: Execution Graph
+Center panel: Execution Board
 
 - Default focus for Pipelines.
 - Largest panel.
-- Shows graph legend only when there is space; otherwise use help/command
+- Shows badge legend only when there is space; otherwise use help/command
   palette.
 
 Right panel: Stage Inspector
@@ -545,9 +842,8 @@ Recommended Dashboard layout:
 +-------------------------------------------+ +------------------------------------------------+
 
 +------------------------------------------------------------------------------------------------+
-| Active Pipeline Graph                                                                          |
-| ┌ research ┐ ├▶ ┌ analysis ┐ ┐                                                                 |
-|              └▶ ┌ clarify  ┐ ┴▶ ┌ writer ┐ ...                                                 |
+| Active Pipeline                                                                                 |
+| L1 research  ->  L2 analysis | clarify  ->  L3 writer JOIN  ->  L4 spec | provider  -> review   |
 +------------------------------------------------------------------------------------------------+
 
 +------------------------------------------------------------------------------------------------+
@@ -558,12 +854,12 @@ Recommended Dashboard layout:
 
 Implementation notes:
 
-- Reuse `pipeline_graph_model()` and `pipeline_graph_lines()` from the
+- Reuse `pipeline_graph_model()` and `pipeline_board_model()` from the
   Pipelines workbench.
-- Dashboard graph is read-only and always rendered with `compact=True`.
+- Dashboard board is read-only and always rendered in compact/fallback mode.
 - Add a small `RichLog` event strip for the last N run/checkpoint/observation
-  events. It should be filterable by selected stage once graph selection exists.
-- Use live-status graph badges when active-run state can be mapped to stage ids.
+  events. It should be filterable by selected stage once board selection exists.
+- Use live-status board badges when active-run state can be mapped to stage ids.
 - If no active preset/pipeline exists, show a clear empty state with the command
   to open Presets/Pipelines.
 
@@ -690,86 +986,117 @@ Tests:
 - `py/swarm_do/tui/tests/test_state.py` graph model assertions.
 - Existing pipeline validation tests continue to pass.
 
-### Phase 3: Text Graph Renderer
+### Phase 3: Layer-Board View Model And Text Fallback
 
-Goal: render a useful DAG map as text/Rich content.
+Goal: prepare board-ready data without touching Textual layout yet, and keep a
+plain-text fallback for copy, narrow panes, and tests.
 
 Tasks:
 
-- Implement `pipeline_graph_lines(model, overlay=None, width=None,
-  compact=False, linear=False, ascii_only=False)`.
-- Implement deterministic Sugiyama-style layered rendering:
-  - topological layers from the existing engine
-  - barycentric reordering within each layer
-  - orthogonal box-drawing edges
-  - explicit join markers
-- Implement wide, narrow tree, compact, and numbered linear rendering modes.
-- Add ASCII fallback for plain terminals.
-- Mark selected node.
-- Mark joins explicitly in narrow mode.
-- Render node shape distinctions for normal agents, fan-out, provider/evidence,
-  selected, dirty, live status, warning, and error states.
-- Add optional swimlane ordering by stage kind when width allows.
-- Add optional critical-path emphasis when the overlay provides
-  `critical_stage_ids`.
-- Add a small legend.
-- Add renderer memoization keyed by pipeline id/revision, overlay fingerprint,
-  width, compact/linear/ascii flags.
-- Replace or supplement `graph_lines()` usage in TUI previews with the new
+- Add `PipelineBoardCard`, `PipelineBoardColumn`, and `PipelineBoardModel` to
+  `py/swarm_do/tui/state.py`.
+- Implement `pipeline_board_model(model, overlay=None, width=None)`.
+- Derive columns directly from `PipelineGraphModel.layers`.
+- Derive card badges from `PipelineGraphNode` and `PipelineGraphOverlay`:
+  - `JOIN`
+  - `FAN xN`
+  - `PROVIDER`
+  - `OUTPUT`
+  - `WARN` / `ERROR`
+  - `DIRTY`
+  - `CRITICAL`
+  - live status
+- Add selected-card dependency and outgoing labels:
+  - `after: analysis + clarify`
+  - `next: spec-review, provider-review`
+- Add deterministic layer labels:
+  - semantic labels when obvious, such as `Research`, `Parallel prep`,
+    `Build`, `Verification`, `Outputs`;
+  - `Layer N` fallback otherwise.
+- Implement `pipeline_board_mode(width, height, columns)` with initial
+  thresholds:
+  - board mode at roughly `>= 96` columns;
+  - compact mode at roughly `72-95` columns;
+  - linear mode below that.
+- Keep or implement `pipeline_graph_lines(..., compact=True, linear=True)` as
+  the plain-text fallback. It does not need to be the primary workbench
   renderer.
+- Implement `pipeline_board_plain_text(board)` for copy/yank and tests.
+- Replace old preview-only `graph_lines()` usage with either the board fallback
+  text or the existing graph fallback where appropriate.
 
 Tests:
 
-- Snapshot-like unit tests on renderer output for default and design pipelines.
-- Tests should assert semantics, not exact whitespace everywhere:
-  - fan-out count appears
-  - provider-review appears
-  - joins are labeled
-  - selected stage is marked
-  - shape markers survive monochrome/plain-string assertions
-  - narrow fallback repeats join nodes with `(join)`
-  - linear fallback preserves complete topological order
-  - compact mode stays under a small line budget suitable for Dashboard
+- Unit tests on `pipeline_board_model()` for default, design, review, and
+  competitive pipelines.
+- Tests should assert semantics, not TCSS or exact visual spacing:
+  - layers are preserved
+  - fan-out count appears as a badge
+  - provider-review appears as provider/evidence work
+  - joins include dependency labels
+  - selected stage has dependency/outgoing labels
+  - dirty/live/critical overlays produce badges
+  - compact and linear thresholds choose the expected mode
+  - plain-text fallback preserves complete topological order
 
-### Phase 4: Pipelines Workbench Layout
+### Phase 4: Native Textual Layer-Board Workbench
 
-Goal: make graph the primary Pipelines surface.
+Goal: replace the hard-to-read graph text pane with a Textual component that
+uses columns, cards, badges, and synchronized inspector state.
 
 Tasks:
 
-- Replace the current three-column `pipeline-gallery`, `stage-rows`,
-  `stage-inspector` layout with:
+- Add `PipelineLayerBoard`, `PipelineLayerColumn`, `PipelineStageCard`, and
+  `PipelineJoinBadge` classes in `py/swarm_do/tui/app.py` or a new
+  `py/swarm_do/tui/widgets.py` module if the app file becomes too large.
+- Add TCSS classes for board, columns, cards, selected state, semantic kinds,
+  warning/error, dirty, critical, and live status.
+- Replace the current `PipelineGraphView(Static)` pane with
+  `PipelineLayerBoard`.
+- Keep the graph-first workbench layout:
   - left pipeline gallery
-  - center execution graph
+  - center layer board
   - right stage inspector
   - bottom validation rail
-- Keep stage rows available in a secondary tab or modal.
-- Add `selected_stage_id: Reactive[str | None]` on `PipelinesScreen`.
+- Keep stage rows or raw YAML available in a secondary tab/modal, not as the
+  default workbench center.
+- Continue using `selected_stage_id: Reactive[str | None]` on
+  `PipelinesScreen`.
 - Synchronize selection:
-  - Graph, stage table, inspector, and validation rail render from
+  - Board, fallback text, inspector, and validation rail render from
     `selected_stage_id`.
-  - Selecting a graph node updates `selected_stage_id`.
+  - Selecting a card updates `selected_stage_id`.
   - Selecting a stage row updates `selected_stage_id`.
   - Selecting a pipeline resets or preserves `selected_stage_id` only when the
-    stage still exists, then refreshes graph, stage table, inspector, and
-    validation rail.
+    stage still exists, then refreshes board, inspector, and validation rail.
+- Implement board keyboard movement:
+  - `left/right` moves by dependency/dependent when available, otherwise by
+    nearest card in adjacent layer;
+  - `up/down` moves within the current layer;
+  - `home/end` moves to first/last topological stage;
+  - `enter` launches the existing edit/fork flow.
+- Implement card click selection without parsing rendered text coordinates.
+- Implement render-mode fallback inside the board:
+  - board mode;
+  - compact layer-list mode;
+  - linear topological mode.
+- Preserve `y`/command-palette copy as plain text.
 - Move long raw stage details out of the default inspector.
 - Keep edit/fork/route/provider/YAML changes in modals or secondary details;
-  the graph selection can launch those flows but must not become the edit
+  board selection can launch those flows but must not become the edit
   surface.
 - Add focused empty states:
   - no pipeline selected
   - unreadable pipeline
-  - graph validation error
+  - board/model validation error
   - stock pipeline selected, fork required to edit
-- Add `y` or command-palette action to copy/yank the current graph as plain
-  text.
 
 Tests:
 
 - Textual pilot/smoke test if available in the repo test environment.
 - Manual cmux launch on a wide terminal and a narrow terminal.
-- Verify text does not overflow badly in the screenshots' approximate width.
+- Verify cards and badges do not resize the layout during focus/status changes.
+- Verify compact/linear fallback is readable in narrow panes.
 
 ### Phase 5: Dashboard Orientation
 
@@ -778,30 +1105,30 @@ Goal: make Dashboard useful even with no active runs.
 Tasks:
 
 - Add active profile summary.
-- Add compact active pipeline graph.
+- Add compact active pipeline board or compact layer-list fallback.
 - Keep in-flight runs table.
 - Add a `RichLog` event strip for the last N checkpoint/observation/run events.
 - Add latest checkpoint/observation summary from existing status state as the
   event strip's empty/minimal state.
-- Map active-run stage state into graph badges when stage ids are available.
+- Map active-run stage state into board badges when stage ids are available.
 - Use empty states instead of huge blank areas.
 
 Tests:
 
-- State tests for active pipeline graph summary when active preset exists.
-- State tests for compact graph line budget.
+- State tests for active pipeline board summary when active preset exists.
+- State tests for compact board/fallback line budget.
 - Manual no-runs view.
 - Manual one-run view.
 
-### Phase 6: Graph Polish And Operator Loops
+### Phase 6: Board Polish And Operator Loops
 
-Goal: make the graph workbench feel like an operator console rather than a
+Goal: make the board workbench feel like an operator console rather than a
 static diagram.
 
 Tasks:
 
 - Add command palette actions for screen-specific commands.
-- Refine `?` help content after the new graph interactions exist.
+- Refine `?` help content after the new board interactions exist.
 - Add visible validation severity styling.
 - Add a default palette and monochrome fallback that survive SSH, cmux,
   Solarized, and low-contrast themes.
@@ -809,8 +1136,10 @@ Tasks:
   amber/dirty, with non-color glyphs as the primary signal.
 - Add critical-path overlay using budget/wall-clock estimates once those
   estimates are stable enough at stage level.
+- Add optional selected-edge hints only if users still miss dependency
+  relationships after the board lands.
 - Add mini-map/"you are here" only if real stock/user pipelines exceed the
-  graph pane width often enough to justify horizontal navigation.
+  board pane width often enough to justify horizontal navigation.
 - Polish borders and focus styles in `app.tcss`.
 - Update README and any TUI docs.
 
@@ -819,7 +1148,7 @@ Tests:
 - Manual keyboard-only walkthrough:
   - open TUI
   - go to Pipelines
-  - inspect default graph
+  - inspect default board
   - fork stock pipeline
   - edit one route
   - validate
@@ -836,7 +1165,8 @@ Why it loses:
 - Harder to test.
 - More likely to stall before fixing the actual navigation/orientation problem.
 
-Use only if the text/Rich graph proves insufficient after real use.
+Use only if the native board and optional image preview both prove insufficient
+after real use.
 
 ### Use Graphviz ASCII As The Main Renderer
 
@@ -850,15 +1180,30 @@ Why it loses:
 
 Why it loses:
 
-- Excellent escape hatch, but the first renderer still needs to work in plain
+- Excellent escape hatch, but the first workbench still needs to work in plain
   SSH/cmux panes.
 - Image output makes selection, diff overlays, and copy-as-text harder unless a
-  text renderer already exists.
+  native board/text renderer already exists.
 - It shifts testing toward visual snapshots before the semantic model is
   proven.
 
 Use later as a capability upgrade when terminals support kitty/sixel/iTerm
-images or when dense pipelines outgrow box-drawing.
+images or when dense pipelines outgrow the native board.
+
+### Continue Edge-Dense Box-Drawing As The Primary Graph
+
+Why it loses:
+
+- The v3 screenshot shows that the operator has to parse glyphs before seeing
+  the workflow.
+- Joins and parallelism are technically represented but not visually obvious.
+- Click hit detection depends on rendered string positions instead of stable
+  widgets.
+- Adding more edge detail would likely increase noise faster than
+  comprehension.
+
+Keep plain-text graph output for copy, compact, linear, and emergency fallback.
+Do not make it the default Pipelines workbench.
 
 ### Use `py-dagviz` Immediately
 
@@ -880,8 +1225,8 @@ Why it loses:
   and medium DAGs this app has today.
 - It weakens copy/paste and screen-reader behavior.
 
-Keep it parked unless pipelines become so dense that box-drawing plus
-Sugiyama-style ordering cannot stay readable.
+Keep it parked unless pipelines become so dense that the native board plus
+selected-edge hints cannot stay readable.
 
 ### Put Editing Directly In The Graph
 
@@ -892,7 +1237,7 @@ Why it loses:
   fight for the same keys.
 - It creates more failure modes for stock-vs-user fork safety.
 
-Graph selection may launch edit/fork modals, but editing itself stays explicit.
+Board selection may launch edit/fork modals, but editing itself stays explicit.
 
 ### Keep The Stage List As The Primary Workbench
 
@@ -904,26 +1249,32 @@ Why it loses:
 
 ## Risks And Mitigations
 
-Risk: text graph rendering becomes too hard to read for complex DAGs.
+Risk: board columns become too wide for small panes.
 
-Mitigation: start with known stock pipelines, use Sugiyama-style layer
-reordering and box-drawing joins, add compact and linear fallbacks, and keep
-stage table/details available. Escalate to Graphviz image output first, then
-`textual-canvas` only if direct canvas interaction is truly needed.
+Mitigation: set explicit board/compact/linear thresholds, make the center board
+scroll horizontally, keep selected-card dependency chips, and preserve the
+linear fallback.
 
-Risk: graph and stage selection drift out of sync.
+Risk: dependency relationships become too implicit without full edge lines.
+
+Mitigation: show `JOIN`/`AND` badges, selected-card `after:` and `next:` chips,
+and inspector dependency details. Add selected-edge hints only if user testing
+shows the badges are insufficient.
+
+Risk: board and stage selection drift out of sync.
 
 Mitigation: store one `Reactive[str | None] selected_stage_id` in
 `PipelinesScreen`; every panel renders from that state.
 
-Risk: graph redraws become noticeable as focus changes or run events stream in.
+Risk: board redraws become noticeable as focus changes or run events stream in.
 
 Mitigation: keep the graph model immutable, separate fast-changing overlays
-from topology, and memoize render output by pipeline/revision/overlay/width.
+from topology, keep the board view model pure, and memoize expensive topology
+mapping by pipeline/revision/overlay/width.
 
 Risk: color-heavy styling fails over SSH, cmux, monochrome, or colorblind use.
 
-Mitigation: make node shape, labels, and glyphs the primary signal; treat color
+Mitigation: make card badges, labels, and glyphs the primary signal; treat color
 as enhancement only.
 
 Risk: command palette duplicates footer actions without improving discovery.
@@ -949,30 +1300,33 @@ The work is successful when:
 - A user can always see how to get to Dashboard, Pipelines, Presets, and
   Settings.
 - `?` opens contextual help from each main screen.
-- Pipelines opens to a graph-first view.
-- The default pipeline graph visibly shows:
+- Pipelines opens to a board-first graph view.
+- The default pipeline board visibly shows:
   - research splitting to analysis and clarify
   - writer waiting for both
   - spec-review and provider-review running after writer
   - review waiting for both spec-review and provider-review
   - docs following spec-review
 - Fan-out pipelines visibly show branch count and merge agent.
-- Provider stages are visually distinct from normal agent stages by shape, not
-  only color.
-- Selecting any graph node updates the inspector.
+- Provider stages are visually distinct from normal agent stages by badge,
+  placement/class, and color enhancement.
+- Selecting any stage card updates the inspector.
 - Validation/budget/provider readiness is visible without opening a modal.
 - Narrow terminals can switch to a numbered linear topological view.
 - The Dashboard is informative even when there are no in-flight runs.
-- The Dashboard includes a compact graph and a small recent-event strip.
+- The Dashboard includes a compact board/fallback graph and a small recent-event
+  strip.
 - Global navigation no longer collides with Doctor/Diff/Set actions.
-- Editing/forking is launched from the graph when useful but remains modal.
+- Editing/forking is launched from board selection when useful but remains
+  modal.
 
 ## Implementation Entry Point
 
 Start with **Phase 1: Navigation And Chrome**, then implement **Phase 2: Pure
-Pipeline Graph Model** before touching the Pipelines layout.
+Pipeline Graph Model**, then **Phase 3: Layer-Board View Model And Text
+Fallback** before touching the Pipelines layout.
 
 Do not begin a canvas or external graph dependency spike until the dependency-
-free `pipeline_graph_model()` and layered box-drawing `pipeline_graph_lines()`
-path has been tried against the stock pipelines in wide, compact, narrow, and
-linear modes.
+free `pipeline_graph_model()`, `pipeline_board_model()`, native
+`PipelineLayerBoard`, and plain-text fallback path have been tried against the
+stock pipelines in wide, compact, narrow, and linear modes.

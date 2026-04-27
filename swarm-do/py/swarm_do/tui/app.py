@@ -73,7 +73,6 @@ from swarm_do.tui.state import (
     pipeline_graph_move,
     pipeline_graph_model,
     pipeline_graph_overlay,
-    pipeline_graph_legend_lines,
     pipeline_live_stage_statuses,
     pipeline_has_provider_stage,
     pipeline_profile_preset,
@@ -900,6 +899,7 @@ if TEXTUAL_IMPORT_ERROR is None:
             "Pipelines\n\n"
             "Global: 1 Dashboard, 2 Runs, 3 Pipelines, 4 Presets, 5 Settings, Ctrl+P Commands, q Quit.\n"
             "Graph: g focus graph, arrows move selection, Enter/f fork or edit selected stage, y copy graph.\n"
+            "Shapes: ┌agent┐, ╔fan-out/terminal╗, ╭provider╮, ⊙ join/fork, ◆ critical, Δ draft change.\n"
             "Local: r route, b branch, n lens, o provider, Ctrl+D doctor, m module, "
             "t details, v validate, a activate, Ctrl+S save, Esc discard."
         )
@@ -919,9 +919,11 @@ if TEXTUAL_IMPORT_ERROR is None:
             with Vertical(id="pipeline-workbench"):
                 with Horizontal(id="pipeline-main"):
                     yield ListView(id="pipeline-gallery")
-                    yield PipelineGraphView(id="pipeline-graph")
-                    yield StageInspectorView("", id="stage-inspector")
-                yield Static("", id="validation-rail")
+                    with Vertical(id="pipeline-content"):
+                        yield PipelineGraphView(id="pipeline-graph")
+                        with Horizontal(id="pipeline-details"):
+                            yield StageInspectorView("", id="stage-inspector")
+                            yield Static("", id="validation-rail")
             yield StatusBar(id="status")
             yield Footer()
 
@@ -1045,7 +1047,6 @@ if TEXTUAL_IMPORT_ERROR is None:
                 model = pipeline_graph_model(pipeline)
                 overlay = self._overlay_for_model(model)
                 lines = pipeline_graph_lines(model, overlay, width=self._graph_render_width())
-                lines.extend(pipeline_graph_legend_lines(model)[:4])
             except Exception as exc:
                 self._graph_model = None
                 self._graph_overlay = pipeline_graph_overlay()
