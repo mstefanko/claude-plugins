@@ -690,10 +690,7 @@ def format_route_chip(chip: PipelineRouteChip) -> str:
     prefix = f"{chip.label} " if chip.label else ""
     if chip.error:
         return f"{prefix}ERROR {chip.error}"
-    return (
-        f"{prefix}{chip.backend}:{_compact_model_name(chip.model)}/{chip.effort}"
-        f" ({_route_source_label(chip.source)})"
-    )
+    return f"{prefix}({_compact_model_name(chip.model)}/{chip.effort})"
 
 
 def format_route_chips(chips: tuple[PipelineRouteChip, ...] | list[PipelineRouteChip], *, max_chips: int = 3) -> str:
@@ -1141,7 +1138,7 @@ def _pipeline_board_compact_lines(board: PipelineBoardModel) -> list[str]:
 def _pipeline_board_compact_card(card: PipelineBoardCard) -> str:
     parts = [card.title]
     if card.route_chips:
-        parts.append(f"route={format_route_chips(card.route_chips, max_chips=2)}")
+        parts.append(format_route_chips(card.route_chips, max_chips=2))
     parts.extend(card.badges)
     if "JOIN" in card.badges and card.dependency_label:
         parts.append(card.dependency_label)
@@ -1159,7 +1156,7 @@ def _pipeline_board_linear_lines(board: PipelineBoardModel) -> list[str]:
     for index, card in enumerate(cards, 1):
         parts = [f"{index}. {card.title}", f"[{_pipeline_board_lane_label(card.lane)}]"]
         if card.route_chips:
-            parts.append(f"route={format_route_chips(card.route_chips, max_chips=2)}")
+            parts.append(format_route_chips(card.route_chips, max_chips=2))
         depends_on = _dependency_label_stage_ids(card.dependency_label)
         if depends_on:
             parts.append(f"depends_on={','.join(depends_on)}")
@@ -1270,8 +1267,14 @@ def _clip_route_error(message: str, limit: int = 48) -> str:
 
 def _compact_model_name(model: str) -> str:
     if model.startswith("claude-"):
-        return model.removeprefix("claude-")
-    return model
+        parts = model.removeprefix("claude-").split("-")
+        if len(parts) >= 3 and parts[-2].isdigit() and parts[-1].isdigit():
+            family = " ".join(parts[:-2])
+            return f"{family} {parts[-2]}.{parts[-1]}".strip()
+        return model.removeprefix("claude-").replace("-", " ")
+    if model.startswith("gpt-"):
+        return "gpt " + model.removeprefix("gpt-")
+    return model.replace("-", " ")
 
 
 def _route_source_label(source: str) -> str:

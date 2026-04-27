@@ -393,25 +393,46 @@ if TEXTUAL_IMPORT_ERROR is None:
                 handler()
 
 
-    def _stage_card_text(card: Any) -> str:
+    def _stage_card_text(card: Any) -> Text:
+        text = Text()
         title = f"> {card.title}" if card.selected else f"  {card.title}"
-        lines = [title]
+        text.append(title)
         if card.subtitle:
-            lines.append(str(card.subtitle))
+            text.append("\n")
+            text.append(str(card.subtitle))
         route_chips = tuple(getattr(card, "route_chips", ()) or ())
         if route_chips:
-            lines.append("route " + format_route_chips(route_chips))
+            text.append("\n")
+            _append_route_chips(text, route_chips)
         badges = [badge for badge in card.badges if badge not in {"JOIN", "OUTPUT"}]
         if badges:
-            lines.append(" ".join(f"[{badge}]" for badge in badges))
+            text.append("\n")
+            text.append(" ".join(f"[{badge}]" for badge in badges))
         if card.selected:
             if card.dependency_label:
-                lines.append(card.dependency_label)
+                text.append("\n")
+                text.append(card.dependency_label)
             if card.outgoing_label:
-                lines.append(card.outgoing_label)
+                text.append("\n")
+                text.append(card.outgoing_label)
         if card.warnings:
-            lines.append("; ".join(card.warnings))
-        return "\n".join(lines)
+            text.append("\n")
+            text.append("; ".join(card.warnings))
+        return text
+
+
+    def _append_route_chips(text: Text, chips: tuple[Any, ...], *, max_chips: int = 3) -> None:
+        visible = list(chips[:max_chips])
+        for index, chip in enumerate(visible):
+            if index:
+                text.append(" ")
+            text.append(format_route_chips([chip]), style=_route_chip_style(getattr(chip, "backend", "")))
+        if len(chips) > len(visible):
+            text.append(f" +{len(chips) - len(visible)}", style=_muted_style())
+
+
+    def _route_chip_style(backend: Any) -> str:
+        return f"bold {_color('background')} on {_backend_style(backend)}"
 
 
     def _flow_gutter_text(label: str, is_last: bool) -> str:

@@ -172,9 +172,11 @@ class TuiAppTests(unittest.TestCase):
         )
         column = dataclasses.make_dataclass("Column", ["cards"])((card,))
 
+        rendered = tui_app._stage_card_text(card).plain
+
         self.assertEqual(tui_app._join_bridge_text(column), "JOIN analysis + clarify\n↓ agent-writer")
-        self.assertNotIn("[JOIN]", tui_app._stage_card_text(card))
-        self.assertIn("[RUN]", tui_app._stage_card_text(card))
+        self.assertNotIn("[JOIN]", rendered)
+        self.assertIn("[RUN]", rendered)
 
     def test_output_bridge_demotes_output_from_card_badges(self) -> None:
         card = dataclasses.make_dataclass(
@@ -207,9 +209,11 @@ class TuiAppTests(unittest.TestCase):
         )
         column = dataclasses.make_dataclass("Column", ["cards"])((card,))
 
+        rendered = tui_app._stage_card_text(card).plain
+
         self.assertEqual(tui_app._output_bridge_text(column), "OUTPUT agent-review")
-        self.assertNotIn("[OUTPUT]", tui_app._stage_card_text(card))
-        self.assertIn("[DONE]", tui_app._stage_card_text(card))
+        self.assertNotIn("[OUTPUT]", rendered)
+        self.assertIn("[DONE]", rendered)
 
     def test_preset_workbench_handles_invalid_selected_preset(self) -> None:
         async def run_app() -> None:

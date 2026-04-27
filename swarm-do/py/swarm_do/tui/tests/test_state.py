@@ -686,11 +686,11 @@ class TestPipelineBoardModel(EnvTestCase):
         preview = preset_profile_preview("balanced", preset, pipeline)
         cards = self._cards_by_id(preview.board)
 
-        self.assertIn("codex:gpt-5.4-mini/medium (preset)", format_route_chips(cards["docs"].route_chips))
-        self.assertIn("claude:sonnet-4-6/high (default)", format_route_chips(cards["research"].route_chips))
+        self.assertIn("(gpt 5.4-mini/medium)", format_route_chips(cards["docs"].route_chips))
+        self.assertIn("(sonnet 4.6/high)", format_route_chips(cards["research"].route_chips))
         writer_routes = format_route_chips(cards["writer"].route_chips)
-        self.assertIn("simple codex:gpt-5.4-mini/medium (preset)", writer_routes)
-        self.assertIn("moderate claude:sonnet-4-6/high (default)", writer_routes)
+        self.assertIn("simple (gpt 5.4-mini/medium)", writer_routes)
+        self.assertIn("moderate (sonnet 4.6/high)", writer_routes)
         self.assertIn("providers=auto min_success=1 max_parallel=4", cards["provider-review"].subtitle)
         self.assertIn("budget: agents<=80 cost<=$20.00 wall<=14400s", preview.summary_lines)
         self.assertEqual(preview.unused_route_lines, ("Unused routes: none",))
@@ -703,9 +703,9 @@ class TestPipelineBoardModel(EnvTestCase):
 
         rendered = format_route_chips(cards["writers"].route_chips, max_chips=5)
 
-        self.assertIn("b0 claude:opus-4-7/xhigh (stage)", rendered)
-        self.assertIn("b1 codex:gpt-5.4/xhigh (stage)", rendered)
-        self.assertIn("merge codex:gpt-5.4/high (preset)", rendered)
+        self.assertIn("b0 (opus 4.7/xhigh)", rendered)
+        self.assertIn("b1 (gpt 5.4/xhigh)", rendered)
+        self.assertIn("merge (gpt 5.4/high)", rendered)
 
     def test_preset_profile_preview_keeps_unused_routes_visible(self) -> None:
         preset = load_preset(find_preset("claude-only").path)
