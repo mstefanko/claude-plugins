@@ -67,6 +67,7 @@ from swarm_do.tui.state import (
     draft_validation_lines,
     effective_fan_out_branch_route,
     effective_stage_agent_route,
+    format_route_chips,
     load_runs,
     load_run_events,
     load_observations,
@@ -83,6 +84,7 @@ from swarm_do.tui.state import (
     pipeline_graph_model,
     pipeline_graph_overlay,
     pipeline_live_stage_statuses,
+    pipeline_route_chips_by_stage,
     pipeline_has_provider_stage,
     pipeline_profile_preset,
     pipeline_stage_rows,
@@ -249,6 +251,7 @@ if TEXTUAL_IMPORT_ERROR is None:
             self.model: Any | None = None
             self.overlay = pipeline_graph_overlay()
             self.board: Any | None = None
+            self.route_chips_by_stage: Mapping[str, Any] = {}
             self.message = "No graph selected."
             self.message_failed = False
 
@@ -259,14 +262,29 @@ if TEXTUAL_IMPORT_ERROR is None:
             self.model = None
             self.overlay = pipeline_graph_overlay()
             self.board = None
+            self.route_chips_by_stage = {}
             self.message = message
             self.message_failed = failed
             self._rebuild()
 
-        def set_graph(self, model: Any, overlay: Any, board: Any) -> None:
+        def set_graph(
+            self,
+            model: Any,
+            overlay: Any,
+            board: Any,
+            route_chips_by_stage: Mapping[str, Any] | None = None,
+        ) -> None:
             self.model = model
             self.overlay = overlay
             self.board = board
+            if route_chips_by_stage is None:
+                route_chips_by_stage = {
+                    card.stage_id: card.route_chips
+                    for column in getattr(board, "columns", ())
+                    for card in getattr(column, "cards", ())
+                    if getattr(card, "route_chips", ())
+                }
+            self.route_chips_by_stage = dict(route_chips_by_stage or {})
             self.message = ""
             self.message_failed = False
             self._rebuild()
@@ -331,6 +349,7 @@ if TEXTUAL_IMPORT_ERROR is None:
                 self.overlay,
                 width=render_width,
                 height=render_height,
+                route_chips_by_stage=self.route_chips_by_stage,
             ).mode
             if mode == self.board.mode:
                 return
@@ -339,6 +358,7 @@ if TEXTUAL_IMPORT_ERROR is None:
                 self.overlay,
                 width=render_width,
                 height=render_height,
+                route_chips_by_stage=self.route_chips_by_stage,
             )
             self._rebuild()
 
@@ -378,6 +398,9 @@ if TEXTUAL_IMPORT_ERROR is None:
         lines = [title]
         if card.subtitle:
             lines.append(str(card.subtitle))
+        route_chips = tuple(getattr(card, "route_chips", ()) or ())
+        if route_chips:
+            lines.append("route " + format_route_chips(route_chips))
         badges = [badge for badge in card.badges if badge not in {"JOIN", "OUTPUT"}]
         if badges:
             lines.append(" ".join(f"[{badge}]" for badge in badges))
@@ -1298,6 +1321,7 @@ if TEXTUAL_IMPORT_ERROR is None:
                         board.set_message("No default graph found. Press 3 to open Presets.", failed=True)
                         return
                     pipeline = load_pipeline(item.path)
+                    preset = {"name": "default-fallback", "pipeline": "default"}
                     graph_name = "default"
                     preset_name = "default fallback"
                 model = pipeline_graph_model(pipeline)
@@ -1310,6 +1334,10 @@ if TEXTUAL_IMPORT_ERROR is None:
                     ),
                     critical_stage_ids=pipeline_critical_stage_ids(model),
                 )
+                route_chips_by_stage = pipeline_route_chips_by_stage(
+                    pipeline,
+                    BackendResolver(preset_name=active, preset_data=preset),
+                )
                 title.update(_dashboard_graph_title(preset_name, graph_name, model))
                 board.set_graph(
                     model,
@@ -1319,7 +1347,9 @@ if TEXTUAL_IMPORT_ERROR is None:
                         overlay,
                         width=self._dashboard_board_width(),
                         height=self._dashboard_board_height(),
+                        route_chips_by_stage=route_chips_by_stage,
                     ),
+                    route_chips_by_stage,
                 )
             except Exception as exc:
                 title.update("Active Preset Board")
@@ -1962,6 +1992,10 @@ if TEXTUAL_IMPORT_ERROR is None:
                 critical_stage_ids=pipeline_critical_stage_ids(model),
             )
 
+        def _route_chips_for_current_pipeline(self, pipeline: Mapping[str, Any]) -> Mapping[str, Any]:
+            del pipeline
+            return {}
+
         def refresh_graph(self) -> None:
             pipeline = self._current_pipeline()
             view = self.query_one("#pipeline-graph", PipelineLayerBoard)
@@ -1980,6 +2014,7 @@ if TEXTUAL_IMPORT_ERROR is None:
                 return
             self._graph_model = model
             self._graph_overlay = overlay
+            route_chips_by_stage = self._route_chips_for_current_pipeline(pipeline)
             view.set_graph(
                 model,
                 overlay,
@@ -1988,7 +2023,9 @@ if TEXTUAL_IMPORT_ERROR is None:
                     overlay,
                     width=self._graph_render_width(),
                     height=self._graph_render_height(),
+                    route_chips_by_stage=route_chips_by_stage,
                 ),
+                route_chips_by_stage,
             )
 
         def _dirty_stage_ids(self) -> frozenset[str]:
@@ -2014,7 +2051,12 @@ if TEXTUAL_IMPORT_ERROR is None:
             if pipeline is None:
                 body = "No graph selected."
             else:
-                body = stage_inspector_text(pipeline, stage.stage_id if stage else None, self._graph_overlay)
+                body = stage_inspector_text(
+                    pipeline,
+                    stage.stage_id if stage else None,
+                    self._graph_overlay,
+                    route_chips_by_stage=self._route_chips_for_current_pipeline(pipeline),
+                )
             self.query_one("#stage-inspector", StageInspectorView).update(body)
 
         def refresh_validation_rail(self) -> None:
@@ -2401,7 +2443,14 @@ if TEXTUAL_IMPORT_ERROR is None:
                 return
             model = pipeline_graph_model(pipeline)
             overlay = self._overlay_for_model(model)
-            board = pipeline_board_model(model, overlay, width=0, height=self._graph_render_height())
+            route_chips_by_stage = self._route_chips_for_current_pipeline(pipeline)
+            board = pipeline_board_model(
+                model,
+                overlay,
+                width=0,
+                height=self._graph_render_height(),
+                route_chips_by_stage=route_chips_by_stage,
+            )
             text = "\n".join(pipeline_board_plain_text(board))
             copier = getattr(self.app, "copy_to_clipboard", None)
             if callable(copier):
@@ -2795,6 +2844,16 @@ if TEXTUAL_IMPORT_ERROR is None:
         def refresh_graph(self) -> None:
             super().refresh_graph()
             self._show_selected_preset_error()
+
+        def _route_chips_for_current_pipeline(self, pipeline: Mapping[str, Any]) -> Mapping[str, Any]:
+            selected = self._selected_preset_data()
+            if selected is None:
+                return {}
+            item, preset, _resolved = selected
+            return pipeline_route_chips_by_stage(
+                pipeline,
+                BackendResolver(preset_name=item.name, preset_data=preset),
+            )
 
         def refresh_stages(self) -> None:
             super().refresh_stages()

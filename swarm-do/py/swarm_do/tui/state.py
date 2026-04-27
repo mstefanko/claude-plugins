@@ -274,6 +274,17 @@ class PipelineBoardCard:
     critical: bool
     status: str | None
     warnings: tuple[str, ...]
+    route_chips: tuple["PipelineRouteChip", ...] = ()
+
+
+@dataclasses.dataclass(frozen=True)
+class PipelineRouteChip:
+    label: str
+    backend: str
+    model: str
+    effort: str
+    source: str
+    error: str | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -579,10 +590,12 @@ def pipeline_board_model(
     overlay: PipelineGraphOverlay | None = None,
     width: int | None = None,
     height: int | None = None,
+    route_chips_by_stage: Mapping[str, tuple[PipelineRouteChip, ...]] | None = None,
 ) -> PipelineBoardModel:
     """Return a layer-board view model derived from a graph model."""
 
     overlay = overlay or pipeline_graph_overlay()
+    route_chips_by_stage = route_chips_by_stage or {}
     node_by_id = _node_by_id(model)
     columns: list[PipelineBoardColumn] = []
     warnings = list(model.warnings)
@@ -594,7 +607,7 @@ def pipeline_board_model(
             if node is None:
                 warnings.append(f"layer {column_index} references unknown stage {stage_id}")
                 continue
-            cards.append(_pipeline_board_card(node, overlay))
+            cards.append(_pipeline_board_card(node, overlay, route_chips_by_stage.get(stage_id, ())))
         columns.append(PipelineBoardColumn(index=column_index, label=f"L{column_index}", cards=tuple(cards)))
 
     board = PipelineBoardModel(
@@ -628,6 +641,71 @@ def pipeline_board_plain_text(board: PipelineBoardModel) -> list[str]:
     return _pipeline_board_compact_lines(board)
 
 
+def pipeline_route_chips_by_stage(
+    pipeline: Mapping[str, Any],
+    resolver: BackendResolver,
+) -> dict[str, tuple[PipelineRouteChip, ...]]:
+    """Resolve compact route chips for runnable agents represented on the board."""
+
+    chips_by_stage: dict[str, tuple[PipelineRouteChip, ...]] = {}
+    for index, stage in enumerate(pipeline.get("stages") or []):
+        if not isinstance(stage, Mapping):
+            continue
+        stage_id = str(stage.get("id") or f"<stage-{index + 1}>")
+        chips: list[PipelineRouteChip] = []
+
+        agents = [agent for agent in stage.get("agents") or [] if isinstance(agent, Mapping)]
+        if agents:
+            for agent_index, agent in enumerate(agents):
+                role = agent.get("role")
+                if not isinstance(role, str) or not role:
+                    continue
+                label = f"agent[{agent_index}]" if len(agents) > 1 else ""
+                chips.extend(_route_chips_for_role(resolver, role, _agent_route_override(agent), label=label))
+
+        fan = stage.get("fan_out")
+        if isinstance(fan, Mapping):
+            role = fan.get("role")
+            if isinstance(role, str) and role:
+                count = fan.get("count")
+                branch_count = count if isinstance(count, int) and count > 0 else 0
+                routes = fan.get("routes") if fan.get("variant") == "models" else None
+                if isinstance(routes, list) and branch_count:
+                    for branch_index in range(branch_count):
+                        override = routes[branch_index] if branch_index < len(routes) else None
+                        chips.append(_route_chip_for_role(resolver, role, override, label=f"b{branch_index}"))
+                else:
+                    chips.extend(_route_chips_for_role(resolver, role, None, label="each"))
+            merge = stage.get("merge")
+            merge_agent = merge.get("agent") if isinstance(merge, Mapping) else None
+            if isinstance(merge_agent, str) and merge_agent:
+                chips.extend(_route_chips_for_role(resolver, merge_agent, None, label="merge"))
+
+        if chips:
+            chips_by_stage[stage_id] = tuple(chips)
+    return chips_by_stage
+
+
+def format_route_chip(chip: PipelineRouteChip) -> str:
+    prefix = f"{chip.label} " if chip.label else ""
+    if chip.error:
+        return f"{prefix}ERROR {chip.error}"
+    return (
+        f"{prefix}{chip.backend}:{_compact_model_name(chip.model)}/{chip.effort}"
+        f" ({_route_source_label(chip.source)})"
+    )
+
+
+def format_route_chips(chips: tuple[PipelineRouteChip, ...] | list[PipelineRouteChip], *, max_chips: int = 3) -> str:
+    if not chips:
+        return ""
+    visible = list(chips[:max_chips])
+    rendered = " | ".join(format_route_chip(chip) for chip in visible)
+    if len(chips) > len(visible):
+        rendered += f" | +{len(chips) - len(visible)}"
+    return rendered
+
+
 def preset_profile_preview(
     preset_name: str,
     preset: Mapping[str, Any],
@@ -639,8 +717,14 @@ def preset_profile_preview(
     """Return a read-only board preview showing how a preset routes a pipeline."""
 
     model = pipeline_graph_model(pipeline)
-    board = pipeline_board_model(model, width=width, height=height)
     resolver = BackendResolver(preset_name=preset_name, preset_data=preset)
+    route_chips_by_stage = pipeline_route_chips_by_stage(pipeline, resolver)
+    board = pipeline_board_model(
+        model,
+        width=width,
+        height=height,
+        route_chips_by_stage=route_chips_by_stage,
+    )
     stage_by_id = {
         str(stage.get("id")): stage
         for stage in pipeline.get("stages") or []
@@ -655,7 +739,10 @@ def preset_profile_preview(
             if stage is None:
                 cards.append(card)
                 continue
-            cards.append(dataclasses.replace(card, subtitle=_preset_stage_route_summary(stage, resolver, preset)))
+            if isinstance(stage.get("provider"), Mapping):
+                cards.append(dataclasses.replace(card, subtitle=_preset_stage_policy_summary(stage, preset)))
+            else:
+                cards.append(card)
         columns.append(dataclasses.replace(column, cards=tuple(cards)))
     routed_board = dataclasses.replace(board, columns=tuple(columns))
     routed_board = dataclasses.replace(routed_board, fallback_lines=tuple(pipeline_board_plain_text(routed_board)))
@@ -933,7 +1020,11 @@ def _node_by_id(model: PipelineGraphModel) -> dict[str, PipelineGraphNode]:
     return {node.stage_id: node for node in model.nodes}
 
 
-def _pipeline_board_card(node: PipelineGraphNode, overlay: PipelineGraphOverlay) -> PipelineBoardCard:
+def _pipeline_board_card(
+    node: PipelineGraphNode,
+    overlay: PipelineGraphOverlay,
+    route_chips: tuple[PipelineRouteChip, ...] = (),
+) -> PipelineBoardCard:
     status = _normalize_board_status(overlay.stage_statuses.get(node.stage_id))
     selected = overlay.selected_stage_id == node.stage_id
     dirty = node.stage_id in overlay.dirty_stage_ids
@@ -954,6 +1045,7 @@ def _pipeline_board_card(node: PipelineGraphNode, overlay: PipelineGraphOverlay)
         critical=critical,
         status=status,
         warnings=node.warnings,
+        route_chips=route_chips,
     )
 
 
@@ -1048,6 +1140,8 @@ def _pipeline_board_compact_lines(board: PipelineBoardModel) -> list[str]:
 
 def _pipeline_board_compact_card(card: PipelineBoardCard) -> str:
     parts = [card.title]
+    if card.route_chips:
+        parts.append(f"route={format_route_chips(card.route_chips, max_chips=2)}")
     parts.extend(card.badges)
     if "JOIN" in card.badges and card.dependency_label:
         parts.append(card.dependency_label)
@@ -1064,6 +1158,8 @@ def _pipeline_board_linear_lines(board: PipelineBoardModel) -> list[str]:
     cards = [card for column in board.columns for card in column.cards]
     for index, card in enumerate(cards, 1):
         parts = [f"{index}. {card.title}", f"[{_pipeline_board_lane_label(card.lane)}]"]
+        if card.route_chips:
+            parts.append(f"route={format_route_chips(card.route_chips, max_chips=2)}")
         depends_on = _dependency_label_stage_ids(card.dependency_label)
         if depends_on:
             parts.append(f"depends_on={','.join(depends_on)}")
@@ -1086,40 +1182,7 @@ def _dependency_label_stage_ids(label: str | None) -> tuple[str, ...]:
     return tuple(part.strip() for part in label.removeprefix("after: ").split(" + ") if part.strip())
 
 
-def _preset_stage_route_summary(
-    stage: Mapping[str, Any],
-    resolver: BackendResolver,
-    preset: Mapping[str, Any],
-) -> str:
-    agents = stage.get("agents")
-    if isinstance(agents, list):
-        parts = []
-        for idx, agent in enumerate(agents):
-            if not isinstance(agent, Mapping):
-                continue
-            role = agent.get("role")
-            if not isinstance(role, str) or not role:
-                continue
-            override = _agent_route_override(agent)
-            summary = _route_summary_for_role(resolver, role, override=override)
-            parts.append(summary if len(agents) == 1 else f"agent[{idx}] {summary}")
-        return " | ".join(parts)
-
-    fan = stage.get("fan_out")
-    if isinstance(fan, Mapping):
-        role = fan.get("role")
-        if not isinstance(role, str) or not role:
-            return ""
-        if fan.get("variant") == "models" and isinstance(fan.get("routes"), list):
-            branch_parts = []
-            for idx, route in enumerate(fan["routes"][:3]):
-                branch_parts.append(f"branch[{idx}] {_single_route_label(resolver, role, route)}")
-            count = fan.get("count")
-            if isinstance(count, int) and count > len(branch_parts):
-                branch_parts.append(f"+{count - len(branch_parts)} more")
-            return " | ".join(branch_parts)
-        return _route_summary_for_role(resolver, role)
-
+def _preset_stage_policy_summary(stage: Mapping[str, Any], preset: Mapping[str, Any]) -> str:
     provider = stage.get("provider")
     if isinstance(provider, Mapping):
         provider_type = str(provider.get("type") or "provider")
@@ -1137,38 +1200,78 @@ def _agent_route_override(agent: Mapping[str, Any]) -> Mapping[str, Any] | str |
     return override if isinstance(override, (Mapping, str)) else None
 
 
-def _route_summary_for_role(
-    resolver: BackendResolver,
-    role: str,
-    *,
-    override: Mapping[str, Any] | str | None = None,
-) -> str:
-    if override is not None:
-        return _single_route_label(resolver, role, override)
-
-    routes = []
-    for complexity in ("simple", "moderate", "hard"):
-        route = resolver.resolve(role, complexity)
-        routes.append((complexity, route))
-    unique = {
-        (route.backend, route.model, route.effort, route.setting_source)
-        for _complexity, route in routes
-    }
-    if len(unique) == 1:
-        return _format_route(routes[0][1].as_dict()) + f" ({_route_source_label(routes[0][1].setting_source)})"
-    return "; ".join(
-        f"{complexity}={_format_route(route.as_dict())} ({_route_source_label(route.setting_source)})"
-        for complexity, route in routes
-    )
-
-
-def _single_route_label(
+def _route_chips_for_role(
     resolver: BackendResolver,
     role: str,
     override: Mapping[str, Any] | str | None,
-) -> str:
-    route = resolver.resolve(role, "hard", override=override)
-    return _format_route(route.as_dict()) + f" ({_route_source_label(route.setting_source)})"
+    *,
+    label: str = "",
+) -> list[PipelineRouteChip]:
+    if override is not None:
+        return [_route_chip_for_role(resolver, role, override, label=label)]
+
+    resolved = []
+    for complexity in ("simple", "moderate", "hard"):
+        route = resolver.resolve(role, complexity)
+        resolved.append((complexity, route))
+    unique = {
+        (route.backend, route.model, route.effort, route.setting_source)
+        for _complexity, route in resolved
+    }
+    if len(unique) == 1:
+        return [_route_chip_from_route(resolved[0][1], label=label)]
+    return [
+        _route_chip_from_route(route, label=_route_chip_label(label, complexity))
+        for complexity, route in resolved
+    ]
+
+
+def _route_chip_for_role(
+    resolver: BackendResolver,
+    role: str,
+    override: Mapping[str, Any] | str | None,
+    *,
+    label: str,
+) -> PipelineRouteChip:
+    try:
+        route = resolver.resolve(role, "hard", override=override)
+    except Exception as exc:
+        return PipelineRouteChip(
+            label=label,
+            backend="error",
+            model=_clip_route_error(str(exc)),
+            effort="",
+            source="error",
+            error=_clip_route_error(str(exc)),
+        )
+    return _route_chip_from_route(route, label=label)
+
+
+def _route_chip_from_route(route: Any, *, label: str) -> PipelineRouteChip:
+    return PipelineRouteChip(
+        label=label,
+        backend=str(route.backend),
+        model=str(route.model),
+        effort=str(route.effort),
+        source=str(route.setting_source),
+    )
+
+
+def _route_chip_label(prefix: str, label: str) -> str:
+    return f"{prefix}/{label}" if prefix else label
+
+
+def _clip_route_error(message: str, limit: int = 48) -> str:
+    normalized = " ".join(message.split())
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: max(0, limit - 1)].rstrip() + "..."
+
+
+def _compact_model_name(model: str) -> str:
+    if model.startswith("claude-"):
+        return model.removeprefix("claude-")
+    return model
 
 
 def _route_source_label(source: str) -> str:
@@ -2826,6 +2929,7 @@ def stage_inspector_text(
     pipeline: Mapping[str, Any],
     stage_id: str | None,
     overlay: PipelineGraphOverlay | None = None,
+    route_chips_by_stage: Mapping[str, tuple[PipelineRouteChip, ...]] | None = None,
 ) -> str:
     if not stage_id:
         return "Select a stage."
@@ -2853,6 +2957,10 @@ def stage_inspector_text(
         if markers:
             insert_at = 4 if status else 3
             lines.insert(insert_at, "markers: " + ", ".join(markers))
+    route_chips = tuple((route_chips_by_stage or {}).get(stage_id, ()))
+    if route_chips:
+        lines.extend(["", "routes:"])
+        lines.extend(f"  - {format_route_chip(chip)}" for chip in route_chips)
     lines.extend(_stage_detail_lines(stage))
     return "\n".join(lines)
 

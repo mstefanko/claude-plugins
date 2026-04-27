@@ -48,6 +48,7 @@ from swarm_do.tui.state import (
     draft_validation_lines,
     effective_fan_out_branch_route,
     effective_stage_agent_route,
+    format_route_chips,
     latest_checkpoint_event,
     latest_observation,
     load_observations,
@@ -685,12 +686,26 @@ class TestPipelineBoardModel(EnvTestCase):
         preview = preset_profile_preview("balanced", preset, pipeline)
         cards = self._cards_by_id(preview.board)
 
-        self.assertIn("codex/gpt-5.4-mini/medium (preset)", cards["docs"].subtitle)
-        self.assertIn("claude/claude-sonnet-4-6/high (default)", cards["research"].subtitle)
-        self.assertIn("simple=codex/gpt-5.4-mini/medium (preset)", cards["writer"].subtitle)
+        self.assertIn("codex:gpt-5.4-mini/medium (preset)", format_route_chips(cards["docs"].route_chips))
+        self.assertIn("claude:sonnet-4-6/high (default)", format_route_chips(cards["research"].route_chips))
+        writer_routes = format_route_chips(cards["writer"].route_chips)
+        self.assertIn("simple codex:gpt-5.4-mini/medium (preset)", writer_routes)
+        self.assertIn("moderate claude:sonnet-4-6/high (default)", writer_routes)
         self.assertIn("providers=auto min_success=1 max_parallel=4", cards["provider-review"].subtitle)
         self.assertIn("budget: agents<=80 cost<=$20.00 wall<=14400s", preview.summary_lines)
         self.assertEqual(preview.unused_route_lines, ("Unused routes: none",))
+
+    def test_preset_profile_preview_shows_model_fanout_and_merge_routes(self) -> None:
+        preset = load_preset(find_preset("competitive").path)
+        pipeline = load_pipeline(find_pipeline("compete").path)
+        preview = preset_profile_preview("competitive", preset, pipeline)
+        cards = self._cards_by_id(preview.board)
+
+        rendered = format_route_chips(cards["writers"].route_chips, max_chips=5)
+
+        self.assertIn("b0 claude:opus-4-7/xhigh (stage)", rendered)
+        self.assertIn("b1 codex:gpt-5.4/xhigh (stage)", rendered)
+        self.assertIn("merge codex:gpt-5.4/high (preset)", rendered)
 
     def test_preset_profile_preview_keeps_unused_routes_visible(self) -> None:
         preset = load_preset(find_preset("claude-only").path)
