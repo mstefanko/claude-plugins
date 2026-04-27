@@ -34,6 +34,10 @@ class TuiAppTests(unittest.TestCase):
         self.assertIn("Copy Pipeline Board", pipeline_titles)
         self.assertIn("Run Provider Doctor", pipeline_titles)
 
+    def test_flow_gutter_marks_downward_board_flow(self) -> None:
+        self.assertEqual(tui_app._flow_gutter_text("L1", False), "L1\n│\n▼")
+        self.assertEqual(tui_app._flow_gutter_text("L5", True), "L5")
+
 
 if __name__ == "__main__":
     unittest.main()

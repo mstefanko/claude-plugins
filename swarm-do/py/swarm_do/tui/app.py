@@ -160,13 +160,14 @@ if TEXTUAL_IMPORT_ERROR is None:
                 handler(self.stage_id)
 
 
-    class PipelineLayerColumn(Vertical):
-        def __init__(self, column: Any, **kwargs: Any):
+    class PipelineLayerColumn(Horizontal):
+        def __init__(self, column: Any, *, is_last: bool = False, **kwargs: Any):
             super().__init__(classes="layer-column", **kwargs)
             self.column = column
+            self.is_last = is_last
 
         def compose(self) -> ComposeResult:
-            yield Static(self.column.label, classes="layer-column-title")
+            yield Static(_flow_gutter_text(self.column.label, self.is_last), classes="layer-flow-gutter")
             with Horizontal(classes="layer-card-row"):
                 for card in self.column.cards:
                     yield PipelineStageCard(card)
@@ -229,7 +230,10 @@ if TEXTUAL_IMPORT_ERROR is None:
             if not self.board.columns:
                 return [Static("Pipeline has no stages.", classes="stage-card stage-card--warning")]
             if self.board.mode == "board":
-                return [PipelineLayerColumn(column) for column in self.board.columns]
+                return [
+                    PipelineLayerColumn(column, is_last=index == len(self.board.columns) - 1)
+                    for index, column in enumerate(self.board.columns)
+                ]
             return [
                 Static(
                     "\n".join(self.board.fallback_lines),
@@ -318,6 +322,10 @@ if TEXTUAL_IMPORT_ERROR is None:
         if card.warnings:
             lines.append("; ".join(card.warnings))
         return "\n".join(lines)
+
+
+    def _flow_gutter_text(label: str, is_last: bool) -> str:
+        return label if is_last else f"{label}\n│\n▼"
 
 
     def _stage_card_classes(card: Any) -> str:

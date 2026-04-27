@@ -98,15 +98,17 @@ DataTable {
     margin-bottom: 1;
 }
 
-.layer-column-title {
-    height: 1;
+.layer-flow-gutter {
+    width: 5;
+    min-height: 3;
+    height: auto;
     text-style: bold;
     color: $accent;
-    margin-bottom: 0;
+    padding: 0 1 0 0;
 }
 
 .layer-card-row {
-    width: 100%;
+    width: 1fr;
     height: auto;
 }
 
