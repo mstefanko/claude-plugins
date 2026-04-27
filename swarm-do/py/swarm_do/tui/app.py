@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import subprocess
 import sys
-import re
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +15,7 @@ try:  # Optional dependency installed by bin/swarm-tui.
     from textual.containers import Container, Horizontal, Vertical
     from textual.reactive import reactive
     from textual.screen import ModalScreen, Screen
+    from textual.widget import Widget
     from textual.widgets import (
         Button,
         Checkbox,
@@ -66,10 +66,11 @@ from swarm_do.tui.state import (
     load_run_events,
     load_observations,
     module_palette_rows,
+    pipeline_board_model,
+    pipeline_board_plain_text,
     pipeline_gallery_rows,
     pipeline_activation_blocker,
     pipeline_critical_stage_ids,
-    pipeline_graph_lines,
     pipeline_graph_move,
     pipeline_graph_model,
     pipeline_graph_overlay,
@@ -142,34 +143,103 @@ if TEXTUAL_IMPORT_ERROR is None:
         can_focus = True
 
 
-    class PipelineGraphView(Static):
+    class PipelineJoinBadge(Static):
+        pass
+
+
+    class PipelineStageCard(Static):
+        can_focus = True
+
+        def __init__(self, card: Any, **kwargs: Any):
+            self.card = card
+            self.stage_id = card.stage_id
+            super().__init__(_stage_card_text(card), classes=_stage_card_classes(card), **kwargs)
+
+        def on_click(self, event: events.Click) -> None:
+            event.stop()
+            self.focus()
+            handler = getattr(self.screen, "select_graph_stage", None)
+            if callable(handler):
+                handler(self.stage_id)
+
+
+    class PipelineLayerColumn(Vertical):
+        def __init__(self, column: Any, **kwargs: Any):
+            super().__init__(classes="layer-column", **kwargs)
+            self.column = column
+
+        def compose(self) -> ComposeResult:
+            yield Static(self.column.label, classes="layer-column-title")
+            for card in self.column.cards:
+                if "JOIN" in card.badges and card.dependency_label:
+                    yield PipelineJoinBadge(card.dependency_label, classes="join-badge")
+                yield PipelineStageCard(card)
+
+
+    class PipelineLayerBoard(Widget):
         can_focus = True
         BINDINGS = [
             Binding("left", "select_left", "Prev layer", show=False),
             Binding("right", "select_right", "Next layer", show=False),
             Binding("up", "select_up", "Prev stage", show=False),
             Binding("down", "select_down", "Next stage", show=False),
+            Binding("home", "select_first", "First stage", show=False),
+            Binding("end", "select_last", "Last stage", show=False),
             Binding("enter", "open_selected", "Edit", show=False),
             Binding("y", "copy_graph", "Copy", show=False),
         ]
 
         def __init__(self, **kwargs: Any):
-            super().__init__("", **kwargs)
+            super().__init__(classes="pipeline-board", **kwargs)
             self.model: Any | None = None
             self.overlay = pipeline_graph_overlay()
-            self.lines: list[str] = []
+            self.board: Any | None = None
+            self.message = "No pipeline selected."
+            self.message_failed = False
 
-        def set_message(self, message: str) -> None:
+        def on_mount(self) -> None:
+            self._rebuild()
+
+        def set_message(self, message: str, *, failed: bool = False) -> None:
             self.model = None
             self.overlay = pipeline_graph_overlay()
-            self.lines = message.splitlines() or [message]
-            self.update(message)
+            self.board = None
+            self.message = message
+            self.message_failed = failed
+            self._rebuild()
 
-        def set_graph(self, model: Any, overlay: Any, lines: list[str]) -> None:
+        def set_graph(self, model: Any, overlay: Any, board: Any) -> None:
             self.model = model
             self.overlay = overlay
-            self.lines = lines
-            self.update("\n".join(lines))
+            self.board = board
+            self.message = ""
+            self.message_failed = False
+            self._rebuild()
+
+        def _rebuild(self) -> None:
+            if not self.is_mounted:
+                return
+            self.remove_children()
+            widgets = self._render_widgets()
+            if widgets:
+                self.mount(*widgets)
+
+        def _render_widgets(self) -> list[Widget]:
+            if self.message:
+                modifier = "stage-card--failed" if self.message_failed else "stage-card--warning"
+                return [Static(self.message, classes=f"stage-card {modifier}")]
+            if self.board is None:
+                return [Static("No pipeline selected.", classes="stage-card stage-card--warning")]
+            if not self.board.columns:
+                return [Static("Pipeline has no stages.", classes="stage-card stage-card--warning")]
+            if self.board.mode == "board":
+                return [PipelineLayerColumn(column) for column in self.board.columns]
+            return [
+                Static(
+                    "\n".join(self.board.fallback_lines),
+                    classes=f"pipeline-board-text pipeline-board-text--{self.board.mode}",
+                )
+            ]
 
         def _select(self, stage_id: str | None) -> None:
             if not stage_id:
@@ -184,6 +254,28 @@ if TEXTUAL_IMPORT_ERROR is None:
             stage_id = pipeline_graph_move(self.model, self.overlay.selected_stage_id, direction)
             self._select(stage_id)
 
+        def on_click(self, event: events.Click) -> None:
+            self.focus()
+
+        def on_resize(self, event: events.Resize) -> None:
+            if self.model is None or self.board is None:
+                return
+            mode = pipeline_board_model(
+                self.model,
+                self.overlay,
+                width=event.size.width,
+                height=event.size.height,
+            ).mode
+            if mode == self.board.mode:
+                return
+            self.board = pipeline_board_model(
+                self.model,
+                self.overlay,
+                width=event.size.width,
+                height=event.size.height,
+            )
+            self._rebuild()
+
         def action_select_left(self) -> None:
             self._move("left")
 
@@ -196,6 +288,14 @@ if TEXTUAL_IMPORT_ERROR is None:
         def action_select_down(self) -> None:
             self._move("down")
 
+        def action_select_first(self) -> None:
+            if self.model is not None and self.model.nodes:
+                self._select(self.model.nodes[0].stage_id)
+
+        def action_select_last(self) -> None:
+            if self.model is not None and self.model.nodes:
+                self._select(self.model.nodes[-1].stage_id)
+
         def action_open_selected(self) -> None:
             handler = getattr(self.screen, "action_begin_edit", None)
             if callable(handler):
@@ -206,18 +306,51 @@ if TEXTUAL_IMPORT_ERROR is None:
             if callable(handler):
                 handler()
 
-        def on_click(self, event: events.Click) -> None:
-            self.focus()
-            if self.model is None:
-                return
-            y = int(getattr(event, "y", -1)) + int(getattr(self, "scroll_y", 0) or 0)
-            if y < 0 or y >= len(self.lines):
-                return
-            x = int(getattr(event, "x", 0)) + int(getattr(self, "scroll_x", 0) or 0)
-            stage_id = _graph_click_stage_id(self.lines[y], self.model, x)
-            if stage_id:
-                event.stop()
-                self._select(stage_id)
+
+    def _stage_card_text(card: Any) -> str:
+        title = f"> {card.title}" if card.selected else f"  {card.title}"
+        lines = [title]
+        if card.subtitle:
+            lines.append(str(card.subtitle))
+        if card.badges:
+            lines.append(" ".join(f"[{badge}]" for badge in card.badges))
+        if card.selected:
+            if card.dependency_label:
+                lines.append(card.dependency_label)
+            if card.outgoing_label:
+                lines.append(card.outgoing_label)
+        if card.warnings:
+            lines.append("; ".join(card.warnings))
+        return "\n".join(lines)
+
+
+    def _stage_card_classes(card: Any) -> str:
+        classes = ["stage-card"]
+        if card.lane == "provider":
+            classes.append("stage-card--provider")
+        elif card.lane in {"terminal", "output"} or "OUTPUT" in card.badges:
+            classes.append("stage-card--terminal")
+        else:
+            classes.append("stage-card--agents")
+        if any(badge.startswith("FAN x") for badge in card.badges):
+            classes.append("stage-card--fanout")
+        if card.selected:
+            classes.append("stage-card--selected")
+        if card.dirty:
+            classes.append("stage-card--dirty")
+        if card.critical:
+            classes.append("stage-card--critical")
+        if card.warnings or "WARN" in card.badges:
+            classes.append("stage-card--warning")
+        if "RUN" in card.badges:
+            classes.append("stage-card--running")
+        if "FAILED" in card.badges:
+            classes.append("stage-card--failed")
+        if "QUEUED" in card.badges:
+            classes.append("stage-card--queued")
+        if "DONE" in card.badges:
+            classes.append("stage-card--done")
+        return " ".join(classes)
 
 
     def _nav_line(active: str) -> str:
@@ -670,7 +803,7 @@ if TEXTUAL_IMPORT_ERROR is None:
     def _dashboard_graph_text(pipeline_name: str) -> str:
         item = find_pipeline(pipeline_name) or find_pipeline("default")
         if item is None:
-            return "Active Pipeline Graph\nno active pipeline found; press 3 to open Pipelines"
+            return "Active Pipeline Board\nno active pipeline found; press 3 to open Pipelines"
         try:
             pipeline = load_pipeline(item.path)
             model = pipeline_graph_model(pipeline)
@@ -683,10 +816,10 @@ if TEXTUAL_IMPORT_ERROR is None:
                 ),
                 critical_stage_ids=pipeline_critical_stage_ids(model),
             )
-            lines = pipeline_graph_lines(model, overlay, width=100, compact=True)
+            board = pipeline_board_model(model, overlay, width=88, height=8)
         except Exception as exc:
-            return f"Active Pipeline Graph\nERROR {exc}"
-        return "Active Pipeline Graph\n" + "\n".join(lines)
+            return f"Active Pipeline Board\nERROR {exc}"
+        return "Active Pipeline Board\n" + "\n".join(board.fallback_lines)
 
 
     class SettingsScreen(Screen):
@@ -876,7 +1009,7 @@ if TEXTUAL_IMPORT_ERROR is None:
         BINDINGS = [
             ("enter", "begin_edit", "Edit"),
             ("f", "begin_edit", "Fork/Edit"),
-            ("g", "focus_graph", "Graph"),
+            ("g", "focus_graph", "Board"),
             ("r", "edit_stage_route", "Route"),
             ("b", "edit_branch_route", "Branch"),
             ("n", "edit_lenses", "Lens"),
@@ -884,7 +1017,7 @@ if TEXTUAL_IMPORT_ERROR is None:
             ("ctrl+d", "provider_doctor", "Doctor"),
             ("m", "add_module", "Module"),
             ("t", "focus_stage_details", "Details"),
-            ("y", "copy_graph", "Copy graph"),
+            ("y", "copy_graph", "Copy board"),
             ("delete", "remove_stage", "Remove"),
             ("ctrl+r", "reset_selected_route", "Reset route"),
             ("ctrl+z", "undo_draft", "Undo"),
@@ -898,8 +1031,8 @@ if TEXTUAL_IMPORT_ERROR is None:
         HELP = (
             "Pipelines\n\n"
             "Global: 1 Dashboard, 2 Runs, 3 Pipelines, 4 Presets, 5 Settings, Ctrl+P Commands, q Quit.\n"
-            "Graph: g focus graph, arrows move selection, Enter/f fork or edit selected stage, y copy graph.\n"
-            "Shapes: ┌agent┐, ╔fan-out/terminal╗, ╭provider╮, ⊙ join/fork, ◆ critical, Δ draft change.\n"
+            "Board: g focus layer board, arrows/Home/End move selection, Enter/f edit, y copy plain text.\n"
+            "Badges: JOIN wait, FAN fan-out, PROVIDER evidence, OUTPUT terminal output, DIRTY draft, CRITICAL path.\n"
             "Local: r route, b branch, n lens, o provider, Ctrl+D doctor, m module, "
             "t details, v validate, a activate, Ctrl+S save, Esc discard."
         )
@@ -920,7 +1053,7 @@ if TEXTUAL_IMPORT_ERROR is None:
                 with Horizontal(id="pipeline-main"):
                     yield ListView(id="pipeline-gallery")
                     with Vertical(id="pipeline-content"):
-                        yield PipelineGraphView(id="pipeline-graph")
+                        yield PipelineLayerBoard(id="pipeline-graph")
                         with Horizontal(id="pipeline-details"):
                             yield StageInspectorView("", id="stage-inspector")
                             yield Static("", id="validation-rail")
@@ -929,7 +1062,7 @@ if TEXTUAL_IMPORT_ERROR is None:
 
         def on_mount(self) -> None:
             self.refresh_pipelines()
-            self.set_focus(self.query_one("#pipeline-graph", PipelineGraphView))
+            self.set_focus(self.query_one("#pipeline-graph", PipelineLayerBoard))
 
         def chrome_context(self) -> str:
             if self._draft is None:
@@ -995,7 +1128,7 @@ if TEXTUAL_IMPORT_ERROR is None:
 
         def refresh_stages(self) -> None:
             pipeline = self._current_pipeline()
-            view = self.query_one("#pipeline-graph", PipelineGraphView)
+            view = self.query_one("#pipeline-graph", PipelineLayerBoard)
             if pipeline is None:
                 self._stage_rows = []
                 self._graph_model = None
@@ -1017,10 +1150,17 @@ if TEXTUAL_IMPORT_ERROR is None:
 
         def _graph_render_width(self) -> int:
             try:
-                width = self.query_one("#pipeline-graph", PipelineGraphView).size.width
+                width = self.query_one("#pipeline-graph", PipelineLayerBoard).size.width
             except Exception:
                 width = 0
             return width if width and width >= 42 else 112
+
+        def _graph_render_height(self) -> int:
+            try:
+                height = self.query_one("#pipeline-graph", PipelineLayerBoard).size.height
+            except Exception:
+                height = 0
+            return height if height and height >= 1 else 20
 
         def _overlay_for_model(self, model: Any) -> Any:
             return pipeline_graph_overlay(
@@ -1037,7 +1177,7 @@ if TEXTUAL_IMPORT_ERROR is None:
 
         def refresh_graph(self) -> None:
             pipeline = self._current_pipeline()
-            view = self.query_one("#pipeline-graph", PipelineGraphView)
+            view = self.query_one("#pipeline-graph", PipelineLayerBoard)
             if pipeline is None:
                 self._graph_model = None
                 self._graph_overlay = pipeline_graph_overlay()
@@ -1046,15 +1186,23 @@ if TEXTUAL_IMPORT_ERROR is None:
             try:
                 model = pipeline_graph_model(pipeline)
                 overlay = self._overlay_for_model(model)
-                lines = pipeline_graph_lines(model, overlay, width=self._graph_render_width())
             except Exception as exc:
                 self._graph_model = None
                 self._graph_overlay = pipeline_graph_overlay()
-                view.set_message(f"ERROR graph unavailable: {exc}")
+                view.set_message(f"Pipeline failed to load: {str(exc)[:120]}", failed=True)
                 return
             self._graph_model = model
             self._graph_overlay = overlay
-            view.set_graph(model, overlay, lines)
+            view.set_graph(
+                model,
+                overlay,
+                pipeline_board_model(
+                    model,
+                    overlay,
+                    width=self._graph_render_width(),
+                    height=self._graph_render_height(),
+                ),
+            )
 
         def _dirty_stage_ids(self) -> frozenset[str]:
             if self._draft is None:
@@ -1114,7 +1262,7 @@ if TEXTUAL_IMPORT_ERROR is None:
             self.refresh_stage_inspector()
 
         def action_focus_graph(self) -> None:
-            self.set_focus(self.query_one("#pipeline-graph", PipelineGraphView))
+            self.set_focus(self.query_one("#pipeline-graph", PipelineLayerBoard))
 
         def action_focus_stage_details(self) -> None:
             self.set_focus(self.query_one("#stage-inspector", StageInspectorView))
@@ -1434,13 +1582,14 @@ if TEXTUAL_IMPORT_ERROR is None:
                 return
             model = pipeline_graph_model(pipeline)
             overlay = self._overlay_for_model(model)
-            text = "\n".join(pipeline_graph_lines(model, overlay, width=self._graph_render_width()))
+            board = pipeline_board_model(model, overlay, width=0, height=self._graph_render_height())
+            text = "\n".join(pipeline_board_plain_text(board))
             copier = getattr(self.app, "copy_to_clipboard", None)
             if callable(copier):
                 copier(text)
-                self.app.push_screen(MessageModal("Graph copied", "Copied the current graph as plain text."))
+                self.app.push_screen(MessageModal("Board copied", "Copied the current board as plain text."))
             else:
-                self.app.push_screen(MessageModal("Graph", text))
+                self.app.push_screen(MessageModal("Board", text))
 
         def action_reset_selected_route(self) -> None:
             draft = self._draft_for_selected()
@@ -1623,47 +1772,6 @@ if TEXTUAL_IMPORT_ERROR is None:
             self.action_activate_pipeline()
 
 
-    def _graph_line_stage_id(line: str, model: Any) -> str | None:
-        if model is None:
-            return None
-        nodes = list(getattr(model, "nodes", ()))
-        tail = line.rsplit("▶", 1)[-1].rsplit("-->", 1)[-1]
-        tail_matches = [node.stage_id for node in nodes if _line_has_stage_id(tail, node.stage_id)]
-        if len(tail_matches) == 1:
-            return tail_matches[0]
-        matches = [node.stage_id for node in nodes if _line_has_stage_id(line, node.stage_id)]
-        if len(matches) == 1:
-            return matches[0]
-        if matches:
-            return sorted(matches, key=line.find)[0]
-        return None
-
-
-    def _graph_click_stage_id(line: str, model: Any, x: int) -> str | None:
-        if model is None:
-            return None
-        matches = []
-        for node in getattr(model, "nodes", ()):
-            match = _line_stage_id_match(line, node.stage_id)
-            if match is None:
-                continue
-            if match.start() <= x <= match.end():
-                return node.stage_id
-            matches.append((abs(match.start() - x), match.start(), node.stage_id))
-        if matches:
-            return min(matches)[2]
-        return None
-
-
-    def _line_has_stage_id(line: str, stage_id: str) -> bool:
-        return _line_stage_id_match(line, stage_id) is not None
-
-
-    def _line_stage_id_match(line: str, stage_id: str) -> re.Match[str] | None:
-        pattern = rf"(?<![A-Za-z0-9_-]){re.escape(stage_id)}(?![A-Za-z0-9_-])"
-        return re.search(pattern, line)
-
-
     class SwarmTui(App):
         CSS_PATH = "app.tcss"
         TITLE = "SwarmDaddy"
@@ -1714,19 +1822,19 @@ if TEXTUAL_IMPORT_ERROR is None:
             yield from super().get_system_commands(screen)
             yield SystemCommand("Go to Dashboard", "Open the operator dashboard", self.action_dashboard)
             yield SystemCommand("Go to Runs", "Open the dashboard runs table", self.action_runs)
-            yield SystemCommand("Go to Pipelines", "Open the graph-first pipeline workbench", self.action_pipelines)
+            yield SystemCommand("Go to Pipelines", "Open the layer-board pipeline workbench", self.action_pipelines)
             yield SystemCommand("Go to Presets", "Open preset browser", self.action_presets)
             yield SystemCommand("Go to Settings", "Open effective role routes", self.action_settings)
             yield SystemCommand("Show Help", "Show contextual help for the current screen", self.action_help_current)
             if isinstance(screen, PipelinesScreen):
-                yield SystemCommand("Focus Pipeline Graph", "Move keyboard focus to the graph", screen.action_focus_graph)
+                yield SystemCommand("Focus Pipeline Board", "Move keyboard focus to the board", screen.action_focus_graph)
                 yield SystemCommand("Focus Stage Details", "Move keyboard focus to the selected stage details", screen.action_focus_stage_details)
                 yield SystemCommand("Show Stage Table", "Show the selected pipeline stages as rows", screen.action_show_stage_table)
                 yield SystemCommand("Validate Selected Pipeline", "Validate the selected pipeline", screen.action_validate_pipeline)
                 yield SystemCommand("Fork/Edit Selected Pipeline", "Fork or edit the selected pipeline", screen.action_begin_edit)
                 yield SystemCommand("Save Pipeline Draft", "Save the current in-memory pipeline draft", screen.action_save_draft)
                 yield SystemCommand("Discard Pipeline Draft", "Discard the current in-memory pipeline draft", screen.action_discard_draft)
-                yield SystemCommand("Copy Pipeline Graph", "Copy the selected pipeline graph as text", screen.action_copy_graph)
+                yield SystemCommand("Copy Pipeline Board", "Copy the selected pipeline board as text", screen.action_copy_graph)
                 yield SystemCommand("Run Provider Doctor", "Check provider readiness for this pipeline", screen.action_provider_doctor)
             if isinstance(screen, SettingsScreen):
                 yield SystemCommand("Edit selected route", "Edit the selected effective role route", screen.action_edit_route)

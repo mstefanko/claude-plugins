@@ -192,6 +192,51 @@ class PipelineGraphOverlay:
     highlighted_stage_ids: frozenset[str]
 
 
+@dataclasses.dataclass(frozen=True)
+class PipelineBoardCard:
+    stage_id: str
+    layer: int
+    title: str
+    subtitle: str
+    badges: tuple[str, ...]
+    dependency_label: str | None
+    outgoing_label: str | None
+    kind: str
+    lane: str
+    selected: bool
+    dirty: bool
+    critical: bool
+    status: str | None
+    warnings: tuple[str, ...]
+
+
+@dataclasses.dataclass(frozen=True)
+class PipelineBoardColumn:
+    index: int
+    label: str
+    cards: tuple[PipelineBoardCard, ...]
+
+
+@dataclasses.dataclass(frozen=True)
+class PipelineBoardModel:
+    columns: tuple[PipelineBoardColumn, ...]
+    mode: str
+    fallback_lines: tuple[str, ...]
+    warnings: tuple[str, ...]
+
+
+BOARD_MIN_WIDTH = 96
+COMPACT_MIN_WIDTH = 72
+MIN_BOARD_HEIGHT = 14
+
+STATUS_TO_BADGE = {
+    "queued": "QUEUED",
+    "running": "RUN",
+    "done": "DONE",
+    "failed": "FAILED",
+}
+
+
 @dataclasses.dataclass
 class PipelineEditDraft:
     pipeline_name: str
@@ -448,6 +493,60 @@ def pipeline_graph_model(pipeline: Mapping[str, Any]) -> PipelineGraphModel:
         pipeline_name=str(pipeline.get("name")) if pipeline.get("name") is not None else None,
         warnings=tuple(model_warnings),
     )
+
+
+def pipeline_board_model(
+    model: PipelineGraphModel,
+    overlay: PipelineGraphOverlay | None = None,
+    width: int | None = None,
+    height: int | None = None,
+) -> PipelineBoardModel:
+    """Return a layer-board view model derived from a graph model."""
+
+    overlay = overlay or pipeline_graph_overlay()
+    node_by_id = _node_by_id(model)
+    columns: list[PipelineBoardColumn] = []
+    warnings = list(model.warnings)
+
+    for column_index, layer in enumerate(model.layers, 1):
+        cards: list[PipelineBoardCard] = []
+        for stage_id in layer:
+            node = node_by_id.get(stage_id)
+            if node is None:
+                warnings.append(f"layer {column_index} references unknown stage {stage_id}")
+                continue
+            cards.append(_pipeline_board_card(node, overlay))
+        columns.append(PipelineBoardColumn(index=column_index, label=f"L{column_index}", cards=tuple(cards)))
+
+    board = PipelineBoardModel(
+        columns=tuple(columns),
+        mode=pipeline_board_mode(width, height, len(columns)),
+        fallback_lines=(),
+        warnings=tuple(warnings),
+    )
+    return dataclasses.replace(board, fallback_lines=tuple(pipeline_board_plain_text(board)))
+
+
+def pipeline_board_mode(width: int | None, height: int | None, column_count: int) -> str:
+    del column_count
+    resolved_width = width if width is not None else BOARD_MIN_WIDTH
+    resolved_height = height if height is not None else MIN_BOARD_HEIGHT
+
+    if resolved_width < COMPACT_MIN_WIDTH:
+        return "linear"
+    if resolved_width < BOARD_MIN_WIDTH:
+        return "compact"
+    if resolved_height < MIN_BOARD_HEIGHT:
+        return "compact"
+    return "board"
+
+
+def pipeline_board_plain_text(board: PipelineBoardModel) -> list[str]:
+    if not board.columns:
+        return ["Pipeline has no stages."]
+    if board.mode == "linear":
+        return _pipeline_board_linear_lines(board)
+    return _pipeline_board_compact_lines(board)
 
 
 def pipeline_graph_lines(
@@ -715,6 +814,140 @@ def _graph_overlay_fingerprint(overlay: PipelineGraphOverlay) -> tuple[Any, ...]
 
 def _node_by_id(model: PipelineGraphModel) -> dict[str, PipelineGraphNode]:
     return {node.stage_id: node for node in model.nodes}
+
+
+def _pipeline_board_card(node: PipelineGraphNode, overlay: PipelineGraphOverlay) -> PipelineBoardCard:
+    status = _normalize_board_status(overlay.stage_statuses.get(node.stage_id))
+    selected = overlay.selected_stage_id == node.stage_id
+    dirty = node.stage_id in overlay.dirty_stage_ids
+    critical = node.stage_id in overlay.critical_stage_ids
+    return PipelineBoardCard(
+        stage_id=node.stage_id,
+        layer=node.layer,
+        title=node.title,
+        subtitle=node.subtitle,
+        badges=_pipeline_board_badges(node, overlay, status),
+        dependency_label=_dependency_chip(node.depends_on),
+        outgoing_label=_outgoing_chip(node.outgoing),
+        kind=node.kind,
+        lane=node.lane,
+        selected=selected,
+        dirty=dirty,
+        critical=critical,
+        status=status,
+        warnings=node.warnings,
+    )
+
+
+def _pipeline_board_badges(
+    node: PipelineGraphNode,
+    overlay: PipelineGraphOverlay,
+    status: str | None,
+) -> tuple[str, ...]:
+    badges: list[str] = []
+    if len(node.depends_on) > 1:
+        badges.append("JOIN")
+    if node.fan_out_count is not None:
+        badges.append(f"FAN x{node.fan_out_count}")
+    if node.provider_type is not None:
+        badges.append("PROVIDER")
+    if _is_output_node(node):
+        badges.append("OUTPUT")
+    if node.warnings:
+        badges.append("WARN")
+    if node.stage_id in overlay.dirty_stage_ids:
+        badges.append("DIRTY")
+    if node.stage_id in overlay.critical_stage_ids:
+        badges.append("CRITICAL")
+    status_badge = _status_badge(status)
+    if status_badge is not None:
+        badges.append(status_badge)
+    return tuple(badges)
+
+
+def _normalize_board_status(status: Any) -> str | None:
+    if status is None:
+        return None
+    normalized = str(status).strip().lower().replace("_", "-")
+    return normalized or None
+
+
+def _status_badge(status: str | None) -> str | None:
+    if status is None:
+        return None
+    badge = STATUS_TO_BADGE.get(status)
+    if badge is not None:
+        return badge
+    if status.endswith("-start"):
+        return "RUN"
+    return None
+
+
+def _is_output_node(node: PipelineGraphNode) -> bool:
+    return node.shape == "terminal" or node.lane in {"output", "terminal"}
+
+
+def _dependency_chip(depends_on: tuple[str, ...]) -> str | None:
+    if not depends_on:
+        return None
+    return "after: " + " + ".join(depends_on)
+
+
+def _outgoing_chip(outgoing: tuple[str, ...]) -> str | None:
+    if not outgoing:
+        return None
+    return "next: " + ", ".join(outgoing)
+
+
+def _pipeline_board_compact_lines(board: PipelineBoardModel) -> list[str]:
+    lines: list[str] = []
+    for column in board.columns:
+        if not column.cards:
+            lines.append(f"{column.label} -")
+            continue
+        rendered = "  ".join(_pipeline_board_compact_card(card) for card in column.cards)
+        lines.append(f"{column.label} {rendered}")
+    return lines
+
+
+def _pipeline_board_compact_card(card: PipelineBoardCard) -> str:
+    parts = [card.title]
+    parts.extend(card.badges)
+    if "JOIN" in card.badges and card.dependency_label:
+        parts.append(card.dependency_label)
+    if card.selected:
+        if "JOIN" not in card.badges and card.dependency_label:
+            parts.append(card.dependency_label)
+        if card.outgoing_label:
+            parts.append(card.outgoing_label)
+    return " ".join(parts)
+
+
+def _pipeline_board_linear_lines(board: PipelineBoardModel) -> list[str]:
+    lines: list[str] = []
+    cards = [card for column in board.columns for card in column.cards]
+    for index, card in enumerate(cards, 1):
+        parts = [f"{index}. {card.title}", f"[{_pipeline_board_lane_label(card.lane)}]"]
+        depends_on = _dependency_label_stage_ids(card.dependency_label)
+        if depends_on:
+            parts.append(f"depends_on={','.join(depends_on)}")
+        parts.extend(card.badges)
+        lines.append(" ".join(parts))
+    return lines
+
+
+def _pipeline_board_lane_label(lane: str) -> str:
+    if lane in {"terminal", "output"}:
+        return "output"
+    if lane in {"", "tools"}:
+        return "agents"
+    return lane
+
+
+def _dependency_label_stage_ids(label: str | None) -> tuple[str, ...]:
+    if not label or not label.startswith("after: "):
+        return ()
+    return tuple(part.strip() for part in label.removeprefix("after: ").split(" + ") if part.strip())
 
 
 def _graph_stage_positions(model: PipelineGraphModel) -> dict[str, tuple[int, int]]:

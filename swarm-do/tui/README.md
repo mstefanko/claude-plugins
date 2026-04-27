@@ -48,7 +48,7 @@ it does not initialize Beads.
 ## What You Can Manage
 
 - **Dashboard:** active preset/pipeline, validation summary, compact active
-  pipeline graph, in-flight runs, recent burn telemetry, latest
+  pipeline board, in-flight runs, recent burn telemetry, latest
   checkpoint/observation, Beads issue open, handoff request, and cancel for
   running `swarm-run` processes.
 - **Settings:** framed effective role routes and editable base/user-preset
@@ -56,10 +56,10 @@ it does not initialize Beads.
   their routes.
 - **Presets:** stock and user preset browsing, loading, diff preview, and user
   preset deletion.
-- **Pipelines:** intent-sorted pipeline gallery, graph-first execution
+- **Pipelines:** intent-sorted pipeline gallery, layer-board execution
   workbench, synchronized stage inspector, validation rail, fork-first editing,
   modules, routes, fan-out branch routes, prompt lenses, provider-review
-  settings, MCO settings, lint, validation, provider doctor, graph copy, and
+  settings, MCO settings, lint, validation, provider doctor, board copy, and
   profile activation.
 
 The TUI writes user-owned configuration under `${CLAUDE_PLUGIN_DATA}/presets/`
@@ -104,11 +104,12 @@ coverage live in `actions.py`.
   it.
 - Presets browse stock and user presets; stock presets are read-only. Press `l`
   to load, `v` to view diff, and `x` to delete user presets.
-- Pipelines open a graph-first composer workbench: intent-sorted gallery,
-  selectable execution graph, focused stage inspector, validation rail,
-  fork-first edit dialog, in-memory draft save/discard state, route/module edit
-  controls, and undo/redo. Provider-review stages are visibly read-only and may
-  skip when no shim is eligible; MCO remains the experimental comparison path.
+- Pipelines open a layer-board composer workbench: intent-sorted gallery,
+  selectable stage cards by topological layer, focused stage inspector,
+  validation rail, fork-first edit dialog, in-memory draft save/discard state,
+  route/module edit controls, and undo/redo. Provider-review stages are visibly
+  read-only and may skip when no shim is eligible; MCO remains the experimental
+  comparison path.
   Stock pipelines remain read-only; editing starts by forking a pipeline and
   its matching preset into user-owned files.
 - The stock `brainstorm`, `research`, `design`, and `review` pipelines are
@@ -119,7 +120,7 @@ coverage live in `actions.py`.
 
 On the Pipelines screen:
 
-- Select a pipeline in the left gallery, then select a graph node or edge row
+- Select a pipeline in the left gallery, then select a layer-board stage card
   to inspect the read-only stage details.
 - Press `f` or `Enter` to begin editing. Stock pipelines open a fork dialog with
   a generated collision-free name; user pipelines open an in-memory draft.
@@ -135,8 +136,10 @@ On the Pipelines screen:
   `memory=false`, `output=findings`, and read-only boundaries.
 - Press `Ctrl+D` on a provider-bearing pipeline to run provider doctor and view
   local provider readiness before activation.
-- Press `t` to open the secondary topological stage list.
-- Press `y` to copy the current graph as plain text.
+- Press `g` to focus the board; arrows move across layers and within parallel
+  cards, while `Home` / `End` jump to the first or last stage.
+- Press `t` to focus the stage details pane.
+- Press `y` to copy the current board as plain text with dependency labels.
 - Press `m` to add a catalog module to the draft, or `Delete` to remove the
   selected stage when nothing still depends on it.
 - Press `Ctrl+R` to reset a selected stage route or fan-out routes to resolver

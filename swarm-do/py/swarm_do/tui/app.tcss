@@ -78,6 +78,103 @@ DataTable {
     overflow-y: auto;
 }
 
+.pipeline-board {
+    layout: horizontal;
+}
+
+.pipeline-board-text {
+    width: 1fr;
+    height: auto;
+    padding: 0 1;
+}
+
+.layer-column {
+    width: 30;
+    height: auto;
+    margin-right: 1;
+}
+
+.layer-column-title {
+    height: 1;
+    text-style: bold;
+    color: $accent;
+    margin-bottom: 1;
+}
+
+.stage-card {
+    width: 100%;
+    min-height: 4;
+    height: auto;
+    border: solid $primary;
+    padding: 0 1;
+    margin-bottom: 1;
+}
+
+.stage-card:focus {
+    border: solid $accent;
+}
+
+.stage-card--selected {
+    border: solid $accent;
+    text-style: bold;
+}
+
+.stage-card--agents {
+    border-left: thick $primary;
+}
+
+.stage-card--provider {
+    border-left: thick $warning;
+}
+
+.stage-card--fanout {
+    border-top: solid $primary;
+}
+
+.stage-card--terminal {
+    border-left: thick $success;
+}
+
+.stage-card--dirty {
+    color: $warning;
+}
+
+.stage-card--critical {
+    background: $panel;
+}
+
+.stage-card--warning {
+    color: $warning;
+}
+
+.stage-card--running {
+    text-style: italic;
+}
+
+.stage-card--failed {
+    color: $error;
+    border: solid $error;
+}
+
+.stage-card--queued {
+    color: $text;
+}
+
+.stage-card--done {
+    color: $success;
+}
+
+.stage-badge {
+    text-style: bold;
+}
+
+.join-badge {
+    height: auto;
+    color: $warning;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
 #preview {
     width: 42;
     border: solid $primary;

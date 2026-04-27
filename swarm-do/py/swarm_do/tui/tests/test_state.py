@@ -27,6 +27,10 @@ from swarm_do.pipeline.providers import ProviderCheck, ProviderDoctorReport
 from swarm_do.pipeline.provider_review import ReviewProviderPolicy, ReviewProviderStatus, ReviewSelectionResult
 from swarm_do.pipeline.registry import find_pipeline, load_pipeline, load_preset
 from swarm_do.tui.state import (
+    BOARD_MIN_WIDTH,
+    COMPACT_MIN_WIDTH,
+    MIN_BOARD_HEIGHT,
+    STATUS_TO_BADGE,
     current_prompt_lens_ids,
     current_mco_provider_config,
     current_provider_review_config,
@@ -52,6 +56,9 @@ from swarm_do.tui.state import (
     mco_provider_result_preview,
     provider_result_preview,
     pipeline_activation_blocker,
+    pipeline_board_model,
+    pipeline_board_mode,
+    pipeline_board_plain_text,
     pipeline_critical_stage_ids,
     pipeline_gallery_rows,
     pipeline_graph_lines,
@@ -438,6 +445,138 @@ class TuiStateTests(EnvTestCase):
         self.assertIn("╔ stage ╗ terminal answer/docs", legend)
         self.assertIn("⊙ join/fork", legend)
 
+
+class TestPipelineBoardModel(EnvTestCase):
+    def _default_model(self):
+        pipeline = load_pipeline(find_pipeline("default").path)
+        return pipeline_graph_model(pipeline)
+
+    def _cards_by_id(self, board):
+        return {
+            card.stage_id: card
+            for column in board.columns
+            for card in column.cards
+        }
+
+    def test_default_pipeline_layers_match_topology(self) -> None:
+        model = self._default_model()
+        board = pipeline_board_model(model)
+
+        self.assertEqual(
+            tuple(tuple(card.stage_id for card in column.cards) for column in board.columns),
+            model.layers,
+        )
+
+    def test_writer_and_review_have_join_badge(self) -> None:
+        cards = self._cards_by_id(pipeline_board_model(self._default_model()))
+
+        self.assertIn("JOIN", cards["writer"].badges)
+        self.assertIn("JOIN", cards["review"].badges)
+
+    def test_provider_review_has_provider_badge(self) -> None:
+        cards = self._cards_by_id(pipeline_board_model(self._default_model()))
+
+        self.assertIn("PROVIDER", cards["provider-review"].badges)
+
+    def test_docs_has_output_badge(self) -> None:
+        cards = self._cards_by_id(pipeline_board_model(self._default_model()))
+
+        self.assertIn("OUTPUT", cards["docs"].badges)
+
+    def test_fan_out_pipeline_shows_fan_count(self) -> None:
+        pipeline = load_pipeline(find_pipeline("compete").path)
+        cards = self._cards_by_id(pipeline_board_model(pipeline_graph_model(pipeline)))
+
+        self.assertIn("FAN x2", cards["writers"].badges)
+
+    def test_overlay_dirty_live_critical_add_badges_without_changing_columns(self) -> None:
+        model = self._default_model()
+        baseline = pipeline_board_model(model)
+        overlay = pipeline_graph_overlay(
+            stage_statuses={"writer": "running"},
+            dirty_stage_ids={"writer"},
+            critical_stage_ids={"writer"},
+        )
+        board = pipeline_board_model(model, overlay)
+
+        self.assertEqual(
+            tuple(tuple(card.stage_id for card in column.cards) for column in board.columns),
+            tuple(tuple(card.stage_id for card in column.cards) for column in baseline.columns),
+        )
+        self.assertEqual(self._cards_by_id(board)["writer"].badges, ("JOIN", "DIRTY", "CRITICAL", "RUN"))
+
+    def test_status_normalization_known_and_unknown(self) -> None:
+        self.assertEqual(STATUS_TO_BADGE["queued"], "QUEUED")
+        model = self._default_model()
+        overlay = pipeline_graph_overlay(
+            stage_statuses={
+                "analysis": "queued",
+                "clarify": "phase_start",
+                "writer": "checkpoint-written",
+                "provider-review": "failed",
+            }
+        )
+        cards = self._cards_by_id(pipeline_board_model(model, overlay))
+
+        self.assertIn("QUEUED", cards["analysis"].badges)
+        self.assertIn("RUN", cards["clarify"].badges)
+        self.assertNotIn("checkpoint-written", cards["writer"].badges)
+        self.assertNotIn("CHECKPOINT-WRITTEN", cards["writer"].badges)
+        self.assertIn("FAILED", cards["provider-review"].badges)
+        self.assertEqual(cards["clarify"].status, "phase-start")
+
+    def test_pipeline_board_mode_thresholds(self) -> None:
+        self.assertEqual(pipeline_board_mode(BOARD_MIN_WIDTH, MIN_BOARD_HEIGHT, 1), "board")
+        self.assertEqual(pipeline_board_mode(BOARD_MIN_WIDTH - 1, MIN_BOARD_HEIGHT, 1), "compact")
+        self.assertEqual(pipeline_board_mode(COMPACT_MIN_WIDTH, MIN_BOARD_HEIGHT, 1), "compact")
+        self.assertEqual(pipeline_board_mode(COMPACT_MIN_WIDTH - 1, MIN_BOARD_HEIGHT, 1), "linear")
+        self.assertEqual(pipeline_board_mode(BOARD_MIN_WIDTH, MIN_BOARD_HEIGHT - 1, 1), "compact")
+
+    def test_pipeline_board_plain_text_compact_and_linear_samples(self) -> None:
+        model = self._default_model()
+        compact = pipeline_board_plain_text(pipeline_board_model(model, width=88, height=20))
+        linear = pipeline_board_plain_text(pipeline_board_model(model, width=60, height=20))
+
+        self.assertEqual(
+            compact,
+            [
+                "L1 research",
+                "L2 analysis  clarify",
+                "L3 writer JOIN after: analysis + clarify",
+                "L4 spec-review  provider-review PROVIDER",
+                "L5 docs OUTPUT  review JOIN OUTPUT after: spec-review + provider-review",
+            ],
+        )
+        self.assertEqual(
+            linear,
+            [
+                "1. research [agents]",
+                "2. analysis [agents] depends_on=research",
+                "3. clarify [agents] depends_on=research",
+                "4. writer [agents] depends_on=analysis,clarify JOIN",
+                "5. spec-review [agents] depends_on=writer",
+                "6. provider-review [provider] depends_on=writer PROVIDER",
+                "7. docs [output] depends_on=spec-review OUTPUT",
+                "8. review [output] depends_on=spec-review,provider-review JOIN OUTPUT",
+            ],
+        )
+
+    def test_outgoing_label_derived_from_node_outgoing(self) -> None:
+        cards = self._cards_by_id(pipeline_board_model(self._default_model()))
+
+        self.assertEqual(cards["research"].outgoing_label, "next: analysis, clarify")
+
+    def test_selected_card_carries_after_and_next_chips(self) -> None:
+        model = self._default_model()
+        overlay = pipeline_graph_overlay(selected_stage_id="writer")
+        cards = self._cards_by_id(pipeline_board_model(model, overlay))
+
+        self.assertTrue(cards["writer"].selected)
+        self.assertEqual(cards["writer"].dependency_label, "after: analysis + clarify")
+        self.assertEqual(cards["writer"].outgoing_label, "next: spec-review, provider-review")
+
+
+class TuiStateContinuedTests(EnvTestCase):
     def test_output_profiles_are_runnable_while_unknown_output_only_is_preview_only(self) -> None:
         for name in ("brainstorm", "research", "design", "review"):
             pipeline = load_pipeline(find_pipeline(name).path)

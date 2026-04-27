@@ -205,7 +205,7 @@ Command palette entries:
 - Fork/Edit Selected Pipeline
 - Save Pipeline Draft
 - Discard Pipeline Draft
-- Copy Pipeline Graph
+- Copy Pipeline Board
 - Run Provider Doctor
 
 ## Graph-First Pipelines Workbench
@@ -214,7 +214,10 @@ This is the main redesign.
 
 Implementation note: the remaining graph readability work is tracked as the
 focused executable plan in `docs/tui-layer-board-execution-plan.md`. This
-section remains useful as design background and rationale.
+section remains useful as design background and rationale. As of
+2026-04-27, the Pipelines center surface uses the native `PipelineLayerBoard`
+with compact/linear plain-text fallbacks; the legacy edge-dense
+`PipelineGraphView` is no longer mounted.
 
 ### Long-Term Workbench Direction
 
@@ -1314,8 +1317,8 @@ The work is successful when:
 - Validation/budget/provider readiness is visible without opening a modal.
 - Narrow terminals can switch to a numbered linear topological view.
 - The Dashboard is informative even when there are no in-flight runs.
-- The Dashboard includes a compact board/fallback graph and a small recent-event
-  strip.
+- The Dashboard includes a compact board/fallback text view and a small
+  recent-event strip.
 - Global navigation no longer collides with Doctor/Diff/Set actions.
 - Editing/forking is launched from board selection when useful but remains
   modal.
