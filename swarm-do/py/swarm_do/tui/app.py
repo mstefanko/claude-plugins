@@ -48,6 +48,7 @@ from swarm_do.tui.state import (
     PipelineEditDraft,
     PipelineGalleryRow,
     StageRow,
+    BOARD_MIN_WIDTH,
     current_prompt_lens_ids,
     current_mco_provider_config,
     current_provider_review_config,
@@ -315,7 +316,7 @@ if TEXTUAL_IMPORT_ERROR is None:
         def on_resize(self, event: events.Resize) -> None:
             if self.model is None or self.board is None:
                 return
-            render_width = event.size.width if event.size.width >= 42 else 112
+            render_width = max(event.size.width, BOARD_MIN_WIDTH) if event.size.width >= 42 else 112
             render_height = event.size.height if event.size.height >= MIN_BOARD_HEIGHT else 20
             mode = pipeline_board_model(
                 self.model,
@@ -460,13 +461,34 @@ if TEXTUAL_IMPORT_ERROR is None:
             report = pipeline_validation_report(pipeline_name)
         except Exception:
             return "unknown"
+        severity = _validation_report_severity(report)
+        if severity is not None:
+            return severity
+        return "n/a"
+
+
+    _QUIET_VALIDATION_WARNINGS = (
+        "provider-review auto selection has no doctor cache; using upper-bound estimate",
+    )
+
+
+    def _is_quiet_validation_warning(line: str) -> bool:
+        return any(fragment in line for fragment in _QUIET_VALIDATION_WARNINGS)
+
+
+    def _validation_report_severity(report: str) -> str | None:
         if "\n  ERROR " in report:
             return "ERROR"
-        if "\n  WARN " in report:
+        warning_lines = [
+            line.strip()
+            for line in report.splitlines()
+            if line.strip().startswith("WARN ")
+        ]
+        if any(not _is_quiet_validation_warning(line) for line in warning_lines):
             return "WARN"
         if "OK structural validation" in report:
             return "OK"
-        return "n/a"
+        return None
 
 
     def _color(name: str) -> str:
@@ -698,9 +720,14 @@ if TEXTUAL_IMPORT_ERROR is None:
                 prefix = "  ✓ "
                 body = stripped.removeprefix("OK ")
             elif stripped.startswith("WARN "):
-                style = _color("warning")
-                prefix = "  ! "
                 body = stripped.removeprefix("WARN ")
+                if _is_quiet_validation_warning(stripped):
+                    style = _muted_style()
+                    prefix = "  • "
+                    body = "estimate: " + body
+                else:
+                    style = _color("warning")
+                    prefix = "  ! "
             elif stripped.startswith("ERROR "):
                 style = _color("error")
                 prefix = "  ✕ "
@@ -1788,7 +1815,9 @@ if TEXTUAL_IMPORT_ERROR is None:
                 width = self.query_one("#pipeline-graph", PipelineLayerBoard).size.width
             except Exception:
                 width = 0
-            return width if width and width >= 42 else 112
+            if not width or width < 42:
+                return 112
+            return max(width, BOARD_MIN_WIDTH)
 
         def _graph_render_height(self) -> int:
             try:

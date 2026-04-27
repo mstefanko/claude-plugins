@@ -109,7 +109,7 @@ Input:focus, Select:focus {
 }
 
 #pipeline-gallery {
-    width: 46;
+    width: 42;
     border: solid $primary;
 }
 
@@ -121,6 +121,8 @@ Input:focus, Select:focus {
 }
 
 #pipeline-gallery ListItem.--highlight {
+    background: $panel;
+    color: $text;
     border-left: thick $accent;
 }
 

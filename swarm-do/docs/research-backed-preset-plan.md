@@ -52,8 +52,10 @@ updated where necessary.
 - `agent-review` already runs the test suite directly and explicitly
   distrusts the writer's pasted output, so executable grounding for the
   P2 repair-loop reviewer exists. The missing piece is *clean context*:
-  it currently sees writer/spec-review notes. P2 below decides between a
-  flag and a new role for that.
+  the current `swarm-run` prompt includes Beads dependency/thread context,
+  so a clean reviewer needs dispatcher/runner support that suppresses
+  writer notes. The earlier `clean_context: true` sketch is not legal
+  pipeline YAML until the schema, validation, and runner learn that field.
 - Telemetry substrate already exists in `schemas/telemetry/`
   (`runs.schema.json`, `findings.schema.json`, `adjudications.schema.json`,
   `finding_outcomes.schema.json`, `provider_findings.v2.schema.json`).
@@ -79,8 +81,30 @@ updated where necessary.
   exists.
 - `mco-review-lab` keep/sunset/extend decision. Plan keeps it experimental;
   a separate eval is required before changing its status.
-- `smart-friend`, `agentless-repair`, `large-project-manager` remain TBD
-  designs in P4. They are placeholders, not actionable work in this plan.
+- `smart-friend`, `agentless-repair`, `large-project-manager`, and an
+  Outcome dashboard were rechecked in this pass. `smart-friend` and
+  `large-project-manager` have straightforward v1 shapes that can be
+  folded into P4 as experimental designs. `agentless-repair` plus richer
+  manager policy and dashboard UI need separate runtime design before
+  implementation.
+
+### Remaining Gaps Found In This Pass
+
+- P2's earlier YAML used unsupported keys: `clean_context: true` is not in
+  `schemas/pipeline.schema.json`, and `lens: revise` has no matching lens
+  catalog entry. P2 below now removes those fields and names the required
+  role/runner changes instead.
+- Any new runnable role must land in more than `role-specs/`: add the
+  generated `agents/` file, a `roles/<role>/shared.md` bundle, a
+  `ROLE_DEFAULTS` route if the TUI/settings should expose it, and telemetry
+  schema/extractor support if the role emits findings.
+- `outcomes.jsonl` exists but its schema still says the write path is a
+  later phase. Outcome reporting should therefore be recipe-first over
+  `runs`, `findings`, `finding_outcomes`, and `adjudications` until a
+  durable phase-outcome writer exists.
+- The current pipeline DSL is a DAG. It cannot express iterative manager
+  loops or deterministic candidate-patch generation/reranking without new
+  runtime primitives.
 
 ## Evidence Rules To Adopt
 
@@ -288,7 +312,7 @@ updated where necessary.
 
 Add `pipelines/repair-loop.yaml` and `presets/repair-loop.toml`.
 
-Target graph (bounded unrolled DAG — no schema changes needed):
+Target graph (bounded unrolled DAG — no loop primitive needed):
 
 ```yaml
 stages:
@@ -306,11 +330,10 @@ stages:
   - id: clean-review
     depends_on: [writer]
     agents:
-      - role: agent-review
-        clean_context: true   # see "Clean-context reviewer" below
+      - role: agent-clean-review
   - id: revise-writer
     depends_on: [writer, clean-review]
-    agents: [{ role: agent-writer, lens: revise }]
+    agents: [{ role: agent-writer }]
     failure_tolerance: { mode: best-effort }   # if no findings, no-op
   - id: spec-review
     depends_on: [revise-writer]
@@ -334,23 +357,31 @@ stages:
     agents: [{ role: agent-docs }]
 ```
 
-Clean-context reviewer — pick one (decision required before P2 starts):
+Clean-context reviewer decision:
 
-- **Option A (smaller change):** add a `clean_context: bool` agent flag.
-  When set, the orchestrator suppresses writer/spec-review notes from the
-  agent's prompt; the reviewer starts from the diff and reruns only
-  relevant discovery. Existing `agent-review` already runs tests directly,
-  so the contract holds.
-- **Option B (cleaner separation):** introduce `agent-clean-reviewer` as a
-  distinct role-spec. Same grounding rules as `agent-review`, explicit
-  "do not read writer notes" clause, and its own catalog entry.
-
-Recommend Option A for v1; reassess after the first eval run.
+- Use a distinct role for v1: `agent-clean-review`.
+  The role has the same no-edit/test-rerun grounding as `agent-review`, but
+  starts from sanitized task context, the diff, changed-file list, and test
+  commands. It must not receive writer notes, spec-review notes, or previous
+  reviewer prose in its prompt.
+- Add runner/dispatcher support for that sanitized context. Today
+  `swarm-run` assembles `bd show --refs --thread` dependency context for
+  normal agents, so a new role alone is not sufficient. Implement this as a
+  role-specific runner mode or an explicit future schema flag; do not put
+  `clean_context: true` in stock YAML until the schema accepts it.
+- Add the normal role plumbing: `role-specs/agent-clean-review.md`,
+  generated `agents/agent-clean-review.md`, `roles/agent-clean-review/`
+  bundle, `ROLE_DEFAULTS`, and findings extraction/schema coverage if this
+  role's findings should join `findings.jsonl`.
+- The revision writer uses the ordinary `agent-writer` role. Extend the
+  writer contract so a respawn after clean-review treats reviewer findings
+  as highest-priority input, can reject out-of-scope findings in notes, and
+  can return a no-op result without committing when clean-review approves.
 
 Implementation notes:
 
-- The clean reviewer must rerun the test suite itself (already required
-  by the `agent-review` contract — `Sequencing & ownership` step 5).
+- The clean reviewer must rerun the test suite itself, matching the
+  `agent-review` grounding rule from `Sequencing & ownership` step 5.
 - The `revise-writer` stage receives the original task context plus
   reviewer findings, then decides whether to apply, reject as
   out-of-scope, or escalate via beads notes.
@@ -360,8 +391,10 @@ Implementation notes:
 - Prefer executable validation evidence over prose judgment. The
   `provider-review` consensus policy already enforces this for findings.
 
-No pipeline-schema changes are required for v1 — the unrolled DAG
-fits the existing primitives.
+No new loop primitive is required for v1 — the unrolled DAG fits the
+existing pipeline shape. Clean context is still a runner/role-plumbing
+change, and becomes a pipeline-schema change only if the project chooses an
+explicit YAML flag instead of role-specific runner behavior.
 
 ### P3 - Cross-Model Merge And Judge Support
 
@@ -390,6 +423,13 @@ Change one of these:
      `findings` schema). The pipeline does not block on it; the operator
      decides.
 
+Telemetry note: `adjudications.v2.schema.json` is useful for sampled human
+review, but it requires an `outcome_id`, and the phase-level
+`outcomes.jsonl` write path is not yet active. For P3 implementation, emit
+immediate disagreement signals as findings/run notes first; add adjudication
+rows only after the outcome writer or an explicit finding-linked v3 design
+exists.
+
 Apply this first to `competitive`, then optionally to `ultra-plan`,
 `design`, and `review` merges. **Do not touch `agent-code-synthesizer`
 or `orchestrator` routing** — those stay Claude even after the rule
@@ -409,20 +449,76 @@ Add these in order:
    three existing research variants; only add dynamic subagents after evals.
 
 3. `smart-friend`
-   Primary writer stays single-threaded and can consult a stronger or
-   differently capable model for hard debugging, tests, visual reasoning, or
-   architecture. This requires careful context transfer and should ship as
-   experimental first.
+   Ship v1 as an experimental *advisor stage*, not live conversational
+   consultation. Base it on `balanced` or future `repair-loop`, preserve one
+   mutating writer, and add one read-only advisor stage after
+   `analysis`/`clarify` and before `writer`:
+
+   ```yaml
+   - id: advisor
+     depends_on: [analysis, clarify]
+     agents:
+       - role: agent-implementation-advisor
+         route: smart-advisor
+   - id: writer
+     depends_on: [analysis, clarify, advisor]
+     agents:
+       - role: agent-writer
+   ```
+
+   The advisor output should be structured evidence, not coaching:
+   debugging hypotheses, architecture risks, test strategy, UI/visual
+   inspection notes when screenshots or assets are explicitly provided, and
+   "do not apply blindly" caveats. The writer remains responsible for
+   applying changes and running tests.
+
+   Keep the operator-facing preset name `smart-friend` if desired, but name
+   the internal role by task (`agent-implementation-advisor`) rather than a
+   broad persona. This follows the lens guidance in
+   `docs/pipeline-composer-implementation-plan.md` and
+   `docs/lens-catalog-v1-research.md`: narrow task/rubric lenses beat generic
+   social-role prompts. Add the role, route default, preset, validation tests,
+   and an A/B comparison against `balanced` before promotion.
 
 4. `agentless-repair`
-   Localization -> candidate patch -> validation/rerank. This is a simple,
-   interpretable baseline inspired by Agentless and should be measured against
-   heavier agent flows.
+   Separate runtime design required. The useful target is:
+   localization -> candidate unified diffs -> temp-worktree validation/rerank
+   -> hand the winning patch to the normal writer/spec-review/review lane.
+   It should be a benchmark-oriented baseline against `repair-loop`, not a
+   default implementation path.
+
+   Current primitives are not enough for true Agentless-style repair:
+   provider stages only support `command: review`, agent stages mutate through
+   Beads/worktree execution rather than patch artifacts, and the pipeline DSL
+   has no deterministic candidate-patch/rerank primitive. Before
+   implementation, design the patch artifact format, temp-worktree lifecycle,
+   validation command contract, failure reporting, and telemetry fields. Also
+   decide whether localization reuses `agent-debug` or gets a narrower
+   read-only `agent-localize-bug` role.
 
 5. `large-project-manager`
-   Manager decomposes work into isolated branches/worktrees, child agents work
-   on bounded units, and the manager synthesizes shared decisions. This should
-   be reserved for large projects with natural decomposition.
+   Fold a conservative v1 into the plan as a preset/policy over existing
+   decomposition rather than a new manager primitive. Start with
+   `balanced` or future `repair-loop` plus:
+
+   ```toml
+   [decompose]
+   mode = "inspect"
+   ```
+
+   The "manager" is the dispatcher/coordinator behavior that already exists:
+   inspect the plan, produce or accept `work_units.v2`, create child Beads
+   issues only after decomposition is accepted, assign isolated
+   branches/worktrees, merge only after spec-review, and write cross-unit
+   decisions into run notes/checkpoints. This should stay experimental and
+   reserved for naturally decomposable large phases.
+
+   Promotion to `decompose.mode = "enforce"` should follow ADR 0004's
+   hard-phase scorecard. Richer manager policy — max unit parallelism,
+   hard-only enforcement, merge-conflict escalation, cross-unit decision logs,
+   operator-intervention thresholds, and iterative replanning loops — is a
+   separate design because the preset schema currently only supports
+   `off|inspect|enforce`.
 
 ## Eval And Telemetry Gaps
 
@@ -438,10 +534,26 @@ to plug into them, not to design new ones.
      join `findings.schema.json` with `finding_outcomes.schema.json`.
    - rollback / rework rate → `runs.schema.json` retry/handoff counts.
    - wall time, cost → already on `runs.schema.json`.
-   - judge disagreements → `adjudications.schema.json`.
+   - judge disagreements → immediate findings/run notes first; use
+     `adjudications.schema.json` after the required outcome linkage exists.
 
    Document the join recipe in `docs/eval-recipes.md` so any contributor
    can rebuild the dashboard from raw run logs.
+
+   Outcome dashboard v1 should be recipe-first:
+   - Add `docs/eval-recipes.md` with SQL examples for
+     `swarm-telemetry query` and the equivalent `swarm-telemetry report`
+     invocations.
+   - Treat `finding_outcomes.jsonl` as the concrete maintained outcome
+     signal today. Treat `outcomes.jsonl` as optional until its write path
+     is active.
+   - Surface preset/pipeline comparisons by `(pipeline_name, phase_kind,
+     phase_complexity)`, accepted findings by provider/role, false-positive
+     rate from adjudicated findings, rework from retry/handoff counts, and
+     wall/cost from `runs`.
+   - Keep the TUI as a thin mirror/link first: show top-line outcome cards
+     and the command to reproduce the report. Do not add richer TUI charts
+     until the CLI recipe is trusted or the SQLite indexer becomes necessary.
 
 2. Capture a `balanced` baseline before P0 ships.
    Run the `balanced` preset on a fixed set of representative tasks and
@@ -453,11 +565,12 @@ to plug into them, not to design new ones.
    The code already has `providers calibrate-consensus`; make it part of
    the release checklist for any provider-review default change.
 
-4. Add A/B gates before promoting `repair-loop`, `hybrid-review`, or
-   `competitive`. A preset should not become default because it feels more
-   sophisticated. Concrete gate: ≥10 representative tasks, beat `balanced`
-   on accepted findings *or* rework rate *or* wall-time-per-accepted-fix
-   at a cost delta ≤ +25 percent. Tie ⇒ stay on `balanced`.
+4. Add A/B gates before promoting `repair-loop`, `hybrid-review`,
+   `competitive`, `smart-friend`, or `large-project-manager`. A preset
+   should not become default because it feels more sophisticated. Concrete
+   gate: ≥10 representative tasks, beat `balanced` on accepted findings *or*
+   rework rate *or* wall-time-per-accepted-fix at a cost delta ≤ +25 percent.
+   Tie ⇒ stay on `balanced`.
 
 5. Document benchmark humility.
    SWE-bench-style numbers are useful but can drift or be contaminated.
@@ -478,6 +591,7 @@ Specialized:
 - `design`: output-only architecture/design plan.
 - `research`: output-only evidence memo with prompt-variant fan-out.
 - `review`: output-only review evidence.
+- `review-strict`: output-only review evidence with stricter provider expectations.
 - `codebase-map`: read-only localization.
 
 Experimental:
@@ -502,38 +616,44 @@ Diagnostic/operational:
    update preset descriptions for `claude-only`, `codex-only`, `competitive`;
    update README's "Choosing A Profile".
 2. Add brainstorm variants and `agent-brainstorm-merge` role; pin file
-   paths per P1 above; register in `catalog.py`; switch
-   `pipelines/brainstorm.yaml` to `prompt_variants`.
+   paths per P1 above; add role route defaults where needed; register in
+   `catalog.py`; switch `pipelines/brainstorm.yaml` to
+   `prompt_variants`; add the `review-strict` output-only preset.
 3. Add `repair-loop` preset (`pipelines/repair-loop.yaml`,
-   `presets/repair-loop.toml`). Decide Option A vs B for the clean-context
-   reviewer first.
+   `presets/repair-loop.toml`). First add `agent-clean-review`, clean
+   context runner/dispatcher behavior, findings extraction/schema support
+   if needed, and the writer respawn contract for review feedback.
 4. Plug preset-promotion metrics into existing `schemas/telemetry/*`;
-   write `docs/eval-recipes.md`.
+   write `docs/eval-recipes.md` as Outcome dashboard v1.
 5. Relax `validation.py:invariant_errors` rule (c); add the regression
    test. Then route the `competitive` writer-judge cross-model.
 6. Add `codebase-map`, then `research-orchestrator` presets.
-7. Treat `smart-friend`, `agentless-repair`, and `large-project-manager`
-   as separate-design TBDs. Do not implement under this plan.
-8. Document the measurement gate.
-9. After step 8 lands and a baseline + one A/B comparison exists,
+7. Add experimental `smart-friend` and `large-project-manager` v1 designs
+   only after their required role/preset or decompose-policy plumbing is
+   explicit. Keep `large-project-manager` at `decompose.mode="inspect"`
+   until ADR 0004's scorecard supports enforcement.
+8. Write a separate `agentless-repair` design before implementation. It
+   needs candidate patch artifacts, temp-worktree validation/rerank, and
+   telemetry design beyond the current pipeline DSL.
+9. Document the measurement gate.
+10. After step 9 lands and a baseline + one A/B comparison exists,
    evaluate whether the TUI default should switch from `balanced` to
-   `repair-loop`. (Split from step 8 — separate decision.)
+   `repair-loop`. (Split from step 9 — separate decision.)
 
 ## Touched / Added / Deferred Map
 
 | Section | Status |
 |---|---|
-| Reviewer Notes (2026-04-27) | **Added** — validates findings against code, drops false positives. |
+| Reviewer Notes (2026-04-27) | **Updated** — validates findings against code, drops false positives, and names remaining executable gaps. |
 | Executive Decision | Untouched. |
 | Evidence Rules To Adopt | Untouched. |
 | Current Catalog Findings | Untouched — assertions verified true on disk. |
 | Default Policy | Untouched. |
 | P0 - Quick Wins | Untouched (research variants verified to exist). |
 | P1 - Brainstorm And Review Shape | **Updated** — file paths pinned; catalog-registration step added. |
-| P2 - Repair Loop Preset | **Updated** — concrete YAML; clean-context reviewer Option A vs B decision; confirmed no schema change needed. |
-| P3 - Cross-Model Merge And Judge Support | **Updated** — names `validation.py:invariant_errors` and the three rules; reuses existing `findings` schema for `NEEDS_HUMAN`; explicit guard against touching synthesizer/orchestrator routing. |
-| P4 - Missing Presets | Untouched — `smart-friend`, `agentless-repair`, `large-project-manager` flagged as TBD in Reviewer Notes. |
-| Eval And Telemetry Gaps | **Updated** — references existing `schemas/telemetry/*`; adds Step 0 baseline; adds concrete A/B gate thresholds. |
-| Proposed Catalog After Changes | Untouched. |
-| Ordered Implementation Plan | **Updated** — Step 0 baseline added; step 8 split; absolute paths added. |
-
+| P2 - Repair Loop Preset | **Updated** — removes invalid `clean_context`/`lens: revise` YAML, names `agent-clean-review` and runner/context requirements. |
+| P3 - Cross-Model Merge And Judge Support | **Updated** — names `validation.py:invariant_errors` and the three rules; reuses existing `findings` schema for immediate `NEEDS_HUMAN`; defers adjudication rows until outcome linkage exists. |
+| P4 - Missing Presets | **Updated** — folds in `smart-friend` and `large-project-manager` v1 designs; marks `agentless-repair` as separate runtime design. |
+| Eval And Telemetry Gaps | **Updated** — references existing `schemas/telemetry/*`; adds Step 0 baseline; adds Outcome dashboard v1; adds concrete A/B gate thresholds. |
+| Proposed Catalog After Changes | **Updated** — adds `review-strict` to specialized presets. |
+| Ordered Implementation Plan | **Updated** — Step 0 baseline added; repair-loop prerequisites fixed; experimental design sequencing clarified. |
