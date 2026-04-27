@@ -136,8 +136,9 @@ On the Pipelines screen:
   `memory=false`, `output=findings`, and read-only boundaries.
 - Press `Ctrl+D` on a provider-bearing pipeline to run provider doctor and view
   local provider readiness before activation.
-- Press `g` to focus the board; arrows move across layers and within parallel
-  cards, while `Home` / `End` jump to the first or last stage.
+- Press `g` to focus the board; `Up` / `Down` move through top-to-bottom
+  layers, `Left` / `Right` move within parallel cards, and `Home` / `End` jump
+  to the first or last stage.
 - Press `t` to focus the stage details pane.
 - Press `y` to copy the current board as plain text with dependency labels.
 - Press `m` to add a catalog module to the draft, or `Delete` to remove the

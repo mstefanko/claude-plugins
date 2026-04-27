@@ -79,7 +79,7 @@ DataTable {
 }
 
 .pipeline-board {
-    layout: horizontal;
+    layout: vertical;
 }
 
 .pipeline-board-text {
@@ -89,25 +89,30 @@ DataTable {
 }
 
 .layer-column {
-    width: 30;
+    width: 100%;
     height: auto;
-    margin-right: 1;
+    margin-bottom: 1;
 }
 
 .layer-column-title {
     height: 1;
     text-style: bold;
     color: $accent;
-    margin-bottom: 1;
+    margin-bottom: 0;
+}
+
+.layer-card-row {
+    width: 100%;
+    height: auto;
 }
 
 .stage-card {
-    width: 100%;
-    min-height: 4;
+    width: 1fr;
+    min-height: 3;
     height: auto;
     border: solid $primary;
     padding: 0 1;
-    margin-bottom: 1;
+    margin-right: 1;
 }
 
 .stage-card:focus {

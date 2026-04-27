@@ -143,10 +143,6 @@ if TEXTUAL_IMPORT_ERROR is None:
         can_focus = True
 
 
-    class PipelineJoinBadge(Static):
-        pass
-
-
     class PipelineStageCard(Static):
         can_focus = True
 
@@ -170,10 +166,9 @@ if TEXTUAL_IMPORT_ERROR is None:
 
         def compose(self) -> ComposeResult:
             yield Static(self.column.label, classes="layer-column-title")
-            for card in self.column.cards:
-                if "JOIN" in card.badges and card.dependency_label:
-                    yield PipelineJoinBadge(card.dependency_label, classes="join-badge")
-                yield PipelineStageCard(card)
+            with Horizontal(classes="layer-card-row"):
+                for card in self.column.cards:
+                    yield PipelineStageCard(card)
 
 
     class PipelineLayerBoard(Widget):
@@ -277,16 +272,16 @@ if TEXTUAL_IMPORT_ERROR is None:
             self._rebuild()
 
         def action_select_left(self) -> None:
-            self._move("left")
-
-        def action_select_right(self) -> None:
-            self._move("right")
-
-        def action_select_up(self) -> None:
             self._move("up")
 
-        def action_select_down(self) -> None:
+        def action_select_right(self) -> None:
             self._move("down")
+
+        def action_select_up(self) -> None:
+            self._move("left")
+
+        def action_select_down(self) -> None:
+            self._move("right")
 
         def action_select_first(self) -> None:
             if self.model is not None and self.model.nodes:
@@ -1031,8 +1026,8 @@ if TEXTUAL_IMPORT_ERROR is None:
         HELP = (
             "Pipelines\n\n"
             "Global: 1 Dashboard, 2 Runs, 3 Pipelines, 4 Presets, 5 Settings, Ctrl+P Commands, q Quit.\n"
-            "Board: g focus layer board, arrows/Home/End move selection, Enter/f edit, y copy plain text.\n"
-            "Badges: JOIN wait, FAN fan-out, PROVIDER evidence, OUTPUT terminal output, DIRTY draft, CRITICAL path.\n"
+            "Board: g focus layer board, Up/Down move layers, Left/Right move parallel stages, Enter/f edit.\n"
+            "Badges: JOIN waits for multiple inputs, FAN fan-out, PROVIDER evidence, OUTPUT terminal output, DIRTY draft.\n"
             "Local: r route, b branch, n lens, o provider, Ctrl+D doctor, m module, "
             "t details, v validate, a activate, Ctrl+S save, Esc discard."
         )

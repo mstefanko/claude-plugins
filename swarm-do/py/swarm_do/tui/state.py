@@ -821,11 +821,12 @@ def _pipeline_board_card(node: PipelineGraphNode, overlay: PipelineGraphOverlay)
     selected = overlay.selected_stage_id == node.stage_id
     dirty = node.stage_id in overlay.dirty_stage_ids
     critical = node.stage_id in overlay.critical_stage_ids
+    title, subtitle = _pipeline_board_labels(node)
     return PipelineBoardCard(
         stage_id=node.stage_id,
         layer=node.layer,
-        title=node.title,
-        subtitle=node.subtitle,
+        title=title,
+        subtitle=subtitle,
         badges=_pipeline_board_badges(node, overlay, status),
         dependency_label=_dependency_chip(node.depends_on),
         outgoing_label=_outgoing_chip(node.outgoing),
@@ -857,12 +858,30 @@ def _pipeline_board_badges(
         badges.append("WARN")
     if node.stage_id in overlay.dirty_stage_ids:
         badges.append("DIRTY")
-    if node.stage_id in overlay.critical_stage_ids:
-        badges.append("CRITICAL")
     status_badge = _status_badge(status)
     if status_badge is not None:
         badges.append(status_badge)
     return tuple(badges)
+
+
+def _pipeline_board_labels(node: PipelineGraphNode) -> tuple[str, str]:
+    if node.provider_type is not None:
+        prefix = node.provider_type
+        subtitle = node.subtitle.removeprefix(prefix).strip()
+        return prefix, subtitle
+
+    if node.fan_out_count is not None:
+        role = node.subtitle.split(" ", 1)[0] if node.subtitle else node.title
+        details = []
+        if node.fan_out_variant:
+            details.append(node.fan_out_variant)
+        if node.merge_agent:
+            details.append(f"merge={node.merge_agent}")
+        return f"{role} x{node.fan_out_count}", " ".join(details)
+
+    if node.subtitle and node.subtitle != "no agents":
+        return node.subtitle, ""
+    return node.title, ""
 
 
 def _normalize_board_status(status: Any) -> str | None:

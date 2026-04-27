@@ -467,6 +467,14 @@ class TestPipelineBoardModel(EnvTestCase):
             model.layers,
         )
 
+    def test_cards_use_actor_and_provider_labels(self) -> None:
+        cards = self._cards_by_id(pipeline_board_model(self._default_model()))
+
+        self.assertEqual(cards["docs"].title, "agent-docs")
+        self.assertEqual(cards["docs"].subtitle, "")
+        self.assertEqual(cards["provider-review"].title, "swarm-review")
+        self.assertEqual(cards["provider-review"].subtitle, "review selection=auto max_parallel=4")
+
     def test_writer_and_review_have_join_badge(self) -> None:
         cards = self._cards_by_id(pipeline_board_model(self._default_model()))
 
@@ -503,7 +511,9 @@ class TestPipelineBoardModel(EnvTestCase):
             tuple(tuple(card.stage_id for card in column.cards) for column in board.columns),
             tuple(tuple(card.stage_id for card in column.cards) for column in baseline.columns),
         )
-        self.assertEqual(self._cards_by_id(board)["writer"].badges, ("JOIN", "DIRTY", "CRITICAL", "RUN"))
+        writer = self._cards_by_id(board)["writer"]
+        self.assertEqual(writer.badges, ("JOIN", "DIRTY", "RUN"))
+        self.assertTrue(writer.critical)
 
     def test_status_normalization_known_and_unknown(self) -> None:
         self.assertEqual(STATUS_TO_BADGE["queued"], "QUEUED")
@@ -540,24 +550,24 @@ class TestPipelineBoardModel(EnvTestCase):
         self.assertEqual(
             compact,
             [
-                "L1 research",
-                "L2 analysis  clarify",
-                "L3 writer JOIN after: analysis + clarify",
-                "L4 spec-review  provider-review PROVIDER",
-                "L5 docs OUTPUT  review JOIN OUTPUT after: spec-review + provider-review",
+                "L1 agent-research",
+                "L2 agent-analysis  agent-clarify",
+                "L3 agent-writer JOIN after: analysis + clarify",
+                "L4 agent-spec-review  swarm-review PROVIDER",
+                "L5 agent-docs OUTPUT  agent-review JOIN OUTPUT after: spec-review + provider-review",
             ],
         )
         self.assertEqual(
             linear,
             [
-                "1. research [agents]",
-                "2. analysis [agents] depends_on=research",
-                "3. clarify [agents] depends_on=research",
-                "4. writer [agents] depends_on=analysis,clarify JOIN",
-                "5. spec-review [agents] depends_on=writer",
-                "6. provider-review [provider] depends_on=writer PROVIDER",
-                "7. docs [output] depends_on=spec-review OUTPUT",
-                "8. review [output] depends_on=spec-review,provider-review JOIN OUTPUT",
+                "1. agent-research [agents]",
+                "2. agent-analysis [agents] depends_on=research",
+                "3. agent-clarify [agents] depends_on=research",
+                "4. agent-writer [agents] depends_on=analysis,clarify JOIN",
+                "5. agent-spec-review [agents] depends_on=writer",
+                "6. swarm-review [provider] depends_on=writer PROVIDER",
+                "7. agent-docs [output] depends_on=spec-review OUTPUT",
+                "8. agent-review [output] depends_on=spec-review,provider-review JOIN OUTPUT",
             ],
         )
 

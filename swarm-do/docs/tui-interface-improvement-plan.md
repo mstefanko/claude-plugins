@@ -216,7 +216,8 @@ Implementation note: the remaining graph readability work is tracked as the
 focused executable plan in `docs/tui-layer-board-execution-plan.md`. This
 section remains useful as design background and rationale. As of
 2026-04-27, the Pipelines center surface uses the native `PipelineLayerBoard`
-with compact/linear plain-text fallbacks; the legacy edge-dense
+with top-to-bottom layers, actor/provider card titles, compact/linear
+plain-text fallbacks, and quieter critical-path styling; the legacy edge-dense
 `PipelineGraphView` is no longer mounted.
 
 ### Long-Term Workbench Direction

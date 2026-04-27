@@ -13,6 +13,12 @@ This plan is the executable successor to the graph workbench portion of
 belongs to that historical plan; this document is only for the remaining
 layer-board implementation.
 
+Implementation adjustment, 2026-04-27: after the first board pass, the default
+board renders layers top-to-bottom, uses actor/provider names as card titles,
+and keeps critical path as a card state/style rather than a loud `CRITICAL`
+badge. The pure board model still preserves `PipelineGraphModel.layers` and
+plain-text fallbacks still expose dependency stage ids.
+
 Out-of-scope owner: Presets screen, Settings screen, AppChrome, global
 `1-5/?/q` bindings, and `get_system_commands` entries are already shipped in
 `py/swarm_do/tui/app.py`. No further shell work is planned in this iteration;
@@ -206,7 +212,9 @@ Initial badges:
 - `OUTPUT`: terminal/docs/answer-producing stages
 - `WARN`: stage warnings exist
 - `DIRTY`: stage id is in `overlay.dirty_stage_ids`
-- `CRITICAL`: stage id is in `overlay.critical_stage_ids`
+- Critical path: stage id is in `overlay.critical_stage_ids`; expose this as
+  `PipelineBoardCard.critical` / `.stage-card--critical`, not as a default
+  badge.
 - `QUEUED`, `RUN`, `DONE`, `FAILED`: derived from `overlay.stage_statuses` via
   `STATUS_TO_BADGE` (below).
 
@@ -632,7 +640,8 @@ Validation:
   - `docs` as an output
 - Provider stages are visually distinct without relying only on color.
 - Fan-out stages visibly show branch count.
-- Dirty, warning, critical, and live states are visible as badges.
+- Dirty, warning, and live states are visible as badges; critical path is
+  visible as a quieter card state/style.
 - Selecting a card updates the inspector.
 - Edit/fork/route/provider actions operate on the selected stage.
 - Narrow panes fall back to compact or linear output.
