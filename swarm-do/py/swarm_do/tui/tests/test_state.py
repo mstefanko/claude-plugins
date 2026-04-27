@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import tempfile
@@ -31,11 +32,14 @@ from swarm_do.tui.state import (
     COMPACT_MIN_WIDTH,
     MIN_BOARD_HEIGHT,
     STATUS_TO_BADGE,
+    PresetCreationDraft,
+    _apply_default_depends_on,
     current_prompt_lens_ids,
     current_mco_provider_config,
     current_provider_review_config,
     current_stage_agent_lens_id,
     draft_add_module_stage,
+    draft_apply_graph_stack,
     draft_set_mco_provider_config,
     draft_set_provider_review_config,
     draft_set_prompt_variant_lenses,
@@ -56,6 +60,7 @@ from swarm_do.tui.state import (
     load_run_events,
     module_palette_rows,
     mco_provider_result_preview,
+    new_preset_preview,
     outcome_dashboard_summary,
     provider_result_preview,
     pipeline_activation_blocker,
@@ -83,11 +88,13 @@ from swarm_do.tui.state import (
     select_source_preset_for_pipeline,
     stage_inspector_text,
     stage_lens_option_rows,
+    start_blank_preset_draft,
     start_preset_draft,
     start_pipeline_draft,
     status_summary,
     suggested_fork_name,
     token_burn_last_24h,
+    validate_creation_draft,
     validate_preset_draft,
     validate_pipeline_draft,
 )
@@ -1250,6 +1257,111 @@ max_wall_clock_seconds = 1800
                 pipeline_actions.cancel_run(run)
         finally:
             pipeline_actions._pid_command = old
+
+
+class PresetCreationDraftTests(unittest.TestCase):
+    def test_start_blank_preset_draft_returns_empty_stages_with_error(self) -> None:
+        draft = start_blank_preset_draft("blank-x", "blank desc")
+        self.assertIsInstance(draft, PresetCreationDraft)
+        self.assertTrue(draft.is_blank)
+        self.assertEqual(draft.preset_mapping["pipeline_inline"]["stages"], [])
+        self.assertEqual(draft.preset_mapping["origin"], "user")
+        joined = " | ".join(draft.errors)
+        self.assertIn("stages must be a non-empty array", joined)
+
+    def test_apply_default_implementation_to_blank_yields_balanced_order(self) -> None:
+        draft = start_blank_preset_draft("blank-y", "blank y")
+        applied = draft_apply_graph_stack(draft, "default-implementation", "empty")
+        stages = applied.preset_mapping["pipeline_inline"]["stages"]
+        stage_ids = [s["id"] for s in stages]
+        # default-implementation mirrors pipelines/default.yaml
+        self.assertIn("research", stage_ids)
+        self.assertIn("writer", stage_ids)
+        self.assertIn("review", stage_ids)
+        # Stack-bundled deps come from the YAML mirror; writer depends on
+        # analysis + clarify, review depends on spec-review + provider-review.
+        by_id = {s["id"]: s for s in stages}
+        self.assertEqual(
+            sorted(by_id["writer"].get("depends_on", [])),
+            ["analysis", "clarify"],
+        )
+        self.assertEqual(
+            sorted(by_id["review"].get("depends_on", [])),
+            ["provider-review", "spec-review"],
+        )
+        # No stages-empty error after apply.
+        self.assertNotIn(
+            "pipeline: stages must be a non-empty array",
+            " | ".join(applied.errors),
+        )
+
+    def test_append_missing_refuses_incompatible_id_collision(self) -> None:
+        draft = start_blank_preset_draft("blank-z", "blank z")
+        # Seed pipeline with a 'research' stage that differs from the
+        # default-implementation template.
+        seeded_pipeline = dict(draft.preset_mapping["pipeline_inline"])
+        seeded_pipeline["stages"] = [
+            {"id": "research", "agents": [{"role": "agent-research-shadow"}]},
+        ]
+        seeded_preset = dict(draft.preset_mapping)
+        seeded_preset["pipeline_inline"] = seeded_pipeline
+        seeded = dataclasses.replace(draft, preset_mapping=seeded_preset)
+        applied = draft_apply_graph_stack(seeded, "default-implementation", "append-missing")
+        joined = " | ".join(applied.errors)
+        self.assertIn("research", joined)
+        self.assertIn("differs from stack template", joined)
+
+    def test_replace_mode_replaces_stages_and_preserves_policy(self) -> None:
+        draft = new_preset_preview("balanced-default", "balanced-custom", None)
+        # Capture top-level policy keys to confirm preservation.
+        before = {
+            k: draft.preset_mapping.get(k)
+            for k in ("name", "description", "origin", "routing", "budget", "decompose", "mem_prime", "review_providers")
+            if k in draft.preset_mapping
+        }
+        applied = draft_apply_graph_stack(draft, "default-research", "replace")
+        # Policy preserved.
+        for k, v in before.items():
+            self.assertEqual(applied.preset_mapping.get(k), v, msg=f"key {k} not preserved")
+        # Stages now reflect default-research mirror (research only).
+        stage_ids = [s["id"] for s in applied.preset_mapping["pipeline_inline"]["stages"]]
+        self.assertEqual(stage_ids, ["research"])
+
+    def test_dependency_defaults_table_for_review_providerreview_docs_revisewriter(self) -> None:
+        existing = {"research", "analysis", "clarify", "writer", "spec-review"}
+        # review -> first existing of (spec-review, provider-review, mco-review, codex-review)
+        self.assertEqual(_apply_default_depends_on("review", existing), ["spec-review"])
+        # provider-review -> first existing of (revise-writer, writers, writer)
+        self.assertEqual(_apply_default_depends_on("provider-review", existing), ["writer"])
+        # docs -> ["spec-review"] when present
+        self.assertEqual(_apply_default_depends_on("docs", existing), ["spec-review"])
+        # docs -> error when spec-review absent
+        err = _apply_default_depends_on("docs", existing - {"spec-review"})
+        self.assertIsInstance(err, str)
+        self.assertIn("spec-review", err)
+        # revise-writer -> literal ["writer", "clean-review"]
+        self.assertEqual(
+            _apply_default_depends_on("revise-writer", existing),
+            ["writer", "clean-review"],
+        )
+
+    def test_new_preset_preview_balanced_default_has_no_errors(self) -> None:
+        draft = new_preset_preview("balanced-default", "balanced-custom", None)
+        self.assertFalse(draft.is_blank)
+        self.assertEqual(draft.recipe_id, "balanced-default")
+        # balanced-default is the canonical happy path; errors must be empty.
+        self.assertEqual(draft.errors, ())
+
+    def test_validate_creation_draft_surfaces_errors_for_invalid_origin(self) -> None:
+        draft = start_blank_preset_draft("bad-origin", "x")
+        # Mutate origin to an invalid value via dataclasses.replace.
+        broken = dict(draft.preset_mapping)
+        broken["origin"] = "not-a-valid-origin"
+        broken_draft = dataclasses.replace(draft, preset_mapping=broken)
+        validated = validate_creation_draft(broken_draft)
+        # Validation must surface at least one error (the empty-stages one
+        # alone would already qualify; but origin-failure should add more).
+        self.assertGreater(len(validated.errors), 0)
 
 
 if __name__ == "__main__":

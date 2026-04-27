@@ -62,6 +62,11 @@ from swarm_do.pipeline.validation import (
     validate_preset_mapping,
     variant_existence_errors,
 )
+from swarm_do.pipeline.recipes import (
+    apply_graph_stack as _recipes_apply_graph_stack,
+    build_blank_preset_draft as _recipes_build_blank_preset_draft,
+    build_recipe_preset as _recipes_build_recipe_preset,
+)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -307,6 +312,247 @@ class PresetProfilePreview:
     board: PipelineBoardModel
     summary_lines: tuple[str, ...]
     unused_route_lines: tuple[str, ...]
+
+
+@dataclasses.dataclass(frozen=True)
+class PresetCreationDraft:
+    """Immutable draft for the new-preset creation flow.
+
+    Phase 3 helper — pure preview state. No I/O, no widgets, no writes.
+    Mutations return a NEW draft via :func:`dataclasses.replace`.
+    """
+
+    name: str
+    description: str
+    preset_mapping: Mapping[str, Any]
+    recipe_id: str | None
+    routing_package_id: str | None
+    errors: tuple[str, ...]
+    warnings: tuple[str, ...]
+    is_blank: bool
+
+
+# Deterministic dependency-defaults table for individual stage adds.
+#
+# Maps stage id -> callable(existing_ids: set[str]) -> list[str] | str.
+# Returning a ``str`` signals an error (e.g. required upstream missing).
+# Used by :func:`draft_apply_graph_stack` to fill ``depends_on`` when a
+# stage template lands without explicit edges. Stack-bundled stages already
+# carry their stock dependencies; this table fires only when a stage's
+# ``depends_on`` is missing or empty.
+_DEFAULT_DEPENDS_ON: Mapping[str, Callable[[set[str]], "list[str] | str"]] = {
+    "analysis": lambda existing: ["research"] if "research" in existing else [],
+    "clarify": lambda existing: ["research"] if "research" in existing else [],
+    "exploration": lambda existing: ["research"] if "research" in existing else [],
+    "advisor": lambda existing: [s for s in ("analysis", "clarify") if s in existing],
+    "writer": lambda existing: (
+        [s for s in ("analysis", "clarify") if s in existing]
+        or "writer requires explicit dependencies"
+    ),
+    "writers": lambda existing: (
+        [s for s in ("analysis", "clarify") if s in existing]
+        or "writer requires explicit dependencies"
+    ),
+    "clean-review": lambda existing: ["writer"],
+    "revise-writer": lambda existing: ["writer", "clean-review"],
+    "spec-review": lambda existing: next(
+        ([s] for s in ("revise-writer", "writers", "writer") if s in existing),
+        [],
+    ),
+    "provider-review": lambda existing: next(
+        ([s] for s in ("revise-writer", "writers", "writer") if s in existing),
+        [],
+    ),
+    "mco-review": lambda existing: next(
+        ([s] for s in ("revise-writer", "writers", "writer") if s in existing),
+        [],
+    ),
+    "codex-review": lambda existing: (
+        ["spec-review"] if "spec-review" in existing else "codex-review requires spec-review"
+    ),
+    "review": lambda existing: (
+        [s for s in ("spec-review", "provider-review", "mco-review", "codex-review") if s in existing]
+        or next(
+            ([s] for s in ("revise-writer", "writers", "writer") if s in existing),
+            [],
+        )
+    ),
+    "docs": lambda existing: (
+        ["spec-review"] if "spec-review" in existing else "docs requires spec-review"
+    ),
+}
+
+
+def _apply_default_depends_on(stage_id: str, existing_ids: set[str]) -> "list[str] | str":
+    """Return default ``depends_on`` for ``stage_id`` given ``existing_ids``.
+
+    Returns a list (possibly empty) when defaults can be derived, or an
+    error string when a hard requirement is unmet (e.g. ``docs`` without
+    ``spec-review``).
+    """
+    rule = _DEFAULT_DEPENDS_ON.get(stage_id)
+    if rule is None:
+        return []
+    return rule(existing_ids)
+
+
+def start_blank_preset_draft(name: str, description: str) -> PresetCreationDraft:
+    """Build a blank :class:`PresetCreationDraft` (empty stages list).
+
+    The returned draft will already carry the
+    ``"pipeline: stages must be a non-empty array"`` error in
+    ``draft.errors`` because :func:`validate_creation_draft` runs the
+    schema lint via ``validate_preset_mapping``.
+    """
+    result = _recipes_build_blank_preset_draft(name, description)
+    draft = PresetCreationDraft(
+        name=name,
+        description=description,
+        preset_mapping=result.preset_mapping,
+        recipe_id=None,
+        routing_package_id=None,
+        errors=tuple(result.errors),
+        warnings=tuple(result.warnings),
+        is_blank=True,
+    )
+    return validate_creation_draft(draft)
+
+
+def new_preset_preview(
+    recipe_id: str,
+    name: str,
+    routing_package_id: str | None,
+) -> PresetCreationDraft:
+    """Build a preview draft from a registered preset recipe."""
+    result = _recipes_build_recipe_preset(
+        recipe_id,
+        name,
+        routing_package_id=routing_package_id,
+    )
+    draft = PresetCreationDraft(
+        name=name,
+        description=result.preset_mapping.get("description", "") or "",
+        preset_mapping=result.preset_mapping,
+        recipe_id=recipe_id,
+        routing_package_id=routing_package_id,
+        errors=tuple(result.errors),
+        warnings=tuple(result.warnings),
+        is_blank=False,
+    )
+    return validate_creation_draft(draft)
+
+
+def validate_creation_draft(draft: PresetCreationDraft) -> PresetCreationDraft:
+    """Run the validation gates and return a NEW draft with errors/warnings.
+
+    Combines:
+
+    * :func:`validate_preset_mapping` (schema + invariants;
+      ``include_budget=False``). For a blank draft this surfaces the
+      literal ``"pipeline: stages must be a non-empty array"``.
+    * :func:`pipeline_activation_error` against the inline pipeline
+      mapping when present.
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    result, _resolved = validate_preset_mapping(
+        draft.preset_mapping,
+        draft.name,
+        include_budget=False,
+    )
+    errors.extend(result.errors)
+    warnings.extend(result.warnings)
+
+    pipeline_inline = draft.preset_mapping.get("pipeline_inline")
+    if isinstance(pipeline_inline, Mapping):
+        activation_error = pipeline_activation_error(draft.name, pipeline_inline)
+        if activation_error:
+            errors.append(activation_error)
+    elif pipeline_inline is not None:
+        errors.append("pipeline_inline must be a mapping")
+
+    return dataclasses.replace(
+        draft,
+        errors=tuple(errors),
+        warnings=tuple(warnings),
+    )
+
+
+def draft_apply_graph_stack(
+    draft: PresetCreationDraft,
+    stack_id: str,
+    mode: str,
+) -> PresetCreationDraft:
+    """Apply a graph stack (``empty`` / ``append-missing`` / ``replace``) to ``draft``.
+
+    Preserves preset-level policy keys (name, description, origin,
+    routing, budget, decompose, mem_prime, review_providers, ...) by
+    deep-copying ``draft.preset_mapping`` and only replacing
+    ``pipeline_inline``. After overlay, fills missing ``depends_on`` via
+    :data:`_DEFAULT_DEPENDS_ON`, then runs topological validation, then
+    pipes the result through :func:`validate_creation_draft`.
+    """
+    pipeline_inline = draft.preset_mapping.get("pipeline_inline")
+    if not isinstance(pipeline_inline, Mapping):
+        return dataclasses.replace(
+            draft,
+            errors=tuple([*draft.errors, "pipeline_inline must be a mapping"]),
+        )
+
+    result = _recipes_apply_graph_stack(pipeline_inline, stack_id, mode)
+    if result.errors:
+        return dataclasses.replace(
+            draft,
+            errors=tuple([*draft.errors, *result.errors]),
+        )
+
+    new_pipeline = copy.deepcopy(dict(result.pipeline_mapping))
+    stages = list(new_pipeline.get("stages") or [])
+    existing_ids: set[str] = {
+        str(stage.get("id"))
+        for stage in stages
+        if isinstance(stage, Mapping) and stage.get("id") is not None
+    }
+
+    apply_errors: list[str] = []
+    for stage in stages:
+        if not isinstance(stage, dict):
+            continue
+        deps = stage.get("depends_on")
+        if deps:
+            continue
+        stage_id = str(stage.get("id") or "")
+        defaults = _apply_default_depends_on(stage_id, existing_ids - {stage_id})
+        if isinstance(defaults, str):
+            apply_errors.append(f"{stage_id}: {defaults}")
+            continue
+        if defaults:
+            stage["depends_on"] = list(defaults)
+
+    if apply_errors:
+        return dataclasses.replace(
+            draft,
+            errors=tuple([*draft.errors, *apply_errors]),
+        )
+
+    new_pipeline["stages"] = stages
+    try:
+        topological_layers(new_pipeline)
+    except ValueError as exc:
+        return dataclasses.replace(
+            draft,
+            errors=tuple([*draft.errors, f"graph: {exc}"]),
+        )
+
+    new_preset_mapping = copy.deepcopy(dict(draft.preset_mapping))
+    new_preset_mapping["pipeline_inline"] = new_pipeline
+
+    new_draft = dataclasses.replace(
+        draft,
+        preset_mapping=new_preset_mapping,
+    )
+    return validate_creation_draft(new_draft)
 
 
 BOARD_MIN_WIDTH = 96
