@@ -5,6 +5,7 @@ origin = "stock"
 
 [routing]
 "roles.agent-brainstorm" = { backend = "claude", model = "claude-sonnet-4-6", effort = "high" }
+"roles.agent-brainstorm-merge" = { backend = "claude", model = "claude-opus-4-7", effort = "high" }
 
 [budget]
 max_agents_per_run = 20

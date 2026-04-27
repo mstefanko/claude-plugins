@@ -955,13 +955,4 @@ def invariant_errors(
                     errors.append(f"invariant: stage {stage_id} role {role} must resolve to a Claude backend")
             except Exception as exc:
                 errors.append(f"invariant: stage {stage_id} role {role} route resolution failed: {exc}")
-        merge = stage.get("merge")
-        if isinstance(merge, Mapping) and merge.get("strategy") == "synthesize":
-            agent = merge.get("agent")
-            if isinstance(agent, str):
-                try:
-                    if not resolver.is_claude_backed(agent, "hard"):
-                        errors.append(f"invariant: synthesize merge agent {agent} must resolve to a Claude backend")
-                except Exception as exc:
-                    errors.append(f"invariant: merge agent {agent} route resolution failed: {exc}")
     return errors

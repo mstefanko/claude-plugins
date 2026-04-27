@@ -1,6 +1,6 @@
 pipeline_version: 1
-name: hybrid-review
-description: Default pipeline with provider evidence and fail-open Codex blocking-issues review before final review.
+name: repair-loop
+description: Bounded evaluator-optimizer implementation flow with one clean-context review and revision cycle.
 stages:
   - id: research
     agents:
@@ -17,12 +17,22 @@ stages:
     depends_on: [analysis, clarify]
     agents:
       - role: agent-writer
-  - id: spec-review
+  - id: clean-review
     depends_on: [writer]
+    agents:
+      - role: agent-clean-review
+  - id: revise-writer
+    depends_on: [writer, clean-review]
+    agents:
+      - role: agent-writer
+    failure_tolerance:
+      mode: best-effort
+  - id: spec-review
+    depends_on: [revise-writer]
     agents:
       - role: agent-spec-review
   - id: provider-review
-    depends_on: [writer]
+    depends_on: [revise-writer]
     provider:
       type: swarm-review
       command: review
@@ -33,17 +43,8 @@ stages:
       max_parallel: 4
     failure_tolerance:
       mode: best-effort
-  - id: codex-review
-    depends_on: [spec-review]
-    agents:
-      - role: agent-codex-review
-        backend: codex
-        model: gpt-5.4
-        effort: high
-    failure_tolerance:
-      mode: best-effort
   - id: review
-    depends_on: [spec-review, provider-review, codex-review]
+    depends_on: [spec-review, provider-review]
     agents:
       - role: agent-review
   - id: docs

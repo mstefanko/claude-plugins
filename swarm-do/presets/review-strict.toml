@@ -1,0 +1,27 @@
+name = "review-strict"
+description = "Output-only review evidence profile with stricter provider expectations; synthesizes evidence, not approval."
+pipeline = "review-strict"
+origin = "stock"
+
+[review_providers]
+selection = "auto"
+min_success = 2
+max_parallel = 4
+
+[routing]
+"roles.agent-review" = { backend = "claude", model = "claude-opus-4-7", effort = "high" }
+
+[budget]
+max_agents_per_run = 35
+max_estimated_cost_usd = 16.0
+max_wall_clock_seconds = 9000
+
+[decompose]
+mode = "off"
+
+[mem_prime]
+mode = "off"
+max_tokens = 500
+recency_days = 90
+min_relevance = 0.6
+adapter = "dispatch_file"

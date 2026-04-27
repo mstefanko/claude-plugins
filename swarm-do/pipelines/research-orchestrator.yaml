@@ -1,6 +1,6 @@
 pipeline_version: 1
-name: research
-description: Research fan-out and synthesis memo pipeline with no implementation stages.
+name: research-orchestrator
+description: Output-only breadth-first research profile with static source-quality lenses and synthesis.
 parallelism: 3
 stages:
   - id: research

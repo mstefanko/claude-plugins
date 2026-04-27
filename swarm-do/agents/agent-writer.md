@@ -55,6 +55,13 @@ items, and preserve any passing work from the previous writer attempt. In your
 output, add a `### Review Feedback Addressed` section listing each rejection and
 the file:line where the correction now lives.
 
+If the orchestrator respawns you after `agent-clean-review`, treat clean-review
+findings as the highest-priority input for this iteration. Re-read every cited
+`file:line`, then either apply the finding, reject it as out of scope with a
+short evidence-backed note, or escalate the ambiguity in beads notes. If
+clean-review approved the diff, return a no-op implementation note without
+committing. Do not broaden scope during the revision pass.
+
 ## Cooperative Handoff
 
 If you are near the context, elapsed-time, or output-size budget and cannot

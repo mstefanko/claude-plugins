@@ -101,14 +101,19 @@ class StatusSummary:
 
 PIPELINE_INTENTS: dict[str, str] = {
     "brainstorm": "brainstorm",
+    "codebase-map": "research",
     "default": "implement",
     "design": "design",
     "lightweight": "implement",
     "hybrid-review": "review",
+    "repair-loop": "implement",
     "mco-review-lab": "mco-assisted review",
     "compete": "competitive implementation",
     "research": "research",
+    "research-orchestrator": "research",
     "review": "review",
+    "review-strict": "review",
+    "smart-friend": "implement",
     "ultra-plan": "design",
 }
 PIPELINE_INTENT_ORDER = (
@@ -2743,6 +2748,8 @@ def pipeline_profile_preset(pipeline_name: str, pipeline: Mapping[str, Any] | No
         pipeline = load_pipeline(item.path)
     profile = pipeline_profile_for(pipeline_name, pipeline)
     if pipeline_name in profile.pipeline_names and profile.preset_names:
+        if pipeline_name in profile.preset_names:
+            return pipeline_name
         return profile.preset_names[0]
     return None
 

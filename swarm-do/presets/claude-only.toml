@@ -1,5 +1,5 @@
 name = "claude-only"
-description = "Route every role through Claude."
+description = "Diagnostic/repro profile that routes every role through Claude; not a production quality default."
 pipeline = "default"
 origin = "stock"
 

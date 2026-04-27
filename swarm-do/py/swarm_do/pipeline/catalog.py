@@ -228,6 +228,24 @@ REVIEW_CONTRACT = OutputContract(
 )
 
 
+BRAINSTORM_CONTRACT = OutputContract(
+    sections=(
+        "Brainstorm",
+        "Goal Frame",
+        "Directions",
+        "Tradeoffs",
+        "Fast Checks",
+        "Open Questions",
+    ),
+    allowed_tags={
+        "Goal Frame": ("[ASSUMPTION]", "[UNKNOWN]"),
+        "Directions": ("[ASSUMPTION]", "[UNKNOWN]"),
+        "Open Questions": ("[UNKNOWN]",),
+    },
+    schema_rule="Preserve the agent-brainstorm output schema and COMPLETE | NEEDS_INPUT status vocabulary.",
+)
+
+
 _PROMPT_LENSES: tuple[LensSpec, ...] = (
     LensSpec(
         lens_id="architecture-risk",
@@ -505,6 +523,78 @@ _PROMPT_LENSES: tuple[LensSpec, ...] = (
             "signal=concrete-input-density",
         ),
     ),
+    LensSpec(
+        lens_id="expand-options",
+        label="Expand Options",
+        category="ideation-rubric",
+        description="Bias brainstorming toward broad, meaningfully different option generation.",
+        stability="stock",
+        roles=("agent-brainstorm",),
+        stage_kinds=("fan_out",),
+        execution_mode="fan_out_only",
+        variant_name="expand-options",
+        variant_path="roles/agent-brainstorm/variants/expand-options.md",
+        output_contract=BRAINSTORM_CONTRACT,
+        merge_expectation=(
+            "agent-brainstorm-merge should cluster broad options and keep "
+            "distinct directions visible instead of averaging them together."
+        ),
+        telemetry_tags=(
+            "category=ideation-rubric",
+            "axis=breadth",
+            "host=agent-brainstorm",
+            "mode=fan_out",
+            "signal=option-diversity",
+        ),
+    ),
+    LensSpec(
+        lens_id="constraints-and-failure-modes",
+        label="Constraints And Failure Modes",
+        category="ideation-rubric",
+        description="Bias brainstorming toward blockers, adoption risks, and practical failure modes.",
+        stability="stock",
+        roles=("agent-brainstorm",),
+        stage_kinds=("fan_out",),
+        execution_mode="fan_out_only",
+        variant_name="constraints-and-failure-modes",
+        variant_path="roles/agent-brainstorm/variants/constraints-and-failure-modes.md",
+        output_contract=BRAINSTORM_CONTRACT,
+        merge_expectation=(
+            "agent-brainstorm-merge should preserve risk and constraint "
+            "signals while ranking option clusters."
+        ),
+        telemetry_tags=(
+            "category=ideation-rubric",
+            "axis=constraints",
+            "host=agent-brainstorm",
+            "mode=fan_out",
+            "signal=failure-mode-coverage",
+        ),
+    ),
+    LensSpec(
+        lens_id="analogies-and-transfers",
+        label="Analogies And Transfers",
+        category="ideation-rubric",
+        description="Bias brainstorming toward transferable patterns from adjacent domains.",
+        stability="stock",
+        roles=("agent-brainstorm",),
+        stage_kinds=("fan_out",),
+        execution_mode="fan_out_only",
+        variant_name="analogies-and-transfers",
+        variant_path="roles/agent-brainstorm/variants/analogies-and-transfers.md",
+        output_contract=BRAINSTORM_CONTRACT,
+        merge_expectation=(
+            "agent-brainstorm-merge should separate useful transferred "
+            "patterns from analogies that break in this context."
+        ),
+        telemetry_tags=(
+            "category=ideation-rubric",
+            "axis=analogy",
+            "host=agent-brainstorm",
+            "mode=fan_out",
+            "signal=transfer-quality",
+        ),
+    ),
 )
 
 
@@ -726,8 +816,8 @@ _REVIEW_PROFILE = PipelineProfileSpec(
     output_only=True,
     preview_only=False,
     requires_command_profile=False,
-    pipeline_names=("review",),
-    preset_names=("review",),
+    pipeline_names=("review", "review-strict"),
+    preset_names=("review", "review-strict"),
 )
 
 

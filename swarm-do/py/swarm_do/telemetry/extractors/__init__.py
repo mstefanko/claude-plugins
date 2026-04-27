@@ -15,7 +15,8 @@ Closes 9b-claude (mstefanko-plugins-7q9) by adding claude_review.py
 alongside the Phase 9b codex_review port. The dispatcher recognizes:
 
   agent-codex-review                    -> codex_review.extract
-  agent-review, agent-code-review       -> claude_review.extract
+  agent-review, agent-clean-review,
+  agent-code-review                     -> claude_review.extract
   swarm-review, provider-review         -> provider_review.extract
   any other role                        -> skipped (fail-open, stderr warn)
 
@@ -32,7 +33,7 @@ from pathlib import Path
 from typing import List, Sequence
 
 
-CLAUDE_EXTRACTOR_ROLES = frozenset({"agent-review", "agent-code-review"})
+CLAUDE_EXTRACTOR_ROLES = frozenset({"agent-review", "agent-clean-review", "agent-code-review"})
 CODEX_EXTRACTOR_ROLES = frozenset({"agent-codex-review"})
 PROVIDER_REVIEW_EXTRACTOR_ROLES = frozenset({"swarm-review", "provider-review"})
 

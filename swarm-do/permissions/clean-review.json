@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "role": "clean-review",
+  "merge_policy": "deny-wins",
+  "permissions": {
+    "allow": [
+      "Read",
+      "Bash(git diff:*)",
+      "Bash(git show:*)",
+      "Bash(git status:*)",
+      "Bash(rg:*)",
+      "Bash(sed:*)"
+    ],
+    "deny": []
+  }
+}

@@ -1,0 +1,23 @@
+name = "research-orchestrator"
+description = "Output-only breadth-first research profile with source-quality lenses and synthesis."
+pipeline = "research-orchestrator"
+origin = "stock"
+
+[routing]
+"roles.agent-research" = { backend = "claude", model = "claude-sonnet-4-6", effort = "high" }
+"roles.agent-research-merge" = { backend = "claude", model = "claude-opus-4-7", effort = "high" }
+
+[budget]
+max_agents_per_run = 20
+max_estimated_cost_usd = 10.0
+max_wall_clock_seconds = 9000
+
+[decompose]
+mode = "off"
+
+[mem_prime]
+mode = "off"
+max_tokens = 500
+recency_days = 90
+min_relevance = 0.6
+adapter = "dispatch_file"

@@ -640,6 +640,31 @@ Diagnostic/operational:
    evaluate whether the TUI default should switch from `balanced` to
    `repair-loop`. (Split from step 9 — separate decision.)
 
+## Implementation Status (2026-04-27)
+
+This section keeps the plan executable by separating shipped repo changes from
+evaluation work that must happen with real tasks.
+
+- Steps 1-3 shipped as repo changes: research/hybrid fixes, brainstorm
+  variants and merge role, `review-strict`, and the bounded `repair-loop`
+  preset with `agent-clean-review` role plumbing.
+- Step 4 shipped as `docs/eval-recipes.md`, using existing telemetry ledgers
+  and `swarm-telemetry` commands.
+- Step 5 shipped as the minimal invariant relaxation: `orchestrator` and
+  `agent-code-synthesizer` remain Claude-only, while synthesize merge agents
+  may now route cross-model. `competitive` routes `agent-writer-judge` through
+  Codex for the first opt-in trial.
+- Step 6 shipped as `codebase-map` and `research-orchestrator`.
+- Step 7 shipped conservative v1s: `smart-friend` adds a read-only
+  `agent-implementation-advisor` before the single writer, and
+  `large-project-manager` uses `repair-loop` with `decompose.mode="inspect"`.
+- Step 8 shipped as `docs/agentless-repair-design.md`; it remains design-only
+  because candidate patch artifacts and temp-worktree reranking are not current
+  pipeline primitives.
+- Step 0 and Step 10 remain operational gates: capture a real `balanced`
+  baseline and at least one A/B comparison before changing the recommended TUI
+  default from `balanced` to `repair-loop`.
+
 ## Touched / Added / Deferred Map
 
 | Section | Status |

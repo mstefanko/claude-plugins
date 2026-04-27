@@ -1,7 +1,12 @@
 name = "hybrid-review"
-description = "Opt-in dogfood pipeline that adds fail-open Codex review after spec-review."
+description = "High-confidence implementation profile that feeds provider evidence and fail-open Codex review into final review."
 pipeline = "hybrid-review"
 origin = "stock"
+
+[review_providers]
+selection = "auto"
+min_success = 1
+max_parallel = 4
 
 [routing]
 "roles.agent-codex-review" = { backend = "codex", model = "gpt-5.4", effort = "high" }

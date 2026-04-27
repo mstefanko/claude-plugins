@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # swarm-run — M1 manual fallback runner for the beads-centric swarm.
 # Usage: swarm-run --backend {claude|codex} --issue <id> [--role <role>] [--lens <lens-id>] [--mode {normal|fallback|competition}] [--dry-run]
-# Scope: only these roles — agent-writer, agent-spec-review, agent-review, agent-codex-review.
+# Scope: only these roles — agent-writer, agent-spec-review, agent-clean-review, agent-review, agent-codex-review.
 # See the swarm-do plugin README for operator docs.
 
 set -euo pipefail
@@ -23,7 +23,7 @@ Usage:
 Flags:
   --backend    claude|codex (required)
   --issue      beads issue id, e.g. bd-123 (required)
-  --role       one of: agent-writer, agent-spec-review, agent-review, agent-codex-review
+  --role       one of: agent-writer, agent-spec-review, agent-clean-review, agent-review, agent-codex-review
                if omitted, inferred from the issue's assignee
   --lens       optional single-agent prompt lens id; resolved through the typed lens catalog
   --mode       normal (default) | fallback | competition
@@ -39,6 +39,7 @@ Examples:
   swarm-run --backend codex --issue bd-42
   swarm-run --backend codex --issue bd-42 --mode fallback
   swarm-run --backend codex --issue bd-42 --role agent-codex-review
+  swarm-run --backend codex --issue bd-42 --role agent-clean-review
   swarm-run --backend codex --issue bd-42 --role agent-review --lens correctness-rubric
   swarm-run --backend claude --issue bd-42 --dry-run
 EOF
@@ -79,7 +80,7 @@ if [[ "$BACKEND" == "codex" ]]; then
 fi
 # Claude backend presence checked only when we're actually going to invoke it (not in dry-run).
 
-SUPPORTED_ROLES=(agent-writer agent-spec-review agent-review agent-codex-review)
+SUPPORTED_ROLES=(agent-writer agent-spec-review agent-clean-review agent-review agent-codex-review)
 is_supported_role() {
   local r="$1" x
   for x in "${SUPPORTED_ROLES[@]}"; do [[ "$x" == "$r" ]] && return 0; done
@@ -118,12 +119,16 @@ if [[ "$ROLE" == "agent-codex-review" && "$BACKEND" == "claude" ]]; then
   die "role agent-codex-review is codex-only; re-run with --backend codex"
 fi
 
+CLEAN_CONTEXT=0
+[[ "$ROLE" == "agent-clean-review" ]] && CLEAN_CONTEXT=1
+
 # Model + effort matrix (plan Section 3 / 4.5).
 MODEL=""; EFFORT=""
 if [[ "$BACKEND" == "codex" ]]; then
   case "$ROLE" in
     agent-writer)        MODEL="gpt-5.4"; EFFORT="high";;
     agent-spec-review)   MODEL="gpt-5.4"; EFFORT="medium";;
+    agent-clean-review)  MODEL="gpt-5.4"; EFFORT="high";;
     agent-review)        MODEL="gpt-5.4"; EFFORT="high";;
     agent-codex-review)  MODEL="gpt-5.4"; EFFORT="high";;
   esac
@@ -132,6 +137,7 @@ else
   case "$ROLE" in
     agent-writer)        MODEL="opus";   EFFORT="high";;
     agent-spec-review)   MODEL="sonnet"; EFFORT="medium";;
+    agent-clean-review)  MODEL="opus";   EFFORT="high";;
     agent-review)        MODEL="opus";   EFFORT="high";;
   esac
 fi
@@ -194,12 +200,35 @@ STARTED="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 T_START_EPOCH="$(date +%s)"
 START_HEAD_SHA="$(git -C "${PWD}" rev-parse HEAD 2>/dev/null || true)"
 
-# Dependency / thread context from beads.
+# Dependency / thread context from beads. Clean review intentionally suppresses
+# dependency/thread history and writer/reviewer notes; the prompt below gets a
+# sanitized changed-file bundle instead.
 DEP_CTX=""
-if [[ "$HAS_JQ" -eq 1 ]]; then
+if [[ "$CLEAN_CONTEXT" -eq 1 ]]; then
+  DEP_CTX="<suppressed: agent-clean-review uses sanitized task and diff context only>"
+elif [[ "$HAS_JQ" -eq 1 ]]; then
   DEP_CTX="$(bd show "$ISSUE" --refs --thread --json 2>/dev/null || true)"
 else
   DEP_CTX="$(bd show "$ISSUE" 2>/dev/null || true)"
+fi
+
+CLEAN_REVIEW_CTX=""
+if [[ "$CLEAN_CONTEXT" -eq 1 ]]; then
+  CLEAN_REVIEW_CTX="$(
+    {
+      printf 'Git status --short:\n'
+      git -C "$PWD" status --short 2>/dev/null || true
+      printf '\nUncommitted diff --stat:\n'
+      git -C "$PWD" diff --find-renames --stat 2>/dev/null || true
+      printf '\nUncommitted changed files:\n'
+      git -C "$PWD" diff --find-renames --name-only 2>/dev/null || true
+      printf '\nLatest commit changed files:\n'
+      git -C "$PWD" show --format='commit %H %s' --find-renames --name-only --stat HEAD 2>/dev/null || true
+      printf '\nDiff check:\n'
+      git -C "$PWD" diff --check 2>/dev/null || true
+    } 2>&1
+  )"
+  [[ -n "$CLEAN_REVIEW_CTX" ]] || CLEAN_REVIEW_CTX="<no git diff context available>"
 fi
 
 # Assemble prompt.
@@ -207,9 +236,10 @@ PROMPT="$(cat "$SHARED_MD"; printf '\n\n---\n\n'; cat "$OVERLAY_MD"
   if [[ -n "$LENS_VARIANT_PATH" ]]; then printf '\n\n---\n## Lens Overlay: %s\n\n' "$LENS"; cat "$LENS_VARIANT_PATH"; fi
   printf '\n\n---\n## Beads Issue: %s\n\n' "$ISSUE"
   if [[ -n "$ISSUE_JSON" ]]; then printf '### Issue JSON\n```json\n%s\n```\n' "$ISSUE_JSON"; fi
+  if [[ "$CLEAN_CONTEXT" -eq 1 ]]; then printf '\n### Clean Review Context\n```\n%s\n```\n' "$CLEAN_REVIEW_CTX"; fi
   printf '\n### Dependency / Thread Context\n```\n%s\n```\n' "${DEP_CTX:-<none>}"
-  printf '\n### Run metadata\n- Role: %s\n- Lens: %s\n- Backend: %s\n- Model: %s\n- Effort: %s\n- Mode: %s\n' \
-    "$ROLE" "${LENS:-none}" "$BACKEND" "$MODEL" "$EFFORT" "$MODE"
+  printf '\n### Run metadata\n- Role: %s\n- Lens: %s\n- Backend: %s\n- Model: %s\n- Effort: %s\n- Mode: %s\n- Clean context: %s\n' \
+    "$ROLE" "${LENS:-none}" "$BACKEND" "$MODEL" "$EFFORT" "$MODE" "$CLEAN_CONTEXT"
 )"
 
 echo "swarm-run: rig=$BEADS_RIG backend=$BACKEND role=$ROLE lens=${LENS:-none} model=$MODEL effort=$EFFORT mode=$MODE issue=$ISSUE dry_run=$DRY_RUN"
@@ -451,6 +481,14 @@ if [[ "$BACKEND" == "codex" ]]; then
     else
       BACKEND_RC=0
     fi
+  elif [[ "$ROLE" == "agent-clean-review" ]]; then
+    if ! printf '%s' "$PROMPT" | codex exec -m "$MODEL" -c model_reasoning_effort="\"$EFFORT\"" --skip-git-repo-check -C "$PWD" >"$OUT_FILE" 2>&1; then
+      echo "swarm-run: codex clean-review invocation failed (see output below)" >&2
+      cat "$OUT_FILE" >&2
+      BACKEND_RC=1
+    else
+      BACKEND_RC=0
+    fi
   else
     if ! printf '%s' "$PROMPT" | codex exec --json -m "$MODEL" -c model_reasoning_effort="\"$EFFORT\"" --skip-git-repo-check -C "$PWD" >"$OUT_FILE" 2>&1; then
       echo "swarm-run: codex invocation failed (see output below)" >&2
@@ -478,7 +516,7 @@ BACKEND_OUT="$(cat "$OUT_FILE")"
 
 # Phase 9b: extract findings into findings.jsonl (fail-open, non-blocking).
 _extractor="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/extract-phase.sh"
-if [[ -x "$_extractor" && ( "$ROLE" == "agent-codex-review" || "$ROLE" == "agent-review" || "$ROLE" == "agent-code-review" ) && -f "$OUT_FILE" ]]; then
+if [[ -x "$_extractor" && ( "$ROLE" == "agent-codex-review" || "$ROLE" == "agent-clean-review" || "$ROLE" == "agent-review" || "$ROLE" == "agent-code-review" ) && -f "$OUT_FILE" ]]; then
   "$_extractor" "$OUT_FILE" "$RUN_ID" "$ROLE" "${ISSUE:-unknown}" 2>&1 | sed 's/^/extract-phase: /' >&2 || true
 fi
 

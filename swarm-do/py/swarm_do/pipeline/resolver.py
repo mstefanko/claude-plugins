@@ -32,8 +32,10 @@ HARDCODED_DEFAULT = Route("claude", "claude-opus-4-7", "high", "hardcoded-defaul
 ROLE_DEFAULTS: dict[str, dict[str, Route] | Route] = {
     "orchestrator": Route("claude", "claude-opus-4-7", "high", "role-default"),
     "agent-brainstorm": Route("claude", "claude-sonnet-4-6", "high", "role-default"),
+    "agent-brainstorm-merge": Route("claude", "claude-opus-4-7", "high", "role-default"),
     "agent-research": Route("claude", "claude-sonnet-4-6", "high", "role-default"),
     "agent-analysis": Route("claude", "claude-opus-4-7", "xhigh", "role-default"),
+    "agent-implementation-advisor": Route("claude", "claude-opus-4-7", "high", "role-default"),
     "agent-debug": Route("claude", "claude-opus-4-7", "xhigh", "role-default"),
     "agent-clarify": Route("claude", "claude-sonnet-4-6", "medium", "role-default"),
     "agent-writer": {
@@ -42,6 +44,7 @@ ROLE_DEFAULTS: dict[str, dict[str, Route] | Route] = {
         "hard": Route("claude", "claude-opus-4-7", "high", "role-default"),
     },
     "agent-spec-review": Route("claude", "claude-sonnet-4-6", "medium", "role-default"),
+    "agent-clean-review": Route("claude", "claude-opus-4-7", "high", "role-default"),
     "agent-review": Route("claude", "claude-opus-4-7", "high", "role-default"),
     "agent-docs": Route("claude", "claude-sonnet-4-6", "medium", "role-default"),
     "agent-codex-review": Route("codex", "gpt-5.4", "high", "role-default"),

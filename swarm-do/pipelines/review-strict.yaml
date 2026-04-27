@@ -1,0 +1,30 @@
+pipeline_version: 1
+name: review-strict
+description: Output-only review evidence profile with stricter provider expectations and five-lens synthesis.
+parallelism: 5
+stages:
+  - id: provider-review
+    provider:
+      type: swarm-review
+      command: review
+      selection: auto
+      output: findings
+      memory: false
+      timeout_seconds: 1800
+      max_parallel: 4
+    failure_tolerance:
+      mode: quorum
+      min_success: 2
+  - id: review
+    depends_on: [provider-review]
+    fan_out:
+      role: agent-review
+      count: 5
+      variant: prompt_variants
+      variants: [correctness-rubric, api-contract, security-threat-model, performance-review, edge-case-review]
+    merge:
+      strategy: synthesize
+      agent: agent-review
+    failure_tolerance:
+      mode: quorum
+      min_success: 3

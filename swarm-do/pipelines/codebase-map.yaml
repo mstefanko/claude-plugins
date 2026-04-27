@@ -1,0 +1,8 @@
+pipeline_version: 1
+name: codebase-map
+description: Output-only read-only localization profile using the codebase-map research lens.
+stages:
+  - id: codebase-map
+    agents:
+      - role: agent-research
+        lens: codebase-map

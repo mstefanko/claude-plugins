@@ -48,6 +48,19 @@ class PipelineValidationTests(unittest.TestCase):
         result, *_ = validate_preset_and_pipeline("review")
         self.assertTrue(result.ok, result.errors)
 
+    def test_strict_review_profile_uses_quorum_provider_evidence(self) -> None:
+        item = find_pipeline("review-strict")
+        self.assertIsNotNone(item)
+        pipeline = load_pipeline(item.path)
+
+        self.assertEqual(topological_layers(pipeline), [["provider-review"], ["review"]])
+        provider_stage = pipeline["stages"][0]
+        self.assertEqual(provider_stage["provider"]["type"], "swarm-review")
+        self.assertEqual(provider_stage["failure_tolerance"], {"mode": "quorum", "min_success": 2})
+        result, preset, *_ = validate_preset_and_pipeline("review-strict")
+        self.assertTrue(result.ok, result.errors)
+        self.assertEqual(preset["review_providers"]["min_success"], 2)
+
     def test_stock_implementation_pipelines_use_auto_provider_review_without_allowlists(self) -> None:
         for name in ("default", "lightweight", "ultra-plan"):
             with self.subTest(name=name):
@@ -77,9 +90,41 @@ class PipelineValidationTests(unittest.TestCase):
         pipeline = load_pipeline(item.path)
         self.assertEqual(
             topological_layers(pipeline),
-            [["research"], ["analysis", "clarify"], ["writer"], ["spec-review"], ["codex-review", "docs", "review"]],
+            [
+                ["research"],
+                ["analysis", "clarify"],
+                ["writer"],
+                ["provider-review", "spec-review"],
+                ["codex-review", "docs"],
+                ["review"],
+            ],
         )
+        review = next(stage for stage in pipeline["stages"] if stage["id"] == "review")
+        self.assertEqual(review["depends_on"], ["spec-review", "provider-review", "codex-review"])
         result, *_ = validate_preset_and_pipeline("hybrid-review")
+        self.assertTrue(result.ok, result.errors)
+
+    def test_repair_loop_unrolls_one_clean_review_revision_cycle(self) -> None:
+        item = find_pipeline("repair-loop")
+        self.assertIsNotNone(item)
+        pipeline = load_pipeline(item.path)
+        self.assertEqual(
+            topological_layers(pipeline),
+            [
+                ["research"],
+                ["analysis", "clarify"],
+                ["writer"],
+                ["clean-review"],
+                ["revise-writer"],
+                ["provider-review", "spec-review"],
+                ["docs", "review"],
+            ],
+        )
+        clean = next(stage for stage in pipeline["stages"] if stage["id"] == "clean-review")
+        self.assertEqual(clean["agents"], [{"role": "agent-clean-review"}])
+        revise = next(stage for stage in pipeline["stages"] if stage["id"] == "revise-writer")
+        self.assertEqual(revise["failure_tolerance"], {"mode": "best-effort"})
+        result, *_ = validate_preset_and_pipeline("repair-loop")
         self.assertTrue(result.ok, result.errors)
 
     def test_mco_review_lab_adds_read_only_provider_before_claude_review(self) -> None:
@@ -104,11 +149,79 @@ class PipelineValidationTests(unittest.TestCase):
         pipeline = load_pipeline(item.path)
         self.assertEqual(topological_layers(pipeline), [["research"]])
         self.assertEqual(stage_agent_count(pipeline["stages"][0]), 4)
+        self.assertEqual(
+            pipeline["stages"][0]["fan_out"]["variants"],
+            ["codebase-map", "prior-art-search", "risk-discovery"],
+        )
         rendered = "\n".join(graph_lines(pipeline))
         self.assertIn("fan_out=3 role=agent-research", rendered)
         self.assertNotIn("agent-writer", rendered)
         result, *_ = validate_preset_and_pipeline("research")
         self.assertTrue(result.ok, result.errors)
+
+    def test_codebase_map_profile_uses_single_research_lens(self) -> None:
+        item = find_pipeline("codebase-map")
+        self.assertIsNotNone(item)
+        pipeline = load_pipeline(item.path)
+        self.assertEqual(topological_layers(pipeline), [["codebase-map"]])
+        self.assertEqual(pipeline["stages"][0]["agents"], [{"role": "agent-research", "lens": "codebase-map"}])
+        result, *_ = validate_preset_and_pipeline("codebase-map")
+        self.assertTrue(result.ok, result.errors)
+
+    def test_research_orchestrator_uses_static_research_variants(self) -> None:
+        item = find_pipeline("research-orchestrator")
+        self.assertIsNotNone(item)
+        pipeline = load_pipeline(item.path)
+        self.assertEqual(topological_layers(pipeline), [["research"]])
+        self.assertEqual(
+            pipeline["stages"][0]["fan_out"]["variants"],
+            ["codebase-map", "prior-art-search", "risk-discovery"],
+        )
+        result, *_ = validate_preset_and_pipeline("research-orchestrator")
+        self.assertTrue(result.ok, result.errors)
+
+    def test_brainstorm_pipeline_uses_prompt_variants_and_merge_role(self) -> None:
+        item = find_pipeline("brainstorm")
+        self.assertIsNotNone(item)
+        pipeline = load_pipeline(item.path)
+        stage = pipeline["stages"][0]
+        self.assertEqual(stage["fan_out"]["variant"], "prompt_variants")
+        self.assertEqual(
+            stage["fan_out"]["variants"],
+            ["expand-options", "constraints-and-failure-modes", "analogies-and-transfers"],
+        )
+        self.assertEqual(stage["merge"]["agent"], "agent-brainstorm-merge")
+        result, *_ = validate_preset_and_pipeline("brainstorm")
+        self.assertTrue(result.ok, result.errors)
+
+    def test_smart_friend_preserves_single_writer_after_advisor(self) -> None:
+        item = find_pipeline("smart-friend")
+        self.assertIsNotNone(item)
+        pipeline = load_pipeline(item.path)
+        self.assertEqual(
+            topological_layers(pipeline),
+            [
+                ["research"],
+                ["analysis", "clarify"],
+                ["advisor"],
+                ["writer"],
+                ["provider-review", "spec-review"],
+                ["docs", "review"],
+            ],
+        )
+        advisor = next(stage for stage in pipeline["stages"] if stage["id"] == "advisor")
+        self.assertEqual(advisor["agents"][0]["role"], "agent-implementation-advisor")
+        writer = next(stage for stage in pipeline["stages"] if stage["id"] == "writer")
+        self.assertEqual(writer["depends_on"], ["analysis", "clarify", "advisor"])
+        result, *_ = validate_preset_and_pipeline("smart-friend")
+        self.assertTrue(result.ok, result.errors)
+
+    def test_large_project_manager_is_repair_loop_with_inspect_decompose(self) -> None:
+        result, preset, pipeline, *_ = validate_preset_and_pipeline("large-project-manager")
+        self.assertTrue(result.ok, result.errors)
+        self.assertEqual(preset["pipeline"], "repair-loop")
+        self.assertEqual(preset["decompose"]["mode"], "inspect")
+        self.assertTrue(any(stage.get("id") == "clean-review" for stage in pipeline["stages"]))
 
     def test_research_cli_dry_run_validates_profile_without_activation(self) -> None:
         stdout = io.StringIO()
@@ -671,6 +784,37 @@ max_wall_clock_seconds = 1800
                 result, *_ = validate_preset_and_pipeline("bad-synth")
                 self.assertFalse(result.ok)
                 self.assertTrue(any("stage synth role agent-code-synthesizer" in e for e in result.errors))
+            finally:
+                if old is None:
+                    os.environ.pop("CLAUDE_PLUGIN_DATA", None)
+                else:
+                    os.environ["CLAUDE_PLUGIN_DATA"] = old
+
+    def test_synthesize_merge_agent_can_route_to_codex(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            data = Path(td)
+            (data / "presets").mkdir()
+            (data / "presets" / "codex-merge.toml").write_text(
+                """
+name = "codex-merge"
+pipeline = "review"
+origin = "user"
+
+[routing]
+"roles.agent-review" = { backend = "codex", model = "gpt-5.4", effort = "high" }
+
+[budget]
+max_agents_per_run = 20
+max_estimated_cost_usd = 5.0
+max_wall_clock_seconds = 1800
+""",
+                encoding="utf-8",
+            )
+            old = os.environ.get("CLAUDE_PLUGIN_DATA")
+            os.environ["CLAUDE_PLUGIN_DATA"] = td
+            try:
+                result, *_ = validate_preset_and_pipeline("codex-merge")
+                self.assertTrue(result.ok, result.errors)
             finally:
                 if old is None:
                     os.environ.pop("CLAUDE_PLUGIN_DATA", None)

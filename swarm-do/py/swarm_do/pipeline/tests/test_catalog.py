@@ -82,6 +82,10 @@ class PipelineCatalogTests(unittest.TestCase):
             set(scanned["agent-review"]),
             {"correctness-rubric", "api-contract", "security-threat-model", "performance-review", "edge-case-review"},
         )
+        self.assertGreaterEqual(
+            set(scanned["agent-brainstorm"]),
+            {"expand-options", "constraints-and-failure-modes", "analogies-and-transfers"},
+        )
         self.assertEqual(get_lens("state-data").variant_name, "explorer-c")
 
     def test_phase3_lenses_compile_to_role_specific_prompt_variants(self) -> None:
@@ -104,6 +108,15 @@ class PipelineCatalogTests(unittest.TestCase):
         )
         self.assertIn("agent-review output schema", get_lens("api-contract").output_contract_for_role("agent-review").schema_rule)
 
+        brainstorm = compile_prompt_variant_fan_out(
+            "agent-brainstorm",
+            ["expand-options", "constraints-and-failure-modes", "analogies-and-transfers"],
+        )
+        self.assertEqual(
+            brainstorm["variants"],
+            ["expand-options", "constraints-and-failure-modes", "analogies-and-transfers"],
+        )
+
     def test_module_and_route_catalogs_include_mco_gating(self) -> None:
         module_ids = {module.module_id for module in list_modules()}
         self.assertIn("mco-review", module_ids)
@@ -120,9 +133,10 @@ class PipelineCatalogTests(unittest.TestCase):
         self.assertEqual(profiles["design"].command_name, "/swarmdaddy:design")
         self.assertEqual(profiles["review"].command_name, "/swarmdaddy:review")
 
-        for name in ("brainstorm", "research", "design", "review"):
+        for name in ("brainstorm", "research", "design", "review", "review-strict"):
             pipeline = load_pipeline(find_pipeline(name).path)
-            self.assertEqual(pipeline_profile_for(name, pipeline).profile_id, name)
+            expected = "review" if name == "review-strict" else name
+            self.assertEqual(pipeline_profile_for(name, pipeline).profile_id, expected)
             self.assertIsNone(pipeline_activation_error(name, pipeline))
 
     def test_pipeline_profiles_keep_unknown_output_only_preview(self) -> None:

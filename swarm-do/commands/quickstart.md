@@ -30,6 +30,21 @@ fi
 "$CLAUDE_PLUGIN_ROOT/bin/swarm" preset migrate
 
 active="$("$CLAUDE_PLUGIN_ROOT/bin/swarm" preset list 2>/dev/null | awk '/^\*/ {print $2; exit}')"
+if [[ -z "${active:-}" ]]; then
+  load_balanced="yes"
+  if [[ "${SWARMDADDY_QUICKSTART_YES:-0}" != "1" ]]; then
+    printf 'activate recommended balanced preset for everyday implementation? [Y/n] '
+    read -r load_reply
+    case "$load_reply" in
+      ""|y|Y|yes|YES) load_balanced="yes" ;;
+      *) load_balanced="no" ;;
+    esac
+  fi
+  if [[ "$load_balanced" == "yes" ]]; then
+    "$CLAUDE_PLUGIN_ROOT/bin/swarm" preset load balanced
+    active="balanced"
+  fi
+fi
 providers="unchecked"
 printf 'rig: ok | active: %s | providers: %s\n' "${active:-default-fallback}" "$providers"
 

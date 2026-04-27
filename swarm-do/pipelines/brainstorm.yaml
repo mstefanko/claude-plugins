@@ -7,10 +7,11 @@ stages:
     fan_out:
       role: agent-brainstorm
       count: 3
-      variant: same
+      variant: prompt_variants
+      variants: [expand-options, constraints-and-failure-modes, analogies-and-transfers]
     merge:
       strategy: synthesize
-      agent: agent-brainstorm
+      agent: agent-brainstorm-merge
     failure_tolerance:
       mode: quorum
       min_success: 2

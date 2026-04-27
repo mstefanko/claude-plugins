@@ -120,20 +120,31 @@ remain useful for checks, automation, and recovery.
 
 Use `bin/swarm preset load <name>` to activate a stock or user preset:
 
-- `balanced`: standard implementation pipeline with automatic provider-review
-  evidence when an eligible read-only shim is available.
-- `claude-only`: force all mutable orchestration through Claude.
-- `codex-only`: route supported roles through Codex where allowed by invariants.
-- `lightweight`: lower-cost implementation routing with the same best-effort
-  provider-review evidence point.
+- `balanced`: recommended everyday implementation profile. It keeps one writer,
+  preserves provider-review evidence, and routes only low-risk roles through
+  Codex.
+- `lightweight`: small/local edits where the lower-cost graph is enough; it
+  keeps the same best-effort provider-review evidence point.
+- `hybrid-review`: high-confidence or higher-risk implementation profile that
+  feeds provider-review and fail-open Codex review evidence into final review.
+- `repair-loop`: bounded implementation profile with one clean-context review
+  and revision cycle before the normal review lanes.
 - `ultra-plan`: wider planning/exploration before writing, then best-effort
   provider-review evidence before final review.
-- `hybrid-review`: standard implementation plus an opt-in Codex review lane.
+- `claude-only`: diagnostic/repro profile that forces every role through Claude.
+- `codex-only`: operational fallback that routes supported roles through Codex
+  where allowed by invariants.
 - `mco-review-lab`: experimental read-only MCO provider evidence before review.
-- `competitive`: manual Pattern 5 setup for two-writer trials.
-- `brainstorm`, `research`, `design`, `review`: output-only command profiles;
-  `review` collects provider-review evidence before final synthesis when an
-  eligible shim is available.
+- `competitive`: opt-in alternative-generation lab for two-writer trials, not a
+  production default.
+- `smart-friend`: experimental advisor-stage profile that preserves one
+  mutating writer.
+- `large-project-manager`: experimental large-phase profile using
+  `repair-loop` plus `decompose.mode="inspect"`.
+- `brainstorm`, `research`, `codebase-map`, `research-orchestrator`, `design`,
+  `review`, `review-strict`: output-only command profiles; review profiles
+  collect provider-review evidence before final synthesis when an eligible shim
+  is available.
 
 Useful profile commands:
 
@@ -537,8 +548,10 @@ generated from `role-specs/`; edit specs, then run
 |------|-------------|-----------|
 | `agent-analysis-judge` | Competitive analysis judge. Reads two competing agent-analysis outputs for the same task and produces a single authoritative work breakdown. Run after BOTH analysis instances close. Allowed to open source files only for items flagged UNVERIFIED in either analysis — reads notes, not files. | agents |
 | `agent-analysis` | Swarm pipeline planner. Evaluates approaches and produces a concrete work breakdown for the writer. Trusts research notes — only opens source files for items marked UNVERIFIED. Runs in parallel with agent-clarify after research closes. | agents |
+| `agent-brainstorm-merge` | Synthesizes parallel brainstorm outputs into ranked option clusters, tradeoffs, and operator-ready decision material without choosing a single winner or creating an implementation handoff. | agents |
 | `agent-brainstorm` | Output-only ideation agent. Generates divergent options, tradeoffs, and synthesis notes without producing an implementation plan, writer handoff, branch, or PR. | agents |
 | `agent-clarify` | Swarm pipeline pre-flight checker. Reads research notes via bd show only — no source file access. Surfaces blockers and ambiguities before implementation begins. Runs in parallel with agent-analysis after research closes. | agents |
+| `agent-clean-review` | Clean-context implementation reviewer. Reviews the current diff from sanitized task context, changed files, and self-run validation only; flags findings in notes and does not edit files. | agents, roles-shared |
 | `agent-code-review` | Thorough code reviewer combining Chain-of-Verification discipline with multi-domain analysis (quality, security, performance, design). Use for post-writer pipeline verification or standalone PR/branch/module reviews. | agents |
 | `agent-code-synthesizer` | Code synthesis agent. Reads two completed writer implementations with complementary approach constraints and cherry-picks the best elements from each into a single unified implementation. Operates at function/method level only — never mixes within a single function or across incompatible data structures. Used in Pattern 6 — Code Synthesis. | agents |
 | `agent-codex-review-phase0` | Cross-model reviewer (GPT-5.4 via Codex CLI). Specialized for blocking-issues only — types, null/nil edges, off-by-one, boundary conditions, parser/serializer mismatches, security boundaries. Invoked manually during Phase 0 validation. | agents |
@@ -546,6 +559,7 @@ generated from `role-specs/`; edit specs, then run
 | `agent-debug` | Swarm pipeline bug analyzer. Replaces agent-analysis for phases tagged kind=bug. Produces a root-cause-first work breakdown — trigger, call chain, fix location, defense-in-depth — never symptom patches. | agents |
 | `agent-decompose` | Bounded planner that converts one inspected plan phase into a schema-strict work_units.v2 artifact. | agents |
 | `agent-docs` | Swarm pipeline documentation updater. Edits .md files and doc comments only — no source code. Reads writer notes to understand what changed before editing anything. Runs in parallel with agent-review after writer closes. | agents |
+| `agent-implementation-advisor` | Read-only implementation advisor that surfaces risks, debugging hypotheses, and validation strategy before the single writer acts. It provides structured evidence, not coaching or edits. | agents |
 | `agent-research-merge` | Synthesizes parallel sub-research outputs into a single unified research report. Runs after all sub-researchers close, before clarify and analysis. Reads only beads notes — no source file access except for items explicitly flagged UNVERIFIED by sub-researchers. | agents |
 | `agent-research` | Swarm pipeline fact-finder. Reads codebase, searches memory, gathers raw findings. No opinions or recommendations — pure discovery. Use at the start of a swarm pipeline before analysis or clarify. | agents |
 | `agent-review` | Swarm pipeline verifier. Runs tests and confirms implementation matches analysis intent. Flags issues in notes only — does not edit files. Runs in parallel with agent-docs after writer closes. | agents, roles-shared |

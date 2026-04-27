@@ -20,6 +20,7 @@ ROLE_NAMES = {
     "research",
     "clarify",
     "codex-review",
+    "clean-review",
     "provider-review",
     "brainstorm",
 }

@@ -1,0 +1,34 @@
+name = "repair-loop"
+description = "Bounded implementation profile with one clean-context review and revision cycle before normal review evidence."
+pipeline = "repair-loop"
+origin = "stock"
+
+[review_providers]
+selection = "auto"
+min_success = 1
+max_parallel = 4
+
+[routing]
+"roles.agent-docs" = { backend = "codex", model = "gpt-5.4-mini", effort = "medium" }
+"roles.agent-spec-review" = { backend = "codex", model = "gpt-5.4-mini", effort = "medium" }
+"roles.agent-clarify" = { backend = "codex", model = "gpt-5.4-mini", effort = "medium" }
+"roles.agent-writer.simple" = { backend = "codex", model = "gpt-5.4-mini", effort = "medium" }
+"roles.agent-clean-review" = { backend = "codex", model = "gpt-5.4", effort = "high" }
+
+[budget]
+max_agents_per_run = 100
+max_estimated_cost_usd = 28.0
+max_wall_clock_seconds = 18000
+max_writer_tool_calls = 60
+max_writer_output_bytes = 60000
+max_handoffs = 1
+
+[decompose]
+mode = "off"
+
+[mem_prime]
+mode = "off"
+max_tokens = 500
+recency_days = 90
+min_relevance = 0.6
+adapter = "dispatch_file"

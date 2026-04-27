@@ -1,11 +1,11 @@
 name = "competitive"
-description = "Competitive two-writer pipeline with Claude judge."
+description = "Opt-in alternative-generation lab with two writers and a cross-family judge; not a production default."
 pipeline = "compete"
 origin = "stock"
 
 [routing]
 "roles.agent-analysis" = { backend = "claude", model = "claude-opus-4-7", effort = "xhigh" }
-"roles.agent-writer-judge" = { backend = "claude", model = "claude-opus-4-7", effort = "high" }
+"roles.agent-writer-judge" = { backend = "codex", model = "gpt-5.4", effort = "high" }
 
 [budget]
 max_agents_per_run = 120

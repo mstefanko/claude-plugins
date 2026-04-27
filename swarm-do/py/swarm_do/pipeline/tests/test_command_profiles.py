@@ -35,8 +35,11 @@ class CommandProfileTests(unittest.TestCase):
         cases = (
             (cmd_brainstorm, "brainstorm"),
             (cmd_research, "research"),
+            (cmd_research, "codebase-map"),
+            (cmd_research, "research-orchestrator"),
             (cmd_design, "design"),
             (cmd_review, "review"),
+            (cmd_review, "review-strict"),
         )
 
         for func, preset in cases:
@@ -46,7 +49,12 @@ class CommandProfileTests(unittest.TestCase):
                 self.assertEqual(code, 0, stderr)
                 self.assertIn("Budget preview", stdout)
                 self.assertIn("Stage graph", stdout)
-                self.assertIn(f"{preset} preset {preset} is valid", stdout)
+                profile_name = {
+                    "codebase-map": "research",
+                    "research-orchestrator": "research",
+                    "review-strict": "review",
+                }.get(preset, preset)
+                self.assertIn(f"{profile_name} preset {preset} is valid", stdout)
 
     def test_output_profile_rejects_wrong_preset_binding(self) -> None:
         code, _stdout, stderr = self._dry_run(cmd_design, "research")

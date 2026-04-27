@@ -1,6 +1,6 @@
 pipeline_version: 1
-name: hybrid-review
-description: Default pipeline with provider evidence and fail-open Codex blocking-issues review before final review.
+name: smart-friend
+description: Experimental implementation profile with a read-only advisor stage before the single writer.
 stages:
   - id: research
     agents:
@@ -13,8 +13,13 @@ stages:
     depends_on: [research]
     agents:
       - role: agent-clarify
-  - id: writer
+  - id: advisor
     depends_on: [analysis, clarify]
+    agents:
+      - role: agent-implementation-advisor
+        route: smart-advisor
+  - id: writer
+    depends_on: [analysis, clarify, advisor]
     agents:
       - role: agent-writer
   - id: spec-review
@@ -33,17 +38,8 @@ stages:
       max_parallel: 4
     failure_tolerance:
       mode: best-effort
-  - id: codex-review
-    depends_on: [spec-review]
-    agents:
-      - role: agent-codex-review
-        backend: codex
-        model: gpt-5.4
-        effort: high
-    failure_tolerance:
-      mode: best-effort
   - id: review
-    depends_on: [spec-review, provider-review, codex-review]
+    depends_on: [spec-review, provider-review]
     agents:
       - role: agent-review
   - id: docs
