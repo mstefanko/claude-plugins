@@ -7,9 +7,12 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest import mock
 
+from swarm_do.pipeline import actions as actions_module
 from swarm_do.pipeline.actions import (
     add_pipeline_stage_from_module,
+    create_user_preset_graph,
     fork_pipeline,
     fork_preset,
     fork_preset_and_pipeline,
@@ -23,7 +26,9 @@ from swarm_do.pipeline.actions import (
     set_stage_agent_lens,
     set_stage_agent_route,
     set_user_preset_pipeline,
+    suggest_user_preset_name,
 )
+from swarm_do.pipeline.paths import current_preset_path, user_presets_dir
 from swarm_do.pipeline.cli import cmd_preset_diff
 from swarm_do.pipeline.diff import diff_user_pipeline, stock_drift_for_pipeline
 from swarm_do.pipeline.registry import find_pipeline, find_preset, load_pipeline, load_preset
@@ -474,6 +479,174 @@ stages:
         self.assertIn("--- stock/balanced", text)
         self.assertIn("+++ user/renamed-balanced", text)
         self.assertNotIn("no stock preset with the same name", text)
+
+
+class CreateUserPresetGraphTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._old_data = os.environ.get("CLAUDE_PLUGIN_DATA")
+        self.td = tempfile.TemporaryDirectory()
+        os.environ["CLAUDE_PLUGIN_DATA"] = self.td.name
+
+    def tearDown(self) -> None:
+        self.td.cleanup()
+        if self._old_data is None:
+            os.environ.pop("CLAUDE_PLUGIN_DATA", None)
+        else:
+            os.environ["CLAUDE_PLUGIN_DATA"] = self._old_data
+
+    def _make_user_preset_mapping(self, name: str = "freshly-built") -> dict:
+        # Build a valid user preset mapping using the stock ultra-plan as the
+        # graph source via fork_preset_and_pipeline, then re-shape to inline.
+        preset_path, _ = fork_preset_and_pipeline("ultra-plan", "ultra-plan", "tmp-source")
+        data = load_preset(preset_path)
+        # tmp-source preset still references pipeline by name; resolve inline.
+        from swarm_do.pipeline.graph_source import resolve_preset_graph
+        resolved = resolve_preset_graph(data)
+        data.pop("pipeline", None)
+        data["pipeline_inline"] = dict(resolved.graph)
+        data["pipeline_inline"]["name"] = name
+        data["name"] = name
+        data["origin"] = "user"
+        # Remove the temp preset/pipeline files so the new name can be reused.
+        os.remove(preset_path)
+        tmp_pipeline = find_pipeline("tmp-source")
+        if tmp_pipeline is not None:
+            os.remove(tmp_pipeline.path)
+        return data
+
+    def test_writes_toml_file_under_presets_dir(self) -> None:
+        mapping = self._make_user_preset_mapping("freshly-built")
+
+        path = create_user_preset_graph("freshly-built", mapping)
+
+        self.assertTrue(path.exists())
+        self.assertEqual(path.parent, user_presets_dir())
+        self.assertEqual(path.name, "freshly-built.toml")
+
+    def test_round_trip_through_preset_loader(self) -> None:
+        mapping = self._make_user_preset_mapping("round-trip")
+
+        path = create_user_preset_graph("round-trip", mapping)
+
+        reloaded = load_preset(path)
+        self.assertEqual(reloaded["name"], "round-trip")
+        self.assertEqual(reloaded["origin"], "user")
+        self.assertIn("pipeline_inline", reloaded)
+        self.assertNotIn("pipeline", reloaded)
+        item = find_preset("round-trip")
+        self.assertIsNotNone(item)
+        self.assertEqual(item.origin, "user")
+
+    def test_rejects_invalid_name(self) -> None:
+        mapping = self._make_user_preset_mapping("temp-mapping")
+        mapping["name"] = "not a valid name!"
+        with self.assertRaises(ValueError):
+            create_user_preset_graph("not a valid name!", mapping)
+
+    def test_rejects_collision_with_existing_preset(self) -> None:
+        mapping = self._make_user_preset_mapping("collide-preset")
+        create_user_preset_graph("collide-preset", mapping)
+
+        # Build another mapping for the same name.
+        mapping2 = self._make_user_preset_mapping("collide-preset")
+        with self.assertRaises(ValueError) as cm:
+            create_user_preset_graph("collide-preset", mapping2)
+        self.assertIn("already exists", str(cm.exception))
+
+    def test_rejects_collision_with_stock_preset(self) -> None:
+        mapping = self._make_user_preset_mapping("ultra-plan")
+        with self.assertRaises(ValueError):
+            create_user_preset_graph("ultra-plan", mapping)
+
+    def test_rejects_collision_with_existing_pipeline(self) -> None:
+        # Fork a pipeline so a user pipeline named 'pipe-collide' exists.
+        fork_pipeline("ultra-plan", "pipe-collide")
+        mapping = self._make_user_preset_mapping("pipe-collide")
+        with self.assertRaises(ValueError) as cm:
+            create_user_preset_graph("pipe-collide", mapping)
+        self.assertIn("pipeline", str(cm.exception).lower())
+
+    def test_rejects_collision_with_stock_pipeline(self) -> None:
+        # 'default' is a stock pipeline name.
+        mapping = self._make_user_preset_mapping("default")
+        with self.assertRaises(ValueError):
+            create_user_preset_graph("default", mapping)
+
+    def test_rejects_mapping_without_pipeline_inline(self) -> None:
+        mapping = self._make_user_preset_mapping("missing-inline")
+        mapping.pop("pipeline_inline")
+        mapping["pipeline"] = "ultra-plan"
+        with self.assertRaises(ValueError) as cm:
+            create_user_preset_graph("missing-inline", mapping)
+        self.assertIn("pipeline_inline", str(cm.exception))
+
+    def test_rejects_mapping_with_non_user_origin(self) -> None:
+        mapping = self._make_user_preset_mapping("bad-origin")
+        mapping["origin"] = "stock"
+        with self.assertRaises(ValueError) as cm:
+            create_user_preset_graph("bad-origin", mapping)
+        self.assertIn("origin", str(cm.exception))
+
+    def test_activate_true_writes_current_preset(self) -> None:
+        mapping = self._make_user_preset_mapping("active-one")
+
+        path = create_user_preset_graph("active-one", mapping, activate=True)
+
+        self.assertTrue(path.exists())
+        active_text = current_preset_path().read_text(encoding="utf-8").strip()
+        self.assertEqual(active_text, "active-one")
+
+    def test_activation_failure_leaves_file_in_place(self) -> None:
+        mapping = self._make_user_preset_mapping("activate-fail")
+
+        with mock.patch.object(
+            actions_module,
+            "activate_preset",
+            side_effect=RuntimeError("boom"),
+        ):
+            with self.assertRaises(RuntimeError):
+                create_user_preset_graph("activate-fail", mapping, activate=True)
+
+        target = user_presets_dir() / "activate-fail.toml"
+        self.assertTrue(target.exists())
+        self.assertIsNotNone(find_preset("activate-fail"))
+
+
+class SuggestUserPresetNameTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._old_data = os.environ.get("CLAUDE_PLUGIN_DATA")
+        self.td = tempfile.TemporaryDirectory()
+        os.environ["CLAUDE_PLUGIN_DATA"] = self.td.name
+
+    def tearDown(self) -> None:
+        self.td.cleanup()
+        if self._old_data is None:
+            os.environ.pop("CLAUDE_PLUGIN_DATA", None)
+        else:
+            os.environ["CLAUDE_PLUGIN_DATA"] = self._old_data
+
+    def test_returns_stem_when_no_collision(self) -> None:
+        self.assertEqual(suggest_user_preset_name("totally-new-name"), "totally-new-name")
+
+    def test_returns_suffix_on_single_collision(self) -> None:
+        # 'ultra-plan' is a stock preset/pipeline → first collision.
+        self.assertEqual(suggest_user_preset_name("ultra-plan"), "ultra-plan-custom")
+
+    def test_returns_numbered_variant_on_multiple_collisions(self) -> None:
+        # ultra-plan and ultra-plan-custom both collide; expect ultra-plan-custom-2.
+        fork_preset("ultra-plan", "ultra-plan-custom")
+        self.assertEqual(
+            suggest_user_preset_name("ultra-plan"),
+            "ultra-plan-custom-2",
+        )
+
+    def test_cap_exhaustion_raises(self) -> None:
+        # Mock find_preset to always return a sentinel so every candidate collides.
+        sentinel = object()
+        with mock.patch.object(actions_module, "find_preset", return_value=sentinel), \
+             mock.patch.object(actions_module, "find_pipeline", return_value=None):
+            with self.assertRaises(ValueError):
+                suggest_user_preset_name("anything")
 
 
 if __name__ == "__main__":

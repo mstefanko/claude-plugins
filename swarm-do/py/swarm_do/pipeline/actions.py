@@ -644,6 +644,59 @@ def save_user_preset_graph(preset_name: str, pipeline_mapping: Mapping[str, Any]
     return item.path
 
 
+def suggest_user_preset_name(stem: str, *, suffix: str = "custom") -> str:
+    if find_preset(stem) is None and find_pipeline(stem) is None:
+        if not NAME_RE.fullmatch(stem):
+            raise ValueError(
+                "preset name must be 1-64 chars of letters, numbers, dot, underscore, or dash"
+            )
+        return stem
+    base = f"{stem}-{suffix}"
+    candidates = [base] + [f"{base}-{i}" for i in range(2, 100)]
+    for candidate in candidates:
+        if not NAME_RE.fullmatch(candidate):
+            continue
+        if find_preset(candidate) is None and find_pipeline(candidate) is None:
+            return candidate
+    raise ValueError(
+        f"could not find an available preset name within 99 attempts for stem '{stem}'"
+    )
+
+
+def create_user_preset_graph(
+    preset_name: str,
+    preset_mapping: Mapping[str, Any],
+    *,
+    activate: bool = False,
+) -> Path:
+    validate_preset_name(preset_name)
+    if find_preset(preset_name) is not None:
+        raise ValueError(f"preset already exists: {preset_name}")
+    if find_pipeline(preset_name) is not None:
+        raise ValueError(f"pipeline with this name already exists: {preset_name}")
+    if preset_mapping.get("origin") != "user":
+        raise ValueError("preset mapping must have origin = 'user'")
+    if "pipeline_inline" not in preset_mapping:
+        raise ValueError("preset mapping must include 'pipeline_inline'")
+    if "pipeline" in preset_mapping:
+        raise ValueError(
+            "preset mapping must not include 'pipeline' when 'pipeline_inline' is set"
+        )
+    result, _ = validate_preset_mapping(
+        preset_mapping, preset_name, include_budget=False
+    )
+    if not result.ok:
+        raise ValueError("; ".join(result.errors))
+    target = user_presets_dir() / f"{preset_name}.toml"
+    try:
+        atomic_write_text(target, render_toml(preset_mapping))
+    except OSError as exc:
+        raise ValueError(f"failed to write preset file: {exc}") from exc
+    if activate:
+        activate_preset(preset_name)
+    return target
+
+
 def _normalize_expected_hash(expected_hash: str) -> str:
     return expected_hash.removeprefix("sha256:")
 
