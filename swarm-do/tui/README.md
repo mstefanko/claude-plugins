@@ -123,6 +123,84 @@ Prompt lenses can now target fan-out branches or one normal agents-stage entry.
 Normal agents stages accept only singular `lens`; synthesize merge agents still
 have no prompt-overlay field.
 
+## Creating A New Preset
+
+The Presets workbench can author a new user preset directly, including its
+inline pipeline graph. Two entry points exist on the Presets screen:
+
+- Press **`N`** to open the **New Preset** modal (uppercase or lowercase).
+- Press **`M`** (uppercase only) to open the **Add Stack** modal against the
+  selected user preset's inline graph.
+
+Lowercase `n` and `m` continue to bind to **Edit Lenses** and **Add Module**
+respectively on a selected user preset; the new authoring shortcuts do not
+displace those bindings.
+
+### New Preset Modal
+
+Opening the modal seeds the form with sensible defaults so Enter is enough for
+the fast path:
+
+- **Kind:** Implementation (default). Output-only kinds expose the matching
+  recipe set.
+- **Recipe:** `Balanced default` (default for Implementation).
+- **Name:** auto-generated through `suggest_user_preset_name("balanced")` so it
+  never collides with an existing preset.
+- **Preview pane:** shows the resolved graph, routing, provider, and budget
+  summary for the chosen recipe, with a validation status badge — **Ready**,
+  **Warning**, or **Blocked**.
+
+Confirming the modal:
+
+- **Enter — Create Preset:** writes a user preset carrying `pipeline_inline`,
+  refreshes the gallery, selects the new preset, and opens the Overview tab.
+- **`A` — Create & Activate:** creates the preset (same as Enter) and then
+  activates it for the next `/swarmdaddy:do`. If activation is refused (for
+  example, by an invariant or budget gate), the preset is still retained and
+  the workbench surfaces a "Preset created, activation refused" message; the
+  preset stays selected so you can fix and retry.
+
+The fast paths therefore are:
+
+| Keystrokes | Result |
+|------------|--------|
+| `N`, Enter | Create preset only |
+| `N`, `A`   | Create preset and activate it |
+
+For the full recipe catalog and per-kind defaults, see
+[`../docs/new-preset-creation-flow-plan.md`](../docs/new-preset-creation-flow-plan.md).
+
+### Blank Graph Flow
+
+Choosing the **Blank graph** recipe creates an unsaved `PresetCreationDraft`
+and switches directly to the Graph tab so you can assemble stages by hand. The
+draft surfaces an empty-stages validation error inline until you apply a stack
+or add stages; the global validation rail may not yet reflect blank-flow
+errors directly, so rely on the draft's own status while building.
+
+### Add Stack (`M`)
+
+`M` on the Presets workbench opens the **Add Stack** modal. Pick a stack id
+and a merge mode:
+
+- Stack id: `default-implementation`, `default-research`, `default-design`, or
+  `default-review`.
+- Mode:
+  - `empty` — only allowed when the current graph has no stages.
+  - `append-missing` — adds stack stages that are not already present.
+  - `replace` — discards the current graph and installs the stack as-is.
+
+`M` is the recommended way to populate a blank-graph draft once you have one
+selected.
+
+### Graph Tab Action Strip
+
+The Graph tab exposes the per-graph editing actions as a single action strip:
+**Add Stack**, **Add Module**, **Add Agent Stage**, **Add Fan-Out**,
+**Add Provider**, **Edit Dependencies**, and **Remove**. These operate on the
+selected user preset's inline graph (or on the in-progress
+`PresetCreationDraft` after the blank flow).
+
 Provider result previews appear in the stage inspector when a prior
 `${CLAUDE_PLUGIN_DATA}/runs/<run-id>/stages/<stage-id>/provider-findings.json`
 artifact exists. The preview shows status, provider count, configured and

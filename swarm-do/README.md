@@ -209,6 +209,11 @@ Important workflow details:
   the desired profile.
 - `/swarmdaddy:setup` is deprecated. Use `/swarmdaddy:quickstart` for first-run
   bootstrap or `/swarmdaddy:configure` for the inspect-only TUI.
+- The Presets workbench can author new user presets with inline pipelines
+  (`pipeline_inline`) directly: press `N` for the New Preset modal (with a
+  preview, validation status, and a Create & Activate fast path) or `M` to
+  apply a stock stack to an inline graph. See `tui/README.md` for the full
+  keystroke reference.
 
 Top-level navigation: `1` dashboard, `2` runs, `3` presets, `4` settings,
 `q` quit. See `tui/README.md` for the full key map.
