@@ -218,7 +218,10 @@ section remains useful as design background and rationale. As of
 2026-04-27, the Pipelines center surface uses the native `PipelineLayerBoard`
 with top-to-bottom layers, actor/provider card titles, compact/linear
 plain-text fallbacks, and quieter critical-path styling; the legacy edge-dense
-`PipelineGraphView` is no longer mounted.
+`PipelineGraphView` is no longer mounted. The Presets screen also reuses the
+same board as a read-only profile preview: presets are not separate DAGs, but
+they can overlay routes, budget, and provider policy onto their linked
+pipeline.
 
 ### Long-Term Workbench Direction
 

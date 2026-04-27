@@ -69,7 +69,11 @@ DataTable {
     border: solid $primary;
 }
 
-#pipeline-graph {
+#preset-profile {
+    width: 1fr;
+}
+
+#pipeline-graph, #preset-board {
     width: 1fr;
     height: 1fr;
     border: solid $primary;
@@ -181,7 +185,8 @@ DataTable {
 }
 
 #preview {
-    width: 42;
+    width: 1fr;
+    height: 1fr;
     border: solid $primary;
     padding: 1;
     overflow-y: auto;
@@ -194,7 +199,7 @@ DataTable {
     overflow-y: auto;
 }
 
-#pipeline-graph:focus, #stage-inspector:focus {
+#pipeline-graph:focus, #preset-board:focus, #stage-inspector:focus {
     border: heavy $accent;
 }
 

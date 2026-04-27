@@ -25,7 +25,7 @@ from swarm_do.pipeline.actions import (
 from swarm_do.pipeline.config_hash import active_config_hash
 from swarm_do.pipeline.providers import ProviderCheck, ProviderDoctorReport
 from swarm_do.pipeline.provider_review import ReviewProviderPolicy, ReviewProviderStatus, ReviewSelectionResult
-from swarm_do.pipeline.registry import find_pipeline, load_pipeline, load_preset
+from swarm_do.pipeline.registry import find_pipeline, find_preset, load_pipeline, load_preset
 from swarm_do.tui.state import (
     BOARD_MIN_WIDTH,
     COMPACT_MIN_WIDTH,
@@ -73,6 +73,7 @@ from swarm_do.tui.state import (
     pipeline_stage_rows,
     pipeline_validation_report,
     pipeline_workbench_preview,
+    preset_profile_preview,
     select_source_preset_for_pipeline,
     stage_inspector_text,
     stage_lens_option_rows,
@@ -584,6 +585,28 @@ class TestPipelineBoardModel(EnvTestCase):
         self.assertTrue(cards["writer"].selected)
         self.assertEqual(cards["writer"].dependency_label, "after: analysis + clarify")
         self.assertEqual(cards["writer"].outgoing_label, "next: spec-review, provider-review")
+
+    def test_preset_profile_preview_overlays_resolved_routes(self) -> None:
+        preset = load_preset(find_preset("balanced").path)
+        pipeline = load_pipeline(find_pipeline("default").path)
+        preview = preset_profile_preview("balanced", preset, pipeline)
+        cards = self._cards_by_id(preview.board)
+
+        self.assertIn("codex/gpt-5.4-mini/medium (preset)", cards["docs"].subtitle)
+        self.assertIn("claude/claude-sonnet-4-6/high (default)", cards["research"].subtitle)
+        self.assertIn("simple=codex/gpt-5.4-mini/medium (preset)", cards["writer"].subtitle)
+        self.assertIn("providers=auto min_success=1 max_parallel=4", cards["provider-review"].subtitle)
+        self.assertIn("budget: agents<=80 cost<=$20.00 wall<=14400s", preview.summary_lines)
+        self.assertEqual(preview.unused_route_lines, ("Unused routes: none",))
+
+    def test_preset_profile_preview_keeps_unused_routes_visible(self) -> None:
+        preset = load_preset(find_preset("claude-only").path)
+        pipeline = load_pipeline(find_pipeline("default").path)
+        preview = preset_profile_preview("claude-only", preset, pipeline)
+
+        unused = "\n".join(preview.unused_route_lines)
+        self.assertIn("roles.agent-debug", unused)
+        self.assertIn("roles.agent-codex-review", unused)
 
 
 class TuiStateContinuedTests(EnvTestCase):

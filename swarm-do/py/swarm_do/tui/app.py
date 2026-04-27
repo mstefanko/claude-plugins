@@ -79,6 +79,7 @@ from swarm_do.tui.state import (
     pipeline_profile_preset,
     pipeline_stage_rows,
     pipeline_validation_report,
+    preset_profile_preview,
     select_source_preset_for_pipeline,
     stage_inspector_text,
     stage_lens_option_rows,
@@ -916,6 +917,7 @@ if TEXTUAL_IMPORT_ERROR is None:
         HELP = (
             "Presets\n\n"
             "Global: 1 Dashboard, 2 Runs, 3 Pipelines, 4 Presets, 5 Settings, Ctrl+P Commands, q Quit.\n"
+            "Preview: board shows the linked pipeline with this preset's resolved routes; unused routes stay below.\n"
             "Local: l load selected preset, v view diff, x delete user preset."
         )
 
@@ -924,7 +926,9 @@ if TEXTUAL_IMPORT_ERROR is None:
             yield AppChrome("Presets", id="app-chrome")
             with Horizontal():
                 yield ListView(id="presets")
-                yield Static("", id="preview")
+                with Vertical(id="preset-profile"):
+                    yield PipelineLayerBoard(id="preset-board")
+                    yield Static("", id="preview")
             yield StatusBar(id="status")
             yield Footer()
 
@@ -957,15 +961,50 @@ if TEXTUAL_IMPORT_ERROR is None:
 
         def preview_selected(self) -> None:
             item = self._selected()
+            board = self.query_one("#preset-board", PipelineLayerBoard)
+            preview = self.query_one("#preview", Static)
             if item is None:
-                self.query_one("#preview", Static).update("No presets found.")
+                board.set_message("No preset selected.")
+                preview.update("No presets found.")
                 return
-            data = load_preset(item.path)
-            routing = data.get("routing", {})
-            lines = [f"{item.name} [{item.origin}]", f"pipeline={data.get('pipeline', 'default')}", ""]
-            if isinstance(routing, dict):
-                lines.extend(f"{key}: {value}" for key, value in sorted(routing.items()))
-            self.query_one("#preview", Static).update("\n".join(lines))
+            try:
+                data = load_preset(item.path)
+                pipeline_name = str(data.get("pipeline") or "default")
+                pipeline_item = find_pipeline(pipeline_name)
+                if pipeline_item is None:
+                    board.set_message(f"Pipeline failed to load: preset references missing pipeline {pipeline_name}", failed=True)
+                    preview.update(f"{item.name} [{item.origin}]\npipeline={pipeline_name}\nERROR pipeline not found")
+                    return
+                pipeline = load_pipeline(pipeline_item.path)
+                model = pipeline_graph_model(pipeline)
+                profile = preset_profile_preview(
+                    item.name,
+                    data,
+                    pipeline,
+                    width=self._preset_board_width(),
+                    height=self._preset_board_height(),
+                )
+            except Exception as exc:
+                board.set_message(f"Pipeline failed to load: {str(exc)[:120]}", failed=True)
+                preview.update(f"{item.name} [{item.origin}]\nERROR {exc}")
+                return
+            board.set_graph(model, pipeline_graph_overlay(), profile.board)
+            lines = [f"{item.name} [{item.origin}]", *profile.summary_lines, "", *profile.unused_route_lines]
+            preview.update("\n".join(lines))
+
+        def _preset_board_width(self) -> int:
+            try:
+                width = self.query_one("#preset-board", PipelineLayerBoard).size.width
+            except Exception:
+                width = 0
+            return width if width and width >= 42 else 112
+
+        def _preset_board_height(self) -> int:
+            try:
+                height = self.query_one("#preset-board", PipelineLayerBoard).size.height
+            except Exception:
+                height = 0
+            return height if height and height >= 1 else 18
 
         def action_load_preset(self) -> None:
             item = self._selected()

@@ -54,8 +54,8 @@ it does not initialize Beads.
 - **Settings:** framed effective role routes and editable base/user-preset
   route overrides. Stock presets remain read-only; fork first before editing
   their routes.
-- **Presets:** stock and user preset browsing, loading, diff preview, and user
-  preset deletion.
+- **Presets:** stock and user preset browsing, linked-pipeline profile board
+  preview, loading, diff preview, and user preset deletion.
 - **Pipelines:** intent-sorted pipeline gallery, layer-board execution
   workbench, synchronized stage inspector, validation rail, fork-first editing,
   modules, routes, fan-out branch routes, prompt lenses, provider-review
@@ -102,8 +102,10 @@ coverage live in `actions.py`.
 - Settings edits `${CLAUDE_PLUGIN_DATA}/backends.toml` or user-preset route
   overrides through invariant-checked helpers. Press `Enter` on a route to edit
   it.
-- Presets browse stock and user presets; stock presets are read-only. Press `l`
-  to load, `v` to view diff, and `x` to delete user presets.
+- Presets browse stock and user presets; stock presets are read-only. The
+  preview board shows the linked pipeline with resolved preset routes on each
+  stage, while the lower panel keeps budget/provider policy and unused routes
+  visible. Press `l` to load, `v` to view diff, and `x` to delete user presets.
 - Pipelines open a layer-board composer workbench: intent-sorted gallery,
   selectable stage cards by topological layer, focused stage inspector,
   validation rail, fork-first edit dialog, in-memory draft save/discard state,

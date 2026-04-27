@@ -225,6 +225,13 @@ class PipelineBoardModel:
     warnings: tuple[str, ...]
 
 
+@dataclasses.dataclass(frozen=True)
+class PresetProfilePreview:
+    board: PipelineBoardModel
+    summary_lines: tuple[str, ...]
+    unused_route_lines: tuple[str, ...]
+
+
 BOARD_MIN_WIDTH = 96
 COMPACT_MIN_WIDTH = 72
 MIN_BOARD_HEIGHT = 14
@@ -547,6 +554,44 @@ def pipeline_board_plain_text(board: PipelineBoardModel) -> list[str]:
     if board.mode == "linear":
         return _pipeline_board_linear_lines(board)
     return _pipeline_board_compact_lines(board)
+
+
+def preset_profile_preview(
+    preset_name: str,
+    preset: Mapping[str, Any],
+    pipeline: Mapping[str, Any],
+    *,
+    width: int | None = None,
+    height: int | None = None,
+) -> PresetProfilePreview:
+    """Return a read-only board preview showing how a preset routes a pipeline."""
+
+    model = pipeline_graph_model(pipeline)
+    board = pipeline_board_model(model, width=width, height=height)
+    resolver = BackendResolver(preset_name=preset_name, preset_data=preset)
+    stage_by_id = {
+        str(stage.get("id")): stage
+        for stage in pipeline.get("stages") or []
+        if isinstance(stage, Mapping) and stage.get("id") is not None
+    }
+    used_route_keys = _preset_profile_used_route_keys(pipeline)
+    columns: list[PipelineBoardColumn] = []
+    for column in board.columns:
+        cards: list[PipelineBoardCard] = []
+        for card in column.cards:
+            stage = stage_by_id.get(card.stage_id)
+            if stage is None:
+                cards.append(card)
+                continue
+            cards.append(dataclasses.replace(card, subtitle=_preset_stage_route_summary(stage, resolver, preset)))
+        columns.append(dataclasses.replace(column, cards=tuple(cards)))
+    routed_board = dataclasses.replace(board, columns=tuple(columns))
+    routed_board = dataclasses.replace(routed_board, fallback_lines=tuple(pipeline_board_plain_text(routed_board)))
+    return PresetProfilePreview(
+        board=routed_board,
+        summary_lines=tuple(_preset_profile_summary_lines(preset_name, preset, pipeline)),
+        unused_route_lines=tuple(_unused_preset_route_lines(preset, used_route_keys)),
+    )
 
 
 def pipeline_graph_lines(
@@ -967,6 +1012,203 @@ def _dependency_label_stage_ids(label: str | None) -> tuple[str, ...]:
     if not label or not label.startswith("after: "):
         return ()
     return tuple(part.strip() for part in label.removeprefix("after: ").split(" + ") if part.strip())
+
+
+def _preset_stage_route_summary(
+    stage: Mapping[str, Any],
+    resolver: BackendResolver,
+    preset: Mapping[str, Any],
+) -> str:
+    agents = stage.get("agents")
+    if isinstance(agents, list):
+        parts = []
+        for idx, agent in enumerate(agents):
+            if not isinstance(agent, Mapping):
+                continue
+            role = agent.get("role")
+            if not isinstance(role, str) or not role:
+                continue
+            override = _agent_route_override(agent)
+            summary = _route_summary_for_role(resolver, role, override=override)
+            parts.append(summary if len(agents) == 1 else f"agent[{idx}] {summary}")
+        return " | ".join(parts)
+
+    fan = stage.get("fan_out")
+    if isinstance(fan, Mapping):
+        role = fan.get("role")
+        if not isinstance(role, str) or not role:
+            return ""
+        if fan.get("variant") == "models" and isinstance(fan.get("routes"), list):
+            branch_parts = []
+            for idx, route in enumerate(fan["routes"][:3]):
+                branch_parts.append(f"branch[{idx}] {_single_route_label(resolver, role, route)}")
+            count = fan.get("count")
+            if isinstance(count, int) and count > len(branch_parts):
+                branch_parts.append(f"+{count - len(branch_parts)} more")
+            return " | ".join(branch_parts)
+        return _route_summary_for_role(resolver, role)
+
+    provider = stage.get("provider")
+    if isinstance(provider, Mapping):
+        provider_type = str(provider.get("type") or "provider")
+        if provider_type == "swarm-review":
+            return _review_provider_policy_summary(preset)
+        return provider_type
+
+    return ""
+
+
+def _agent_route_override(agent: Mapping[str, Any]) -> Mapping[str, Any] | str | None:
+    override = agent.get("route")
+    if override is None and {"backend", "model", "effort"} <= set(agent.keys()):
+        override = agent
+    return override if isinstance(override, (Mapping, str)) else None
+
+
+def _route_summary_for_role(
+    resolver: BackendResolver,
+    role: str,
+    *,
+    override: Mapping[str, Any] | str | None = None,
+) -> str:
+    if override is not None:
+        return _single_route_label(resolver, role, override)
+
+    routes = []
+    for complexity in ("simple", "moderate", "hard"):
+        route = resolver.resolve(role, complexity)
+        routes.append((complexity, route))
+    unique = {
+        (route.backend, route.model, route.effort, route.setting_source)
+        for _complexity, route in routes
+    }
+    if len(unique) == 1:
+        return _format_route(routes[0][1].as_dict()) + f" ({_route_source_label(routes[0][1].setting_source)})"
+    return "; ".join(
+        f"{complexity}={_format_route(route.as_dict())} ({_route_source_label(route.setting_source)})"
+        for complexity, route in routes
+    )
+
+
+def _single_route_label(
+    resolver: BackendResolver,
+    role: str,
+    override: Mapping[str, Any] | str | None,
+) -> str:
+    route = resolver.resolve(role, "hard", override=override)
+    return _format_route(route.as_dict()) + f" ({_route_source_label(route.setting_source)})"
+
+
+def _route_source_label(source: str) -> str:
+    if source == "active-preset" or source.startswith("preset-route:"):
+        return "preset"
+    if source == "backends.toml":
+        return "base"
+    if source == "stage-override":
+        return "stage"
+    return "default"
+
+
+def _review_provider_policy_summary(preset: Mapping[str, Any]) -> str:
+    policy = preset.get("review_providers")
+    if not isinstance(policy, Mapping):
+        return "providers: default"
+    selection = policy.get("selection", "auto")
+    parts = [f"providers={selection}"]
+    for key in ("min_success", "max_parallel"):
+        if policy.get(key) is not None:
+            parts.append(f"{key}={policy[key]}")
+    if isinstance(policy.get("include"), list):
+        parts.append(f"include={len(policy['include'])}")
+    if isinstance(policy.get("exclude"), list):
+        parts.append(f"exclude={len(policy['exclude'])}")
+    return " ".join(parts)
+
+
+def _preset_profile_summary_lines(
+    preset_name: str,
+    preset: Mapping[str, Any],
+    pipeline: Mapping[str, Any],
+) -> list[str]:
+    pipeline_name = str(preset.get("pipeline") or pipeline.get("name") or "default")
+    lines = [f"Preset profile: {preset_name}", f"pipeline={pipeline_name}"]
+    description = preset.get("description")
+    if isinstance(description, str) and description:
+        lines.append(description)
+    budget = preset.get("budget")
+    if isinstance(budget, Mapping):
+        budget_bits = []
+        if budget.get("max_agents_per_run") is not None:
+            budget_bits.append(f"agents<={budget['max_agents_per_run']}")
+        if budget.get("max_estimated_cost_usd") is not None:
+            budget_bits.append(f"cost<=${float(budget['max_estimated_cost_usd']):.2f}")
+        if budget.get("max_wall_clock_seconds") is not None:
+            budget_bits.append(f"wall<={budget['max_wall_clock_seconds']}s")
+        if budget_bits:
+            lines.append("budget: " + " ".join(budget_bits))
+    review_policy = _review_provider_policy_summary(preset)
+    if review_policy != "providers: default":
+        lines.append(review_policy)
+    decompose = preset.get("decompose")
+    if isinstance(decompose, Mapping) and decompose.get("mode") is not None:
+        lines.append(f"decompose={decompose['mode']}")
+    mem_prime = preset.get("mem_prime")
+    if isinstance(mem_prime, Mapping) and mem_prime.get("mode") is not None:
+        lines.append(f"mem_prime={mem_prime['mode']}")
+    return lines
+
+
+def _preset_profile_used_route_keys(pipeline: Mapping[str, Any]) -> set[str]:
+    roles: set[str] = set()
+    explicit_route_names: set[str] = set()
+    for stage in pipeline.get("stages") or []:
+        if not isinstance(stage, Mapping):
+            continue
+        for agent in stage.get("agents") or []:
+            if not isinstance(agent, Mapping):
+                continue
+            role = agent.get("role")
+            if isinstance(role, str) and role:
+                roles.add(role)
+            override = agent.get("route")
+            if isinstance(override, str):
+                explicit_route_names.add(override)
+        fan = stage.get("fan_out")
+        if isinstance(fan, Mapping):
+            role = fan.get("role")
+            if isinstance(role, str) and role:
+                roles.add(role)
+            for route in fan.get("routes") or []:
+                if isinstance(route, str):
+                    explicit_route_names.add(route)
+
+    keys = set(explicit_route_names)
+    for role in roles:
+        keys.add(f"roles.{role}")
+        for complexity in ("simple", "moderate", "hard"):
+            keys.add(f"roles.{role}.{complexity}")
+    return keys
+
+
+def _unused_preset_route_lines(preset: Mapping[str, Any], used_route_keys: set[str]) -> list[str]:
+    routing = preset.get("routing")
+    if not isinstance(routing, Mapping):
+        return ["Unused routes: none"]
+    unused = [
+        key
+        for key in sorted(str(key) for key in routing)
+        if key not in used_route_keys
+    ]
+    if not unused:
+        return ["Unused routes: none"]
+    lines = ["Unused routes:"]
+    for key in unused[:8]:
+        value = routing.get(key)
+        route = _format_route(value) if isinstance(value, Mapping) else str(value)
+        lines.append(f"  {key}: {route}")
+    if len(unused) > 8:
+        lines.append(f"  ... {len(unused) - 8} more")
+    return lines
 
 
 def _graph_stage_positions(model: PipelineGraphModel) -> dict[str, tuple[int, int]]:
