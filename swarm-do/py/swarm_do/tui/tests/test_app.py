@@ -139,6 +139,23 @@ class TuiAppTests(unittest.TestCase):
 
         asyncio.run(run_app())
 
+    def test_dashboard_graph_refresh_reuses_unchanged_board_widgets(self) -> None:
+        async def run_app() -> None:
+            app = tui_app.SwarmTui()
+            async with app.run_test(size=(120, 40)) as pilot:
+                await pilot.pause()
+                await pilot.pause()
+                self.assertIsInstance(app.screen, tui_app.DashboardScreen)
+                board = app.screen.query_one("#dashboard-graph", tui_app.PipelineLayerBoard)
+                child_ids = [id(child) for child in board.children]
+
+                app.screen._refresh_dashboard_graph()
+                await pilot.pause()
+
+                self.assertEqual([id(child) for child in board.children], child_ids)
+
+        asyncio.run(run_app())
+
     def test_flow_gutter_marks_downward_board_flow(self) -> None:
         self.assertEqual(tui_app._flow_gutter_text("L1", False), "L1\n│\n▼")
         self.assertEqual(tui_app._flow_gutter_text("L5", True), "L5")

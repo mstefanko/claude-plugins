@@ -261,6 +261,15 @@ if TEXTUAL_IMPORT_ERROR is None:
             self._rebuild()
 
         def set_message(self, message: str, *, failed: bool = False) -> None:
+            if (
+                self.model is None
+                and self.board is None
+                and self.message == message
+                and self.message_failed == failed
+                and self.is_mounted
+                and len(self.children) > 0
+            ):
+                return
             self.model = None
             self.overlay = pipeline_graph_overlay()
             self.board = None
@@ -276,9 +285,6 @@ if TEXTUAL_IMPORT_ERROR is None:
             board: Any,
             route_chips_by_stage: Mapping[str, Any] | None = None,
         ) -> None:
-            self.model = model
-            self.overlay = overlay
-            self.board = board
             if route_chips_by_stage is None:
                 route_chips_by_stage = {
                     card.stage_id: card.route_chips
@@ -286,7 +292,22 @@ if TEXTUAL_IMPORT_ERROR is None:
                     for card in getattr(column, "cards", ())
                     if getattr(card, "route_chips", ())
                 }
-            self.route_chips_by_stage = dict(route_chips_by_stage or {})
+            normalized_route_chips = dict(route_chips_by_stage or {})
+            if (
+                self.model == model
+                and self.overlay == overlay
+                and self.board == board
+                and self.route_chips_by_stage == normalized_route_chips
+                and self.message == ""
+                and not self.message_failed
+                and self.is_mounted
+                and len(self.children) > 0
+            ):
+                return
+            self.model = model
+            self.overlay = overlay
+            self.board = board
+            self.route_chips_by_stage = normalized_route_chips
             self.message = ""
             self.message_failed = False
             self._rebuild()

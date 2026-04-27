@@ -194,6 +194,16 @@ Input:focus, Select:focus {
     overflow-y: auto;
 }
 
+#dashboard-graph {
+    height: 4fr;
+    max-height: 26;
+}
+
+#inflight {
+    height: 1fr;
+    min-height: 4;
+}
+
 .pipeline-board {
     layout: vertical;
 }
