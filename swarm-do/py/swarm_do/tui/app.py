@@ -74,6 +74,7 @@ from swarm_do.tui.state import (
     pipeline_board_plain_text,
     pipeline_gallery_rows,
     preset_gallery_rows,
+    MIN_BOARD_HEIGHT,
     pipeline_activation_blocker,
     pipeline_critical_stage_ids,
     pipeline_graph_move,
@@ -204,6 +205,10 @@ if TEXTUAL_IMPORT_ERROR is None:
         pass
 
 
+    class PipelineOutputBridge(Static):
+        pass
+
+
     class PipelineLayerColumn(Horizontal):
         def __init__(self, column: Any, *, is_last: bool = False, **kwargs: Any):
             super().__init__(classes="layer-column", **kwargs)
@@ -280,6 +285,9 @@ if TEXTUAL_IMPORT_ERROR is None:
                     if join_text is not None:
                         widgets.append(PipelineJoinBridge(join_text, classes="join-bridge"))
                     widgets.append(PipelineLayerColumn(column, is_last=index == len(self.board.columns) - 1))
+                    output_text = _output_bridge_text(column)
+                    if output_text is not None:
+                        widgets.append(PipelineOutputBridge(output_text, classes="output-bridge"))
                 return widgets
             return [
                 Static(
@@ -307,19 +315,21 @@ if TEXTUAL_IMPORT_ERROR is None:
         def on_resize(self, event: events.Resize) -> None:
             if self.model is None or self.board is None:
                 return
+            render_width = event.size.width if event.size.width >= 42 else 112
+            render_height = event.size.height if event.size.height >= MIN_BOARD_HEIGHT else 20
             mode = pipeline_board_model(
                 self.model,
                 self.overlay,
-                width=event.size.width,
-                height=event.size.height,
+                width=render_width,
+                height=render_height,
             ).mode
             if mode == self.board.mode:
                 return
             self.board = pipeline_board_model(
                 self.model,
                 self.overlay,
-                width=event.size.width,
-                height=event.size.height,
+                width=render_width,
+                height=render_height,
             )
             self._rebuild()
 
@@ -359,7 +369,7 @@ if TEXTUAL_IMPORT_ERROR is None:
         lines = [title]
         if card.subtitle:
             lines.append(str(card.subtitle))
-        badges = [badge for badge in card.badges if badge != "JOIN"]
+        badges = [badge for badge in card.badges if badge not in {"JOIN", "OUTPUT"}]
         if badges:
             lines.append(" ".join(f"[{badge}]" for badge in badges))
         if card.selected:
@@ -388,6 +398,16 @@ if TEXTUAL_IMPORT_ERROR is None:
             lines.append(f"JOIN {card.dependency_label.removeprefix('after: ')}")
             lines.append(f"↓ {card.title}")
         return "\n".join(lines)
+
+
+    def _output_bridge_text(column: Any) -> str | None:
+        output_cards = [
+            card for card in getattr(column, "cards", ())
+            if "OUTPUT" in card.badges
+        ]
+        if not output_cards:
+            return None
+        return "\n".join(f"OUTPUT {card.title}" for card in output_cards)
 
 
     def _stage_card_classes(card: Any) -> str:
@@ -1459,7 +1479,7 @@ if TEXTUAL_IMPORT_ERROR is None:
                 height = self.query_one("#pipeline-graph", PipelineLayerBoard).size.height
             except Exception:
                 height = 0
-            return height if height and height >= 1 else 20
+            return height if height and height >= MIN_BOARD_HEIGHT else 20
 
         def _overlay_for_model(self, model: Any) -> Any:
             return pipeline_graph_overlay(
@@ -2151,6 +2171,7 @@ if TEXTUAL_IMPORT_ERROR is None:
             super().__init__()
             self._routing_rows: list[tuple[str, Mapping[str, Any]]] = []
             self._policy_rows: list[tuple[str, str, Any]] = []
+            self._selected_preset_error: str | None = None
 
         def compose(self) -> ComposeResult:
             yield Header()
@@ -2203,6 +2224,8 @@ if TEXTUAL_IMPORT_ERROR is None:
         def _show_tab(self, tab_id: str) -> None:
             try:
                 self.query_one("#preset-tabs", TabbedContent).active = tab_id
+                if tab_id == "graph":
+                    self.call_after_refresh(self.refresh_graph)
             except Exception:
                 pass
 
@@ -2215,9 +2238,16 @@ if TEXTUAL_IMPORT_ERROR is None:
         def _selected_preset_data(self) -> tuple[Any, dict[str, Any], Any] | None:
             item = self._selected_preset_item()
             if item is None:
+                self._selected_preset_error = None
                 return None
-            preset = load_preset(item.path)
-            return item, preset, resolve_preset_graph(preset)
+            try:
+                preset = load_preset(item.path)
+                resolved = resolve_preset_graph(preset)
+            except Exception as exc:
+                self._selected_preset_error = f"{item.name}: {exc}"
+                return None
+            self._selected_preset_error = None
+            return item, preset, resolved
 
         def _current_pipeline(self) -> dict[str, Any] | None:
             row = self._selected_gallery_row()
@@ -2252,8 +2282,24 @@ if TEXTUAL_IMPORT_ERROR is None:
             self.query_one("#status", StatusBar).refresh_status()
             _refresh_chrome(self)
 
+        def _show_selected_preset_error(self) -> None:
+            if not self._selected_preset_error:
+                return
+            message = f"Preset graph failed to load: {self._selected_preset_error}"
+            try:
+                self.query_one("#pipeline-graph", PipelineLayerBoard).set_message(message, failed=True)
+                self.query_one("#stage-inspector", StageInspectorView).update(message)
+                self.query_one("#validation-rail", Static).update(f"validation: unavailable\nERROR {self._selected_preset_error}")
+            except Exception:
+                pass
+
+        def refresh_graph(self) -> None:
+            super().refresh_graph()
+            self._show_selected_preset_error()
+
         def refresh_stages(self) -> None:
             super().refresh_stages()
+            self._show_selected_preset_error()
             self.refresh_overview()
 
         def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
@@ -2265,6 +2311,8 @@ if TEXTUAL_IMPORT_ERROR is None:
                 self.selected_stage_id = None
                 self._draft = None
             self.refresh_preset()
+            if self._active_tab() == "graph":
+                self.call_after_refresh(self.refresh_graph)
 
         def refresh_overview(self) -> None:
             try:
@@ -2273,7 +2321,10 @@ if TEXTUAL_IMPORT_ERROR is None:
                 return
             selected = self._selected_preset_data()
             if selected is None:
-                overview.update("No preset selected.")
+                if self._selected_preset_error:
+                    overview.update(f"ERROR {self._selected_preset_error}")
+                else:
+                    overview.update("No preset selected.")
                 return
             item, preset, resolved = selected
             pipeline = self._current_pipeline() or resolved.graph

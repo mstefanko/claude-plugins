@@ -200,6 +200,16 @@ Input:focus, Select:focus {
     border-left: thick $warning;
 }
 
+.output-bridge {
+    width: 1fr;
+    height: auto;
+    margin: 0 0 1 5;
+    padding: 0 1;
+    color: $success;
+    text-style: bold;
+    border-left: thick $success;
+}
+
 .stage-card {
     width: 1fr;
     min-height: 3;

@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import os
+import tempfile
 import unittest
+from pathlib import Path
 
 from swarm_do.tui import app as tui_app
 
@@ -118,6 +121,81 @@ class TuiAppTests(unittest.TestCase):
         self.assertEqual(tui_app._join_bridge_text(column), "JOIN analysis + clarify\n↓ agent-writer")
         self.assertNotIn("[JOIN]", tui_app._stage_card_text(card))
         self.assertIn("[RUN]", tui_app._stage_card_text(card))
+
+    def test_output_bridge_demotes_output_from_card_badges(self) -> None:
+        card = dataclasses.make_dataclass(
+            "Card",
+            [
+                "title",
+                "subtitle",
+                "badges",
+                "selected",
+                "dependency_label",
+                "outgoing_label",
+                "warnings",
+                "lane",
+                "dirty",
+                "critical",
+                "stage_id",
+            ],
+        )(
+            "agent-review",
+            "",
+            ("JOIN", "OUTPUT", "DONE"),
+            False,
+            "after: spec-review + provider-review",
+            None,
+            (),
+            "output",
+            False,
+            False,
+            "review",
+        )
+        column = dataclasses.make_dataclass("Column", ["cards"])((card,))
+
+        self.assertEqual(tui_app._output_bridge_text(column), "OUTPUT agent-review")
+        self.assertNotIn("[OUTPUT]", tui_app._stage_card_text(card))
+        self.assertIn("[DONE]", tui_app._stage_card_text(card))
+
+    def test_preset_workbench_handles_invalid_selected_preset(self) -> None:
+        async def run_app() -> None:
+            app = tui_app.SwarmTui()
+            async with app.run_test(size=(120, 40)) as pilot:
+                app.action_presets()
+                await pilot.pause()
+                await pilot.pause()
+                screen = app.screen
+                self.assertIsInstance(screen, tui_app.PresetWorkbenchScreen)
+                screen._selected_pipeline_name = "local"
+                screen.refresh_pipelines()
+                screen.refresh_preset()
+                self.assertIn("local: preset pipeline must reference", screen._selected_preset_error or "")
+                self.assertIn(
+                    "Preset graph failed to load",
+                    screen.query_one("#pipeline-graph", tui_app.PipelineLayerBoard).message,
+                )
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "presets").mkdir()
+            (root / "pipelines").mkdir()
+            (root / "presets" / "local.toml").write_text(
+                'name = "local"\norigin = "user"\npipeline = "local"\n\n[budget]\n',
+                encoding="utf-8",
+            )
+            (root / "pipelines" / "local.yaml").write_text(
+                "pipeline_version: 1\nname: local\nstages:\n  - id: research\n    agents:\n      - role: agent-research\n",
+                encoding="utf-8",
+            )
+            old = os.environ.get("CLAUDE_PLUGIN_DATA")
+            os.environ["CLAUDE_PLUGIN_DATA"] = td
+            try:
+                asyncio.run(run_app())
+            finally:
+                if old is None:
+                    os.environ.pop("CLAUDE_PLUGIN_DATA", None)
+                else:
+                    os.environ["CLAUDE_PLUGIN_DATA"] = old
 
 
 if __name__ == "__main__":
