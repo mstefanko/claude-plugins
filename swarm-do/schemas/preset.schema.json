@@ -4,11 +4,40 @@
   "title": "swarm-do preset",
   "type": "object",
   "additionalProperties": false,
-  "required": ["name", "pipeline", "budget"],
+  "required": ["name", "budget"],
+  "oneOf": [
+    { "required": ["pipeline"], "not": { "required": ["pipeline_inline"] } },
+    { "required": ["pipeline_inline"], "not": { "required": ["pipeline"] } }
+  ],
   "properties": {
     "name": { "type": "string", "minLength": 1 },
     "description": { "type": "string" },
     "pipeline": { "type": "string", "minLength": 1 },
+    "pipeline_inline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pipeline_version", "name", "stages"],
+      "properties": {
+        "pipeline_version": { "type": "integer" },
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" },
+        "parallelism": { "type": "integer", "minimum": 1, "maximum": 32 },
+        "stages": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "object" }
+        }
+      }
+    },
+    "pipeline_inline_source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "hash"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      }
+    },
     "origin": { "type": "string", "enum": ["stock", "user", "experiment"] },
     "forked_from": { "type": "string", "minLength": 1 },
     "forked_from_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },

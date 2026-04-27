@@ -138,6 +138,9 @@ fi
 [[ -n "$MODEL" && -n "$EFFORT" ]] || die "no model/effort for backend=$BACKEND role=$ROLE"
 
 _PY_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/py"
+if [[ -z "$(PYTHONPATH="${_PY_ROOT}:${PYTHONPATH:-}" python3 -m swarm_do.pipeline.context preset_name 2>/dev/null || true)" ]]; then
+  echo "swarmdaddy: no active preset; using default pipeline (research → analysis+clarify → writer → spec-review+provider-review → review+docs)" >&2
+fi
 
 # Prompt bundle.
 ROLE_DIR="$ROLES_DIR/$ROLE"

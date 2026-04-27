@@ -517,8 +517,24 @@ stages:
             (data / "presets" / "unresolved.toml").write_text(
                 """
 name = "unresolved"
-pipeline = "unresolved"
 origin = "user"
+
+[pipeline_inline]
+pipeline_version = 1
+name = "unresolved"
+
+[[pipeline_inline.stages]]
+id = "writers"
+
+[pipeline_inline.stages.fan_out]
+role = "agent-writer"
+count = 2
+variant = "models"
+routes = ["fast", "slow"]
+
+[pipeline_inline.stages.merge]
+strategy = "synthesize"
+agent = "agent-writer-judge"
 
 [budget]
 max_agents_per_run = 20
@@ -564,8 +580,24 @@ stages:
             (data / "presets" / "named-routes.toml").write_text(
                 """
 name = "named-routes"
-pipeline = "named-routes"
 origin = "user"
+
+[pipeline_inline]
+pipeline_version = 1
+name = "named-routes"
+
+[[pipeline_inline.stages]]
+id = "writers"
+
+[pipeline_inline.stages.fan_out]
+role = "agent-writer"
+count = 2
+variant = "models"
+routes = ["fast", "slow"]
+
+[pipeline_inline.stages.merge]
+strategy = "synthesize"
+agent = "agent-writer-judge"
 
 [routing]
 fast = { backend = "claude", model = "claude-opus-4-7", effort = "high" }
@@ -611,8 +643,20 @@ stages:
             (data / "presets" / "bad-synth.toml").write_text(
                 """
 name = "bad-synth"
-pipeline = "bad-synth"
 origin = "user"
+
+[pipeline_inline]
+pipeline_version = 1
+name = "bad-synth"
+
+[[pipeline_inline.stages]]
+id = "synth"
+
+[[pipeline_inline.stages.agents]]
+role = "agent-code-synthesizer"
+backend = "codex"
+model = "gpt-5.4"
+effort = "high"
 
 [budget]
 max_agents_per_run = 20
@@ -658,8 +702,24 @@ stages:
             (data / "presets" / "dangling.toml").write_text(
                 """
 name = "dangling"
-pipeline = "dangling"
 origin = "user"
+
+[pipeline_inline]
+pipeline_version = 1
+name = "dangling"
+
+[[pipeline_inline.stages]]
+id = "explore"
+
+[pipeline_inline.stages.fan_out]
+role = "agent-analysis"
+count = 1
+variant = "prompt_variants"
+variants = ["missing-variant"]
+
+[pipeline_inline.stages.merge]
+strategy = "synthesize"
+agent = "agent-analysis-judge"
 
 [budget]
 max_agents_per_run = 20

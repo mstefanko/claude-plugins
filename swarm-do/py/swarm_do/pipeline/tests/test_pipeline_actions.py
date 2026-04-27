@@ -72,7 +72,10 @@ class PipelinePersistenceTests(unittest.TestCase):
     def test_coupled_fork_writes_preset_and_pipeline_as_matching_pair(self) -> None:
         preset_path, pipeline_path = fork_preset_and_pipeline("ultra-plan", "ultra-plan", "my-coupled")
 
-        self.assertEqual(load_preset(preset_path)["pipeline"], "my-coupled")
+        preset = load_preset(preset_path)
+        self.assertNotIn("pipeline", preset)
+        self.assertEqual(preset["pipeline_inline"]["name"], "my-coupled")
+        self.assertEqual(preset["pipeline_inline_source"]["name"], "ultra-plan")
         self.assertEqual(load_pipeline(pipeline_path)["name"], "my-coupled")
         self.assertEqual(find_preset("my-coupled").origin, "user")
         self.assertEqual(find_pipeline("my-coupled").origin, "user")
@@ -319,7 +322,7 @@ stages:
         with self.assertRaisesRegex(ValueError, "cannot combine"):
             set_prompt_variant_lenses("compete-edit", "writers", ["architecture-risk"])
 
-    def test_preview_only_output_pipeline_cannot_be_activated_on_user_preset(self) -> None:
+    def test_user_pipeline_cannot_be_activated_on_user_preset(self) -> None:
         presets = self.root / "presets"
         presets.mkdir()
         preset_path = presets / "user.toml"
@@ -354,7 +357,7 @@ stages:
             encoding="utf-8",
         )
 
-        with self.assertRaisesRegex(ValueError, "preview-only"):
+        with self.assertRaisesRegex(ValueError, "stock pipeline"):
             set_user_preset_pipeline("user", "review-only")
         self.assertEqual(load_preset(preset_path)["pipeline"], "default")
 

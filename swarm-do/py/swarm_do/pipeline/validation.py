@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import fnmatch
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
 from .catalog import AGENTS_LENS_STACKING_ERROR, get_lens, validate_prompt_lens_selection
 from .engine import BudgetPreview, budget_preview, topological_layers
+from .graph_source import PresetGraphError, resolve_preset_graph
 from .paths import REPO_ROOT
-from .registry import find_pipeline, find_preset, load_pipeline, load_preset
+from .registry import find_preset, load_preset
 from .resolver import BACKENDS, EFFORTS, BackendResolver
 
 
@@ -32,6 +34,8 @@ PRESET_TOP_KEYS = {
     "name",
     "description",
     "pipeline",
+    "pipeline_inline",
+    "pipeline_inline_source",
     "origin",
     "forked_from",
     "routing",
@@ -208,9 +212,35 @@ def schema_lint_preset(preset: Mapping[str, Any]) -> list[str]:
     unknown = sorted(set(preset.keys()) - PRESET_TOP_KEYS)
     if unknown:
         errors.append(f"preset: unknown top-level keys: {', '.join(unknown)}")
-    for key in ("name", "pipeline"):
-        if not isinstance(preset.get(key), str) or not preset.get(key):
-            errors.append(f"preset: {key} must be a non-empty string")
+    if not isinstance(preset.get("name"), str) or not preset.get("name"):
+        errors.append("preset: name must be a non-empty string")
+    has_pipeline = isinstance(preset.get("pipeline"), str) and bool(preset.get("pipeline"))
+    has_inline = isinstance(preset.get("pipeline_inline"), Mapping)
+    if has_pipeline == has_inline:
+        errors.append("preset: exactly one of pipeline or pipeline_inline is required")
+    if "pipeline" in preset and not has_pipeline:
+        errors.append("preset: pipeline must be a non-empty string")
+    if "pipeline_inline" in preset and not isinstance(preset.get("pipeline_inline"), Mapping):
+        errors.append("preset: pipeline_inline must be a table")
+    if preset.get("origin") == "stock" and not has_pipeline:
+        errors.append("preset: stock presets must use pipeline stock-ref form")
+    if preset.get("origin") == "stock" and has_inline:
+        errors.append("preset: stock presets cannot use pipeline_inline")
+    source = preset.get("pipeline_inline_source")
+    if source is not None:
+        if not has_inline:
+            errors.append("preset: pipeline_inline_source is only valid with pipeline_inline")
+        elif not isinstance(source, Mapping):
+            errors.append("preset: pipeline_inline_source must be a table")
+        else:
+            if not isinstance(source.get("name"), str) or not source.get("name"):
+                errors.append("preset: pipeline_inline_source.name must be a non-empty string")
+            source_hash = source.get("hash")
+            if (
+                not isinstance(source_hash, str)
+                or not re.fullmatch(r"sha256:[0-9a-f]{64}", source_hash)
+            ):
+                errors.append("preset: pipeline_inline_source.hash must be sha256:<64 lowercase hex>")
     if "origin" in preset and preset["origin"] not in {"stock", "user", "experiment"}:
         errors.append("preset: origin must be stock, user, or experiment")
     for key in ("forked_from", "forked_from_hash", "generated_by"):
@@ -769,20 +799,16 @@ def validate_preset_mapping(
     plan_path: str | None = None,
     include_budget: bool = False,
 ) -> tuple[ValidationResult, dict[str, Any]]:
-    pipeline_item = find_pipeline(str(preset.get("pipeline", "")))
-    if pipeline_item is None:
-        result = ValidationResult()
-        result.errors.extend(schema_lint_preset(preset))
-        result.add(f"pipeline not found: {preset.get('pipeline')}")
-        return result, {}
     try:
-        pipeline = load_pipeline(pipeline_item.path)
-    except Exception as exc:
+        resolved = resolve_preset_graph(preset)
+    except PresetGraphError as exc:
         result = ValidationResult()
         result.errors.extend(schema_lint_preset(preset))
-        result.add(f"pipeline parse failed: {exc}")
+        result.add(str(exc))
         return result, {}
+    pipeline = resolved.graph
     result = validate_preset_pipeline_mappings(preset, pipeline, preset_name, plan_path, include_budget)
+    result.warnings.extend(resolved.warnings)
     return result, pipeline
 
 

@@ -9,8 +9,8 @@ import subprocess
 from collections.abc import Callable
 from typing import Any, Mapping
 
+from .graph_source import PresetGraphError, resolve_preset_graph
 from .provider_review import ReviewProviderResolver, ReviewSelectionResult
-from .registry import find_pipeline, load_pipeline
 from .resolver import BackendResolver, active_preset_name, load_preset_by_name
 
 
@@ -127,7 +127,6 @@ def _resolve_pipeline_for_doctor(
     preset_name: str | None,
 ) -> tuple[str | None, str | None, Mapping[str, Any] | None, Mapping[str, Any] | None, ProviderCheck | None]:
     active = active_preset_name() if preset_name == "current" else preset_name
-    pipeline_name = "default"
     preset_data: Mapping[str, Any] | None = None
     if active:
         try:
@@ -138,23 +137,18 @@ def _resolve_pipeline_for_doctor(
                 "error",
                 f"active preset cannot be loaded: {exc}",
             )
-        pipeline_name = str(preset_data.get("pipeline") or "default")
-
-    item = find_pipeline(pipeline_name)
-    if item is None:
-        return active, pipeline_name, preset_data, None, ProviderCheck(
-            "pipeline",
-            "error",
-            f"pipeline not found: {pipeline_name}",
-        )
+    else:
+        preset_data = {"name": "default-fallback", "pipeline": "default", "budget": {}}
     try:
-        return active, pipeline_name, preset_data, load_pipeline(item.path), None
+        resolved = resolve_preset_graph(preset_data)
+    except PresetGraphError as exc:
+        pipeline_name = str(preset_data.get("pipeline") or f"inline:{active}") if preset_data else None
+        return active, pipeline_name, preset_data, None, ProviderCheck("pipeline", "error", str(exc))
     except Exception as exc:
-        return active, pipeline_name, preset_data, None, ProviderCheck(
-            "pipeline",
-            "error",
-            f"pipeline cannot be loaded: {exc}",
-        )
+        pipeline_name = str(preset_data.get("pipeline") or f"inline:{active}") if preset_data else None
+        return active, pipeline_name, preset_data, None, ProviderCheck("pipeline", "error", f"pipeline cannot be loaded: {exc}")
+    pipeline_name = resolved.source_name or (f"inline:{active}" if active else "default")
+    return active, pipeline_name, preset_data, resolved.graph, None
 
 
 def _required_backends(

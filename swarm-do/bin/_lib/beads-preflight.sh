@@ -23,23 +23,7 @@ bd_preflight_or_die() {
   local rig
   rig="$(bd where 2>/dev/null || true)"
   if [[ -z "$rig" ]]; then
-    cat >&2 <<EOF
-$caller: no beads database found for this repo.
-
-The swarm pipeline requires an existing beads rig. Choose one:
-
-  1. Repo-local beads rig (recommended for cartledger-style projects):
-       cd $PWD
-       bd init --stealth
-
-  2. Shared beads rig (single rig across multiple repos):
-       export BEADS_DIR=/path/to/.beads
-
-Then verify:
-  bd where
-
-Then rerun your swarm command.
-EOF
+    printf 'No Beads rig detected in this repo. Run /swarmdaddy:init-beads (or /swarmdaddy:quickstart for guided first-run setup) first.\n' >&2
     exit 1
   fi
 

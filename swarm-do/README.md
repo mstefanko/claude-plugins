@@ -32,12 +32,13 @@ The plugin has two main modes:
   provider is enough to collect evidence, but single-provider findings stay
   `needs-verification`.
 - The recommended configuration UI is `/swarmdaddy:configure`, backed by
-  `bin/swarm-tui`. It manages presets, pipelines, routes, provider readiness,
-  and active-run status; its optional Textual dependencies are installed into a
+  `bin/swarm-tui`. It manages presets, routes, provider readiness, and
+  active-run status; its optional Textual dependencies are installed into a
   managed venv on first launch.
 
-The plugin never initializes Beads implicitly. Run `/swarmdaddy:init-beads` only
-when you have decided the current repo should get a `.beads/` store.
+The plugin never initializes Beads from `/swarmdaddy:configure`.
+Run `/swarmdaddy:quickstart` for guided first-run setup, or
+`/swarmdaddy:init-beads` when you only want the explicit Beads bootstrap.
 
 ## Quick Start
 
@@ -49,13 +50,22 @@ when you have decided the current repo should get a `.beads/` store.
    /reload-plugins
    ```
 
-2. In the repo where you want to run a swarm, initialize Beads if needed:
+2. In the repo where you want to run a swarm, use the guided path:
 
    ```text
-   /swarmdaddy:init-beads
+   /swarmdaddy:quickstart
    ```
 
-3. Check the active routing profile:
+   It initializes Beads when missing, migrates old user pipeline files into
+   unified presets, prints the active state, and opens the TUI.
+
+3. Run the next command:
+
+   ```text
+   /swarmdaddy:do docs/my-plan.md --decompose=inspect
+   ```
+
+4. Optional checks:
 
    ```bash
    "${CLAUDE_PLUGIN_ROOT}/bin/swarm" preset list
@@ -64,7 +74,7 @@ when you have decided the current repo should get a `.beads/` store.
    "${CLAUDE_PLUGIN_ROOT}/bin/swarm" permissions check
    ```
 
-4. Open the TUI to choose or fork presets/pipelines, inspect routes, and run
+5. Open the inspect-only TUI later to customize presets, inspect routes, and run
    provider doctor from the same configuration view:
 
    ```text
@@ -81,7 +91,7 @@ when you have decided the current repo should get a `.beads/` store.
    approve the managed venv install prompt. In non-interactive dev shells, use
    `SWARM_TUI_AUTO_INSTALL=1 "${CLAUDE_PLUGIN_ROOT}/bin/swarm-tui"`.
 
-5. Pick a command:
+6. Other dispatch commands:
 
    ```text
    /swarmdaddy:do docs/my-plan.md --decompose=inspect
@@ -91,7 +101,7 @@ when you have decided the current repo should get a `.beads/` store.
    /swarmdaddy:brainstorm "Safer migration paths for the telemetry schema"
    ```
 
-6. Resume interrupted implementation work by Beads epic id:
+7. Resume interrupted implementation work by Beads epic id:
 
    ```text
    /swarmdaddy:resume bd-123
@@ -104,12 +114,11 @@ Fresh installs have no active preset. With no active preset, `/swarmdaddy:do`
 uses the `default` pipeline and route resolution falls back to
 `${CLAUDE_PLUGIN_DATA}/backends.toml` and built-in role defaults.
 
-Most users should manage presets and pipelines through `/swarmdaddy:configure`
-or `bin/swarm-tui`. The CLI commands below are the scriptable equivalents and
+Most users should manage presets through `/swarmdaddy:configure` or
+`bin/swarm-tui`. The CLI commands below are the scriptable equivalents and
 remain useful for checks, automation, and recovery.
 
-Use `bin/swarm mode <name>` or `bin/swarm preset load <name>` to activate a
-stock preset:
+Use `bin/swarm preset load <name>` to activate a stock or user preset:
 
 - `balanced`: standard implementation pipeline with automatic provider-review
   evidence when an eligible read-only shim is available.
@@ -132,11 +141,13 @@ Useful profile commands:
 bin/swarm preset list
 bin/swarm preset load balanced
 bin/swarm preset clear
-bin/swarm mode research
 bin/swarm preset dry-run hybrid-review docs/my-plan.md
 bin/swarm compete docs/my-plan.md --dry-run
 bin/swarm compete docs/my-plan.md
 ```
+
+`bin/swarm mode <name>` is a deprecated alias of
+`bin/swarm preset load <name>`.
 
 `bin/swarm compete <plan-path>` validates and activates the `competitive`
 preset. It does not dispatch by itself; after it succeeds, run
@@ -168,28 +179,25 @@ Use the TUI as the main place to manage swarm configuration:
 
 | Screen | Key | What You Can Do |
 |--------|-----|-----------------|
-| Dashboard | `d` | See active preset/pipeline, in-flight runs, token burn, latest checkpoint/observation, open a Beads issue, request handoff, or cancel a running `swarm-run`. |
-| Settings | `s` | Inspect effective role routes and edit base or user-preset route overrides with invariant checks. |
-| Presets | `p` | Browse stock/user presets, load a preset, view diffs, and delete user presets. Stock presets are read-only. |
-| Pipelines | `i` | Browse pipelines by intent, inspect stage topology, fork stock pipelines, edit user pipeline drafts, add modules, edit routes/lenses/provider stages, run lint/validation/provider doctor, and activate compatible profiles. |
+| Dashboard | `1` | See active preset, in-flight runs, token burn, latest checkpoint/observation, open the run's Beads issue, request handoff, cancel a running `swarm-run`, or run `Ctrl+H` health. |
+| Presets | `3` | Browse stock/user presets, activate a preset, inspect Overview/Graph/Routing/Budget & Policy tabs, edit user presets, view diffs, and run `Ctrl+H` provider doctor. |
+| Settings | `4` | Inspect global route defaults and edit base or user-preset route overrides with invariant checks. |
 
 Important workflow details:
 
-- Stock presets and pipelines are read-only. Press `f` or `Enter` on a stock
-  pipeline to fork it into `${CLAUDE_PLUGIN_DATA}/pipelines/` and a matching
-  user preset before editing.
-- Pipeline edits are in-memory until `Ctrl+S`; the validation rail blocks hard
-  errors before writing YAML.
-- Provider stages can be managed from the Pipelines screen: press `o` to edit
-  `swarm-review` or MCO settings and `d` to run provider doctor before
-  activation.
+- Stock presets are read-only. Press `A` on a stock preset to create a
+  stock-ref user preset and activate it for the next `/swarmdaddy:do`.
+- User presets can follow a stock graph or carry an inline graph snapshot.
+  Graph edits on a stock-following user preset first detach it to an inline
+  snapshot; routing and budget edits keep the stock graph reference.
+- Press `Ctrl+H` (formerly `Ctrl+D`) to run provider doctor before activation.
 - The TUI manages configuration and active-run operations. Starting a new swarm
   run still happens through `/swarmdaddy:*` slash commands after you activate
   the desired profile.
-- `/swarmdaddy:setup` is an alias for `/swarmdaddy:configure`. It opens the TUI
-  and does not initialize Beads; use `/swarmdaddy:init-beads` for that.
+- `/swarmdaddy:setup` is deprecated. Use `/swarmdaddy:quickstart` for first-run
+  bootstrap or `/swarmdaddy:configure` for the inspect-only TUI.
 
-Top-level navigation: `d` dashboard, `s` settings, `p` presets, `i` pipelines,
+Top-level navigation: `1` dashboard, `2` runs, `3` presets, `4` settings,
 `q` quit. See `tui/README.md` for the full key map.
 
 ## Provider Review Versus MCO
@@ -197,12 +205,12 @@ Top-level navigation: `d` dashboard, `s` settings, `p` presets, `i` pipelines,
 SwarmDaddy has two provider evidence paths. New work should normally use the
 internal provider-review stage; MCO remains an opt-in comparison lab.
 
-| Path | Pipeline type | Helper | When it appears | Contract |
+| Path | Graph field | Helper | When it appears | Contract |
 |------|---------------|--------|-----------------|----------|
-| Internal provider review | `provider.type: swarm-review` | `bin/swarm-provider-review` | The `default` pipeline and presets that select it (`balanced`, `claude-only`, `codex-only`), plus `lightweight`, `ultra-plan`, and output-only `review` | Swarm-owned v2 artifact, native-schema Claude/Codex shims, read-only gated, evidence-only |
+| Internal provider review | `provider.type: swarm-review` | `bin/swarm-provider-review` | The `default` graph and presets that select it (`balanced`, `claude-only`, `codex-only`), plus `lightweight`, `ultra-plan`, and output-only `review` | Swarm-owned v2 artifact, native-schema Claude/Codex shims, read-only gated, evidence-only |
 | MCO comparison path | `provider.type: mco` | `bin/swarm-stage-mco` | `mco-review-lab` only | External `mco review` adapter, v1 artifact, experimental comparison path |
 
-In implementation pipelines, the internal stage runs after `writer` and before
+In implementation graphs, the internal stage runs after `writer` and before
 the final `agent-review`. In output-only `review`, it runs before the review
 synthesis. It uses `selection: auto` in stock presets, so provider doctor
 chooses only eligible read-only shims. If no shim is eligible, the stage
@@ -235,8 +243,11 @@ only after material local CLI or command-contract drift.
 - `/swarmdaddy:configure`: open the TUI configuration console. In cmux it opens
   a right split pane; otherwise it uses the current interactive terminal or
   prints manual launch instructions.
-- `/swarmdaddy:setup`: alias for `/swarmdaddy:configure`; does not initialize
-  Beads.
+- `/swarmdaddy:quickstart`: guided first-run bootstrap; initializes Beads when
+  missing, migrates old user pipelines into presets, prints status, and opens
+  the TUI.
+- `/swarmdaddy:setup`: deprecated alias for `/swarmdaddy:configure`; does not
+  initialize Beads.
 - `/swarmdaddy:brainstorm <topic-or-path> [--dry-run]`: output-only divergent
   exploration with a synthesis note.
 - `/swarmdaddy:research <question-or-path> [--dry-run]`: output-only evidence
@@ -259,7 +270,7 @@ here instead.
 2. `bin/swarm plan inspect` prepares the run and classifies phases.
 3. If decomposition is enabled, each phase is converted into a
    `work_units.v2` artifact and linted before writer/spec-review issues exist.
-4. The active pipeline is resolved into topological layers. Stages in the same
+4. The active preset graph is resolved into topological layers. Stages in the same
    layer can run in parallel.
 5. Writer work uses isolated unit branches/worktrees. Spec-review approval is
    required before merging a unit into the integration branch.
@@ -292,11 +303,14 @@ budget validation.
 bin/swarm preset list
 bin/swarm preset load <name>
 bin/swarm preset clear
+bin/swarm preset show <name>
 bin/swarm preset save <new-name> --from <current|preset-name>
 bin/swarm preset diff <name>
 bin/swarm preset rename <old-name> <new-name>
 bin/swarm preset delete <name>
 bin/swarm preset dry-run <name> <plan-path>
+bin/swarm preset migrate
+bin/swarm preset adopt <archived-yaml> --template <stock-preset> [--name <name>]
 
 bin/swarm pipeline list
 bin/swarm pipeline show <name>
@@ -306,7 +320,6 @@ bin/swarm pipeline set <name>
 bin/swarm pipeline diff <name>
 bin/swarm pipeline drift <name>
 
-bin/swarm mode claude-only|codex-only|balanced|brainstorm|research|design|review|custom
 bin/swarm providers doctor [--preset <name|current>] [--review] [--mco] [--mco-timeout-seconds N] [--json]
 bin/swarm providers evidence <provider-findings.json>
 bin/swarm providers calibrate-consensus <samples.json> [--output <report.json>] [--json]
@@ -348,9 +361,11 @@ bin/swarm worktrees add-unit --run-id <run-id> --unit-id <unit-id> [--repo <repo
 bin/swarm worktrees merge --integration-branch <branch> --unit-branch <branch> [--repo <repo>] [--json]
 ```
 
+`bin/swarm mode <name>` is a deprecated alias of `bin/swarm preset load <name>`.
+
 Additional helpers:
 
-- `bin/swarm-validate <preset> [--plan <path>]`: preset/pipeline gate shim.
+- `bin/swarm-validate <preset> [--plan <path>]`: preset gate shim.
 - `bin/swarm-run --backend claude|codex --issue <bd-id> [...]`: manual single
   role fallback runner for writer/spec-review/review/codex-review lanes.
 - `bin/swarm-gpt`, `bin/swarm-claude`, `bin/swarm-gpt-review`: convenience
@@ -365,7 +380,7 @@ Additional helpers:
 - `bin/extract-phase.sh`: findings extraction shim.
 - `bin/swarm-telemetry`: telemetry inspection and maintenance CLI.
 - `bin/swarm-tui`: recommended Textual configuration console for presets,
-  pipelines, routes, provider doctoring, and active-run status.
+  routes, provider doctoring, and active-run status.
 
 ## Data And Configuration
 
@@ -374,7 +389,9 @@ Important paths:
 
 - `${CLAUDE_PLUGIN_DATA}/current-preset.txt`: active preset name.
 - `${CLAUDE_PLUGIN_DATA}/backends.toml`: fallback role routing overrides.
-- `${CLAUDE_PLUGIN_DATA}/presets/` and `pipelines/`: user-owned forks.
+- `${CLAUDE_PLUGIN_DATA}/presets/`: user-owned presets.
+- `${CLAUDE_PLUGIN_DATA}/pipelines/.archived/`: archived legacy user pipeline
+  YAML after `bin/swarm preset migrate`.
 - `${CLAUDE_PLUGIN_DATA}/telemetry/*.jsonl`: runs, findings, outcomes,
   adjudications, run events, observations, and knowledge ledgers.
 - `${CLAUDE_PLUGIN_DATA}/active-run.json`: dispatcher-owned active run state.
@@ -386,13 +403,43 @@ Important paths:
 From a development shell where `CLAUDE_PLUGIN_DATA` is not set, most pipeline
 helpers use the repo's `data/` directory as a local fallback.
 
-## Presets, Pipelines, And Prompt Lenses
+## Presets And Prompt Lenses
 
-Stock presets live in `presets/`; stock pipelines live in `pipelines/`. User
-forks are written to `${CLAUDE_PLUGIN_DATA}/presets/` and
-`${CLAUDE_PLUGIN_DATA}/pipelines/`.
+Stock presets live in `presets/`; stock graph templates live in `pipelines/`.
+User presets live in `${CLAUDE_PLUGIN_DATA}/presets/`. A preset either follows
+a stock graph with `pipeline = "default"` or stores an edited graph as a
+`[pipeline_inline]` snapshot.
 
-Pipelines support these stage shapes:
+```toml
+name = "balanced"
+pipeline = "default"
+
+[budget]
+max_agents_per_run = 16
+max_estimated_cost_usd = 25.0
+max_wall_clock_seconds = 14400
+```
+
+```toml
+name = "my-balanced-edit"
+origin = "user"
+
+[budget]
+max_agents_per_run = 16
+max_estimated_cost_usd = 25.0
+max_wall_clock_seconds = 14400
+
+[pipeline_inline]
+pipeline_version = 1
+name = "default"
+
+[[pipeline_inline.stages]]
+id = "research"
+depends_on = []
+agents = [{ role = "agent-research" }]
+```
+
+Preset graphs support these stage shapes:
 
 - `agents`: one or more role agents in a stage.
 - `fan_out`: multiple branches of one role, optionally with prompt variants or
@@ -509,8 +556,8 @@ generated from `role-specs/`; edit specs, then run
 
 ## Testing
 
-The current Python suite uses `unittest` and covers pipeline validation,
-preset/pipeline persistence, telemetry parity and golden files, role
+The current Python suite uses `unittest` and covers graph validation,
+preset persistence, telemetry parity and golden files, role
 generation, work-unit execution helpers, worktrees, provider doctoring, resume
 state, and TUI state helpers.
 

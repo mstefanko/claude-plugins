@@ -18,10 +18,10 @@ prints the graph without dispatching agents.
 ## What Happens
 
 1. **Preflight:** verify Beads is available with the normal SwarmDaddy helper.
-2. **Profile validation:** validate and activate the `research` preset/pipeline,
+2. **Profile validation:** validate and activate the `research` preset,
    including budget preview and route invariants.
 3. **Permissions:** check the read-only research permission preset.
-4. **Dispatch:** run the active `research` pipeline only: parallel
+4. **Dispatch:** run the active `research` preset graph only: parallel
    `agent-research` branches followed by `agent-research-merge`.
 5. **Terminal output:** write a final evidence memo or Beads synthesis note with
    sources, conflicts, gaps, constraints, and open questions. Do not create a PR.
@@ -57,10 +57,10 @@ If not a dry run, activate the research profile:
 "$CLAUDE_PLUGIN_ROOT/bin/swarm" research <optional-existing-path>
 ```
 
-Then dispatch the `research` pipeline described by:
+Then dispatch the graph described by:
 
 ```bash
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" pipeline show research
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" preset show research
 ```
 
 Create one parent Beads issue for the research request. For the fan-out stage,

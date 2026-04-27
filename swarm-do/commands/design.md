@@ -20,10 +20,10 @@ prints the graph without dispatching agents.
 ## What Happens
 
 1. **Preflight:** verify Beads is available with the normal SwarmDaddy helper.
-2. **Profile validation:** validate and activate the `design` preset/pipeline,
+2. **Profile validation:** validate and activate the `design` preset,
    including budget preview and route invariants.
 3. **Permissions:** check read-only research and clarify permission presets.
-4. **Dispatch:** run the active `design` pipeline only: research,
+4. **Dispatch:** run the active `design` preset graph only: research,
    prompt-variant analysis fan-out, clarify, and final recommendation.
 5. **Terminal output:** write a recommendation and execution-ready plan. Do not
    create writer issues or a PR.
@@ -58,14 +58,14 @@ If not a dry run, activate the design profile:
 "$CLAUDE_PLUGIN_ROOT/bin/swarm" design <optional-existing-path>
 ```
 
-Then dispatch the `design` pipeline described by:
+Then dispatch the graph described by:
 
 ```bash
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" pipeline show design
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" preset show design
 ```
 
 Create one parent Beads issue for the design request. Dispatch only the graph
-from the `design` pipeline: research, exploration branches, clarify, merge, and
+from the `design` preset: research, exploration branches, clarify, merge, and
 the final `agent-analysis` recommendation stage. Do not create work units,
 writer/spec-review/review/docs issues, worktrees, merge operations, or pull
 requests.

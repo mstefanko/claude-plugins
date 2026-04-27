@@ -18,8 +18,8 @@ without dispatching agents.
 ## What Happens
 
 1. **Preflight:** verify Beads is available with the normal SwarmDaddy helper.
-2. **Profile validation:** validate and activate the `brainstorm`
-   preset/pipeline, including budget preview and route invariants.
+2. **Profile validation:** validate and activate the `brainstorm` preset,
+   including budget preview and route invariants.
 3. **Permissions:** check the read-only brainstorm permission preset.
 4. **Dispatch:** run only the `brainstorm` fan-out and synthesize merge.
 5. **Terminal output:** write a synthesis note with directions, tradeoffs, fast
@@ -55,10 +55,10 @@ If not a dry run, activate the brainstorm profile:
 "$CLAUDE_PLUGIN_ROOT/bin/swarm" brainstorm <optional-existing-path>
 ```
 
-Then dispatch the `brainstorm` pipeline described by:
+Then dispatch the graph described by:
 
 ```bash
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" pipeline show brainstorm
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" preset show brainstorm
 ```
 
 Create one parent Beads issue for the brainstorm request. Create one child

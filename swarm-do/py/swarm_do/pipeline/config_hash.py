@@ -33,6 +33,11 @@ def active_config_payload() -> dict[str, object]:
         "preset_hash": _file_digest(preset_file) if preset_file else None,
         "pipeline_name": context.get("pipeline_name"),
         "pipeline_hash": context.get("pipeline_hash"),
+        "graph_source": context.get("graph_source"),
+        "graph_source_name": context.get("graph_source_name"),
+        "graph_lineage_name": context.get("graph_lineage_name"),
+        "graph_lineage_hash": context.get("graph_lineage_hash"),
+        "source_hash": context.get("source_hash"),
     }
 
 

@@ -44,6 +44,7 @@ from swarm_do.pipeline.editing import (
     validate_provider_review_selection as _validate_provider_review_selection,
 )
 from swarm_do.pipeline.engine import topological_layers
+from swarm_do.pipeline.graph_source import resolve_preset_graph
 from swarm_do.pipeline.paths import resolve_data_dir
 from swarm_do.pipeline.providers import ProviderDoctorReport, provider_doctor
 from swarm_do.pipeline.registry import find_pipeline, list_pipelines, list_presets, load_pipeline, load_preset, sha256_file
@@ -58,7 +59,7 @@ from swarm_do.pipeline.validation import (
     route_resolution_errors,
     schema_lint_pipeline,
     validate_preset_and_pipeline,
-    validate_preset_pipeline_mappings,
+    validate_preset_mapping,
     variant_existence_errors,
 )
 
@@ -73,13 +74,14 @@ class StatusSummary:
     last_429_codex: str | None
     latest_checkpoint: dict[str, Any] | None = None
     latest_observation: dict[str, Any] | None = None
+    getting_started_visible: bool = False
 
     def render(self) -> str:
         cost = f"${self.cost_today:.4f}" if self.cost_today is not None else "n/a"
         claude = self.last_429_claude or "n/a"
         codex = self.last_429_codex or "n/a"
         rendered = (
-            f"preset={self.preset} pipeline={self.pipeline} runs_today={self.runs_today} "
+            f"preset={self.preset} graph={self.pipeline} runs_today={self.runs_today} "
             f"cost_today={cost} last_429_claude={claude} last_429_codex={codex}"
         )
         if self.latest_checkpoint:
@@ -308,24 +310,30 @@ def pipeline_intent(name: str, pipeline: Mapping[str, Any]) -> str:
 
 def pipeline_gallery_rows() -> list[PipelineGalleryRow]:
     rows: list[PipelineGalleryRow] = []
-    for item in list_pipelines():
+    for item in list_presets():
         try:
-            pipeline = load_pipeline(item.path)
+            preset = load_preset(item.path)
+            resolved = resolve_preset_graph(preset)
+            pipeline = resolved.graph
         except Exception as exc:
-            rows.append(PipelineGalleryRow("custom", item.name, item.origin, None, f"unreadable: {exc}"))
+            rows.append(PipelineGalleryRow("custom", item.name, item.origin, item.name, f"unreadable: {exc}"))
             continue
         rows.append(
             PipelineGalleryRow(
-                intent=pipeline_intent(item.name, pipeline),
+                intent=pipeline_intent(resolved.source_name or item.name, pipeline),
                 name=item.name,
                 origin=item.origin,
-                preset=_preset_for_pipeline(item.name),
+                preset=item.name,
                 description=str(pipeline.get("description") or ""),
             )
         )
     order = {intent: idx for idx, intent in enumerate(PIPELINE_INTENT_ORDER)}
     origin_order = {"stock": 0, "experiment": 1, "user": 2, "path": 3}
     return sorted(rows, key=lambda row: (order.get(row.intent, 99), row.intent, origin_order.get(row.origin, 9), row.name))
+
+
+def preset_gallery_rows() -> list[PipelineGalleryRow]:
+    return pipeline_gallery_rows()
 
 
 def _stage_kind(stage: Mapping[str, Any]) -> str:
@@ -1712,11 +1720,25 @@ def suggested_fork_name(source_name: str, *, suffix: str = "edit") -> str:
 
 
 def start_pipeline_draft(pipeline_name: str, *, preset_name: str | None = None) -> PipelineEditDraft:
+    selected_preset = preset_name or pipeline_name
+    preset_item = next((item for item in list_presets() if item.name == selected_preset), None)
+    if preset_item is not None:
+        preset = load_preset(preset_item.path)
+        resolved = resolve_preset_graph(preset)
+        pipeline = resolved.graph
+        return PipelineEditDraft(
+            pipeline_name=selected_preset,
+            preset_name=selected_preset,
+            origin=preset_item.origin,
+            pipeline=copy.deepcopy(pipeline),
+            original_pipeline=copy.deepcopy(pipeline),
+            original_disk_hash=resolved.source_hash,
+        )
     item = find_pipeline(pipeline_name)
     if item is None:
-        raise ValueError(f"pipeline not found: {pipeline_name}")
+        raise ValueError(f"preset or pipeline not found: {pipeline_name}")
     pipeline = load_pipeline(item.path)
-    selected_preset = preset_name if preset_name is not None else _preset_for_pipeline(pipeline_name)
+    selected_preset = _preset_for_pipeline(pipeline_name)
     return PipelineEditDraft(
         pipeline_name=item.name,
         preset_name=selected_preset,
@@ -2299,6 +2321,7 @@ def token_burn_last_24h(rows: list[dict[str, Any]], now: datetime | None = None)
 
 
 def status_summary(data_dir: Path | None = None, now: datetime | None = None) -> StatusSummary:
+    data_dir = data_dir or resolve_data_dir()
     rows = load_runs(data_dir)
     now = now or datetime.now(UTC)
     today = now.date()
@@ -2319,8 +2342,14 @@ def status_summary(data_dir: Path | None = None, now: datetime | None = None) ->
                 last_429[backend] = rate_ts
 
     context = current_context()
-    preset = active_preset_name() or "custom"
+    preset = active_preset_name() or "default-fallback"
     pipeline = str(context.get("pipeline_name") or "default")
+    getting_started_visible = (
+        active_preset_name() is None
+        and not load_in_flight(data_dir)
+        and not rows
+        and not (data_dir / ".getting-started-dismissed").exists()
+    )
     return StatusSummary(
         preset=preset,
         pipeline=pipeline,
@@ -2330,6 +2359,7 @@ def status_summary(data_dir: Path | None = None, now: datetime | None = None) ->
         last_429_codex=last_429.get("codex").isoformat().replace("+00:00", "Z") if "codex" in last_429 else None,
         latest_checkpoint=latest_checkpoint_event(data_dir),
         latest_observation=latest_observation(data_dir),
+        getting_started_visible=getting_started_visible,
     )
 
 
@@ -2623,8 +2653,9 @@ def validate_pipeline_draft(draft: PipelineEditDraft, *, plan_path: str | None =
             return result
         preset = load_preset(preset_item.path)
         preset = copy.deepcopy(preset)
-        preset["pipeline"] = draft.pipeline_name
-        result = validate_preset_pipeline_mappings(preset, draft.pipeline, draft.preset_name, plan_path, include_budget)
+        preset.pop("pipeline", None)
+        preset["pipeline_inline"] = copy.deepcopy(draft.pipeline)
+        result, _ = validate_preset_mapping(preset, draft.preset_name, plan_path, include_budget)
         activation_error = pipeline_activation_error(draft.pipeline_name, draft.pipeline)
         if activation_error:
             result.add(activation_error)
@@ -2772,20 +2803,43 @@ def pipeline_validation_report(
     include_provider_doctor: bool = False,
     provider_doctor_fn: Callable[..., ProviderDoctorReport] = provider_doctor,
 ) -> str:
-    preset_name = _preset_for_pipeline(pipeline_name)
+    preset_item = next((item for item in list_presets() if item.name == pipeline_name), None)
+    preset_name = preset_item.name if preset_item is not None else _preset_for_pipeline(pipeline_name)
     lines: list[str] = ["validation:"]
-    item = find_pipeline(pipeline_name)
-    if item is not None:
+    pipeline_for_profile: dict[str, Any] | None = None
+    graph_name = pipeline_name
+    if preset_item is not None:
         try:
-            pipeline_for_profile = load_pipeline(item.path)
-            lines.append("  " + pipeline_profile_summary(pipeline_name, pipeline_for_profile))
-            activation_error = pipeline_activation_blocker(pipeline_name, pipeline_for_profile)
+            preset = load_preset(preset_item.path)
+            resolved = resolve_preset_graph(preset)
+            pipeline_for_profile = resolved.graph
+            graph_name = resolved.source_name or f"inline:{preset_item.name}"
+            lines.append("  " + pipeline_profile_summary(graph_name, pipeline_for_profile))
+            activation_error = pipeline_activation_blocker(graph_name, pipeline_for_profile)
             if activation_error:
                 lines.append(f"  ERROR {activation_error}")
         except Exception as exc:
             lines.append(f"  ERROR profile unavailable: {exc}")
+    else:
+        item = find_pipeline(pipeline_name)
+        if item is not None:
+            try:
+                pipeline_for_profile = load_pipeline(item.path)
+                lines.append("  " + pipeline_profile_summary(pipeline_name, pipeline_for_profile))
+                activation_error = pipeline_activation_blocker(pipeline_name, pipeline_for_profile)
+                if activation_error:
+                    lines.append(f"  ERROR {activation_error}")
+            except Exception as exc:
+                lines.append(f"  ERROR profile unavailable: {exc}")
+    if preset_item is None and pipeline_for_profile is None:
+        try:
+            item = find_pipeline(pipeline_name)
+            if item is not None:
+                pipeline_for_profile = load_pipeline(item.path)
+        except Exception as exc:
+            lines.append(f"  ERROR profile unavailable: {exc}")
     if preset_name is None:
-        lines.append("  full validation needs a preset that references this pipeline")
+        lines.append("  full validation needs a preset")
         return "\n".join(lines)
     result, *_ = validate_preset_and_pipeline(preset_name, plan_path, include_budget=True)
     if result.errors:
@@ -2799,8 +2853,13 @@ def pipeline_validation_report(
             f"  budget: agents={b.agent_count} cost=${b.estimated_cost_usd:.4f} "
             f"wall={b.estimated_wall_clock_seconds}s fan_out_width={b.fan_out_width}"
         )
-    has_mco = _pipeline_has_provider(pipeline_name, "mco")
-    has_swarm_review = _pipeline_has_provider(pipeline_name, "swarm-review")
+    pipeline_for_provider = pipeline_for_profile
+    has_mco = pipeline_has_provider_stage(pipeline_for_provider, "mco") if pipeline_for_provider else _pipeline_has_provider(pipeline_name, "mco")
+    has_swarm_review = (
+        pipeline_has_provider_stage(pipeline_for_provider, "swarm-review")
+        if pipeline_for_provider
+        else _pipeline_has_provider(pipeline_name, "swarm-review")
+    )
     if has_mco or has_swarm_review:
         if include_provider_doctor:
             report = provider_doctor_fn(
@@ -2866,3 +2925,12 @@ def pipeline_workbench_preview(
     model = pipeline_graph_model(pipeline)
     lines.extend(pipeline_graph_lines(model, width=100))
     return "\n".join(lines)
+
+
+# Preset-facing aliases kept at the module boundary; the implementation still
+# reuses the mature graph helpers internally.
+preset_graph_board_model = pipeline_board_model
+preset_graph_stage_rows = pipeline_stage_rows
+preset_validation_report = pipeline_validation_report
+start_preset_draft = start_pipeline_draft
+validate_preset_draft = validate_pipeline_draft

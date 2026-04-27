@@ -13,10 +13,10 @@ Orchestrate a multi-agent swarm pipeline against a plan file. Routes each phase 
 
 ## What happens
 
-1. **Preflight:** verify `bd where` succeeds in the current repo. If not, halt with setup instructions — do **not** auto-init.
+1. **Preflight:** verify `bd where` succeeds in the current repo. If not, halt with: `No Beads rig detected in this repo. Run /swarmdaddy:init-beads (or /swarmdaddy:quickstart for guided first-run setup) first.` Do **not** auto-init.
 2. **Load orchestration prompt:** the skill at `skills/swarmdaddy/SKILL.md` contains the full per-phase protocol. Follow it exactly.
 3. **Plan-prepare:** inspect the plan, optionally decompose each phase into a `work_units.v2` artifact, and create writer/spec-review child issues only after the artifact is accepted.
-4. **Per phase:** load the active preset/pipeline, create beads issues for that graph, spawn subagents in topological order, and use the deterministic work-unit executor for the writer/spec-review lane when a `work_units.v1` or `work_units.v2` artifact is present. Poll background writers, run validation before spec-review, merge only APPROVED unit branches into the integration branch, and close on APPROVED review.
+4. **Per phase:** load the active preset, create beads issues for that graph, spawn subagents in topological order, and use the deterministic work-unit executor for the writer/spec-review lane when a `work_units.v1` or `work_units.v2` artifact is present. Poll background writers, run validation before spec-review, merge only APPROVED unit branches into the integration branch, and close on APPROVED review.
 5. **After all phases:** open exactly one consolidated PR into `main`.
 
 ## Execute

@@ -1,7 +1,7 @@
 # SwarmDaddy TUI
 
 The TUI is the recommended operator surface for managing SwarmDaddy
-configuration. Use it to inspect and edit presets, pipelines, role routes,
+configuration. Use it to inspect and edit presets, role routes,
 provider-review settings, provider readiness, and active-run state. The
 `/swarmdaddy:configure` slash command opens this console; the CLI remains the
 scriptable surface and other `/swarmdaddy:*` commands remain the dispatch
@@ -42,28 +42,24 @@ the TUI in a right split pane and records the pane under
 existing pane. Set `SWARM_TUI_CMUX_PANE=1` only when intentionally running the
 TUI inside the pane and avoiding recursive split creation.
 
-`/swarmdaddy:setup` is an alias for `/swarmdaddy:configure`. It opens this TUI;
-it does not initialize Beads.
+`/swarmdaddy:setup` is deprecated. Use `/swarmdaddy:quickstart` for first-run
+bootstrap or `/swarmdaddy:configure` for this inspect-only TUI.
 
 ## What You Can Manage
 
-- **Dashboard:** active preset/pipeline, validation summary, compact active
-  pipeline board, in-flight runs, recent burn telemetry, latest
+- **Dashboard:** active preset, validation summary, compact active graph board,
+  in-flight runs, recent burn telemetry, latest
   checkpoint/observation, Beads issue open, handoff request, and cancel for
   running `swarm-run` processes.
 - **Settings:** framed effective role routes and editable base/user-preset
   route overrides. Stock presets remain read-only; fork first before editing
   their routes.
-- **Presets:** stock and user preset browsing, linked-pipeline profile board
-  preview, loading, diff preview, and user preset deletion.
-- **Pipelines:** intent-sorted pipeline gallery, layer-board execution
-  workbench, synchronized stage inspector, validation rail, fork-first editing,
-  modules, routes, fan-out branch routes, prompt lenses, provider-review
-  settings, MCO settings, lint, validation, provider doctor, board copy, and
-  profile activation.
+- **Presets:** stock and user preset browsing, Overview/Graph/Routing/Budget &
+  Policy tabs, user preset editing, activation, diff preview, provider health,
+  and user preset deletion.
 
-The TUI writes user-owned configuration under `${CLAUDE_PLUGIN_DATA}/presets/`
-and `${CLAUDE_PLUGIN_DATA}/pipelines/`. It does not edit stock files in place.
+The TUI writes user-owned configuration under `${CLAUDE_PLUGIN_DATA}/presets/`.
+It does not edit stock files in place.
 
 ## Navigation
 
@@ -73,9 +69,8 @@ Top-level keys:
 |-----|--------|
 | `1` | Dashboard |
 | `2` | Runs table on Dashboard |
-| `3` | Pipelines |
-| `4` | Presets |
-| `5` | Settings |
+| `3` | Presets |
+| `4` | Settings |
 | `Ctrl+P` | Command palette |
 | `?` | Contextual help |
 | `q` | Quit |
@@ -97,65 +92,32 @@ coverage live in `actions.py`.
 
 - Dashboard reads `telemetry/runs.jsonl`, `telemetry/run_events.jsonl`,
   `telemetry/observations.jsonl`, and `in-flight/*.lock`. Press `o` to open the
-  selected Beads issue, `f` to request a Codex handoff, and `c` to cancel a
-  selected running `swarm-run`.
+  selected run's Beads issue, `f` to request a Codex handoff, `c` to cancel a
+  selected running `swarm-run`, and `Ctrl+H` for provider health.
 - Settings edits `${CLAUDE_PLUGIN_DATA}/backends.toml` or user-preset route
   overrides through invariant-checked helpers. Press `Enter` on a route to edit
   it.
 - Presets browse stock and user presets; stock presets are read-only. The
-  preview board shows the linked pipeline with resolved preset routes on each
-  stage, while the lower panel keeps budget/provider policy and unused routes
-  visible. Press `l` to load, `v` to view diff, and `x` to delete user presets.
-- Pipelines open a layer-board composer workbench: intent-sorted gallery,
-  selectable stage cards by topological layer, focused stage inspector,
-  validation rail, fork-first edit dialog, in-memory draft save/discard state,
-  route/module edit controls, and undo/redo. Provider-review stages are visibly
-  read-only and may skip when no shim is eligible; MCO remains the experimental
-  comparison path.
-  Stock pipelines remain read-only; editing starts by forking a pipeline and
-  its matching preset into user-owned files.
-- The stock `brainstorm`, `research`, `design`, and `review` pipelines are
+  inspector has Overview, Graph, Routing, and Budget & Policy tabs. Graph edits
+  on stock-following user presets ask to detach to an inline snapshot first;
+  routing and policy edits preserve the stock graph reference. Press `A` to
+  activate for the next `/swarmdaddy:do`, `v` to view diff, `x` to delete user
+  presets, and `Ctrl+H` (formerly `Ctrl+D`) to run provider doctor.
+- The stock `brainstorm`, `research`, `design`, and `review` presets are
   runnable through their matching `/swarmdaddy:*` commands. User or experimental
-  output-only pipelines remain activation-gated unless their profile is known.
+  output-only graphs remain activation-gated unless their profile is known.
 
-## Composer Flow
+## Preset Flow
 
-On the Pipelines screen:
-
-- Select a pipeline in the left gallery, then select a layer-board stage card
-  to inspect the read-only stage details.
-- Press `f` or `Enter` to begin editing. Stock pipelines open a fork dialog with
-  a generated collision-free name; user pipelines open an in-memory draft.
-- Press `r` on an agents stage to override the first agent route in the draft.
-- Press `b` on a model fan-out stage to edit a branch route. Prompt-variant
-  fan-outs stay lens-only and cannot be mixed with per-branch model routes.
-- Press `n` on a fan-out or normal agents stage to apply compatible prompt
-  lenses. The modal lists each lens id, category, execution mode,
-  output-contract rule, merge expectation, and safety note. Lens edits stay in
-  the in-memory draft until validation passes and `Ctrl+S` writes the YAML.
-- Press `o` on a provider-review stage to edit selected providers or selection
-  mode, timeout, and failure tolerance. The editor preserves `command=review`,
-  `memory=false`, `output=findings`, and read-only boundaries.
-- Press `Ctrl+D` on a provider-bearing pipeline to run provider doctor and view
-  local provider readiness before activation.
-- Press `g` to focus the board; `Up` / `Down` move through top-to-bottom
-  layers, `Left` / `Right` move within parallel cards, and `Home` / `End` jump
-  to the first or last stage. The left flow rail marks the downward layer order,
-  and join bridge rows call out where multiple upstream stages feed the next
-  stage.
-- Press `t` to focus the stage details pane.
-- Press `y` to copy the current board as plain text with dependency labels.
-- Press `m` to add a catalog module to the draft, or `Delete` to remove the
-  selected stage when nothing still depends on it.
-- Press `Ctrl+R` to reset a selected stage route or fan-out routes to resolver
-  defaults.
-- Press `Ctrl+Z` / `Ctrl+Y` for in-session undo and redo.
-- Press `Ctrl+S` to save the current draft. The validation rail blocks hard
-  validation errors before writing YAML.
-- Press `Esc` to discard the in-memory draft and return to the last saved file.
-- Press `a` on the stock `research` pipeline to activate the research profile.
-  Preview-only output graphs can still be browsed, forked, linted, and saved,
-  but activation is blocked.
+- Select a preset in the left gallery to inspect its Overview, Graph, Routing,
+  and Budget & Policy tabs.
+- Press `A` or `a` to use the selected preset for the next `/swarmdaddy:do`.
+  Stock presets are materialized as user presets first, preserving their stock
+  graph reference.
+- Press `Ctrl+H` to run provider doctor. `Ctrl+D` still works for one release
+  and shows a deprecation notice.
+- User presets can follow a stock graph with `pipeline = "default"` or carry an
+  edited graph in `[pipeline_inline]`.
 
 Prompt lenses can now target fan-out branches or one normal agents-stage entry.
 Normal agents stages accept only singular `lens`; synthesize merge agents still
@@ -170,6 +132,6 @@ decision.
 
 ## Invariant Guards
 
-The TUI must share the same hard rejects as pipeline validation. In particular,
+The TUI must share the same hard rejects as preset validation. In particular,
 `orchestrator`, `agent-code-synthesizer`, and synthesize-merge agents must remain
 Claude-backed. There is no force-save path. See `docs/adr/0002-pipeline-invariants.md`.

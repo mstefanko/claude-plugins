@@ -20,10 +20,10 @@ agents.
 ## What Happens
 
 1. **Preflight:** verify Beads is available with the normal SwarmDaddy helper.
-2. **Profile validation:** validate and activate the `review` preset/pipeline,
+2. **Profile validation:** validate and activate the `review` preset,
    including budget preview and route invariants.
 3. **Permissions:** check the read-only review permission preset.
-4. **Dispatch:** run the active `review` pipeline only: rubric-lensed review
+4. **Dispatch:** run the active `review` preset graph only: rubric-lensed review
    fan-out and synthesized findings.
 5. **Terminal output:** write a findings/evidence summary. Do not create a PR.
 
@@ -57,10 +57,10 @@ If not a dry run, activate the review profile:
 "$CLAUDE_PLUGIN_ROOT/bin/swarm" review <optional-existing-path>
 ```
 
-Then dispatch the `review` pipeline described by:
+Then dispatch the graph described by:
 
 ```bash
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" pipeline show review
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" preset show review
 ```
 
 Create one parent Beads issue for the review target. Create one child issue per

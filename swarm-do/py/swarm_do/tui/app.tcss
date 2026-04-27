@@ -117,6 +117,27 @@ Input:focus, Select:focus {
     width: 1fr;
 }
 
+#preset-workbench {
+    height: 1fr;
+}
+
+#preset-content {
+    width: 1fr;
+}
+
+#preset-tabs {
+    height: 1fr;
+}
+
+#preset-overview, #preset-policy-help {
+    padding: 1;
+    overflow-y: auto;
+}
+
+#preset-routing, #preset-policy {
+    height: 1fr;
+}
+
 #pipeline-details {
     height: 10;
 }

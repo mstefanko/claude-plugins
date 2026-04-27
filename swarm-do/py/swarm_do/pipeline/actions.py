@@ -27,6 +27,7 @@ from swarm_do.pipeline.editing import (
     validate_provider_review_selection as _validate_provider_review_selection,
 )
 from swarm_do.pipeline.engine import topological_layers
+from swarm_do.pipeline.graph_source import PresetGraphError, canonical_graph_hash, resolve_preset_graph
 from swarm_do.pipeline.paths import current_preset_path, resolve_data_dir, user_pipelines_dir, user_presets_dir
 from swarm_do.pipeline.registry import find_pipeline, find_preset, load_pipeline, load_preset, sha256_file
 from swarm_do.pipeline.render_yaml import render_pipeline_yaml
@@ -193,79 +194,132 @@ def _route_inline(route: Mapping[str, Any]) -> str:
     )
 
 
+def _toml_scalar(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return str(value)
+    return _quote(str(value))
+
+
+def _toml_inline_map(value: Mapping[str, Any]) -> str:
+    parts = []
+    for key in sorted(value):
+        item = value[key]
+        if isinstance(item, Mapping):
+            rendered = _toml_inline_map(item)
+        else:
+            rendered = _toml_value(item)
+        parts.append(f"{key} = {rendered}")
+    return "{ " + ", ".join(parts) + " }"
+
+
+def _toml_value(value: Any) -> str:
+    if isinstance(value, Mapping):
+        return _toml_inline_map(value)
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml_value(item) for item in value) + "]"
+    return _toml_scalar(value)
+
+
+def _is_inline_value(value: Any) -> bool:
+    if isinstance(value, Mapping):
+        return False
+    if isinstance(value, list):
+        return all(not isinstance(item, Mapping) for item in value)
+    return value is not None
+
+
+def _key_order(keys: set[str], preferred: tuple[str, ...]) -> list[str]:
+    ordered = [key for key in preferred if key in keys]
+    ordered.extend(sorted(keys - set(ordered)))
+    return ordered
+
+
+_ROOT_SCALARS = ("name", "description", "pipeline", "origin", "forked_from", "forked_from_hash", "generated_by")
+_ROOT_TABLES = ("routing", "budget", "decompose", "mem_prime", "review_providers", "roles", "pipeline_inline", "pipeline_inline_source")
+_TABLE_KEY_ORDER: dict[str, tuple[str, ...]] = {
+    "budget": (
+        "max_agents_per_run",
+        "max_estimated_cost_usd",
+        "max_wall_clock_seconds",
+        "max_writer_tool_calls",
+        "max_writer_output_bytes",
+        "max_handoffs",
+    ),
+    "decompose": ("mode",),
+    "mem_prime": ("mode", "adapter", "max_tokens", "recency_days", "min_relevance"),
+    "review_providers": ("selection", "min_success", "max_parallel", "include", "exclude"),
+    "pipeline_inline": ("pipeline_version", "name", "description", "origin", "forked_from", "forked_from_hash", "generated_by", "parallelism", "stages"),
+    "pipeline_inline_source": ("name", "hash"),
+    "pipeline_inline.stages": ("id", "depends_on", "agents", "fan_out", "provider", "merge", "failure_tolerance"),
+    "pipeline_inline.stages.agents": ("role", "route", "backend", "model", "effort", "lens"),
+    "pipeline_inline.stages.fan_out": ("role", "count", "variant", "variants", "routes"),
+    "pipeline_inline.stages.provider": (
+        "type",
+        "command",
+        "providers",
+        "selection",
+        "mode",
+        "strict_contract",
+        "output",
+        "memory",
+        "timeout_seconds",
+        "max_parallel",
+    ),
+    "pipeline_inline.stages.merge": ("strategy", "agent"),
+    "pipeline_inline.stages.failure_tolerance": ("mode", "min_success"),
+}
+
+
+def _render_table_body(lines: list[str], path: str, table: Mapping[str, Any]) -> None:
+    keys = _key_order(set(str(key) for key in table), _TABLE_KEY_ORDER.get(path, ()))
+    nested_tables: list[tuple[str, Mapping[str, Any]]] = []
+    arrays_of_tables: list[tuple[str, list[Any]]] = []
+    for key in keys:
+        value = table.get(key)
+        if _is_inline_value(value):
+            lines.append(f"{key} = {_toml_value(value)}")
+        elif isinstance(value, Mapping):
+            nested_tables.append((key, value))
+        elif isinstance(value, list):
+            if value and all(isinstance(item, Mapping) for item in value):
+                arrays_of_tables.append((key, value))
+            else:
+                lines.append(f"{key} = {_toml_value(value)}")
+
+    for key, value in nested_tables:
+        child_path = f"{path}.{key}"
+        lines.extend(["", f"[{child_path}]"])
+        _render_table_body(lines, child_path, value)
+
+    for key, rows in arrays_of_tables:
+        child_path = f"{path}.{key}"
+        for row in rows:
+            lines.extend(["", f"[[{child_path}]]"])
+            _render_table_body(lines, child_path, row)
+
+
 def render_toml(data: Mapping[str, Any]) -> str:
     lines: list[str] = []
-    for key in ("name", "description", "pipeline", "origin", "forked_from", "forked_from_hash", "generated_by"):
+    for key in _ROOT_SCALARS:
         value = data.get(key)
         if isinstance(value, str):
             lines.append(f"{key} = {_quote(value)}")
-    routing = data.get("routing")
-    if isinstance(routing, Mapping) and routing:
-        lines.extend(["", "[routing]"])
-        for key in sorted(routing):
-            value = routing[key]
-            if isinstance(value, Mapping):
-                lines.append(f"{_quote(str(key))} = {_route_inline(value)}")
-    budget = data.get("budget")
-    if isinstance(budget, Mapping) and budget:
-        lines.extend(["", "[budget]"])
-        for key in (
-            "max_agents_per_run",
-            "max_estimated_cost_usd",
-            "max_wall_clock_seconds",
-            "max_writer_tool_calls",
-            "max_writer_output_bytes",
-            "max_handoffs",
-        ):
-            if key in budget:
-                lines.append(f"{key} = {budget[key]}")
-    decompose = data.get("decompose")
-    if isinstance(decompose, Mapping) and decompose:
-        lines.extend(["", "[decompose]"])
-        for key in ("mode",):
-            if isinstance(decompose.get(key), str):
-                lines.append(f"{key} = {_quote(str(decompose[key]))}")
-    mem_prime = data.get("mem_prime")
-    if isinstance(mem_prime, Mapping) and mem_prime:
-        lines.extend(["", "[mem_prime]"])
-        for key in ("mode", "adapter"):
-            if isinstance(mem_prime.get(key), str):
-                lines.append(f"{key} = {_quote(str(mem_prime[key]))}")
-        for key in ("max_tokens", "recency_days", "min_relevance"):
-            if key in mem_prime:
-                lines.append(f"{key} = {mem_prime[key]}")
-    review_providers = data.get("review_providers")
-    if isinstance(review_providers, Mapping) and review_providers:
-        lines.extend(["", "[review_providers]"])
-        for key in ("selection",):
-            if isinstance(review_providers.get(key), str):
-                lines.append(f"{key} = {_quote(str(review_providers[key]))}")
-        for key in ("min_success", "max_parallel"):
-            if key in review_providers:
-                lines.append(f"{key} = {review_providers[key]}")
-        for key in ("include", "exclude"):
-            value = review_providers.get(key)
-            if isinstance(value, list):
-                lines.append(f"{key} = [{', '.join(_quote(str(item)) for item in value)}]")
-    roles = data.get("roles")
-    if isinstance(roles, Mapping):
-        for role in sorted(roles):
-            value = roles[role]
-            if isinstance(value, Mapping):
-                lines.extend(["", f"[roles.{role}]"])
-                if {"backend", "model", "effort"} <= set(value):
-                    lines.extend(
-                        [
-                            f"backend = {_quote(str(value['backend']))}",
-                            f"model = {_quote(str(value['model']))}",
-                            f"effort = {_quote(str(value['effort']))}",
-                        ]
-                    )
+    for key in _ROOT_TABLES:
+        table = data.get(key)
+        if not isinstance(table, Mapping) or not table:
+            continue
+        lines.extend(["", f"[{key}]"])
+        if key == "routing":
+            for route_key in sorted(table):
+                value = table[route_key]
+                if isinstance(value, Mapping):
+                    lines.append(f"{_quote(str(route_key))} = {_route_inline(value)}")
                 else:
-                    for complexity in ("simple", "moderate", "hard"):
-                        route = value.get(complexity)
-                        if isinstance(route, Mapping):
-                            lines.append(f"{complexity} = {_route_inline(route)}")
+                    lines.append(f"{_quote(str(route_key))} = {_toml_value(value)}")
+        else:
+            _render_table_body(lines, key, table)
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -278,6 +332,18 @@ def load_toml_file(path: Path) -> dict[str, Any]:
 
 def backends_path() -> Path:
     return resolve_data_dir() / "backends.toml"
+
+
+def has_beads_rig(path: Path | None = None) -> bool:
+    root = path or Path.cwd()
+    return (root / ".beads").is_dir() or bool(os.environ.get("BEADS_DIR"))
+
+
+def activate_preset(name: str) -> None:
+    validate_preset_name(name)
+    if find_preset(name) is None:
+        raise ValueError(f"preset not found: {name}")
+    atomic_write_text(current_preset_path(), name + "\n")
 
 
 def validate_preset_name(name: str) -> None:
@@ -383,12 +449,17 @@ def set_user_preset_pipeline(preset_name: str, pipeline_name: str) -> None:
     if item.origin != "user":
         raise ValueError("stock presets are read-only; fork before changing pipeline")
     pipeline_item = find_pipeline(pipeline_name)
-    if pipeline_item is not None:
-        activation_error = pipeline_activation_error(pipeline_name, load_pipeline(pipeline_item.path))
-        if activation_error:
-            raise ValueError(activation_error)
+    if pipeline_item is None:
+        raise ValueError(f"pipeline not found: {pipeline_name}")
+    if pipeline_item.origin != "stock":
+        raise ValueError(f"pipeline must reference a stock pipeline: {pipeline_name}")
+    activation_error = pipeline_activation_error(pipeline_name, load_pipeline(pipeline_item.path))
+    if activation_error:
+        raise ValueError(activation_error)
     data = load_preset(item.path)
     data["pipeline"] = pipeline_name
+    data.pop("pipeline_inline", None)
+    data.pop("pipeline_inline_source", None)
     result, _ = validate_preset_mapping(data, preset_name)
     if not result.ok:
         raise ValueError("; ".join(result.errors))
@@ -467,11 +538,17 @@ def fork_preset_and_pipeline(
     pipeline.setdefault("generated_by", "SwarmDaddy pipeline composer")
 
     preset["name"] = new_name
-    preset["pipeline"] = new_name
     preset["origin"] = "user"
     preset["forked_from"] = preset_item.name
     preset["forked_from_hash"] = "sha256:" + sha256_file(preset_item.path)
     preset.setdefault("generated_by", "SwarmDaddy pipeline composer")
+    preset.pop("pipeline", None)
+    preset["pipeline_inline"] = pipeline
+    if pipeline_item.origin == "stock":
+        preset["pipeline_inline_source"] = {
+            "name": pipeline_item.name,
+            "hash": canonical_graph_hash(load_pipeline(pipeline_item.path)),
+        }
 
     errors = schema_lint_preset(preset)
     errors.extend(_pipeline_errors(pipeline, preset_name=new_name, preset=preset))
@@ -491,6 +568,80 @@ def fork_preset_and_pipeline(
         _simulate_failure_after_first=_simulate_failure_after_pipeline,
     )
     return preset_target, pipeline_target
+
+
+def detach_preset_graph(name: str) -> None:
+    validate_preset_name(name)
+    item = find_preset(name)
+    if item is None:
+        raise ValueError(f"preset not found: {name}")
+    if item.origin != "user":
+        raise ValueError("stock presets are read-only; create a user preset before editing the graph")
+    data = load_preset(item.path)
+    resolved = resolve_preset_graph(data)
+    if resolved.source == "inline-snapshot":
+        return
+    data["pipeline_inline"] = copy.deepcopy(resolved.graph)
+    data["pipeline_inline_source"] = {
+        "name": resolved.source_name or str(data.get("pipeline") or ""),
+        "hash": resolved.source_hash,
+    }
+    data.pop("pipeline", None)
+    result, _ = validate_preset_mapping(data, name)
+    if not result.ok:
+        raise ValueError("; ".join(result.errors))
+    atomic_write_text(item.path, render_toml(data))
+
+
+def reattach_preset_graph(name: str, stock_name: str | None = None) -> None:
+    validate_preset_name(name)
+    item = find_preset(name)
+    if item is None:
+        raise ValueError(f"preset not found: {name}")
+    if item.origin != "user":
+        raise ValueError("stock presets are read-only")
+    data = load_preset(item.path)
+    if stock_name is None:
+        source = data.get("pipeline_inline_source")
+        if isinstance(source, Mapping) and isinstance(source.get("name"), str):
+            stock_name = source["name"]
+    if not stock_name:
+        raise ValueError("inline preset has no upstream stock graph to re-attach")
+    pipeline_item = find_pipeline(stock_name)
+    if pipeline_item is None or pipeline_item.origin != "stock":
+        raise ValueError(f"stock pipeline not found: {stock_name}")
+    data["pipeline"] = stock_name
+    data.pop("pipeline_inline", None)
+    data.pop("pipeline_inline_source", None)
+    result, _ = validate_preset_mapping(data, name)
+    if not result.ok:
+        raise ValueError("; ".join(result.errors))
+    atomic_write_text(item.path, render_toml(data))
+
+
+def save_user_preset_graph(preset_name: str, pipeline_mapping: Mapping[str, Any], *, expected_hash: str | None = None) -> Path:
+    validate_preset_name(preset_name)
+    item = find_preset(preset_name)
+    if item is None:
+        raise ValueError(f"preset not found: {preset_name}")
+    if item.origin != "user":
+        raise ValueError("stock presets are read-only; create a user preset before editing the graph")
+    data = load_preset(item.path)
+    if "pipeline_inline" not in data:
+        detach_preset_graph(preset_name)
+        data = load_preset(item.path)
+    if expected_hash is not None:
+        resolved = resolve_preset_graph(data)
+        if resolved.source_hash != expected_hash:
+            raise ValueError("preset graph changed on disk; reload before saving")
+    graph = copy.deepcopy(dict(pipeline_mapping))
+    data["pipeline_inline"] = graph
+    data.pop("pipeline", None)
+    result, _ = validate_preset_mapping(data, preset_name)
+    if not result.ok:
+        raise ValueError("; ".join(result.errors))
+    atomic_write_text(item.path, render_toml(data))
+    return item.path
 
 
 def _normalize_expected_hash(expected_hash: str) -> str:

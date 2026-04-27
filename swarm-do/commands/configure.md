@@ -5,8 +5,12 @@ argument-hint: ""
 
 # /swarmdaddy:configure
 
-Open the SwarmDaddy Textual TUI for managing presets, pipelines, routes,
+Open the SwarmDaddy Textual TUI for inspecting and editing presets, routes,
 provider-review settings, provider doctoring, and active-run status.
+
+This is an inspect/edit launcher only. It does not initialize Beads, migrate
+presets, or prompt on stdin. Use `/swarmdaddy:quickstart` for guided first-run
+bootstrap.
 
 ## Execute
 

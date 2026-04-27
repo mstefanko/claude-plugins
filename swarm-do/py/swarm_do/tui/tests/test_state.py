@@ -73,14 +73,19 @@ from swarm_do.tui.state import (
     pipeline_stage_rows,
     pipeline_validation_report,
     pipeline_workbench_preview,
+    preset_graph_board_model,
+    preset_graph_stage_rows,
     preset_profile_preview,
+    preset_validation_report,
     select_source_preset_for_pipeline,
     stage_inspector_text,
     stage_lens_option_rows,
+    start_preset_draft,
     start_pipeline_draft,
     status_summary,
     suggested_fork_name,
     token_burn_last_24h,
+    validate_preset_draft,
     validate_pipeline_draft,
 )
 
@@ -104,6 +109,13 @@ class EnvTestCase(unittest.TestCase):
 
 
 class TuiStateTests(EnvTestCase):
+    def test_preset_boundary_aliases_use_existing_graph_helpers(self) -> None:
+        self.assertIs(preset_graph_board_model, pipeline_board_model)
+        self.assertIs(preset_graph_stage_rows, pipeline_stage_rows)
+        self.assertIs(preset_validation_report, pipeline_validation_report)
+        self.assertIs(start_preset_draft, start_pipeline_draft)
+        self.assertIs(validate_preset_draft, validate_pipeline_draft)
+
     def test_status_summary_renders_na_for_unobserved_cost_and_429(self) -> None:
         tel = self.root / "telemetry"
         tel.mkdir()
@@ -121,6 +133,7 @@ class TuiStateTests(EnvTestCase):
         )
         summary = status_summary(now=datetime(2026, 4, 24, 13, tzinfo=UTC))
         rendered = summary.render()
+        self.assertEqual(summary.preset, "default-fallback")
         self.assertIn("runs_today=1", rendered)
         self.assertIn("cost_today=n/a", rendered)
         self.assertIn("last_429_claude=n/a", rendered)
@@ -283,9 +296,9 @@ class TuiStateTests(EnvTestCase):
 
     def test_pipeline_gallery_groups_by_intent_and_stage_inspector_focuses_selected_stage(self) -> None:
         rows = pipeline_gallery_rows()
-        default = next(row for row in rows if row.name == "default")
-        self.assertEqual(default.intent, "implement")
-        self.assertEqual(default.preset, "balanced")
+        balanced = next(row for row in rows if row.name == "balanced")
+        self.assertEqual(balanced.intent, "implement")
+        self.assertEqual(balanced.preset, "balanced")
         research = next(row for row in rows if row.name == "research")
         self.assertEqual(research.intent, "research")
         self.assertEqual(research.preset, "research")

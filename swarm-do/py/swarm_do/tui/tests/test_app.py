@@ -35,27 +35,50 @@ class TuiAppTests(unittest.TestCase):
 
         self.assertEqual(bindings["1"], "dashboard")
         self.assertEqual(bindings["2"], "runs")
-        self.assertEqual(bindings["3"], "pipelines")
-        self.assertEqual(bindings["4"], "presets")
-        self.assertEqual(bindings["5"], "settings")
+        self.assertEqual(bindings["3"], "presets")
+        self.assertEqual(bindings["4"], "settings")
+        self.assertNotIn("5", bindings)
         self.assertEqual(bindings["question_mark"], "help_current")
         self.assertNotIn("d", bindings)
         self.assertNotIn("s", bindings)
         self.assertNotIn("p", bindings)
         self.assertNotIn("i", bindings)
 
-    def test_command_palette_includes_global_and_pipeline_commands(self) -> None:
+    def test_command_palette_includes_global_and_preset_commands(self) -> None:
         app = tui_app.SwarmTui()
 
         dashboard_titles = [command.title for command in app.get_system_commands(tui_app.DashboardScreen())]
-        pipeline_titles = [command.title for command in app.get_system_commands(tui_app.PipelinesScreen())]
+        preset_titles = [command.title for command in app.get_system_commands(tui_app.PresetWorkbenchScreen())]
 
         self.assertIn("Go to Dashboard", dashboard_titles)
-        self.assertIn("Go to Pipelines", dashboard_titles)
+        self.assertIn("Go to Presets", dashboard_titles)
         self.assertIn("Show Help", dashboard_titles)
-        self.assertIn("Validate Selected Pipeline", pipeline_titles)
-        self.assertIn("Copy Pipeline Board", pipeline_titles)
-        self.assertIn("Run Provider Doctor", pipeline_titles)
+        self.assertIn("Activate selected preset", preset_titles)
+        self.assertIn("View selected preset diff", preset_titles)
+        self.assertNotIn("Focus Pipeline Board", preset_titles)
+        self.assertNotIn("Save Pipeline Draft", preset_titles)
+
+    def test_preset_workbench_is_tabbed_screen(self) -> None:
+        async def run_app() -> None:
+            app = tui_app.SwarmTui()
+            async with app.run_test(size=(120, 40)) as pilot:
+                app.action_presets()
+                await pilot.pause()
+                await pilot.pause()
+                self.assertIsInstance(app.screen, tui_app.PresetWorkbenchScreen)
+                tabs = app.screen.query_one("#preset-tabs", tui_app.TabbedContent)
+                self.assertIn(tabs.active, {"overview", "graph"})
+                app.screen.action_show_graph()
+                await pilot.pause()
+                self.assertEqual(tabs.active, "graph")
+                app.screen.action_show_routing()
+                await pilot.pause()
+                self.assertEqual(tabs.active, "routing")
+                app.screen.action_show_policy()
+                await pilot.pause()
+                self.assertEqual(tabs.active, "policy")
+
+        asyncio.run(run_app())
 
     def test_flow_gutter_marks_downward_board_flow(self) -> None:
         self.assertEqual(tui_app._flow_gutter_text("L1", False), "L1\n│\n▼")

@@ -23,6 +23,8 @@ from .actions import (
 from .catalog import pipeline_activation_error, pipeline_profile_for
 from .diff import diff_user_pipeline, diff_user_preset, stock_drift_for_pipeline
 from .engine import graph_lines
+from .graph_source import resolve_preset_graph
+from .migrate_inline import adopt_archived_pipeline, migrate_user_pipelines
 from .paths import current_preset_path, resolve_data_dir, user_presets_dir
 from .registry import (
     find_pipeline,
@@ -62,12 +64,36 @@ def cmd_preset_load(args: argparse.Namespace) -> int:
     _print_validation(result)
     if not result.ok:
         return 1
-    activation_error = pipeline_activation_error(str(preset.get("pipeline")), pipeline)
+    resolved = resolve_preset_graph(preset)
+    graph_name = resolved.source_name or f"inline:{args.name}"
+    activation_error = pipeline_activation_error(graph_name, pipeline)
     if activation_error:
         print(f"swarm: preset load: {activation_error}", file=sys.stderr)
         return 1
     _activate_preset(args.name)
     print(f"loaded preset {args.name}; budget gate will run during dry-run and run start")
+    return 0
+
+
+def cmd_preset_show(args: argparse.Namespace) -> int:
+    item = find_preset(args.name)
+    if item is None:
+        print(f"swarm: preset show: preset not found: {args.name}", file=sys.stderr)
+        return 1
+    try:
+        preset = load_preset(item.path)
+        resolved = resolve_preset_graph(preset)
+    except Exception as exc:
+        print(f"swarm: preset show: {exc}", file=sys.stderr)
+        return 1
+    graph_name = resolved.source_name or f"inline:{args.name}"
+    print(f"{preset.get('name', args.name)} ({item.origin})")
+    print(f"graph: {resolved.source}" + (f" {graph_name}" if graph_name else ""))
+    if resolved.lineage_name:
+        print(f"lineage: {resolved.lineage_name} {resolved.lineage_hash or ''}".rstrip())
+    for warning in resolved.warnings:
+        print(f"warning: {warning}", file=sys.stderr)
+    print("\n".join(graph_lines(resolved.graph)))
     return 0
 
 
@@ -206,6 +232,26 @@ def cmd_preset_dry_run(args: argparse.Namespace) -> int:
     return 0 if result.ok else 1
 
 
+def cmd_preset_migrate(args: argparse.Namespace) -> int:
+    try:
+        summary = migrate_user_pipelines()
+    except Exception as exc:
+        print(f"swarm: preset migrate: {exc}", file=sys.stderr)
+        return 1
+    print("\n".join(summary.lines()))
+    return 0
+
+
+def cmd_preset_adopt(args: argparse.Namespace) -> int:
+    try:
+        target = adopt_archived_pipeline(Path(args.archived_yaml), template=args.template, name=args.name)
+    except Exception as exc:
+        print(f"swarm: preset adopt: {exc}", file=sys.stderr)
+        return 1
+    print(f"adopted inline preset {target.stem}: {target}")
+    return 0
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     print(format_status(load_state()))
     data_dir = resolve_data_dir()
@@ -306,6 +352,14 @@ def cmd_compete(args: argparse.Namespace) -> int:
     return 0
 
 
+def _preset_graph_name(preset_name: str, preset: dict[str, Any]) -> str:
+    try:
+        resolved = resolve_preset_graph(preset)
+    except Exception:
+        return str(preset.get("pipeline") or f"inline:{preset_name}")
+    return resolved.source_name or f"inline:{preset_name}"
+
+
 def _optional_existing_target_path(target: list[str]) -> str | None:
     if not target:
         return None
@@ -344,14 +398,15 @@ def _cmd_output_profile(args: argparse.Namespace, *, profile_id: str) -> int:
     _print_validation(result)
     if not result.ok:
         return 1
-    actual_profile = pipeline_profile_for(str(preset.get("pipeline")), pipeline)
+    graph_name = _preset_graph_name(preset_name, preset)
+    actual_profile = pipeline_profile_for(graph_name, pipeline)
     if actual_profile.profile_id != profile_id:
         print(
             f"swarm: {profile_id}: preset {preset_name} uses profile {actual_profile.profile_id}, expected {profile_id}",
             file=sys.stderr,
         )
         return 1
-    activation_error = pipeline_activation_error(str(preset.get("pipeline")), pipeline)
+    activation_error = pipeline_activation_error(graph_name, pipeline)
     if activation_error:
         print(f"swarm: {profile_id}: {activation_error}", file=sys.stderr)
         return 1
@@ -440,7 +495,10 @@ def cmd_pipeline_fork(args: argparse.Namespace) -> int:
         if args.with_preset:
             preset_path, pipeline_path = fork_preset_and_pipeline(args.with_preset, args.source, args.name)
             print(f"forked preset {args.with_preset} -> {args.name}: {preset_path}")
-            print(f"forked pipeline {args.source} -> {args.name}: {pipeline_path}")
+            if pipeline_path != Path():
+                print(f"forked pipeline {args.source} -> {args.name}: {pipeline_path}")
+            else:
+                print(f"preset {args.name} follows stock graph {args.source}")
         else:
             path = fork_pipeline(args.source, args.name)
             print(f"forked pipeline {args.source} -> {args.name}: {path}")
@@ -550,6 +608,7 @@ def cmd_providers_calibrate_consensus(args: argparse.Namespace) -> int:
 
 
 def cmd_mode(args: argparse.Namespace) -> int:
+    print(f"swarm mode is deprecated; use 'swarm preset load {args.name}'", file=sys.stderr)
     if args.name == "custom":
         return cmd_preset_clear(args)
     mapped = "competitive" if args.name == "balanced-competitive" else args.name
@@ -915,11 +974,18 @@ def _build_parser() -> argparse.ArgumentParser:
     p = preset_sub.add_parser("load"); p.add_argument("name"); p.set_defaults(func=cmd_preset_load)
     p = preset_sub.add_parser("clear"); p.set_defaults(func=cmd_preset_clear)
     p = preset_sub.add_parser("list"); p.set_defaults(func=cmd_preset_list)
+    p = preset_sub.add_parser("show"); p.add_argument("name"); p.set_defaults(func=cmd_preset_show)
     p = preset_sub.add_parser("save"); p.add_argument("name"); p.add_argument("--from", dest="source", required=True); p.set_defaults(func=cmd_preset_save)
     p = preset_sub.add_parser("diff"); p.add_argument("name"); p.set_defaults(func=cmd_preset_diff)
     p = preset_sub.add_parser("rename"); p.add_argument("old_name"); p.add_argument("new_name"); p.set_defaults(func=cmd_preset_rename)
     p = preset_sub.add_parser("delete"); p.add_argument("name"); p.set_defaults(func=cmd_preset_delete)
     p = preset_sub.add_parser("dry-run"); p.add_argument("name"); p.add_argument("plan_path"); p.set_defaults(func=cmd_preset_dry_run)
+    p = preset_sub.add_parser("migrate"); p.set_defaults(func=cmd_preset_migrate)
+    p = preset_sub.add_parser("adopt")
+    p.add_argument("archived_yaml")
+    p.add_argument("--template", required=True)
+    p.add_argument("--name")
+    p.set_defaults(func=cmd_preset_adopt)
 
     pipeline = sub.add_parser("pipeline")
     pipeline_sub = pipeline.add_subparsers(dest="pipeline_command")

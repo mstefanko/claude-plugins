@@ -5,21 +5,16 @@ argument-hint: ""
 
 # /swarmdaddy:setup
 
-Alias for `/swarmdaddy:configure`. Open the SwarmDaddy TUI to choose or fork
-presets/pipelines, inspect routes, run provider doctor, and manage active-run
-status.
-
-This command does **not** initialize Beads. Use `/swarmdaddy:init-beads` only
-when the current repo should get a `.beads/` store.
+Deprecated alias for `/swarmdaddy:configure`.
 
 ## Execute
 
 Run via Bash:
 
 ```bash
+echo "setup is deprecated. Use /swarmdaddy:quickstart for first-run bootstrap, or /swarmdaddy:configure to open the TUI without side effects."
 "$CLAUDE_PLUGIN_ROOT/bin/swarm-tui"
 ```
 
-Follow the same launch behavior as `/swarmdaddy:configure`: cmux split pane when
-available, current terminal when interactive, and manual instructions when no
-interactive surface is available.
+This command has the same launch behavior as `/swarmdaddy:configure`: no Beads
+initialization, no preset migration, and no stdin prompt.
