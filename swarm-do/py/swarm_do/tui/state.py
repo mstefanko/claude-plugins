@@ -99,6 +99,65 @@ class StatusSummary:
         return rendered
 
 
+ACCEPTED_MAINTAINER_ACTIONS = frozenset(
+    {"fixed_in_same_pr", "followup_issue", "followup_pr", "hotfix_within_14d"}
+)
+
+
+@dataclasses.dataclass(frozen=True)
+class OutcomeDashboardSummary:
+    since_days: int
+    run_count: int
+    successful_runs: int
+    findings_count: int
+    outcome_count: int
+    accepted_findings: int
+    ignored_findings: int
+    handoff_count: int
+    nonzero_exit_count: int
+    mean_wall_seconds: float | None
+    mean_cost_usd: float | None
+    top_accepted_role: str | None
+    top_accepted_role_count: int
+    top_pipeline: str | None
+    top_pipeline_count: int
+    report_commands: tuple[str, ...]
+
+    def render(self) -> str:
+        accepted = f"{self.accepted_findings}/{self.outcome_count}" if self.outcome_count else "0/0"
+        top_role = (
+            f"{self.top_accepted_role}({self.top_accepted_role_count})"
+            if self.top_accepted_role
+            else "n/a"
+        )
+        top_pipeline = (
+            f"{self.top_pipeline}({self.top_pipeline_count})"
+            if self.top_pipeline
+            else "n/a"
+        )
+        return "\n".join(
+            [
+                f"Outcome Signals ({self.since_days}d)",
+                (
+                    f"findings={self.findings_count} accepted={accepted} "
+                    f"ignored_rate={_format_rate(self.ignored_findings, self.outcome_count)} "
+                    f"top_role={top_role}"
+                ),
+                (
+                    f"runs={self.run_count} success={_format_rate(self.successful_runs, self.run_count)} "
+                    f"rework=handoffs:{self.handoff_count} exits:{self.nonzero_exit_count}"
+                ),
+                (
+                    f"wall_mean={_format_seconds_short(self.mean_wall_seconds)} "
+                    f"cost_mean={_format_usd(self.mean_cost_usd)} top_pipeline={top_pipeline}"
+                ),
+                f"report: {self.report_commands[0]}",
+                f"compare: {self.report_commands[1]}",
+                f"outcomes: {self.report_commands[-1]}",
+            ]
+        )
+
+
 PIPELINE_INTENTS: dict[str, str] = {
     "brainstorm": "brainstorm",
     "codebase-map": "research",
@@ -2246,6 +2305,14 @@ def observations_path(data_dir: Path | None = None) -> Path:
     return telemetry_dir(data_dir) / "observations.jsonl"
 
 
+def findings_path(data_dir: Path | None = None) -> Path:
+    return telemetry_dir(data_dir) / "findings.jsonl"
+
+
+def finding_outcomes_path(data_dir: Path | None = None) -> Path:
+    return telemetry_dir(data_dir) / "finding_outcomes.jsonl"
+
+
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
     if not path.is_file():
         return []
@@ -2290,6 +2357,97 @@ def load_observations(data_dir: Path | None = None) -> list[dict[str, Any]]:
     return read_jsonl(observations_path(data_dir))
 
 
+def load_findings(data_dir: Path | None = None) -> list[dict[str, Any]]:
+    return read_jsonl(findings_path(data_dir))
+
+
+def load_finding_outcomes(data_dir: Path | None = None) -> list[dict[str, Any]]:
+    return read_jsonl(finding_outcomes_path(data_dir))
+
+
+def outcome_dashboard_summary(
+    data_dir: Path | None = None,
+    now: datetime | None = None,
+    since_days: int = 30,
+) -> OutcomeDashboardSummary:
+    data_dir = data_dir or resolve_data_dir()
+    since_days = max(1, since_days)
+    now = now or datetime.now(UTC)
+    cutoff = now - timedelta(days=since_days)
+    runs = _rows_since(load_runs(data_dir), cutoff, ("timestamp_start", "timestamp_end"))
+    all_findings = load_findings(data_dir)
+    findings = _rows_since(all_findings, cutoff, ("timestamp",))
+    outcomes = _rows_since(load_finding_outcomes(data_dir), cutoff, ("observed_at",))
+
+    successful_runs = 0
+    nonzero_exit_count = 0
+    handoff_count = 0
+    wall_values: list[float] = []
+    cost_values: list[float] = []
+    pipeline_counts: dict[str, int] = {}
+    for row in runs:
+        exit_code = row.get("exit_code")
+        if _is_zero_exit(exit_code):
+            successful_runs += 1
+        elif exit_code is not None:
+            nonzero_exit_count += 1
+        if row.get("writer_status") == "HANDOFF_REQUESTED":
+            handoff_count += 1
+        wall = row.get("wall_clock_seconds")
+        if isinstance(wall, (int, float)) and not isinstance(wall, bool):
+            wall_values.append(float(wall))
+        cost = row.get("estimated_cost_usd")
+        if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+            cost_values.append(float(cost))
+        pipeline_name = str(row.get("pipeline_name") or "(none)")
+        pipeline_counts[pipeline_name] = pipeline_counts.get(pipeline_name, 0) + 1
+
+    findings_by_id = {
+        str(row["finding_id"]): row
+        for row in all_findings
+        if isinstance(row.get("finding_id"), str)
+    }
+    accepted_findings = 0
+    ignored_findings = 0
+    accepted_by_role: dict[str, int] = {}
+    for row in outcomes:
+        action = row.get("maintainer_action")
+        finding_id = row.get("finding_id")
+        if action == "ignored":
+            ignored_findings += 1
+        if action not in ACCEPTED_MAINTAINER_ACTIONS:
+            continue
+        accepted_findings += 1
+        finding = findings_by_id.get(str(finding_id))
+        role = str((finding or {}).get("role") or "(unknown)")
+        accepted_by_role[role] = accepted_by_role.get(role, 0) + 1
+
+    top_role, top_role_count = _top_count(accepted_by_role)
+    top_pipeline, top_pipeline_count = _top_count(pipeline_counts)
+    return OutcomeDashboardSummary(
+        since_days=since_days,
+        run_count=len(runs),
+        successful_runs=successful_runs,
+        findings_count=len(findings),
+        outcome_count=len(outcomes),
+        accepted_findings=accepted_findings,
+        ignored_findings=ignored_findings,
+        handoff_count=handoff_count,
+        nonzero_exit_count=nonzero_exit_count,
+        mean_wall_seconds=_mean(wall_values),
+        mean_cost_usd=_mean(cost_values),
+        top_accepted_role=top_role,
+        top_accepted_role_count=top_role_count,
+        top_pipeline=top_pipeline,
+        top_pipeline_count=top_pipeline_count,
+        report_commands=(
+            f"bin/swarm-telemetry report --since {since_days}d --bucket phase_kind",
+            f"bin/swarm-telemetry report --since {since_days}d --bucket complexity",
+            f"bin/swarm-telemetry join-outcomes --since {since_days}d --dry-run",
+        ),
+    )
+
+
 def latest_checkpoint_event(data_dir: Path | None = None) -> dict[str, Any] | None:
     for row in reversed(load_run_events(data_dir)):
         if row.get("event_type") == "checkpoint_written":
@@ -2323,6 +2481,56 @@ def token_burn_last_24h(rows: list[dict[str, Any]], now: datetime | None = None)
     for backend in sorted({str(r.get("backend") or "unknown") for r in rows} | set(totals)):
         result[backend] = totals.get(backend, 0) if backend in observed else None
     return result
+
+
+def _rows_since(
+    rows: list[dict[str, Any]],
+    cutoff: datetime,
+    timestamp_fields: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    filtered: list[dict[str, Any]] = []
+    for row in rows:
+        timestamp = None
+        for field in timestamp_fields:
+            timestamp = _parse_ts(row.get(field))
+            if timestamp is not None:
+                break
+        if timestamp is None or timestamp >= cutoff:
+            filtered.append(row)
+    return filtered
+
+
+def _is_zero_exit(value: Any) -> bool:
+    return value == 0 or value == "0"
+
+
+def _mean(values: list[float]) -> float | None:
+    return sum(values) / len(values) if values else None
+
+
+def _top_count(counts: Mapping[str, int]) -> tuple[str | None, int]:
+    if not counts:
+        return None, 0
+    name, count = sorted(counts.items(), key=lambda item: (-item[1], item[0]))[0]
+    return name, count
+
+
+def _format_rate(numerator: int, denominator: int) -> str:
+    if denominator <= 0:
+        return "n/a"
+    return f"{numerator / denominator:.0%}"
+
+
+def _format_seconds_short(seconds: float | None) -> str:
+    if seconds is None:
+        return "n/a"
+    return f"{seconds:.1f}s"
+
+
+def _format_usd(value: float | None) -> str:
+    if value is None:
+        return "n/a"
+    return f"${value:.4f}"
 
 
 def status_summary(data_dir: Path | None = None, now: datetime | None = None) -> StatusSummary:

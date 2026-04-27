@@ -84,8 +84,9 @@ updated where necessary.
 - `smart-friend`, `agentless-repair`, `large-project-manager`, and an
   Outcome dashboard were rechecked in this pass. `smart-friend` and
   `large-project-manager` have straightforward v1 shapes that can be
-  folded into P4 as experimental designs. `agentless-repair` plus richer
-  manager policy and dashboard UI need separate runtime design before
+  folded into P4 as experimental designs. `agentless-repair` now has a
+  substrate-first runtime design in `docs/agentless-repair-design.md`; richer
+  manager policy and dashboard UI still need separate runtime design before
   implementation.
 
 ### Remaining Gaps Found In This Pass
@@ -481,7 +482,8 @@ Add these in order:
    and an A/B comparison against `balanced` before promotion.
 
 4. `agentless-repair`
-   Separate runtime design required. The useful target is:
+   Build the reusable patch-candidate substrate first, then let this preset
+   consume it. The useful target remains:
    localization -> candidate unified diffs -> temp-worktree validation/rerank
    -> hand the winning patch to the normal writer/spec-review/review lane.
    It should be a benchmark-oriented baseline against `repair-loop`, not a
@@ -490,11 +492,55 @@ Add these in order:
    Current primitives are not enough for true Agentless-style repair:
    provider stages only support `command: review`, agent stages mutate through
    Beads/worktree execution rather than patch artifacts, and the pipeline DSL
-   has no deterministic candidate-patch/rerank primitive. Before
-   implementation, design the patch artifact format, temp-worktree lifecycle,
-   validation command contract, failure reporting, and telemetry fields. Also
-   decide whether localization reuses `agent-debug` or gets a narrower
-   read-only `agent-localize-bug` role.
+   has no deterministic candidate-patch/rerank primitive. Do not overload the
+   provider-review stage; add a purpose-built primitive.
+
+   Shared primitive:
+
+   ```text
+   patch_candidates artifact -> isolated apply/validate -> ranked evidence
+     -> non-mutating handoff
+   ```
+
+   Implementation shape:
+   - Add `py/swarm_do/pipeline/patch_candidates.py` and
+     `bin/swarm patch-candidates ...` subcommands before adding a stock
+     pipeline stage.
+   - Define `schemas/patch_candidates.schema.json` for candidate unified diffs,
+     source metadata, touched files, assumptions, base SHA, allowed/blocked
+     files, validation commands, and diff hashes. Store large diffs/logs in
+     sidecars plus a manifest, matching the provider-review artifact pattern.
+   - Reuse `work_units.v2` validation vocabulary wherever possible:
+     `allowed_files`, `blocked_files`, `validation_commands`,
+     `expected_results`, `risk_tags`, and `handoff_notes`.
+   - Extend or neighbor `py/swarm_do/pipeline/worktrees.py` for candidate
+     worktrees under `.swarm-do/candidates/<run_id>/<candidate_id>/`. Apply
+     exactly one patch per worktree, run bounded commands, write results, and
+     clean up by default.
+   - Rank deterministically by apply success, required validation passes,
+     optional validation signal, blast radius, localization match, and risk
+     tags. Ties become `needs_human`; an LLM judge should not silently break
+     them.
+   - Handoff only `winning.patch` plus prompt-safe evidence to the normal
+     `agent-writer`; the writer remains the first mutating actor and can apply,
+     adapt, or reject the patch in notes.
+   - Add telemetry through a compact candidate-validation ledger registered in
+     `swarm_do.telemetry.registry.LEDGERS`, plus run events for started,
+     validated, selected, and cleanup-failed lifecycle points. Keep rich command
+     logs in per-run artifacts, not `runs.v2`.
+
+   This should improve several plugin areas before `agentless-repair` exists:
+   safer `competitive` writer comparisons, provider-generated patch
+   suggestions, benchmark harnesses, large-project isolated candidate
+   validation, review-finding autofix trials, and future repair-loop patch
+   suggestions. The expanded design lives in
+   `docs/agentless-repair-design.md`.
+
+   After the CLI primitive is stable, add a narrow `patch_candidates` pipeline
+   stage kind rather than a generic provider command. Then add the experimental
+   `agentless-repair` preset. Decide at that point whether localization can
+   reuse `agent-debug` for dogfood or needs a narrower read-only
+   `agent-localize-bug` role.
 
 5. `large-project-manager`
    Fold a conservative v1 into the plan as a preset/policy over existing
@@ -632,11 +678,17 @@ Diagnostic/operational:
    only after their required role/preset or decompose-policy plumbing is
    explicit. Keep `large-project-manager` at `decompose.mode="inspect"`
    until ADR 0004's scorecard supports enforcement.
-8. Write a separate `agentless-repair` design before implementation. It
-   needs candidate patch artifacts, temp-worktree validation/rerank, and
-   telemetry design beyond the current pipeline DSL.
+8. Build the patch-candidate substrate described in
+   `docs/agentless-repair-design.md`: artifact schema and lint CLI, safe
+   apply/path-policy checks, temp-worktree validation and cleanup, deterministic
+   ranking, prompt-safe evidence summaries, telemetry ledger/run events, and
+   manual dogfood through benchmark/autofix trials.
 9. Document the measurement gate.
-10. After step 9 lands and a baseline + one A/B comparison exists,
+10. Add an explicit `patch_candidates` pipeline stage kind, then wire
+   experimental `agentless-repair` as a consumer. Keep the handoff
+   non-mutating and keep `agent-writer` as the first actor that edits the
+   user's worktree.
+11. After step 9 lands and a baseline + one A/B comparison exists,
    evaluate whether the TUI default should switch from `balanced` to
    `repair-loop`. (Split from step 9 — separate decision.)
 
@@ -658,10 +710,11 @@ evaluation work that must happen with real tasks.
 - Step 7 shipped conservative v1s: `smart-friend` adds a read-only
   `agent-implementation-advisor` before the single writer, and
   `large-project-manager` uses `repair-loop` with `decompose.mode="inspect"`.
-- Step 8 shipped as `docs/agentless-repair-design.md`; it remains design-only
-  because candidate patch artifacts and temp-worktree reranking are not current
-  pipeline primitives.
-- Step 0 and Step 10 remain operational gates: capture a real `balanced`
+- Step 8 shipped as `docs/agentless-repair-design.md` and has now been expanded
+  into a substrate-first build plan; it remains design-only because candidate
+  patch artifacts, temp-worktree reranking, and a `patch_candidates` pipeline
+  stage are not current runtime primitives.
+- Step 0 and Step 11 remain operational gates: capture a real `balanced`
   baseline and at least one A/B comparison before changing the recommended TUI
   default from `balanced` to `repair-loop`.
 
@@ -678,7 +731,7 @@ evaluation work that must happen with real tasks.
 | P1 - Brainstorm And Review Shape | **Updated** — file paths pinned; catalog-registration step added. |
 | P2 - Repair Loop Preset | **Updated** — removes invalid `clean_context`/`lens: revise` YAML, names `agent-clean-review` and runner/context requirements. |
 | P3 - Cross-Model Merge And Judge Support | **Updated** — names `validation.py:invariant_errors` and the three rules; reuses existing `findings` schema for immediate `NEEDS_HUMAN`; defers adjudication rows until outcome linkage exists. |
-| P4 - Missing Presets | **Updated** — folds in `smart-friend` and `large-project-manager` v1 designs; marks `agentless-repair` as separate runtime design. |
+| P4 - Missing Presets | **Updated** — folds in `smart-friend` and `large-project-manager` v1 designs; updates `agentless-repair` to consume a reusable patch-candidate substrate. |
 | Eval And Telemetry Gaps | **Updated** — references existing `schemas/telemetry/*`; adds Step 0 baseline; adds Outcome dashboard v1; adds concrete A/B gate thresholds. |
 | Proposed Catalog After Changes | **Updated** — adds `review-strict` to specialized presets. |
-| Ordered Implementation Plan | **Updated** — Step 0 baseline added; repair-loop prerequisites fixed; experimental design sequencing clarified. |
+| Ordered Implementation Plan | **Updated** — Step 0 baseline added; repair-loop prerequisites fixed; patch-candidate substrate and agentless consumer steps split. |

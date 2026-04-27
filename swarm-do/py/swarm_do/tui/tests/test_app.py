@@ -22,6 +22,8 @@ class TuiAppTests(unittest.TestCase):
         self.assertEqual(theme.surface, "#1E1E3F")
         self.assertEqual(theme.panel, "#2D2B55")
         self.assertEqual(theme.accent, "#FF69B4")
+        self.assertEqual(theme.variables["block-cursor-background"], "#2D2B55")
+        self.assertEqual(theme.variables["block-cursor-blurred-background"], "#2D2B55")
         self.assertEqual(theme.variables["footer-background"], "transparent")
 
     def test_posting_galaxy_theme_is_selected_on_startup(self) -> None:
@@ -117,6 +119,21 @@ class TuiAppTests(unittest.TestCase):
                 app.screen.action_show_policy()
                 await pilot.pause()
                 self.assertEqual(tabs.active, "policy")
+
+        asyncio.run(run_app())
+
+    def test_dashboard_uses_layer_board_for_active_preset(self) -> None:
+        async def run_app() -> None:
+            app = tui_app.SwarmTui()
+            async with app.run_test(size=(120, 40)) as pilot:
+                await pilot.pause()
+                await pilot.pause()
+                self.assertIsInstance(app.screen, tui_app.DashboardScreen)
+                board = app.screen.query_one("#dashboard-graph", tui_app.PipelineLayerBoard)
+                self.assertIsNotNone(board.board)
+                self.assertEqual(board.board.mode, "board")
+                title = app.screen.query_one("#dashboard-graph-title", tui_app.Static)
+                self.assertIn("Active Preset Board", str(title.content))
 
         asyncio.run(run_app())
 

@@ -42,24 +42,27 @@ AppChrome {
 }
 
 #dashboard-top {
-    height: 8;
+    height: 6;
 }
 
-#profile-summary, #event-strip {
+#profile-summary, #event-strip, #outcome-summary {
     width: 1fr;
     border: solid $primary;
     padding: 1;
 }
 
-#dashboard-graph {
-    height: 8;
-    border: solid $primary;
-    padding: 1;
-}
-
-#banner, #target, #hash, #burn, #settings-title, #settings-warning {
+#banner, #target, #hash, #burn, #settings-title, #settings-warning, #dashboard-graph-title, #queue-title {
     padding: 0 1;
     height: 1;
+}
+
+#dashboard-graph-title {
+    background: $surface 65%;
+    color: $text;
+}
+
+#queue-title {
+    color: $text-muted;
 }
 
 DataTable {
@@ -73,9 +76,14 @@ DataTable > .datatable--header {
     color: $text-success;
 }
 
-DataTable > .datatable--cursor {
+DataTable > .datatable--cursor,
+DataTable:focus > .datatable--cursor {
     background: $primary 30%;
     color: $text;
+}
+
+#inflight {
+    height: 4;
 }
 
 ListView {
@@ -86,8 +94,10 @@ ListItem {
     color: $text-muted;
 }
 
-ListItem.--highlight {
-    background: $primary 30%;
+ListItem.-highlight,
+ListItem.--highlight,
+ListView:focus > ListItem.-highlight {
+    background: $panel;
     color: $text;
 }
 
@@ -120,7 +130,9 @@ Input:focus, Select:focus {
     border-bottom: solid $surface-lighten-1;
 }
 
-#pipeline-gallery ListItem.--highlight {
+#pipeline-gallery > ListItem.-highlight,
+#pipeline-gallery > ListItem.--highlight,
+#pipeline-gallery:focus > ListItem.-highlight {
     background: $panel;
     color: $text;
     border-left: thick $accent;
@@ -173,7 +185,7 @@ Input:focus, Select:focus {
     width: 1fr;
 }
 
-#pipeline-graph, #preset-board {
+#pipeline-graph, #preset-board, #dashboard-graph {
     width: 1fr;
     height: 1fr;
     border: solid $primary;

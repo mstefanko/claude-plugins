@@ -71,6 +71,7 @@ from swarm_do.tui.state import (
     load_run_events,
     load_observations,
     module_palette_rows,
+    outcome_dashboard_summary,
     pipeline_board_model,
     pipeline_board_plain_text,
     pipeline_gallery_rows,
@@ -126,6 +127,13 @@ if TEXTUAL_IMPORT_ERROR is None:
         panel=POSTING_GALAXY_COLORS["panel"],
         dark=True,
         variables={
+            "block-cursor-background": POSTING_GALAXY_COLORS["panel"],
+            "block-cursor-foreground": POSTING_GALAXY_COLORS["text"],
+            "block-cursor-text-style": "bold",
+            "block-cursor-blurred-background": POSTING_GALAXY_COLORS["panel"],
+            "block-cursor-blurred-foreground": POSTING_GALAXY_COLORS["text"],
+            "block-cursor-blurred-text-style": "none",
+            "block-hover-background": POSTING_GALAXY_COLORS["panel"],
             "input-cursor-background": POSTING_GALAXY_COLORS["primary"],
             "footer-background": "transparent",
         },
@@ -1187,9 +1195,11 @@ if TEXTUAL_IMPORT_ERROR is None:
                 with Horizontal(id="dashboard-top"):
                     yield Static("", id="profile-summary")
                     yield Static("", id="event-strip")
-                yield Static("", id="dashboard-graph")
+                    yield Static("", id="outcome-summary")
+                yield Static("", id="dashboard-graph-title")
+                yield PipelineLayerBoard(id="dashboard-graph")
+                yield Static("Issue Queue", id="queue-title")
                 yield DataTable(id="inflight")
-                yield Static("", id="burn")
             yield StatusBar(id="status")
             yield Footer()
 
@@ -1233,9 +1243,14 @@ if TEXTUAL_IMPORT_ERROR is None:
             else:
                 panel.display = False
                 plan_input.display = False
-            self.query_one("#profile-summary", Static).update(_dashboard_profile_text(summary))
+            provider_state = getattr(self.app, "provider_state", "unchecked")
+            beads_state = "ok" if actions.has_beads_rig() else "missing"
+            self.query_one("#profile-summary", Static).update(
+                _dashboard_profile_text(summary, provider_state=provider_state, beads_state=beads_state)
+            )
             self.query_one("#event-strip", Static).update(_dashboard_event_text())
-            self.query_one("#dashboard-graph", Static).update(_dashboard_graph_text(summary.pipeline))
+            self.query_one("#outcome-summary", Static).update(_dashboard_outcome_text(outcome_dashboard_summary()))
+            self._refresh_dashboard_graph()
             table = self.query_one("#inflight", DataTable)
             table.clear(columns=True)
             table.add_columns("issue", "role", "backend", "model", "effort", "pid", "status")
@@ -1244,14 +1259,71 @@ if TEXTUAL_IMPORT_ERROR is None:
                 table.add_row(run.issue_id, run.role, run.backend, run.model, run.effort, run.display_pid, run.status)
             if not in_flight:
                 table.add_row("none", "no in-flight runs", "", "", "", "", "")
-            burns = token_burn_last_24h(load_runs())
-            if not burns:
-                burn_text = "tokens/hr: n/a"
-            else:
-                burn_text = " | ".join(f"{backend}={value if value is not None else 'n/a'}" for backend, value in burns.items())
-            self.query_one("#burn", Static).update(burn_text)
+            self.query_one("#queue-title", Static).update(_dashboard_queue_title(token_burn_last_24h(load_runs())))
             self.query_one("#status", StatusBar).refresh_status()
             _refresh_chrome(self)
+
+        def _dashboard_board_width(self) -> int:
+            try:
+                width = self.query_one("#dashboard-graph", PipelineLayerBoard).size.width
+            except Exception:
+                width = 0
+            return width if width and width >= 42 else 112
+
+        def _dashboard_board_height(self) -> int:
+            try:
+                height = self.query_one("#dashboard-graph", PipelineLayerBoard).size.height
+            except Exception:
+                height = 0
+            return height if height and height >= MIN_BOARD_HEIGHT else 20
+
+        def _refresh_dashboard_graph(self) -> None:
+            title = self.query_one("#dashboard-graph-title", Static)
+            board = self.query_one("#dashboard-graph", PipelineLayerBoard)
+            try:
+                active = active_preset_name()
+                if active:
+                    preset_item = find_preset(active)
+                    if preset_item is None:
+                        raise ValueError(f"active preset not found: {active}")
+                    preset = load_preset(preset_item.path)
+                    resolved = resolve_preset_graph(preset)
+                    pipeline = resolved.graph
+                    graph_name = str(preset.get("pipeline") or resolved.source_name or pipeline.get("name") or "inline")
+                    preset_name = active
+                else:
+                    item = find_pipeline("default")
+                    if item is None:
+                        title.update("Active Preset Board")
+                        board.set_message("No default graph found. Press 3 to open Presets.", failed=True)
+                        return
+                    pipeline = load_pipeline(item.path)
+                    graph_name = "default"
+                    preset_name = "default fallback"
+                model = pipeline_graph_model(pipeline)
+                overlay = pipeline_graph_overlay(
+                    stage_statuses=pipeline_live_stage_statuses(
+                        model,
+                        in_flight_runs=load_in_flight(),
+                        run_events=load_run_events()[-12:],
+                        observations=load_observations()[-12:],
+                    ),
+                    critical_stage_ids=pipeline_critical_stage_ids(model),
+                )
+                title.update(_dashboard_graph_title(preset_name, graph_name, model))
+                board.set_graph(
+                    model,
+                    overlay,
+                    pipeline_board_model(
+                        model,
+                        overlay,
+                        width=self._dashboard_board_width(),
+                        height=self._dashboard_board_height(),
+                    ),
+                )
+            except Exception as exc:
+                title.update("Active Preset Board")
+                board.set_message(f"Graph failed to load: {str(exc)[:120]}", failed=True)
 
         def on_input_submitted(self, event: Input.Submitted) -> None:
             if event.input.id != "getting-started-plan":
@@ -1325,67 +1397,118 @@ if TEXTUAL_IMPORT_ERROR is None:
             self.action_provider_doctor()
 
 
-    def _dashboard_profile_text(summary: Any) -> str:
-        lines = [
-            "Active Profile",
-            f"preset={summary.preset}  graph={summary.pipeline}",
-            f"runs_today={summary.runs_today}  validation={_validation_badge(summary.pipeline)}",
-        ]
-        report_target = summary.pipeline.removeprefix("inline:") if summary.pipeline.startswith("inline:") else summary.pipeline
-        report_lines = pipeline_validation_report(report_target).splitlines()
-        for line in report_lines:
-            stripped = line.strip()
-            if stripped.startswith(("OK ", "WARN ", "ERROR ", "budget:", "provider doctor:")):
-                lines.append(stripped)
-            if len(lines) >= 7:
-                break
-        return "\n".join(lines)
+    def _state_style(state: str) -> str:
+        return {
+            "ok": _color("success"),
+            "ready": _color("success"),
+            "selected": _color("success"),
+            "warn": _color("warning"),
+            "missing": _color("warning"),
+            "unchecked": _muted_style(),
+            "error": _color("error"),
+        }.get(state, _muted_style())
 
 
-    def _dashboard_event_text() -> str:
-        lines = ["Active Runs / Event Log"]
+    def _dashboard_profile_text(summary: Any, *, provider_state: str = "unchecked", beads_state: str = "ok") -> Text:
+        status = _validation_badge(summary.pipeline)
+        cost = f"${summary.cost_today:.4f}" if summary.cost_today is not None else "n/a"
+        text = Text()
+        text.append("Active Profile\n", style=f"bold {_color('text')}")
+        text.append("  ")
+        _append_badge(text, summary.preset, _color("primary"))
+        text.append("  ")
+        _append_badge(text, summary.pipeline, _source_style("stock-ref"))
+        text.append("  ")
+        _append_status(text, status)
+        text.append("\n  ")
+        text.append(f"runs {summary.runs_today}", style=_muted_style())
+        text.append("  ")
+        text.append(f"cost {cost}", style=_muted_style())
+        text.append("  ")
+        text.append("beads ", style=_muted_style())
+        _append_badge(text, beads_state, _state_style(beads_state))
+        text.append("  providers ", style=_muted_style())
+        _append_badge(text, provider_state, _state_style(provider_state))
+        return text
+
+
+    def _dashboard_event_text() -> Text:
+        text = Text()
+        text.append("Activity\n", style=f"bold {_color('text')}")
         in_flight = load_in_flight()
         if in_flight:
-            for run in in_flight[:4]:
-                lines.append(f"{run.issue_id} {run.role} {run.status}")
+            for run in in_flight[:2]:
+                text.append("  ")
+                _append_badge(text, run.status, _state_style(run.status))
+                text.append(f" {run.issue_id} {run.role}\n", style=_color("text"))
         else:
-            lines.append("no in-flight runs")
+            text.append("  no in-flight runs\n", style=_muted_style())
         events = load_run_events()[-3:]
         observations = load_observations()[-3:]
-        for row in events:
-            lines.append(f"event {row.get('event_type', 'unknown')} {row.get('phase_id') or row.get('run_id') or ''}".rstrip())
-        for row in observations:
-            lines.append(f"obs {row.get('event_type', 'unknown')} {row.get('source') or ''}".rstrip())
-        return "\n".join(lines[:8])
+        for label, row in (("event", events[-1] if events else None), ("obs", observations[-1] if observations else None)):
+            if row is None:
+                continue
+            marker = row.get("phase_id") or row.get("run_id") or row.get("source") or ""
+            text.append("  ")
+            text.append(label, style=_color("secondary"))
+            text.append(f" {row.get('event_type', 'unknown')} {marker}".rstrip(), style=_muted_style())
+            text.append("\n")
+        return text
 
 
-    def _dashboard_graph_text(pipeline_name: str) -> str:
-        try:
-            active = active_preset_name()
-            if active:
-                preset_item = find_preset(active)
-                if preset_item is None:
-                    raise ValueError(f"active preset not found: {active}")
-                pipeline = resolve_preset_graph(load_preset(preset_item.path)).graph
-            else:
-                item = find_pipeline("default")
-                if item is None:
-                    return "Active Preset Board\nno default graph found; press 3 to open Presets"
-                pipeline = load_pipeline(item.path)
-            model = pipeline_graph_model(pipeline)
-            overlay = pipeline_graph_overlay(
-                stage_statuses=pipeline_live_stage_statuses(
-                    model,
-                    in_flight_runs=load_in_flight(),
-                    run_events=load_run_events()[-12:],
-                    observations=load_observations()[-12:],
-                ),
-                critical_stage_ids=pipeline_critical_stage_ids(model),
-            )
-            board = pipeline_board_model(model, overlay, width=88, height=8)
-        except Exception as exc:
-            return f"Active Preset Board\nERROR {exc}"
-        return "Active Preset Board\n" + "\n".join(board.fallback_lines)
+    def _dashboard_outcome_text(summary: OutcomeDashboardSummary) -> Text:
+        text = Text()
+        text.append(f"Outcomes {summary.since_days}d\n", style=f"bold {_color('text')}")
+        accepted = f"{summary.accepted_findings}/{summary.outcome_count}" if summary.outcome_count else "0/0"
+        text.append("  ✓ ", style=f"bold {_color('success')}")
+        text.append(f"accepted {accepted}", style=_color("success"))
+        text.append("  ")
+        text.append(f"findings {summary.findings_count}\n", style=_muted_style())
+        text.append("  ● ", style=f"bold {_color('primary')}")
+        text.append(f"success {_format_dashboard_rate(summary.successful_runs, summary.run_count)}", style=_color("primary"))
+        text.append("  ")
+        text.append(f"rework h:{summary.handoff_count} x:{summary.nonzero_exit_count}\n", style=_muted_style())
+        role = (
+            f"{summary.top_accepted_role}({summary.top_accepted_role_count})"
+            if summary.top_accepted_role
+            else "n/a"
+        )
+        text.append("  ◆ ", style=f"bold {_color('accent')}")
+        text.append(f"top role {role}", style=_color("accent") if summary.top_accepted_role else _muted_style())
+        return text
+
+
+    def _format_dashboard_rate(numerator: int, denominator: int) -> str:
+        if denominator <= 0:
+            return "n/a"
+        return f"{numerator / denominator:.0%}"
+
+
+    def _dashboard_graph_title(preset_name: str, graph_name: str, model: Any) -> Text:
+        text = Text()
+        text.append("Active Preset Board", style=f"bold {_color('text')}")
+        text.append("  ")
+        _append_badge(text, preset_name, _color("primary"))
+        text.append("  ")
+        _append_badge(text, f"graph={graph_name}", _source_style("stock-ref"))
+        text.append("  ")
+        text.append(f"{len(getattr(model, 'nodes', ()))} stages", style=_muted_style())
+        return text
+
+
+    def _dashboard_queue_title(burns: Mapping[str, int | None]) -> Text:
+        text = Text()
+        text.append("Issue Queue", style=f"bold {_muted_style()}")
+        text.append("  tokens/hr ", style=_muted_style())
+        if not burns:
+            text.append("n/a", style=_muted_style())
+            return text
+        for index, (backend, value) in enumerate(sorted(burns.items())):
+            if index:
+                text.append("  ", style=_muted_style())
+            text.append(str(backend), style=_backend_style(backend))
+            text.append(f"={value if value is not None else 'n/a'}", style=_muted_style())
+        return text
 
 
     class SettingsScreen(Screen):

@@ -64,7 +64,7 @@ Then dispatch the graph described by:
 Create one parent Beads issue for the brainstorm request. Create one child
 issue per `agent-brainstorm` branch, giving each branch the same request plus a
 distinct angle when a natural split is available. After quorum succeeds, create
-the synthesize merge issue assigned to `agent-brainstorm`, dependent on
+the synthesize merge issue assigned to `agent-brainstorm-merge`, dependent on
 successful branches.
 
 When spawning any Claude-backed subagent, load its role persona through:

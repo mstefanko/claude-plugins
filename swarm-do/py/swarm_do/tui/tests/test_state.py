@@ -54,6 +54,7 @@ from swarm_do.tui.state import (
     load_run_events,
     module_palette_rows,
     mco_provider_result_preview,
+    outcome_dashboard_summary,
     provider_result_preview,
     pipeline_activation_blocker,
     pipeline_board_model,
@@ -149,6 +150,85 @@ class TuiStateTests(EnvTestCase):
         ]
         burn = token_burn_last_24h(rows, now=datetime(2026, 4, 24, 13, tzinfo=UTC))
         self.assertIsNone(burn["codex"])
+
+    def test_outcome_dashboard_summary_joins_runs_findings_and_outcomes(self) -> None:
+        tel = self.root / "telemetry"
+        tel.mkdir()
+        (tel / "runs.jsonl").write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "run_id": "RUN_A",
+                            "timestamp_start": "2026-04-25T12:00:00Z",
+                            "pipeline_name": "balanced",
+                            "exit_code": 0,
+                            "wall_clock_seconds": 30,
+                            "estimated_cost_usd": 0.01,
+                            "writer_status": None,
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "run_id": "RUN_B",
+                            "timestamp_start": "2026-04-26T12:00:00Z",
+                            "pipeline_name": "balanced",
+                            "exit_code": 1,
+                            "wall_clock_seconds": 90,
+                            "estimated_cost_usd": None,
+                            "writer_status": "HANDOFF_REQUESTED",
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "run_id": "RUN_OLD",
+                            "timestamp_start": "2026-02-01T12:00:00Z",
+                            "pipeline_name": "repair-loop",
+                            "exit_code": 0,
+                        }
+                    ),
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (tel / "findings.jsonl").write_text(
+            "\n".join(
+                [
+                    json.dumps({"finding_id": "F_1", "run_id": "RUN_A", "timestamp": "2026-04-25T12:01:00Z", "role": "provider-review"}),
+                    json.dumps({"finding_id": "F_2", "run_id": "RUN_B", "timestamp": "2026-04-26T12:01:00Z", "role": "agent-review"}),
+                    json.dumps({"finding_id": "F_OLD", "run_id": "RUN_OLD", "timestamp": "2026-02-01T12:01:00Z", "role": "agent-review"}),
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (tel / "finding_outcomes.jsonl").write_text(
+            "\n".join(
+                [
+                    json.dumps({"finding_outcome_id": "O_1", "finding_id": "F_1", "observed_at": "2026-04-25T13:00:00Z", "maintainer_action": "fixed_in_same_pr"}),
+                    json.dumps({"finding_outcome_id": "O_2", "finding_id": "F_2", "observed_at": "2026-04-26T13:00:00Z", "maintainer_action": "ignored"}),
+                    json.dumps({"finding_outcome_id": "O_OLD", "finding_id": "F_OLD", "observed_at": "2026-02-01T13:00:00Z", "maintainer_action": "fixed_in_same_pr"}),
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        summary = outcome_dashboard_summary(now=datetime(2026, 4, 27, 12, tzinfo=UTC))
+        self.assertEqual(summary.run_count, 2)
+        self.assertEqual(summary.successful_runs, 1)
+        self.assertEqual(summary.accepted_findings, 1)
+        self.assertEqual(summary.ignored_findings, 1)
+        self.assertEqual(summary.handoff_count, 1)
+        self.assertEqual(summary.nonzero_exit_count, 1)
+        self.assertEqual(summary.top_accepted_role, "provider-review")
+        self.assertEqual(summary.top_pipeline, "balanced")
+        rendered = summary.render()
+        self.assertIn("accepted=1/2", rendered)
+        self.assertIn("success=50%", rendered)
+        self.assertIn("report: bin/swarm-telemetry report --since 30d --bucket phase_kind", rendered)
+        self.assertIn("outcomes: bin/swarm-telemetry join-outcomes --since 30d --dry-run", rendered)
 
     def test_in_flight_lockfiles_load(self) -> None:
         locks = self.root / "in-flight"
