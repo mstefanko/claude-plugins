@@ -1707,6 +1707,13 @@ if TEXTUAL_IMPORT_ERROR is None:
             self.app.push_screen(RouteModal(role, complexity, (route.backend, route.model, route.effort)), done)
 
 
+    # LEGACY (kept for git-history reference; SHADOWED by the redefinition below):
+    # This class is overwritten at app.py:2757 before SwarmTui ever instantiates
+    # it. The `PresetsScreen = PresetWorkbenchScreen` alias at app.py:1891 is also
+    # reassigned at app.py:3384, and `self.install_screen(PresetWorkbenchScreen(),
+    # name="presets")` at app.py:3405 binds the 2757 class. Verified at runtime:
+    # `inspect.getsourcelines(PresetWorkbenchScreen)` returns line 2757.
+    # Do not edit this body for behavior changes — touch the LIVE class at 2757.
     class PresetWorkbenchScreen(Screen):
         BINDINGS = [
             ("a", "activate_preset", "Activate"),
@@ -2754,6 +2761,12 @@ if TEXTUAL_IMPORT_ERROR is None:
         return _load_default_graph()
 
 
+    # LIVE: this is the PresetWorkbenchScreen instantiated by SwarmTui.
+    # Bound at app.py:3405 via `self.install_screen(PresetWorkbenchScreen(),
+    # name="presets")` and aliased at app.py:3384 (`PresetsScreen =
+    # PresetWorkbenchScreen`). Inherits behavior from `_LegacyPipelineEditor`
+    # (app.py:1894). The earlier definition at app.py:1710 is dead code (shadowed).
+    # Phases 4 u2-u4 must target THIS class.
     class PresetWorkbenchScreen(_LegacyPipelineEditor):
         BINDINGS = [
             Binding("a", "activate_preset", "Activate"),
