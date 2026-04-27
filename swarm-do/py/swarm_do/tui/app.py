@@ -2083,39 +2083,76 @@ if TEXTUAL_IMPORT_ERROR is None:
                 done,
             )
 
+        def _fan_out_lens_target(
+            self,
+            draft: PipelineEditDraft,
+            stage_id: str,
+            fan: Mapping[str, Any],
+        ) -> tuple[str, str, list[str]] | None:
+            if fan.get("variant") == "models" or "routes" in fan:
+                self.app.push_screen(MessageModal("Lens edit", "Model-route fan-outs cannot also use prompt lenses. Reset routes first."))
+                return None
+            role = fan.get("role")
+            if not isinstance(role, str) or not role:
+                self.app.push_screen(MessageModal("Lens edit", "Fan-out role is invalid."))
+                return None
+            return "fan_out", role, current_prompt_lens_ids(draft.pipeline, stage_id)
+
+        def _agents_lens_target(
+            self,
+            draft: PipelineEditDraft,
+            stage_id: str,
+            agents: list[Any],
+        ) -> tuple[str, str, list[str]] | None:
+            if not agents or not isinstance(agents[0], dict):
+                self.app.push_screen(MessageModal("Lens edit", "The selected agents stage has no editable first agent."))
+                return None
+            role = agents[0].get("role")
+            if not isinstance(role, str) or not role:
+                self.app.push_screen(MessageModal("Lens edit", "Agent role is invalid."))
+                return None
+            current = current_stage_agent_lens_id(draft.pipeline, stage_id, 0)
+            return "agents", role, [current] if current else []
+
+        def _selected_lens_target(
+            self,
+            draft: PipelineEditDraft,
+            stage_id: str,
+        ) -> tuple[str, str, list[str]] | None:
+            mapping = self._selected_stage_mapping()
+            fan = mapping.get("fan_out") if isinstance(mapping, dict) else None
+            agents = mapping.get("agents") if isinstance(mapping, dict) else None
+            if isinstance(fan, dict):
+                return self._fan_out_lens_target(draft, stage_id, fan)
+            if isinstance(agents, list):
+                return self._agents_lens_target(draft, stage_id, agents)
+            self.app.push_screen(MessageModal("Lens edit", "Select an agents or fan-out stage to apply prompt lenses."))
+            return None
+
+        def _apply_lens_selection(
+            self,
+            draft: PipelineEditDraft,
+            stage_id: str,
+            target_kind: str,
+            lens_ids: list[str],
+        ) -> None:
+            if target_kind == "fan_out":
+                draft_set_prompt_variant_lenses(draft, stage_id, lens_ids)
+                return
+            if len(lens_ids) > 1:
+                raise ValueError("lens stacking is disabled for normal agents stages; use one lens id")
+            draft_set_stage_agent_lens(draft, stage_id, 0, lens_ids[0] if lens_ids else None)
+
         def action_edit_lenses(self) -> None:
             draft = self._draft_for_selected()
             stage = self._selected_stage_row()
             if draft is None or stage is None:
                 return
-            mapping = self._selected_stage_mapping()
-            fan = mapping.get("fan_out") if isinstance(mapping, dict) else None
-            agents = mapping.get("agents") if isinstance(mapping, dict) else None
-            is_fan_out = isinstance(fan, dict)
-            is_agents = isinstance(agents, list)
-            if not is_fan_out and not is_agents:
-                self.app.push_screen(MessageModal("Lens edit", "Select an agents or fan-out stage to apply prompt lenses."))
+            target = self._selected_lens_target(draft, stage.stage_id)
+            if target is None:
                 return
+            target_kind, role, current_ids = target
             try:
-                if is_fan_out and (fan.get("variant") == "models" or "routes" in fan):
-                    self.app.push_screen(MessageModal("Lens edit", "Model-route fan-outs cannot also use prompt lenses. Reset routes first."))
-                    return
-                if is_fan_out:
-                    role = fan.get("role")
-                    if not isinstance(role, str) or not role:
-                        self.app.push_screen(MessageModal("Lens edit", "Fan-out role is invalid."))
-                        return
-                    current_ids = current_prompt_lens_ids(draft.pipeline, stage.stage_id)
-                else:
-                    if not agents or not isinstance(agents[0], dict):
-                        self.app.push_screen(MessageModal("Lens edit", "The selected agents stage has no editable first agent."))
-                        return
-                    role = agents[0].get("role")
-                    if not isinstance(role, str) or not role:
-                        self.app.push_screen(MessageModal("Lens edit", "Agent role is invalid."))
-                        return
-                    current = current_stage_agent_lens_id(draft.pipeline, stage.stage_id, 0)
-                    current_ids = [current] if current else []
                 rows = stage_lens_option_rows(draft.pipeline, stage.stage_id)
             except Exception as exc:
                 self.app.push_screen(MessageModal("Lens unavailable", str(exc)))
@@ -2128,12 +2165,7 @@ if TEXTUAL_IMPORT_ERROR is None:
                 if lens_ids is None:
                     return
                 try:
-                    if is_fan_out:
-                        draft_set_prompt_variant_lenses(draft, stage.stage_id, lens_ids)
-                    else:
-                        if len(lens_ids) > 1:
-                            raise ValueError("lens stacking is disabled for normal agents stages; use one lens id")
-                        draft_set_stage_agent_lens(draft, stage.stage_id, 0, lens_ids[0] if lens_ids else None)
+                    self._apply_lens_selection(draft, stage.stage_id, target_kind, lens_ids)
                 except Exception as exc:
                     self.app.push_screen(MessageModal("Lens refused", str(exc)))
                     return

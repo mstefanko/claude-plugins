@@ -1166,17 +1166,9 @@ def _build_parser() -> argparse.ArgumentParser:
     permissions = sub.add_parser("permissions")
     permissions_sub = permissions.add_subparsers(dest="permissions_command")
     p = permissions_sub.add_parser("check")
-    permission_roles = [
-        "writer",
-        "spec-review",
-        "review",
-        "research",
-        "clarify",
-        "codex-review",
-        "clean-review",
-        "provider-review",
-        "brainstorm",
-    ]
+    from .permissions import ROLE_NAMES
+
+    permission_roles = sorted(ROLE_NAMES)
     p.add_argument("--role", action="append", choices=permission_roles)
     p.add_argument("--scope", choices=["repo", "user"], default="repo")
     p.add_argument("--path")

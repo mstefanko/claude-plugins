@@ -13,10 +13,15 @@ from swarm_do.pipeline import catalog
 from swarm_do.pipeline.cli import cmd_research
 from swarm_do.pipeline.engine import budget_preview, graph_lines, stage_agent_count, topological_layers
 from swarm_do.pipeline.provider_review import write_review_doctor_cache
-from swarm_do.pipeline.registry import find_pipeline, load_pipeline
+from swarm_do.pipeline.registry import find_pipeline, find_preset, load_pipeline, load_preset
 from swarm_do.pipeline.resolver import BackendResolver
 from swarm_do.pipeline.simple_yaml import loads
-from swarm_do.pipeline.validation import schema_lint_pipeline, validate_preset_and_pipeline, variant_existence_errors
+from swarm_do.pipeline.validation import (
+    schema_lint_pipeline,
+    validate_preset_and_pipeline,
+    validate_preset_pipeline_mappings,
+    variant_existence_errors,
+)
 
 
 class PipelineValidationTests(unittest.TestCase):
@@ -60,6 +65,23 @@ class PipelineValidationTests(unittest.TestCase):
         result, preset, *_ = validate_preset_and_pipeline("review-strict")
         self.assertTrue(result.ok, result.errors)
         self.assertEqual(preset["review_providers"]["min_success"], 2)
+
+    def test_review_provider_quorum_policy_rejects_preset_stage_drift(self) -> None:
+        preset_item = find_preset("review-strict")
+        pipeline_item = find_pipeline("review-strict")
+        self.assertIsNotNone(preset_item)
+        self.assertIsNotNone(pipeline_item)
+        preset = load_preset(preset_item.path)
+        pipeline = load_pipeline(pipeline_item.path)
+        preset["review_providers"]["min_success"] = 1
+
+        result = validate_preset_pipeline_mappings(preset, pipeline, "review-strict")
+
+        self.assertFalse(result.ok)
+        self.assertTrue(
+            any("review_providers.min_success" in error and "provider-review" in error for error in result.errors),
+            result.errors,
+        )
 
     def test_stock_implementation_pipelines_use_auto_provider_review_without_allowlists(self) -> None:
         for name in ("default", "lightweight", "ultra-plan"):

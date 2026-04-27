@@ -23,6 +23,12 @@ class PermissionPresetTests(unittest.TestCase):
                 fragment = load_fragment(role)
                 self.assertEqual(fragment["role"], role)
 
+    def test_clean_review_and_advisor_fragments_do_not_allow_sed(self) -> None:
+        for role in ("clean-review", "implementation-advisor"):
+            with self.subTest(role=role):
+                allow = load_fragment(role)["permissions"]["allow"]
+                self.assertNotIn("Bash(sed:*)", allow)
+
     def test_writer_fragment_reports_missing_rules_then_merges(self) -> None:
         fragment = load_fragment("writer")
         settings = {"permissions": {"allow": ["Read"]}}

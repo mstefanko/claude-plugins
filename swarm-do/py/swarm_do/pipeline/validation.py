@@ -826,6 +826,7 @@ def validate_preset_pipeline_mappings(
     result.errors.extend(variant_existence_errors(pipeline))
     result.errors.extend(route_resolution_errors(pipeline, preset_name, preset))
     result.errors.extend(invariant_errors(pipeline, preset_name, preset))
+    result.errors.extend(review_provider_policy_alignment_errors(preset, pipeline))
     try:
         topological_layers(pipeline)
     except ValueError as exc:
@@ -839,6 +840,40 @@ def validate_preset_pipeline_mappings(
         except Exception as exc:
             result.add(f"budget preview failed: {exc}")
     return result
+
+
+def review_provider_policy_alignment_errors(
+    preset: Mapping[str, Any],
+    pipeline: Mapping[str, Any],
+) -> list[str]:
+    if preset.get("origin") != "stock":
+        return []
+    policy = preset.get("review_providers")
+    if not isinstance(policy, Mapping) or "min_success" not in policy:
+        return []
+    policy_min = policy.get("min_success")
+    if not isinstance(policy_min, int) or isinstance(policy_min, bool):
+        return []
+
+    errors: list[str] = []
+    for idx, stage in enumerate(pipeline.get("stages") or []):
+        if not isinstance(stage, Mapping):
+            continue
+        provider = stage.get("provider")
+        if not isinstance(provider, Mapping) or provider.get("type") != "swarm-review":
+            continue
+        tolerance = stage.get("failure_tolerance")
+        if not isinstance(tolerance, Mapping) or tolerance.get("mode") != "quorum":
+            continue
+        stage_min = tolerance.get("min_success")
+        if stage_min != policy_min:
+            stage_id = stage.get("id") if isinstance(stage.get("id"), str) else f"<stage-{idx + 1}>"
+            errors.append(
+                "preset: review_providers.min_success "
+                f"({policy_min}) must match pipeline stage {stage_id} "
+                f"failure_tolerance.min_success ({stage_min}) for swarm-review quorum stages"
+            )
+    return errors
 
 
 def role_existence_errors(pipeline: Mapping[str, Any]) -> list[str]:

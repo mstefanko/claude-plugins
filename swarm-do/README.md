@@ -145,6 +145,8 @@ Use `bin/swarm preset load <name>` to activate a stock or user preset:
   `review`, `review-strict`: output-only command profiles; review profiles
   collect provider-review evidence before final synthesis when an eligible shim
   is available.
+  `research-orchestrator` is currently v1-parity with `research` while keeping
+  a distinct preset name for future subquestion/source-quality orchestration.
 
 Useful profile commands:
 

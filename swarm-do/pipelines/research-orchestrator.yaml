@@ -1,6 +1,6 @@
 pipeline_version: 1
 name: research-orchestrator
-description: Output-only breadth-first research profile with static source-quality lenses and synthesis.
+description: V1 parity with research: static source-quality lenses and synthesis; future versions add explicit subquestion orchestration.
 parallelism: 3
 stages:
   - id: research

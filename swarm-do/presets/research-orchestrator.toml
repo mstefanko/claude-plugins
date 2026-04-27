@@ -1,5 +1,5 @@
 name = "research-orchestrator"
-description = "Output-only breadth-first research profile with source-quality lenses and synthesis."
+description = "V1 parity with research: static source-quality lenses and synthesis; future versions add explicit subquestion orchestration."
 pipeline = "research-orchestrator"
 origin = "stock"
 

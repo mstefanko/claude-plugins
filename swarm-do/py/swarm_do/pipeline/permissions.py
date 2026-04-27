@@ -23,6 +23,7 @@ ROLE_NAMES = {
     "clean-review",
     "provider-review",
     "brainstorm",
+    "implementation-advisor",
 }
 MERGE_POLICIES = {"deny-wins"}
 
