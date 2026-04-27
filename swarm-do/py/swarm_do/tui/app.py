@@ -15,6 +15,7 @@ try:  # Optional dependency installed by bin/swarm-tui.
     from textual.containers import Container, Horizontal, Vertical
     from textual.reactive import reactive
     from textual.screen import ModalScreen, Screen
+    from textual.theme import Theme
     from textual.widget import Widget
     from textual.widgets import (
         Button,
@@ -92,22 +93,54 @@ from swarm_do.tui.state import (
 
 
 if TEXTUAL_IMPORT_ERROR is None:
+    POSTING_GALAXY_THEME_NAME = "posting-galaxy"
+    POSTING_GALAXY_COLORS = {
+        "primary": "#C45AFF",
+        "secondary": "#a684e8",
+        "warning": "#FFD700",
+        "error": "#FF4500",
+        "success": "#00FA9A",
+        "accent": "#FF69B4",
+        "background": "#0F0F1F",
+        "surface": "#1E1E3F",
+        "panel": "#2D2B55",
+        "text": "#F8F2FF",
+    }
+    # Ported from Posting's built-in "galaxy" Textual theme.
+    POSTING_GALAXY_THEME = Theme(
+        name=POSTING_GALAXY_THEME_NAME,
+        primary=POSTING_GALAXY_COLORS["primary"],
+        secondary=POSTING_GALAXY_COLORS["secondary"],
+        warning=POSTING_GALAXY_COLORS["warning"],
+        error=POSTING_GALAXY_COLORS["error"],
+        success=POSTING_GALAXY_COLORS["success"],
+        accent=POSTING_GALAXY_COLORS["accent"],
+        background=POSTING_GALAXY_COLORS["background"],
+        surface=POSTING_GALAXY_COLORS["surface"],
+        panel=POSTING_GALAXY_COLORS["panel"],
+        dark=True,
+        variables={
+            "input-cursor-background": POSTING_GALAXY_COLORS["primary"],
+            "footer-background": "transparent",
+        },
+    )
 
     def swarmdaddy_logo() -> Text:
         logo = Text()
-        amber = "#c98418"
-        ink = "#dfe7e5"
-        teal = "#65b8b0"
-        logo.append("       __    __          ", style=f"bold {amber}")
+        primary = POSTING_GALAXY_COLORS["primary"]
+        ink = POSTING_GALAXY_COLORS["text"]
+        secondary = POSTING_GALAXY_COLORS["secondary"]
+        accent = POSTING_GALAXY_COLORS["accent"]
+        logo.append("       __    __          ", style=f"bold {primary}")
         logo.append("Swarm", style=f"bold {ink}")
-        logo.append("Daddy\n", style=f"bold {amber}")
-        logo.append("    __/  \\__/  \\__\n", style=f"bold {amber}")
-        logo.append("   /  \\__/", style=f"bold {amber}")
-        logo.append("[]", style=f"bold {teal}")
-        logo.append("\\__/  \\\n", style=f"bold {amber}")
-        logo.append("   \\__/  \\__/  \\__/\n", style=f"bold {amber}")
-        logo.append("   /  \\__/  \\__/  \\\n", style=f"bold {amber}")
-        logo.append("   \\__/  \\__/  \\__/", style=f"bold {amber}")
+        logo.append("Daddy\n", style=f"bold {accent}")
+        logo.append("    __/  \\__/  \\__\n", style=f"bold {primary}")
+        logo.append("   /  \\__/", style=f"bold {primary}")
+        logo.append("[]", style=f"bold {secondary}")
+        logo.append("\\__/  \\\n", style=f"bold {primary}")
+        logo.append("   \\__/  \\__/  \\__/\n", style=f"bold {primary}")
+        logo.append("   /  \\__/  \\__/  \\\n", style=f"bold {primary}")
+        logo.append("   \\__/  \\__/  \\__/", style=f"bold {primary}")
         return logo
 
 
@@ -1850,6 +1883,8 @@ if TEXTUAL_IMPORT_ERROR is None:
         ]
 
         def on_mount(self) -> None:
+            self.register_theme(POSTING_GALAXY_THEME)
+            self.theme = POSTING_GALAXY_THEME_NAME
             self.install_screen(DashboardScreen(), name="dashboard")
             self.install_screen(SettingsScreen(), name="settings")
             self.install_screen(PresetsScreen(), name="presets")

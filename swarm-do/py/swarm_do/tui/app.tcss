@@ -1,14 +1,37 @@
 Screen {
     layout: vertical;
+    background: $background;
+    color: $text;
+}
+
+* {
+    scrollbar-color: $primary 35%;
+    scrollbar-color-hover: $primary 80%;
+    scrollbar-color-active: $primary;
+    scrollbar-background: $surface-darken-1;
+    scrollbar-background-hover: $surface-darken-1;
+    scrollbar-background-active: $surface-darken-1;
+    scrollbar-size-vertical: 1;
 }
 
 Vertical {
     height: 1fr;
 }
 
+Header {
+    background: $background;
+    color: $text;
+}
+
+Footer {
+    background: transparent;
+    color: $text-muted;
+}
+
 #logo {
     padding: 0 1;
     height: 6;
+    background: $background;
 }
 
 AppChrome {
@@ -41,6 +64,40 @@ AppChrome {
 
 DataTable {
     height: 1fr;
+    background: $surface 65%;
+    color: $text;
+}
+
+DataTable > .datatable--header {
+    background: $panel;
+    color: $text-success;
+}
+
+DataTable > .datatable--cursor {
+    background: $primary 30%;
+    color: $text;
+}
+
+ListView {
+    background: $surface 65%;
+}
+
+ListItem {
+    color: $text-muted;
+}
+
+ListItem.--highlight {
+    background: $primary 30%;
+    color: $text;
+}
+
+Input, Select {
+    background: $surface;
+    color: $text;
+}
+
+Input:focus, Select:focus {
+    border: solid $accent;
 }
 
 #pipeline-workbench {

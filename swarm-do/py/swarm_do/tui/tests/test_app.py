@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import unittest
 
@@ -8,6 +9,27 @@ from swarm_do.tui import app as tui_app
 
 @unittest.skipIf(tui_app.TEXTUAL_IMPORT_ERROR is not None, "Textual is not installed")
 class TuiAppTests(unittest.TestCase):
+    def test_posting_galaxy_theme_uses_source_palette(self) -> None:
+        theme = tui_app.POSTING_GALAXY_THEME
+
+        self.assertEqual(theme.name, "posting-galaxy")
+        self.assertEqual(theme.primary, "#C45AFF")
+        self.assertEqual(theme.secondary, "#a684e8")
+        self.assertEqual(theme.background, "#0F0F1F")
+        self.assertEqual(theme.surface, "#1E1E3F")
+        self.assertEqual(theme.panel, "#2D2B55")
+        self.assertEqual(theme.accent, "#FF69B4")
+        self.assertEqual(theme.variables["footer-background"], "transparent")
+
+    def test_posting_galaxy_theme_is_selected_on_startup(self) -> None:
+        async def run_app() -> None:
+            app = tui_app.SwarmTui()
+            async with app.run_test(size=(120, 40)):
+                self.assertEqual(app.theme, tui_app.POSTING_GALAXY_THEME_NAME)
+                self.assertIn(tui_app.POSTING_GALAXY_THEME_NAME, app.available_themes)
+
+        asyncio.run(run_app())
+
     def test_global_navigation_bindings_are_numbered(self) -> None:
         bindings = {binding.key: binding.action for binding in tui_app.SwarmTui.BINDINGS}
 
