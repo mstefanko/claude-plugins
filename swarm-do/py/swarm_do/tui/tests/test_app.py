@@ -6,8 +6,12 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from swarm_do.tui import app as tui_app
+
+if tui_app.TEXTUAL_IMPORT_ERROR is None:
+    from swarm_do.pipeline import recipes as _recipes
 
 
 @unittest.skipIf(tui_app.TEXTUAL_IMPORT_ERROR is not None, "Textual is not installed")
@@ -273,6 +277,415 @@ class TuiAppTests(unittest.TestCase):
                     os.environ.pop("CLAUDE_PLUGIN_DATA", None)
                 else:
                     os.environ["CLAUDE_PLUGIN_DATA"] = old
+
+
+@unittest.skipIf(tui_app.TEXTUAL_IMPORT_ERROR is not None, "Textual is not installed")
+class NewPresetFlowTests(unittest.TestCase):
+    """Coverage for NewPresetModal / GraphStackModal modals + the
+    ``N`` and ``M`` bindings on the live :class:`PresetWorkbenchScreen`
+    (defined at ``swarm_do/tui/app.py`` near line 3132 — the
+    ``_LegacyPipelineEditor`` subclass aliased as ``PresetsScreen``).
+
+    These tests exercise:
+
+    * Modal defaults (recipe id, intent, name).
+    * Modal dismiss payloads (``NewPresetRequest`` / ``GraphStackRequest``).
+    * Bindings: ``N`` -> NewPresetModal, ``M`` -> GraphStackModal,
+      lowercase ``n`` -> existing lens flow, lowercase ``m`` -> existing
+      module flow.
+    * The three ``action_new_preset`` branches: balanced create-only,
+      blank, and create-and-activate (with patched
+      ``actions.create_user_preset_graph`` / ``actions.activate_preset``
+      to assert call ordering and arguments).
+    * The activation-failure path surfaces a "Preset created, activation
+      refused" notify.
+    """
+
+    # ------------------------------------------------------------------
+    # Fixture helpers
+    # ------------------------------------------------------------------
+
+    def _make_user_preset_dir(self) -> tempfile.TemporaryDirectory:
+        """Create a temp ``CLAUDE_PLUGIN_DATA`` root that contains a
+        single inline-snapshot user preset named ``mine``.
+
+        ``inline-snapshot`` is required because ``_graph_edit_ready``
+        (app.py:3439) only treats user presets with that source as
+        directly editable; otherwise it pushes a "detach" confirm.
+        """
+        td = tempfile.TemporaryDirectory()
+        root = Path(td.name)
+        (root / "presets").mkdir()
+        preset_toml = (
+            'name = "mine"\n'
+            'origin = "user"\n'
+            'description = "fixture"\n'
+            "\n"
+            "[budget]\n"
+            "\n"
+            "[pipeline_inline]\n"
+            'name = "mine"\n'
+            "pipeline_version = 1\n"
+            "\n"
+            "[[pipeline_inline.stages]]\n"
+            'id = "research"\n'
+            "\n"
+            "[[pipeline_inline.stages.agents]]\n"
+            'role = "agent-research"\n'
+        )
+        (root / "presets" / "mine.toml").write_text(preset_toml, encoding="utf-8")
+        return td
+
+    # ------------------------------------------------------------------
+    # 1. NewPresetModal defaults
+    # ------------------------------------------------------------------
+
+    def test_new_preset_modal_defaults(self) -> None:
+        async def run_app() -> None:
+            app = tui_app.SwarmTui()
+            async with app.run_test(size=(120, 40)) as pilot:
+                await pilot.pause()
+                modal = tui_app.NewPresetModal()
+                # Default recipe = balanced-default (DEFAULT_RECIPE_ID at
+                # app.py:1330).
+                self.assertEqual(modal._recipe_id, "balanced-default")
+                # Intent for the default recipe is "Implementation".
+                spec = _recipes.get_preset_recipe(modal._recipe_id)
+                self.assertEqual(spec.intent, "Implementation")
+                # Suggested name uses suggest_user_preset_name("balanced").
+                from swarm_do.pipeline.actions import suggest_user_preset_name
+
+                self.assertEqual(
+                    modal._suggested_name,
+                    suggest_user_preset_name("balanced"),
+                )
+
+        asyncio.run(run_app())
+
+    # ------------------------------------------------------------------
+    # 2. GraphStackModal dismiss
+    # ------------------------------------------------------------------
+
+    def test_graph_stack_modal_dismiss_emits_request(self) -> None:
+        async def run_app() -> None:
+            app = tui_app.SwarmTui()
+            async with app.run_test(size=(120, 40)) as pilot:
+                await pilot.pause()
+
+                captured: list[object] = []
+
+                def on_dismiss(payload: object) -> None:
+                    captured.append(payload)
+
+                modal = tui_app.GraphStackModal()
+                app.push_screen(modal, on_dismiss)
+                await pilot.pause()
+                # Force a deterministic stack/mode independent of the
+                # widget tree so we exercise dismiss(GraphStackRequest).
+                modal._stack_id = "default-research"
+                modal._mode = "append-missing"
+                modal.action_apply()
+                await pilot.pause()
+                await pilot.pause()
+
+                self.assertEqual(len(captured), 1)
+                payload = captured[0]
+                self.assertIsInstance(payload, tui_app.GraphStackRequest)
+                self.assertEqual(payload.stack_id, "default-research")
+                self.assertIn(payload.mode, {"empty", "append-missing", "replace"})
+                self.assertEqual(payload.mode, "append-missing")
+
+        asyncio.run(run_app())
+
+    # ------------------------------------------------------------------
+    # 3. PresetWorkbenchScreen N binding pushes NewPresetModal
+    # ------------------------------------------------------------------
+
+    def test_uppercase_n_binding_pushes_new_preset_modal(self) -> None:
+        async def run_app() -> None:
+            app = tui_app.SwarmTui()
+            async with app.run_test(size=(120, 40)) as pilot:
+                app.action_presets()
+                await pilot.pause()
+                await pilot.pause()
+                self.assertIsInstance(app.screen, tui_app.PresetWorkbenchScreen)
+                # Capital N — uppercase keysym.
+                await pilot.press("N")
+                await pilot.pause()
+                await pilot.pause()
+                self.assertIsInstance(app.screen, tui_app.NewPresetModal)
+
+        asyncio.run(run_app())
+
+    # ------------------------------------------------------------------
+    # 4. PresetWorkbenchScreen M binding pushes GraphStackModal
+    # ------------------------------------------------------------------
+
+    def test_uppercase_m_binding_pushes_graph_stack_modal(self) -> None:
+        async def run_app() -> None:
+            app = tui_app.SwarmTui()
+            async with app.run_test(size=(120, 40)) as pilot:
+                app.action_presets()
+                await pilot.pause()
+                await pilot.pause()
+                self.assertIsInstance(app.screen, tui_app.PresetWorkbenchScreen)
+                await pilot.press("M")
+                await pilot.pause()
+                await pilot.pause()
+                self.assertIsInstance(app.screen, tui_app.GraphStackModal)
+
+        asyncio.run(run_app())
+
+    # ------------------------------------------------------------------
+    # 5. Lowercase n / m still trigger the existing lens / module
+    # actions (verified by spying on the screen's action methods).
+    # ------------------------------------------------------------------
+
+    def test_lowercase_n_still_invokes_action_edit_lenses(self) -> None:
+        async def run_app() -> None:
+            app = tui_app.SwarmTui()
+            async with app.run_test(size=(120, 40)) as pilot:
+                app.action_presets()
+                await pilot.pause()
+                await pilot.pause()
+                screen = app.screen
+                self.assertIsInstance(screen, tui_app.PresetWorkbenchScreen)
+                with mock.patch.object(
+                    type(screen),
+                    "action_edit_lenses",
+                    autospec=True,
+                ) as spy:
+                    await pilot.press("n")
+                    await pilot.pause()
+                    await pilot.pause()
+                self.assertGreaterEqual(spy.call_count, 1)
+
+        asyncio.run(run_app())
+
+    def test_lowercase_m_still_invokes_action_add_module(self) -> None:
+        async def run_app() -> None:
+            app = tui_app.SwarmTui()
+            async with app.run_test(size=(120, 40)) as pilot:
+                app.action_presets()
+                await pilot.pause()
+                await pilot.pause()
+                screen = app.screen
+                self.assertIsInstance(screen, tui_app.PresetWorkbenchScreen)
+                with mock.patch.object(
+                    type(screen),
+                    "action_add_module",
+                    autospec=True,
+                ) as spy:
+                    await pilot.press("m")
+                    await pilot.pause()
+                    await pilot.pause()
+                self.assertGreaterEqual(spy.call_count, 1)
+
+        asyncio.run(run_app())
+
+    # ------------------------------------------------------------------
+    # 6. Balanced create-only flow (blank=False, activate=False) —
+    # asserts ``actions.create_user_preset_graph`` is called once with
+    # ``activate=False`` and the new preset is selected in the gallery.
+    # ------------------------------------------------------------------
+
+    def test_balanced_create_only_calls_create_user_preset_graph(self) -> None:
+        async def run_app() -> None:
+            app = tui_app.SwarmTui()
+            async with app.run_test(size=(120, 40)) as pilot:
+                app.action_presets()
+                await pilot.pause()
+                await pilot.pause()
+                screen = app.screen
+                self.assertIsInstance(screen, tui_app.PresetWorkbenchScreen)
+
+                request = tui_app.NewPresetRequest(
+                    recipe_id="balanced-default",
+                    routing_package_id=None,
+                    name="my-balanced",
+                    description="t",
+                    blank=False,
+                    activate=False,
+                )
+
+                with mock.patch(
+                    "swarm_do.pipeline.actions.create_user_preset_graph",
+                    autospec=True,
+                ) as create_mock:
+                    screen._handle_new_preset_dismiss(request)
+                    await pilot.pause()
+                    await pilot.pause()
+
+                self.assertEqual(create_mock.call_count, 1)
+                _, kwargs = create_mock.call_args
+                self.assertEqual(kwargs.get("activate"), False)
+                # First positional arg is the preset name.
+                self.assertEqual(create_mock.call_args.args[0], "my-balanced")
+                # New preset is now the selected gallery row (set
+                # before refresh_pipelines at app.py:3621-3622).
+                self.assertEqual(screen._selected_pipeline_name, "my-balanced")
+
+        asyncio.run(run_app())
+
+    # ------------------------------------------------------------------
+    # 7. Blank flow — no write; Graph tab active.
+    # ------------------------------------------------------------------
+
+    def test_blank_flow_does_not_call_create_user_preset_graph(self) -> None:
+        async def run_app() -> None:
+            app = tui_app.SwarmTui()
+            async with app.run_test(size=(120, 40)) as pilot:
+                app.action_presets()
+                await pilot.pause()
+                await pilot.pause()
+                screen = app.screen
+                self.assertIsInstance(screen, tui_app.PresetWorkbenchScreen)
+
+                request = tui_app.NewPresetRequest(
+                    recipe_id=None,
+                    routing_package_id=None,
+                    name="blank-one",
+                    description="from scratch",
+                    blank=True,
+                    activate=False,
+                )
+
+                with mock.patch(
+                    "swarm_do.pipeline.actions.create_user_preset_graph",
+                    autospec=True,
+                ) as create_mock:
+                    screen._handle_new_preset_dismiss(request)
+                    await pilot.pause()
+                    await pilot.pause()
+
+                self.assertEqual(create_mock.call_count, 0)
+                # Graph tab is active afterward.
+                tabs = screen.query_one("#preset-tabs", tui_app.TabbedContent)
+                self.assertEqual(tabs.active, "graph")
+                # Creation draft is stored for the screen to consume.
+                self.assertIsNotNone(screen._creation_draft)
+                self.assertTrue(screen._creation_draft.is_blank)
+                # The blank draft surfaces the stages-non-empty schema
+                # error (start_blank_preset_draft contract — see
+                # state.py:399).
+                rail = " ".join(screen._creation_draft.errors)
+                self.assertIn("stages must be a non-empty array", rail)
+
+        asyncio.run(run_app())
+
+    # ------------------------------------------------------------------
+    # 8. Create & Activate — call order: create_user_preset_graph(...,
+    # activate=False) first, then activate_preset(name).
+    # ------------------------------------------------------------------
+
+    def test_create_and_activate_call_order(self) -> None:
+        async def run_app() -> None:
+            app = tui_app.SwarmTui()
+            async with app.run_test(size=(120, 40)) as pilot:
+                app.action_presets()
+                await pilot.pause()
+                await pilot.pause()
+                screen = app.screen
+                self.assertIsInstance(screen, tui_app.PresetWorkbenchScreen)
+
+                request = tui_app.NewPresetRequest(
+                    recipe_id="balanced-default",
+                    routing_package_id=None,
+                    name="active-one",
+                    description="",
+                    blank=False,
+                    activate=True,
+                )
+
+                # Use a single parent mock so we can assert
+                # cross-mock call ordering deterministically.
+                manager = mock.MagicMock()
+                with mock.patch(
+                    "swarm_do.pipeline.actions.create_user_preset_graph",
+                    autospec=True,
+                ) as create_mock, mock.patch(
+                    "swarm_do.pipeline.actions.activate_preset",
+                    autospec=True,
+                ) as activate_mock:
+                    manager.attach_mock(create_mock, "create")
+                    manager.attach_mock(activate_mock, "activate")
+
+                    screen._handle_new_preset_dismiss(request)
+                    await pilot.pause()
+                    await pilot.pause()
+
+                # Both called exactly once.
+                self.assertEqual(create_mock.call_count, 1)
+                self.assertEqual(activate_mock.call_count, 1)
+                # create_user_preset_graph was called with
+                # activate=False (kwarg) — activation is a separate
+                # step.
+                _, create_kwargs = create_mock.call_args
+                self.assertEqual(create_kwargs.get("activate"), False)
+                # activate_preset called with the request name.
+                self.assertEqual(activate_mock.call_args.args[0], "active-one")
+                # Cross-mock order: create before activate.
+                ordered = [call[0] for call in manager.mock_calls]
+                self.assertLess(ordered.index("create"), ordered.index("activate"))
+
+        asyncio.run(run_app())
+
+    # ------------------------------------------------------------------
+    # 9. Activation failure — preset retained; "Preset created,
+    # activation refused" surfaced via app.notify.
+    # ------------------------------------------------------------------
+
+    def test_activation_failure_surfaces_notify_and_retains_preset(self) -> None:
+        async def run_app() -> None:
+            app = tui_app.SwarmTui()
+            async with app.run_test(size=(120, 40)) as pilot:
+                app.action_presets()
+                await pilot.pause()
+                await pilot.pause()
+                screen = app.screen
+                self.assertIsInstance(screen, tui_app.PresetWorkbenchScreen)
+
+                request = tui_app.NewPresetRequest(
+                    recipe_id="balanced-default",
+                    routing_package_id=None,
+                    name="refused-one",
+                    description="",
+                    blank=False,
+                    activate=True,
+                )
+
+                with mock.patch(
+                    "swarm_do.pipeline.actions.create_user_preset_graph",
+                    autospec=True,
+                ) as create_mock, mock.patch(
+                    "swarm_do.pipeline.actions.activate_preset",
+                    autospec=True,
+                    side_effect=RuntimeError("policy refused"),
+                ) as activate_mock, mock.patch.object(
+                    app, "notify", autospec=True
+                ) as notify_mock:
+                    screen._handle_new_preset_dismiss(request)
+                    await pilot.pause()
+                    await pilot.pause()
+
+                # create_user_preset_graph was still called — the
+                # preset exists on disk (mocked) and is NOT rolled
+                # back.
+                self.assertEqual(create_mock.call_count, 1)
+                self.assertEqual(activate_mock.call_count, 1)
+                # The screen retains the new preset as its selected
+                # gallery row (not deleted/rolled back).
+                self.assertEqual(screen._selected_pipeline_name, "refused-one")
+                # Notify was called with the activation-refused
+                # message (see app.py:3633).
+                self.assertGreaterEqual(notify_mock.call_count, 1)
+                joined = " ".join(
+                    str(call.args[0]) if call.args else ""
+                    for call in notify_mock.call_args_list
+                )
+                self.assertIn("Preset created, activation refused", joined)
+
+        asyncio.run(run_app())
 
 
 if __name__ == "__main__":
