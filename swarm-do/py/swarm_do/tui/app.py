@@ -56,6 +56,7 @@ from swarm_do.tui.state import (
     current_provider_review_config,
     current_stage_agent_lens_id,
     draft_add_module_stage,
+    draft_apply_graph_stack,
     draft_remove_stage,
     draft_reset_fan_out_routes,
     draft_reset_stage_agent_route,
@@ -97,6 +98,7 @@ from swarm_do.tui.state import (
     select_source_preset_for_pipeline,
     stage_inspector_text,
     stage_lens_option_rows,
+    start_blank_preset_draft,
     start_pipeline_draft,
     status_summary,
     suggested_fork_name,
@@ -3136,8 +3138,10 @@ if TEXTUAL_IMPORT_ERROR is None:
             Binding("r", "edit_stage_route", "Route"),
             Binding("b", "edit_branch_route", "Branch"),
             Binding("n", "edit_lenses", "Lens"),
+            Binding("N", "new_preset", "New Preset", show=True),
             Binding("o", "overview_or_provider", "Overview"),
             Binding("m", "add_module", "Module"),
+            Binding("M", "add_stack", "Add Stack", show=True),
             Binding("delete", "remove_stage", "Remove"),
             Binding("ctrl+s", "save_draft", "Save"),
             Binding("escape", "discard_draft", "Discard"),
@@ -3166,6 +3170,10 @@ if TEXTUAL_IMPORT_ERROR is None:
             self._routing_rows: list[tuple[str, Mapping[str, Any]]] = []
             self._policy_rows: list[tuple[str, str, Any]] = []
             self._selected_preset_error: str | None = None
+            # u3: in-memory creation draft for the blank-preset path
+            # (NewPresetModal -> action_new_preset). None when no
+            # blank-preset flow is in progress.
+            self._creation_draft: PresetCreationDraft | None = None
 
         def compose(self) -> ComposeResult:
             yield Header()
@@ -3177,6 +3185,14 @@ if TEXTUAL_IMPORT_ERROR is None:
                         with TabPane("Overview", id="overview"):
                             yield Static("", id="preset-overview")
                         with TabPane("Graph", id="graph"):
+                            with Horizontal(id="graph-action-strip"):
+                                yield Button("Add Stack", id="action-add-stack")
+                                yield Button("Add Module", id="action-add-module")
+                                yield Button("Add Agent Stage", id="action-add-agent-stage")
+                                yield Button("Add Fan-Out", id="action-add-fan-out")
+                                yield Button("Add Provider", id="action-add-provider")
+                                yield Button("Edit Dependencies", id="action-edit-dependencies")
+                                yield Button("Remove", id="action-remove")
                             yield PipelineLayerBoard(id="pipeline-graph")
                             with Horizontal(id="pipeline-details"):
                                 yield StageInspectorView("", id="stage-inspector")
@@ -3188,6 +3204,22 @@ if TEXTUAL_IMPORT_ERROR is None:
                             yield Static("Enter edits the selected value for user presets.", id="preset-policy-help")
             yield StatusBar(id="status")
             yield Footer()
+
+        def on_button_pressed(self, event: Button.Pressed) -> None:
+            """Dispatch Graph-tab action-strip button presses to screen actions."""
+            mapping = {
+                "action-add-stack": self.action_add_stack,
+                "action-add-module": self.action_add_module,
+                "action-add-agent-stage": self.action_add_agent_stage,
+                "action-add-fan-out": self.action_add_fan_out,
+                "action-add-provider": self.action_add_provider,
+                "action-edit-dependencies": self.action_edit_dependencies,
+                "action-remove": self.action_remove_stage,
+            }
+            handler = mapping.get(event.button.id or "")
+            if handler is not None:
+                event.stop()
+                handler()
 
         def on_mount(self) -> None:
             self.refresh_pipelines()
@@ -3525,6 +3557,175 @@ if TEXTUAL_IMPORT_ERROR is None:
                 return
             super().action_remove_stage()
 
+        # ------------------------------------------------------------
+        # u3: New-preset and graph-stack flows
+        # ------------------------------------------------------------
+
+        def action_new_preset(self) -> None:
+            """Open :class:`NewPresetModal` and route the result.
+
+            Three branches based on :class:`NewPresetRequest`:
+
+            - recipe (``blank=False, activate=False``): build via
+              :func:`recipes.build_recipe_preset`, write via
+              :func:`actions.create_user_preset_graph`, refresh gallery,
+              switch to Overview.
+            - blank (``blank=True``): store the unsaved
+              :class:`PresetCreationDraft` on the screen; switch to
+              Graph tab; refresh validation rail. No write occurs.
+            - create-and-activate (``blank=False, activate=True``):
+              create first; reload + revalidate; then call
+              :func:`actions.activate_preset`. If activation refuses,
+              keep the new preset and surface a non-fatal banner.
+            """
+            self.app.push_screen(NewPresetModal(), self._handle_new_preset_dismiss)
+
+        def _handle_new_preset_dismiss(self, request: Any) -> None:
+            if request is None:
+                return
+            if not isinstance(request, NewPresetRequest):
+                return
+
+            # Blank flow — pure preview state, no write.
+            if request.blank:
+                draft = start_blank_preset_draft(request.name, request.description or request.name)
+                self._creation_draft = draft
+                self._show_tab("graph")
+                self.refresh_validation_rail()
+                return
+
+            # Recipe-based flow (with or without activation).
+            if not request.recipe_id:
+                self.app.push_screen(MessageModal("New preset", "Recipe id is required for non-blank presets."))
+                return
+            try:
+                build = recipes.build_recipe_preset(
+                    request.recipe_id,
+                    request.name,
+                    description=request.description,
+                    routing_package_id=request.routing_package_id,
+                )
+            except Exception as exc:
+                self.app.push_screen(MessageModal("Preset build failed", str(exc)))
+                return
+            if build.errors:
+                self.app.push_screen(MessageModal("Preset build refused", "\n".join(build.errors)))
+                return
+            try:
+                actions.create_user_preset_graph(request.name, build.preset_mapping, activate=False)
+            except Exception as exc:
+                self.app.push_screen(MessageModal("Preset create failed", str(exc)))
+                return
+
+            # Refresh gallery + select the new preset, then jump to Overview.
+            self._selected_pipeline_name = request.name
+            self.refresh_pipelines()
+            self._show_tab("overview")
+
+            if request.activate:
+                # Reload + revalidate are implicit via refresh_pipelines.
+                # Run activation as a separate step so failures are
+                # non-fatal (the preset still exists on disk).
+                try:
+                    actions.activate_preset(request.name)
+                except Exception as exc:
+                    notifier = getattr(self.app, "notify", None)
+                    msg = f"Preset created, activation refused: {exc}"
+                    if callable(notifier):
+                        try:
+                            notifier(msg, severity="error")
+                        except Exception:
+                            self.app.push_screen(MessageModal("Activation refused", msg))
+                    else:
+                        self.app.push_screen(MessageModal("Activation refused", msg))
+                    return
+                self.refresh_pipelines()
+                self.query_one("#status", StatusBar).refresh_status()
+                _refresh_chrome(self)
+
+        def action_add_stack(self) -> None:
+            """Open :class:`GraphStackModal` and apply the chosen stack.
+
+            If a creation draft is in progress, applies via
+            :func:`state.draft_apply_graph_stack` (in-memory). Otherwise
+            applies via :func:`recipes.apply_graph_stack` against the
+            current draft pipeline.
+            """
+            self.app.push_screen(GraphStackModal(), self._handle_graph_stack_dismiss)
+
+        def _handle_graph_stack_dismiss(self, request: Any) -> None:
+            if request is None:
+                return
+            if not isinstance(request, GraphStackRequest):
+                return
+
+            # Blank-preset creation flow takes precedence.
+            if self._creation_draft is not None:
+                try:
+                    new_draft = draft_apply_graph_stack(
+                        self._creation_draft, request.stack_id, request.mode
+                    )
+                except Exception as exc:
+                    self.app.push_screen(MessageModal("Stack apply failed", str(exc)))
+                    return
+                self._creation_draft = new_draft
+                if new_draft.errors:
+                    self.app.push_screen(
+                        MessageModal("Stack apply refused", "\n".join(new_draft.errors))
+                    )
+                    return
+                self.refresh_validation_rail()
+                return
+
+            # Otherwise, apply to the current draft pipeline.
+            if not self._graph_edit_ready(self.action_add_stack):
+                return
+            draft = self._draft_for_selected()
+            if draft is None:
+                return
+            try:
+                result = recipes.apply_graph_stack(draft.pipeline, request.stack_id, request.mode)
+            except Exception as exc:
+                self.app.push_screen(MessageModal("Stack apply failed", str(exc)))
+                return
+            if result.errors:
+                self.app.push_screen(MessageModal("Stack apply refused", "\n".join(result.errors)))
+                return
+            try:
+                draft.replace_pipeline(dict(result.pipeline_mapping))
+            except AttributeError:
+                # Older drafts may not expose replace_pipeline; fall back
+                # to direct mutation of the mapping.
+                draft.pipeline.clear()
+                draft.pipeline.update(dict(result.pipeline_mapping))
+            self.refresh_stages()
+
+        # u3: Graph-tab action-strip stubs. Real wiring will land in
+        # subsequent work units; surface a notify so the buttons don't
+        # crash when invoked.
+        def action_add_agent_stage(self) -> None:
+            self._notify_stub("Add Agent Stage")
+
+        def action_add_fan_out(self) -> None:
+            self._notify_stub("Add Fan-Out")
+
+        def action_add_provider(self) -> None:
+            self._notify_stub("Add Provider")
+
+        def action_edit_dependencies(self) -> None:
+            self._notify_stub("Edit Dependencies")
+
+        def _notify_stub(self, label: str) -> None:
+            msg = f"{label}: not yet implemented"
+            notifier = getattr(self.app, "notify", None)
+            if callable(notifier):
+                try:
+                    notifier(msg)
+                    return
+                except Exception:
+                    pass
+            self.app.push_screen(MessageModal(label, msg))
+
         def action_reset_selected_route(self) -> None:
             if not self._graph_edit_ready(self.action_reset_selected_route):
                 return
@@ -3832,6 +4033,7 @@ if TEXTUAL_IMPORT_ERROR is None:
             if isinstance(screen, SettingsScreen):
                 yield SystemCommand("Edit selected route", "Edit the selected effective role route", screen.action_edit_route)
             if isinstance(screen, PresetWorkbenchScreen):
+                yield SystemCommand("Create new preset", "Open the new preset modal (recipe or blank)", screen.action_new_preset)
                 yield SystemCommand("Activate selected preset", "Use this preset for next /swarmdaddy:do", screen.action_activate_preset)
                 yield SystemCommand("View selected preset diff", "Open the selected preset diff", screen.action_diff_preset)
                 stock_name = screen._reattach_stock_name()
