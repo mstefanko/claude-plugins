@@ -22,6 +22,8 @@ class TuiAppTests(unittest.TestCase):
         self.assertEqual(theme.surface, "#1E1E3F")
         self.assertEqual(theme.panel, "#2D2B55")
         self.assertEqual(theme.accent, "#FF69B4")
+        self.assertEqual(tui_app.POSTING_GALAXY_COLORS["codex"], "#5CE1E6")
+        self.assertNotEqual(tui_app._backend_style("codex"), tui_app._color("success"))
         self.assertEqual(theme.variables["block-cursor-background"], "#2D2B55")
         self.assertEqual(theme.variables["block-cursor-blurred-background"], "#2D2B55")
         self.assertEqual(theme.variables["footer-background"], "transparent")

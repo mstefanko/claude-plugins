@@ -703,6 +703,14 @@ def format_route_chips(chips: tuple[PipelineRouteChip, ...] | list[PipelineRoute
     return rendered
 
 
+def format_route_chip_summary(chips: tuple[PipelineRouteChip, ...] | list[PipelineRouteChip], *, max_chips: int = 3) -> str:
+    if _route_chips_are_complexity_alternatives(chips):
+        count = len(_unique_route_chip_keys(chips))
+        noun = "model" if count == 1 else "models"
+        return f"1 of {count} {noun} by complexity"
+    return format_route_chips(chips, max_chips=max_chips)
+
+
 def preset_profile_preview(
     preset_name: str,
     preset: Mapping[str, Any],
@@ -1138,7 +1146,7 @@ def _pipeline_board_compact_lines(board: PipelineBoardModel) -> list[str]:
 def _pipeline_board_compact_card(card: PipelineBoardCard) -> str:
     parts = [card.title]
     if card.route_chips:
-        parts.append(format_route_chips(card.route_chips, max_chips=2))
+        parts.append(format_route_chip_summary(card.route_chips, max_chips=2))
     parts.extend(card.badges)
     if "JOIN" in card.badges and card.dependency_label:
         parts.append(card.dependency_label)
@@ -1156,7 +1164,7 @@ def _pipeline_board_linear_lines(board: PipelineBoardModel) -> list[str]:
     for index, card in enumerate(cards, 1):
         parts = [f"{index}. {card.title}", f"[{_pipeline_board_lane_label(card.lane)}]"]
         if card.route_chips:
-            parts.append(format_route_chips(card.route_chips, max_chips=2))
+            parts.append(format_route_chip_summary(card.route_chips, max_chips=2))
         depends_on = _dependency_label_stage_ids(card.dependency_label)
         if depends_on:
             parts.append(f"depends_on={','.join(depends_on)}")
@@ -1256,6 +1264,19 @@ def _route_chip_from_route(route: Any, *, label: str) -> PipelineRouteChip:
 
 def _route_chip_label(prefix: str, label: str) -> str:
     return f"{prefix}/{label}" if prefix else label
+
+
+def _route_chips_are_complexity_alternatives(chips: tuple[PipelineRouteChip, ...] | list[PipelineRouteChip]) -> bool:
+    labels = [chip.label for chip in chips]
+    return labels == ["simple", "moderate", "hard"] and len(_unique_route_chip_keys(chips)) > 1
+
+
+def _unique_route_chip_keys(chips: tuple[PipelineRouteChip, ...] | list[PipelineRouteChip]) -> set[tuple[str, str, str]]:
+    return {
+        (chip.backend, chip.model, chip.effort)
+        for chip in chips
+        if chip.error is None
+    }
 
 
 def _clip_route_error(message: str, limit: int = 48) -> str:

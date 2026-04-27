@@ -48,6 +48,7 @@ from swarm_do.tui.state import (
     draft_validation_lines,
     effective_fan_out_branch_route,
     effective_stage_agent_route,
+    format_route_chip_summary,
     format_route_chips,
     latest_checkpoint_event,
     latest_observation,
@@ -691,6 +692,8 @@ class TestPipelineBoardModel(EnvTestCase):
         writer_routes = format_route_chips(cards["writer"].route_chips)
         self.assertIn("simple (gpt 5.4-mini/medium)", writer_routes)
         self.assertIn("moderate (sonnet 4.6/high)", writer_routes)
+        self.assertEqual(format_route_chip_summary(cards["writer"].route_chips), "1 of 3 models by complexity")
+        self.assertIn("agent-writer 1 of 3 models by complexity JOIN", "\n".join(preview.board.fallback_lines))
         self.assertIn("providers=auto min_success=1 max_parallel=4", cards["provider-review"].subtitle)
         self.assertIn("budget: agents<=80 cost<=$20.00 wall<=14400s", preview.summary_lines)
         self.assertEqual(preview.unused_route_lines, ("Unused routes: none",))

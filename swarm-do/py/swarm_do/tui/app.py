@@ -67,6 +67,7 @@ from swarm_do.tui.state import (
     draft_validation_lines,
     effective_fan_out_branch_route,
     effective_stage_agent_route,
+    format_route_chip_summary,
     format_route_chips,
     load_runs,
     load_run_events,
@@ -109,6 +110,7 @@ if TEXTUAL_IMPORT_ERROR is None:
         "warning": "#FFD700",
         "error": "#FF4500",
         "success": "#00FA9A",
+        "codex": "#5CE1E6",
         "accent": "#FF69B4",
         "background": "#0F0F1F",
         "surface": "#1E1E3F",
@@ -422,6 +424,9 @@ if TEXTUAL_IMPORT_ERROR is None:
 
 
     def _append_route_chips(text: Text, chips: tuple[Any, ...], *, max_chips: int = 3) -> None:
+        if _route_chips_are_complexity_alternatives(chips):
+            text.append(format_route_chip_summary(chips), style=_route_chip_group_style(chips))
+            return
         visible = list(chips[:max_chips])
         for index, chip in enumerate(visible):
             if index:
@@ -433,6 +438,31 @@ if TEXTUAL_IMPORT_ERROR is None:
 
     def _route_chip_style(backend: Any) -> str:
         return f"bold {_color('background')} on {_backend_style(backend)}"
+
+
+    def _route_chip_group_style(chips: tuple[Any, ...]) -> str:
+        backends = {
+            str(getattr(chip, "backend", "")).lower()
+            for chip in chips
+            if getattr(chip, "backend", "")
+        }
+        if len(backends) == 1:
+            return _route_chip_style(next(iter(backends)))
+        return f"bold {_color('background')} on {_color('accent')}"
+
+
+    def _route_chips_are_complexity_alternatives(chips: tuple[Any, ...]) -> bool:
+        labels = [str(getattr(chip, "label", "")) for chip in chips]
+        unique = {
+            (
+                str(getattr(chip, "backend", "")),
+                str(getattr(chip, "model", "")),
+                str(getattr(chip, "effort", "")),
+            )
+            for chip in chips
+            if not getattr(chip, "error", None)
+        }
+        return labels == ["simple", "moderate", "hard"] and len(unique) > 1
 
 
     def _flow_gutter_text(label: str, is_last: bool) -> str:
@@ -584,8 +614,8 @@ if TEXTUAL_IMPORT_ERROR is None:
     def _backend_style(backend: Any) -> str:
         return {
             "claude": _color("secondary"),
-            "codex": _color("success"),
-            "gpt": _color("success"),
+            "codex": _color("codex"),
+            "gpt": _color("codex"),
         }.get(str(backend).lower(), _muted_style())
 
 
