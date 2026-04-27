@@ -109,8 +109,24 @@ Input:focus, Select:focus {
 }
 
 #pipeline-gallery {
-    width: 36;
+    width: 46;
     border: solid $primary;
+}
+
+#pipeline-gallery ListItem {
+    height: auto;
+    min-height: 4;
+    padding: 0 1;
+    border-bottom: solid $surface-lighten-1;
+}
+
+#pipeline-gallery ListItem.--highlight {
+    border-left: thick $accent;
+}
+
+#pipeline-gallery .preset-row {
+    width: 1fr;
+    height: auto;
 }
 
 #pipeline-content {
@@ -132,6 +148,10 @@ Input:focus, Select:focus {
 #preset-overview, #preset-policy-help {
     padding: 1;
     overflow-y: auto;
+}
+
+#preset-overview {
+    background: $surface 45%;
 }
 
 #preset-routing, #preset-policy {

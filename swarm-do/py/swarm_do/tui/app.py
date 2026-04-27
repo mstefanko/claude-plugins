@@ -469,6 +469,322 @@ if TEXTUAL_IMPORT_ERROR is None:
         return "n/a"
 
 
+    def _color(name: str) -> str:
+        return POSTING_GALAXY_COLORS[name]
+
+
+    def _muted_style() -> str:
+        return "#8B86A8"
+
+
+    def _intent_style(intent: str) -> str:
+        return {
+            "brainstorm": _color("accent"),
+            "research": _color("secondary"),
+            "design": _color("accent"),
+            "implement": _color("primary"),
+            "review": _color("warning"),
+            "competitive implementation": _color("warning"),
+            "mco-assisted review": _color("success"),
+            "custom": _muted_style(),
+        }.get(intent, _muted_style())
+
+
+    def _origin_style(origin: str) -> str:
+        return {
+            "stock": _color("secondary"),
+            "experiment": _color("warning"),
+            "user": _color("success"),
+            "path": _color("accent"),
+        }.get(origin, _muted_style())
+
+
+    def _source_style(source: str) -> str:
+        if source == "stock-ref":
+            return _color("primary")
+        if source == "inline-snapshot":
+            return _color("warning")
+        return _muted_style()
+
+
+    def _backend_style(backend: Any) -> str:
+        return {
+            "claude": _color("secondary"),
+            "codex": _color("success"),
+            "gpt": _color("success"),
+        }.get(str(backend).lower(), _muted_style())
+
+
+    def _validation_style(status: str) -> str:
+        return {
+            "OK": _color("success"),
+            "WARN": _color("warning"),
+            "ERROR": _color("error"),
+            "n/a": _muted_style(),
+            "unknown": _muted_style(),
+        }.get(status, _muted_style())
+
+
+    def _validation_icon(status: str) -> str:
+        return {
+            "OK": "✓",
+            "WARN": "!",
+            "ERROR": "✕",
+        }.get(status, "•")
+
+
+    def _append_badge(text: Text, label: str, style: str) -> None:
+        text.append("[", style=style)
+        text.append(label, style=f"bold {style}")
+        text.append("]", style=style)
+
+
+    def _append_status(text: Text, status: str, *, label: str | None = None) -> None:
+        style = _validation_style(status)
+        text.append(_validation_icon(status), style=f"bold {style}")
+        text.append(" ")
+        _append_badge(text, label or status, style)
+
+
+    def _clip(value: str, limit: int) -> str:
+        normalized = " ".join(value.split())
+        if len(normalized) <= limit:
+            return normalized
+        return normalized[: max(0, limit - 1)].rstrip() + "…"
+
+
+    def _format_seconds(seconds: Any) -> str:
+        if not isinstance(seconds, (int, float)):
+            return "n/a"
+        seconds = int(seconds)
+        if seconds >= 3600 and seconds % 3600 == 0:
+            return f"{seconds // 3600}h"
+        if seconds >= 3600:
+            return f"{seconds / 3600:.1f}h"
+        if seconds >= 60 and seconds % 60 == 0:
+            return f"{seconds // 60}m"
+        return f"{seconds}s"
+
+
+    def _budget_summary(preset: Mapping[str, Any]) -> str:
+        budget = preset.get("budget")
+        if not isinstance(budget, Mapping):
+            return "budget n/a"
+        bits = []
+        if budget.get("max_agents_per_run") is not None:
+            bits.append(f"agents≤{budget['max_agents_per_run']}")
+        if budget.get("max_estimated_cost_usd") is not None:
+            bits.append(f"cost≤${float(budget['max_estimated_cost_usd']):.0f}")
+        if budget.get("max_wall_clock_seconds") is not None:
+            bits.append(f"wall≤{_format_seconds(budget['max_wall_clock_seconds'])}")
+        return " ".join(bits) if bits else "budget n/a"
+
+
+    def _policy_summary(preset: Mapping[str, Any]) -> str:
+        bits = []
+        review = preset.get("review_providers")
+        if isinstance(review, Mapping):
+            selection = review.get("selection", "auto")
+            bits.append(f"review={selection}")
+            if review.get("min_success") is not None:
+                bits.append(f"min={review['min_success']}")
+            if review.get("max_parallel") is not None:
+                bits.append(f"parallel={review['max_parallel']}")
+        for section in ("decompose", "mem_prime"):
+            value = preset.get(section)
+            if isinstance(value, Mapping) and value.get("mode") is not None:
+                bits.append(f"{section}={value['mode']}")
+        return " ".join(bits) if bits else "policy default"
+
+
+    def _pipeline_composition(pipeline: Mapping[str, Any]) -> dict[str, int]:
+        try:
+            model = pipeline_graph_model(pipeline)
+        except Exception:
+            return {"agents": 0, "fanout": 0, "provider": 0, "output": 0, "joins": 0}
+        return {
+            "agents": sum(1 for node in model.nodes if node.lane == "agents"),
+            "fanout": sum(1 for node in model.nodes if node.lane == "fan-out"),
+            "provider": sum(1 for node in model.nodes if node.lane == "provider"),
+            "output": sum(1 for node in model.nodes if node.lane in {"terminal", "output"}),
+            "joins": sum(1 for node in model.nodes if len(node.depends_on) > 1),
+        }
+
+
+    def _route_counts(preset: Mapping[str, Any], profile: Any | None = None) -> tuple[int, int]:
+        routing = preset.get("routing")
+        configured = len(routing) if isinstance(routing, Mapping) else 0
+        unused = 0
+        if profile is not None:
+            for line in getattr(profile, "unused_route_lines", ()):
+                stripped = str(line).strip()
+                if stripped.startswith("roles."):
+                    unused += 1
+                elif stripped.startswith("..."):
+                    parts = stripped.split()
+                    if len(parts) >= 2 and parts[1].isdigit():
+                        unused += int(parts[1])
+        return configured, unused
+
+
+    def _preset_list_renderable(row: PipelineGalleryRow, active: str | None) -> Text:
+        text = Text()
+        is_active = active == row.name
+        status = _validation_badge(row.name)
+        icon_style = _color("success") if is_active else _muted_style()
+        text.append("● " if is_active else "○ ", style=f"bold {icon_style}")
+        text.append(row.name, style=f"bold {_color('text') if is_active else _color('secondary')}")
+        text.append("  ")
+        _append_badge(text, row.intent, _intent_style(row.intent))
+        text.append(" ")
+        _append_badge(text, row.origin, _origin_style(row.origin))
+        if is_active:
+            text.append(" ")
+            _append_badge(text, "active", _color("success"))
+
+        description = row.description or "No description."
+        text.append("\n  ")
+        text.append(_clip(description, 68), style=_muted_style())
+
+        try:
+            item = find_preset(row.name)
+            if item is None:
+                raise ValueError("preset not found")
+            preset = load_preset(item.path)
+            resolved = resolve_preset_graph(preset)
+            pipeline_name = str(preset.get("pipeline") or resolved.source_name or row.name)
+            route_count, unused_count = _route_counts(preset)
+            unused_suffix = f" unused={unused_count}" if unused_count else ""
+            metadata = (
+                f"graph={pipeline_name}  routes={route_count}{unused_suffix}  "
+                f"{_budget_summary(preset)}"
+            )
+        except Exception as exc:
+            metadata = f"profile unavailable: {_clip(str(exc), 48)}"
+
+        text.append("\n  ")
+        _append_status(text, status)
+        text.append("  ")
+        text.append(_clip(metadata, 76), style=_muted_style())
+        return text
+
+
+    def _append_composition(text: Text, composition: Mapping[str, int]) -> None:
+        text.append("Composition\n", style=f"bold {_color('text')}")
+        chips = (
+            ("●", "agents", composition.get("agents", 0), _color("primary")),
+            ("◆", "fan-out", composition.get("fanout", 0), _color("accent")),
+            ("◈", "provider", composition.get("provider", 0), _color("warning")),
+            ("■", "output", composition.get("output", 0), _color("success")),
+            ("⊙", "joins", composition.get("joins", 0), _muted_style()),
+        )
+        text.append("  ")
+        for index, (icon, label, value, style) in enumerate(chips):
+            if index:
+                text.append("  ")
+            text.append(icon, style=f"bold {style}")
+            text.append(f" {label} {value}", style=style)
+        text.append("\n")
+
+
+    def _append_validation_report(text: Text, report: str) -> None:
+        text.append("Validation\n", style=f"bold {_color('text')}")
+        for line in report.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped == "validation:":
+                continue
+            if stripped.startswith("OK "):
+                style = _color("success")
+                prefix = "  ✓ "
+                body = stripped.removeprefix("OK ")
+            elif stripped.startswith("WARN "):
+                style = _color("warning")
+                prefix = "  ! "
+                body = stripped.removeprefix("WARN ")
+            elif stripped.startswith("ERROR "):
+                style = _color("error")
+                prefix = "  ✕ "
+                body = stripped.removeprefix("ERROR ")
+            else:
+                style = _muted_style()
+                prefix = "    "
+                body = stripped
+            text.append(prefix, style=f"bold {style}")
+            text.append(body, style=style)
+            text.append("\n")
+
+
+    def _preset_overview_renderable(
+        row: PipelineGalleryRow | None,
+        item: Any,
+        preset: Mapping[str, Any],
+        resolved: Any,
+        pipeline: Mapping[str, Any],
+        profile: Any | None,
+        validation: str,
+    ) -> Text:
+        text = Text()
+        active = active_preset_name()
+        is_active = active == item.name
+        status = _validation_badge(item.name)
+        text.append("● " if is_active else "○ ", style=f"bold {_color('success') if is_active else _muted_style()}")
+        text.append(item.name, style=f"bold {_color('text')}")
+        text.append("  ")
+        _append_badge(text, "active" if is_active else "available", _color("success") if is_active else _muted_style())
+        text.append(" ")
+        _append_badge(text, item.origin, _origin_style(item.origin))
+        if row is not None:
+            text.append(" ")
+            _append_badge(text, row.intent, _intent_style(row.intent))
+        text.append(" ")
+        _append_status(text, status)
+        text.append("\n")
+
+        description = preset.get("description")
+        if isinstance(description, str) and description.strip():
+            text.append(description.strip() + "\n", style=_muted_style())
+
+        text.append("\nGraph\n", style=f"bold {_color('text')}")
+        text.append("  ◆ ", style=f"bold {_source_style(resolved.source)}")
+        text.append(_graph_source_line(item.name, dict(preset), resolved), style=_source_style(resolved.source))
+        text.append("\n")
+        lineage = preset.get("forked_from") or getattr(resolved, "lineage_name", None) or "none"
+        text.append("  lineage ", style=_muted_style())
+        text.append(str(lineage), style=_muted_style())
+        text.append("\n\n")
+
+        _append_composition(text, _pipeline_composition(pipeline))
+        route_count, unused_count = _route_counts(preset, profile)
+        text.append("Routing\n", style=f"bold {_color('text')}")
+        text.append("  ● ", style=f"bold {_color('success') if route_count else _muted_style()}")
+        text.append(f"{route_count} configured", style=_color("success") if route_count else _muted_style())
+        text.append("  ")
+        text.append("● ", style=f"bold {_color('warning') if unused_count else _muted_style()}")
+        text.append(f"{unused_count} unused", style=_color("warning") if unused_count else _muted_style())
+        text.append("\n")
+
+        text.append("Budget & Policy\n", style=f"bold {_color('text')}")
+        text.append("  ")
+        text.append(_budget_summary(preset), style=_color("accent"))
+        text.append("\n  ")
+        text.append(_policy_summary(preset), style=_color("secondary"))
+        text.append("\n\n")
+
+        if profile is not None and getattr(profile, "unused_route_lines", None):
+            text.append("Unused Routes\n", style=f"bold {_color('text')}")
+            if tuple(profile.unused_route_lines) == ("Unused routes: none",):
+                text.append("  none\n", style=_muted_style())
+            else:
+                for line in profile.unused_route_lines:
+                    stripped = str(line)
+                    style = _color("warning") if stripped.strip().startswith("roles.") else _muted_style()
+                    text.append("  " + stripped.strip() + "\n", style=style)
+            text.append("\n")
+
+        _append_validation_report(text, validation)
+        return text
+
+
     def _graph_source_line(preset_name: str, preset: dict[str, Any], resolved: Any) -> str:
         del preset
         if resolved.source == "stock-ref":
@@ -2266,8 +2582,7 @@ if TEXTUAL_IMPORT_ERROR is None:
             view.clear()
             active = active_preset_name()
             for row in self._gallery_rows:
-                marker = "*" if active == row.name else " "
-                view.append(ListItem(Label(f"{marker} {row.label}")))
+                view.append(ListItem(Static(_preset_list_renderable(row, active), classes="preset-row")))
             if self._selected_pipeline_name is None and self._gallery_rows:
                 self._selected_pipeline_name = active if active and any(row.name == active for row in self._gallery_rows) else self._gallery_rows[0].name
             if self._selected_pipeline_name is not None:
@@ -2328,23 +2643,15 @@ if TEXTUAL_IMPORT_ERROR is None:
                 return
             item, preset, resolved = selected
             pipeline = self._current_pipeline() or resolved.graph
+            row = self._selected_gallery_row()
             try:
                 profile = preset_profile_preview(item.name, preset, pipeline, width=96, height=12)
-                summary = [*profile.summary_lines, "", *profile.unused_route_lines]
             except Exception as exc:
-                summary = [f"profile unavailable: {exc}"]
-            validation = pipeline_validation_report(item.name)
-            lines = [
-                f"{item.name} [{item.origin}]",
-                str(preset.get("description") or ""),
-                _graph_source_line(item.name, preset, resolved),
-                f"Lineage: {preset.get('forked_from') or 'none'}",
-                "",
-                *summary,
-                "",
-                validation,
-            ]
-            overview.update("\n".join(line for line in lines if line is not None))
+                profile = None
+                validation = f"ERROR profile unavailable: {exc}"
+            else:
+                validation = pipeline_validation_report(item.name)
+            overview.update(_preset_overview_renderable(row, item, preset, resolved, pipeline, profile, validation))
 
         def refresh_routing(self) -> None:
             try:
@@ -2352,7 +2659,7 @@ if TEXTUAL_IMPORT_ERROR is None:
             except Exception:
                 return
             table.clear(columns=True)
-            table.add_columns("route", "backend", "model", "effort")
+            table.add_columns("", "route", "backend", "model", "effort")
             self._routing_rows = []
             selected = self._selected_preset_data()
             if selected is None:
@@ -2364,9 +2671,16 @@ if TEXTUAL_IMPORT_ERROR is None:
                 if not isinstance(value, Mapping):
                     continue
                 self._routing_rows.append((key, value))
-                table.add_row(key, str(value.get("backend", "")), str(value.get("model", "")), str(value.get("effort", "")))
+                backend = str(value.get("backend", ""))
+                table.add_row(
+                    Text("●", style=f"bold {_backend_style(backend)}"),
+                    key,
+                    Text(backend, style=_backend_style(backend)),
+                    str(value.get("model", "")),
+                    str(value.get("effort", "")),
+                )
             if not self._routing_rows:
-                table.add_row("none", "", "", "")
+                table.add_row(Text("○", style=_muted_style()), "none", "", "", "")
 
         def refresh_policy(self) -> None:
             try:

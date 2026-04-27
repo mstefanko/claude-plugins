@@ -61,6 +61,39 @@ class TuiAppTests(unittest.TestCase):
         self.assertNotIn("Focus Pipeline Board", preset_titles)
         self.assertNotIn("Save Pipeline Draft", preset_titles)
 
+    def test_preset_list_rows_use_multiline_status_rendering(self) -> None:
+        row = next(row for row in tui_app.preset_gallery_rows() if row.name == "balanced")
+
+        rendered = tui_app._preset_list_renderable(row, "balanced")
+        plain = rendered.plain
+
+        self.assertGreaterEqual(len(plain.splitlines()), 3)
+        self.assertTrue(plain.startswith("● balanced"))
+        self.assertIn("[active]", plain)
+        self.assertIn("[implement]", plain)
+        self.assertIn("graph=default", plain)
+        self.assertIn("routes=", plain)
+
+    def test_preset_overview_rendering_promotes_status_and_composition(self) -> None:
+        row = next(row for row in tui_app.preset_gallery_rows() if row.name == "balanced")
+        item = tui_app.find_preset("balanced")
+        self.assertIsNotNone(item)
+        preset = tui_app.load_preset(item.path)
+        resolved = tui_app.resolve_preset_graph(preset)
+        profile = tui_app.preset_profile_preview("balanced", preset, resolved.graph, width=96, height=12)
+        validation = tui_app.pipeline_validation_report("balanced")
+
+        rendered = tui_app._preset_overview_renderable(row, item, preset, resolved, resolved.graph, profile, validation)
+        plain = rendered.plain
+
+        self.assertIn("Graph", plain)
+        self.assertIn("Composition", plain)
+        self.assertIn("Routing", plain)
+        self.assertIn("Budget & Policy", plain)
+        self.assertIn("Validation", plain)
+        self.assertIn("agents", plain)
+        self.assertIn("configured", plain)
+
     def test_preset_workbench_is_tabbed_screen(self) -> None:
         async def run_app() -> None:
             app = tui_app.SwarmTui()
