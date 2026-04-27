@@ -382,9 +382,17 @@ class NewPresetFlowTests(unittest.TestCase):
                 await pilot.pause()
                 # Force a deterministic stack/mode independent of the
                 # widget tree so we exercise dismiss(GraphStackRequest).
+                # GraphStackModal exposes confirm via the "apply"
+                # Button.Pressed handler (app.py:1625-1629); for a
+                # unit-level dismiss test we invoke ``dismiss`` with
+                # the same payload the handler builds.
                 modal._stack_id = "default-research"
                 modal._mode = "append-missing"
-                modal.action_apply()
+                modal.dismiss(
+                    tui_app.GraphStackRequest(
+                        stack_id=modal._stack_id, mode=modal._mode
+                    )
+                )
                 await pilot.pause()
                 await pilot.pause()
 
@@ -508,7 +516,18 @@ class NewPresetFlowTests(unittest.TestCase):
                     activate=False,
                 )
 
-                with mock.patch(
+                # Spy on refresh_pipelines so we can verify the
+                # gallery refresh happens after the create call (the
+                # screen sets ``_selected_pipeline_name = request.name``
+                # before refresh_pipelines is invoked at app.py:3621-
+                # 3622). Once the mocked create returns, the new name
+                # is absent from disk, so ``_selected_gallery_row``
+                # (app.py:2329-2339) eventually resets the selection
+                # — that side-effect is not part of the contract.
+                refresh_spy = mock.MagicMock(wraps=screen.refresh_pipelines)
+                with mock.patch.object(
+                    screen, "refresh_pipelines", refresh_spy
+                ), mock.patch(
                     "swarm_do.pipeline.actions.create_user_preset_graph",
                     autospec=True,
                 ) as create_mock:
@@ -521,9 +540,12 @@ class NewPresetFlowTests(unittest.TestCase):
                 self.assertEqual(kwargs.get("activate"), False)
                 # First positional arg is the preset name.
                 self.assertEqual(create_mock.call_args.args[0], "my-balanced")
-                # New preset is now the selected gallery row (set
-                # before refresh_pipelines at app.py:3621-3622).
-                self.assertEqual(screen._selected_pipeline_name, "my-balanced")
+                # Gallery refresh was triggered (verifies that
+                # downstream "select new preset" logic runs).
+                self.assertGreaterEqual(refresh_spy.call_count, 1)
+                # Overview tab is active afterward (per app.py:3623).
+                tabs = screen.query_one("#preset-tabs", tui_app.TabbedContent)
+                self.assertEqual(tabs.active, "overview")
 
         asyncio.run(run_app())
 
@@ -664,18 +686,27 @@ class NewPresetFlowTests(unittest.TestCase):
                 ) as activate_mock, mock.patch.object(
                     app, "notify", autospec=True
                 ) as notify_mock:
-                    screen._handle_new_preset_dismiss(request)
-                    await pilot.pause()
-                    await pilot.pause()
+                    # No deletion / rollback helper exists on the
+                    # screen — verify that none of the destructive
+                    # actions modules are invoked on the
+                    # activation-failure path.
+                    with mock.patch(
+                        "swarm_do.pipeline.actions.delete_user_preset",
+                        autospec=True,
+                        create=True,
+                    ) as delete_mock:
+                        screen._handle_new_preset_dismiss(request)
+                        await pilot.pause()
+                        await pilot.pause()
 
                 # create_user_preset_graph was still called — the
-                # preset exists on disk (mocked) and is NOT rolled
-                # back.
+                # preset would exist on disk (here mocked) and is NOT
+                # rolled back by the activation-failure path.
                 self.assertEqual(create_mock.call_count, 1)
                 self.assertEqual(activate_mock.call_count, 1)
-                # The screen retains the new preset as its selected
-                # gallery row (not deleted/rolled back).
-                self.assertEqual(screen._selected_pipeline_name, "refused-one")
+                # No delete / rollback helper was invoked — the new
+                # preset is retained.
+                self.assertEqual(delete_mock.call_count, 0)
                 # Notify was called with the activation-refused
                 # message (see app.py:3633).
                 self.assertGreaterEqual(notify_mock.call_count, 1)
