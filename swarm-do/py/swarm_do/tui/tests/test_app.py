@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import unittest
 
 from swarm_do.tui import app as tui_app
@@ -37,6 +38,41 @@ class TuiAppTests(unittest.TestCase):
     def test_flow_gutter_marks_downward_board_flow(self) -> None:
         self.assertEqual(tui_app._flow_gutter_text("L1", False), "L1\n│\n▼")
         self.assertEqual(tui_app._flow_gutter_text("L5", True), "L5")
+
+    def test_join_bridge_demotes_join_from_card_badges(self) -> None:
+        card = dataclasses.make_dataclass(
+            "Card",
+            [
+                "title",
+                "subtitle",
+                "badges",
+                "selected",
+                "dependency_label",
+                "outgoing_label",
+                "warnings",
+                "lane",
+                "dirty",
+                "critical",
+                "stage_id",
+            ],
+        )(
+            "agent-writer",
+            "",
+            ("JOIN", "RUN"),
+            False,
+            "after: analysis + clarify",
+            None,
+            (),
+            "agents",
+            False,
+            False,
+            "writer",
+        )
+        column = dataclasses.make_dataclass("Column", ["cards"])((card,))
+
+        self.assertEqual(tui_app._join_bridge_text(column), "JOIN analysis + clarify\n↓ agent-writer")
+        self.assertNotIn("[JOIN]", tui_app._stage_card_text(card))
+        self.assertIn("[RUN]", tui_app._stage_card_text(card))
 
 
 if __name__ == "__main__":

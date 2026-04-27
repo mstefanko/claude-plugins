@@ -140,7 +140,9 @@ On the Pipelines screen:
   local provider readiness before activation.
 - Press `g` to focus the board; `Up` / `Down` move through top-to-bottom
   layers, `Left` / `Right` move within parallel cards, and `Home` / `End` jump
-  to the first or last stage. The left flow rail marks the downward layer order.
+  to the first or last stage. The left flow rail marks the downward layer order,
+  and join bridge rows call out where multiple upstream stages feed the next
+  stage.
 - Press `t` to focus the stage details pane.
 - Press `y` to copy the current board as plain text with dependency labels.
 - Press `m` to add a catalog module to the draft, or `Delete` to remove the

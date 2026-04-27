@@ -160,6 +160,10 @@ if TEXTUAL_IMPORT_ERROR is None:
                 handler(self.stage_id)
 
 
+    class PipelineJoinBridge(Static):
+        pass
+
+
     class PipelineLayerColumn(Horizontal):
         def __init__(self, column: Any, *, is_last: bool = False, **kwargs: Any):
             super().__init__(classes="layer-column", **kwargs)
@@ -230,10 +234,13 @@ if TEXTUAL_IMPORT_ERROR is None:
             if not self.board.columns:
                 return [Static("Pipeline has no stages.", classes="stage-card stage-card--warning")]
             if self.board.mode == "board":
-                return [
-                    PipelineLayerColumn(column, is_last=index == len(self.board.columns) - 1)
-                    for index, column in enumerate(self.board.columns)
-                ]
+                widgets: list[Widget] = []
+                for index, column in enumerate(self.board.columns):
+                    join_text = _join_bridge_text(column)
+                    if join_text is not None:
+                        widgets.append(PipelineJoinBridge(join_text, classes="join-bridge"))
+                    widgets.append(PipelineLayerColumn(column, is_last=index == len(self.board.columns) - 1))
+                return widgets
             return [
                 Static(
                     "\n".join(self.board.fallback_lines),
@@ -312,8 +319,9 @@ if TEXTUAL_IMPORT_ERROR is None:
         lines = [title]
         if card.subtitle:
             lines.append(str(card.subtitle))
-        if card.badges:
-            lines.append(" ".join(f"[{badge}]" for badge in card.badges))
+        badges = [badge for badge in card.badges if badge != "JOIN"]
+        if badges:
+            lines.append(" ".join(f"[{badge}]" for badge in badges))
         if card.selected:
             if card.dependency_label:
                 lines.append(card.dependency_label)
@@ -326,6 +334,20 @@ if TEXTUAL_IMPORT_ERROR is None:
 
     def _flow_gutter_text(label: str, is_last: bool) -> str:
         return label if is_last else f"{label}\n│\n▼"
+
+
+    def _join_bridge_text(column: Any) -> str | None:
+        join_cards = [
+            card for card in getattr(column, "cards", ())
+            if "JOIN" in card.badges and card.dependency_label
+        ]
+        if not join_cards:
+            return None
+        lines = []
+        for card in join_cards:
+            lines.append(f"JOIN {card.dependency_label.removeprefix('after: ')}")
+            lines.append(f"↓ {card.title}")
+        return "\n".join(lines)
 
 
     def _stage_card_classes(card: Any) -> str:

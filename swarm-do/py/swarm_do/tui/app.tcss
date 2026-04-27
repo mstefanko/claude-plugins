@@ -112,6 +112,16 @@ DataTable {
     height: auto;
 }
 
+.join-bridge {
+    width: 1fr;
+    height: auto;
+    margin: 0 0 1 5;
+    padding: 0 1;
+    color: $warning;
+    text-style: bold;
+    border-left: thick $warning;
+}
+
 .stage-card {
     width: 1fr;
     min-height: 3;
