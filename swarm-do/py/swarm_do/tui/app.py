@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -42,11 +43,12 @@ from swarm_do.pipeline.graph_source import resolve_preset_graph
 from swarm_do.pipeline.registry import find_pipeline, find_preset, list_presets, load_pipeline, load_preset, sha256_file
 from swarm_do.pipeline.resolver import BACKENDS, EFFORTS, BackendResolver, ROLE_DEFAULTS, active_preset_name
 from swarm_do.pipeline.validation import MCO_PROVIDER_ORDER, schema_lint_pipeline
-from swarm_do.pipeline import actions
-from swarm_do.pipeline.actions import load_in_flight
+from swarm_do.pipeline import actions, recipes
+from swarm_do.pipeline.actions import load_in_flight, suggest_user_preset_name
 from swarm_do.tui.state import (
     PipelineEditDraft,
     PipelineGalleryRow,
+    PresetCreationDraft,
     StageRow,
     BOARD_MIN_WIDTH,
     current_prompt_lens_ids,
@@ -73,6 +75,7 @@ from swarm_do.tui.state import (
     load_run_events,
     load_observations,
     module_palette_rows,
+    new_preset_preview,
     outcome_dashboard_summary,
     pipeline_board_model,
     pipeline_board_plain_text,
@@ -98,8 +101,37 @@ from swarm_do.tui.state import (
     status_summary,
     suggested_fork_name,
     token_burn_last_24h,
+    validate_creation_draft,
     validate_pipeline_draft,
 )
+
+
+@dataclass(frozen=True)
+class NewPresetRequest:
+    """Result payload emitted by :class:`NewPresetModal` on confirm.
+
+    ``recipe_id`` is ``None`` for blank presets. ``routing_package_id`` is
+    ``None`` when the recipe's default routing package is in use.
+    ``activate`` is ``True`` when the operator chose Create & Activate.
+    """
+
+    recipe_id: str | None
+    routing_package_id: str | None
+    name: str
+    description: str
+    blank: bool
+    activate: bool
+
+
+@dataclass(frozen=True)
+class GraphStackRequest:
+    """Result payload emitted by :class:`GraphStackModal` on confirm.
+
+    ``mode`` is one of ``"empty"``, ``"append-missing"``, ``"replace"``.
+    """
+
+    stack_id: str
+    mode: str
 
 
 if TEXTUAL_IMPORT_ERROR is None:
@@ -1265,6 +1297,334 @@ if TEXTUAL_IMPORT_ERROR is None:
                 self.dismiss([])
                 return
             self.dismiss([part.strip() for part in raw.split(",") if part.strip()])
+
+
+    class NewPresetModal(ModalScreen["NewPresetRequest | None"]):
+        """Create-a-new-preset wizard.
+
+        Defaults: Implementation intent, ``balanced-default`` routing
+        variant. Suggested name is ``actions.suggest_user_preset_name``
+        with stem ``"balanced"``. The modal renders a preview area that
+        reflects the currently-selected recipe / routing package /
+        graph / budget and a Ready/Warning/Blocked validation badge.
+
+        Buttons:
+
+        * ``Create Preset`` (Enter) — dismiss with ``activate=False``.
+        * ``Create & Activate`` (A) — dismiss with ``activate=True``.
+        * ``Cancel`` — dismiss with ``None``.
+
+        Both Create buttons are disabled when validation status is
+        ``Blocked``. Wiring (push from PresetWorkbenchScreen, etc.) is
+        u3's responsibility — this class only emits ``NewPresetRequest``.
+        """
+
+        BINDINGS = [
+            Binding("enter", "create", "Create", show=False),
+            Binding("a", "create_and_activate", "Create & Activate", show=False),
+            Binding("escape", "cancel", "Cancel", show=False),
+        ]
+
+        DEFAULT_RECIPE_ID = "balanced-default"
+        DEFAULT_ROUTING_PACKAGE_ID = "balanced-default"
+
+        def __init__(self) -> None:
+            super().__init__()
+            self._recipes = recipes.list_preset_recipes()
+            self._routing_packages = recipes.list_routing_packages()
+            initial_recipe_id = (
+                self.DEFAULT_RECIPE_ID
+                if any(r.recipe_id == self.DEFAULT_RECIPE_ID for r in self._recipes)
+                else (self._recipes[0].recipe_id if self._recipes else "")
+            )
+            initial_routing_id = (
+                self.DEFAULT_ROUTING_PACKAGE_ID
+                if any(p.package_id == self.DEFAULT_ROUTING_PACKAGE_ID for p in self._routing_packages)
+                else (self._routing_packages[0].package_id if self._routing_packages else "")
+            )
+            self._recipe_id: str = initial_recipe_id
+            self._routing_package_id: str = initial_routing_id
+            self._blank: bool = False
+            self._suggested_name = suggest_user_preset_name("balanced")
+            self._draft: PresetCreationDraft | None = None
+
+        # -- Composition -------------------------------------------------
+
+        def compose(self) -> ComposeResult:
+            recipe_options = [
+                (f"{r.display_name} ({r.intent})", r.recipe_id) for r in self._recipes
+            ]
+            routing_options = [
+                (p.display_name, p.package_id) for p in self._routing_packages
+            ]
+            with Container(id="modal"):
+                yield Label("New Preset", classes="modal-title")
+                yield Static(
+                    "Pick a recipe and routing package; preview shows graph, routing, providers, budget.",
+                    id="new-preset-help",
+                )
+                yield Input(value=self._suggested_name, placeholder="user preset name", id="new-preset-name")
+                yield Input(value="", placeholder="description (optional)", id="new-preset-description")
+                yield Select(
+                    recipe_options or [("(no recipes available)", "")],
+                    value=self._recipe_id or Select.BLANK,
+                    id="new-preset-recipe",
+                )
+                yield Select(
+                    routing_options or [("(no routing packages)", "")],
+                    value=self._routing_package_id or Select.BLANK,
+                    id="new-preset-routing",
+                )
+                yield Checkbox("Blank preset (no recipe; manual stages)", value=False, id="new-preset-blank")
+                yield Static("", id="new-preset-preview")
+                yield Static("", id="new-preset-validation")
+                with Horizontal(classes="buttons"):
+                    yield Button("Create Preset", id="create", variant="primary")
+                    yield Button("Create & Activate", id="create-activate", variant="success")
+                    yield Button("Cancel", id="cancel")
+
+        def on_mount(self) -> None:
+            self._refresh_preview()
+
+        # -- Reactivity --------------------------------------------------
+
+        def on_input_changed(self, event: Input.Changed) -> None:
+            if event.input.id in {"new-preset-name", "new-preset-description"}:
+                self._refresh_preview()
+
+        def on_select_changed(self, event: Select.Changed) -> None:
+            if event.select.id == "new-preset-recipe":
+                self._recipe_id = "" if event.value is Select.BLANK else str(event.value)
+            elif event.select.id == "new-preset-routing":
+                self._routing_package_id = "" if event.value is Select.BLANK else str(event.value)
+            else:
+                return
+            self._refresh_preview()
+
+        def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
+            if event.checkbox.id != "new-preset-blank":
+                return
+            self._blank = bool(event.value)
+            # Disable recipe/routing controls for blank mode (they're ignored).
+            try:
+                self.query_one("#new-preset-recipe", Select).disabled = self._blank
+                self.query_one("#new-preset-routing", Select).disabled = self._blank
+            except Exception:
+                pass
+            self._refresh_preview()
+
+        # -- Preview / validation ---------------------------------------
+
+        def _current_name(self) -> str:
+            try:
+                value = self.query_one("#new-preset-name", Input).value.strip()
+            except Exception:
+                value = ""
+            return value or self._suggested_name
+
+        def _current_description(self) -> str:
+            try:
+                return self.query_one("#new-preset-description", Input).value.strip()
+            except Exception:
+                return ""
+
+        def _refresh_preview(self) -> None:
+            name = self._current_name()
+            description = self._current_description()
+            try:
+                if self._blank or not self._recipe_id:
+                    # Blank preset preview: empty stages → expected schema error.
+                    from swarm_do.tui.state import start_blank_preset_draft
+
+                    draft = start_blank_preset_draft(name, description or name)
+                else:
+                    draft = new_preset_preview(
+                        self._recipe_id,
+                        name,
+                        self._routing_package_id or None,
+                    )
+            except Exception as exc:  # pragma: no cover - defensive UI guard.
+                draft = None
+                preview_text = f"preview unavailable: {exc}"
+                status = "Blocked"
+                validation_text = preview_text
+            else:
+                preview_text = self._format_preview(draft)
+                status = self._status_for(draft)
+                validation_text = self._format_validation(draft, status)
+
+            self._draft = draft
+            try:
+                self.query_one("#new-preset-preview", Static).update(preview_text)
+                self.query_one("#new-preset-validation", Static).update(validation_text)
+            except Exception:
+                pass
+            self._sync_button_state(status)
+
+        def _status_for(self, draft: PresetCreationDraft | None) -> str:
+            if draft is None or draft.errors:
+                return "Blocked"
+            if draft.warnings:
+                return "Warning"
+            return "Ready"
+
+        def _format_preview(self, draft: PresetCreationDraft) -> str:
+            mapping = dict(draft.preset_mapping)
+            pipeline = mapping.get("pipeline_inline") or {}
+            stages = pipeline.get("stages") or []
+            stage_ids = [str(s.get("id", "?")) for s in stages]
+            graph_line = "graph: " + (" → ".join(stage_ids) if stage_ids else "(no stages)")
+
+            routing = mapping.get("routing") or {}
+            routing_label = (
+                draft.routing_package_id or self._routing_package_id or "(none)"
+            )
+            routing_line = f"routing package: {routing_label}  ({len(routing)} routes)"
+
+            review_providers = mapping.get("review_providers") or {}
+            providers_line = "providers: " + (
+                ", ".join(sorted(review_providers.keys())) if review_providers else "(none)"
+            )
+
+            budget = mapping.get("budget") or {}
+            if budget:
+                budget_line = "budget: " + ", ".join(
+                    f"{k}={v}" for k, v in sorted(budget.items())
+                )
+            else:
+                budget_line = "budget: (recipe defaults)"
+
+            return "\n".join([graph_line, routing_line, providers_line, budget_line])
+
+        def _format_validation(self, draft: PresetCreationDraft, status: str) -> str:
+            lines = [f"validation: {status}"]
+            for err in draft.errors:
+                lines.append(f"  error: {err}")
+            for warn in draft.warnings:
+                lines.append(f"  warning: {warn}")
+            return "\n".join(lines)
+
+        def _sync_button_state(self, status: str) -> None:
+            blocked = status == "Blocked"
+            for button_id in ("create", "create-activate"):
+                try:
+                    self.query_one(f"#{button_id}", Button).disabled = blocked
+                except Exception:
+                    pass
+
+        # -- Actions -----------------------------------------------------
+
+        def _build_request(self, *, activate: bool) -> NewPresetRequest:
+            return NewPresetRequest(
+                recipe_id=None if self._blank else (self._recipe_id or None),
+                routing_package_id=None if self._blank else (self._routing_package_id or None),
+                name=self._current_name(),
+                description=self._current_description(),
+                blank=self._blank,
+                activate=activate,
+            )
+
+        def _can_submit(self) -> bool:
+            return self._status_for(self._draft) != "Blocked"
+
+        def action_create(self) -> None:
+            if not self._can_submit():
+                return
+            self.dismiss(self._build_request(activate=False))
+
+        def action_create_and_activate(self) -> None:
+            if not self._can_submit():
+                return
+            self.dismiss(self._build_request(activate=True))
+
+        def action_cancel(self) -> None:
+            self.dismiss(None)
+
+        def on_button_pressed(self, event: Button.Pressed) -> None:
+            event.stop()
+            if event.button.id == "cancel":
+                self.dismiss(None)
+                return
+            if event.button.id == "create":
+                if not self._can_submit():
+                    return
+                self.dismiss(self._build_request(activate=False))
+                return
+            if event.button.id == "create-activate":
+                if not self._can_submit():
+                    return
+                self.dismiss(self._build_request(activate=True))
+
+
+    class GraphStackModal(ModalScreen["GraphStackRequest | None"]):
+        """Apply-a-graph-stack modal.
+
+        The operator picks a registered ``stack_id`` from
+        ``recipes.list_graph_stacks()`` and a ``mode`` from
+        ``{"empty", "append-missing", "replace"}``. On confirm the
+        modal dismisses with a :class:`GraphStackRequest`. Wiring is
+        u3's job; this class only emits the payload.
+        """
+
+        BINDINGS = [
+            Binding("escape", "cancel", "Cancel", show=False),
+        ]
+
+        MODE_OPTIONS: tuple[tuple[str, str], ...] = (
+            ("Empty target — fill from stack", "empty"),
+            ("Append missing stages", "append-missing"),
+            ("Replace existing stages", "replace"),
+        )
+
+        def __init__(self) -> None:
+            super().__init__()
+            self._stacks = recipes.list_graph_stacks()
+            self._stack_id: str = self._stacks[0].stack_id if self._stacks else ""
+            self._mode: str = "empty"
+
+        def compose(self) -> ComposeResult:
+            stack_options = [
+                (f"{spec.display_name} ({spec.stack_id})", spec.stack_id)
+                for spec in self._stacks
+            ] or [("(no graph stacks registered)", "")]
+            with Container(id="modal"):
+                yield Label("Apply Graph Stack", classes="modal-title")
+                yield Static(
+                    "Stacks are reusable groups of stages — empty/append-missing/replace controls how they merge.",
+                    id="graph-stack-help",
+                )
+                yield Select(
+                    stack_options,
+                    value=self._stack_id or Select.BLANK,
+                    id="graph-stack-id",
+                )
+                yield Select(
+                    list(self.MODE_OPTIONS),
+                    value=self._mode,
+                    id="graph-stack-mode",
+                )
+                with Horizontal(classes="buttons"):
+                    yield Button("Apply", id="apply", variant="primary")
+                    yield Button("Cancel", id="cancel")
+
+        def on_select_changed(self, event: Select.Changed) -> None:
+            if event.select.id == "graph-stack-id":
+                self._stack_id = "" if event.value is Select.BLANK else str(event.value)
+            elif event.select.id == "graph-stack-mode":
+                self._mode = "empty" if event.value is Select.BLANK else str(event.value)
+
+        def action_cancel(self) -> None:
+            self.dismiss(None)
+
+        def on_button_pressed(self, event: Button.Pressed) -> None:
+            event.stop()
+            if event.button.id == "cancel":
+                self.dismiss(None)
+                return
+            if event.button.id == "apply":
+                if not self._stack_id:
+                    return
+                self.dismiss(GraphStackRequest(stack_id=self._stack_id, mode=self._mode))
 
 
     class DashboardScreen(Screen):
