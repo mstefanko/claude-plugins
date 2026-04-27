@@ -645,6 +645,7 @@ def save_user_preset_graph(preset_name: str, pipeline_mapping: Mapping[str, Any]
 
 
 def suggest_user_preset_name(stem: str, *, suffix: str = "custom") -> str:
+    """Return an available user preset name derived from ``stem``, appending ``suffix`` and a counter on collision."""
     if find_preset(stem) is None and find_pipeline(stem) is None:
         if not NAME_RE.fullmatch(stem):
             raise ValueError(
@@ -669,6 +670,7 @@ def create_user_preset_graph(
     *,
     activate: bool = False,
 ) -> Path:
+    """Create a new user preset with an inline pipeline graph; optionally activate it."""
     validate_preset_name(preset_name)
     if find_preset(preset_name) is not None:
         raise ValueError(f"preset already exists: {preset_name}")
