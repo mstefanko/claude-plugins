@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/07/schema#",
+  "$id": "https://mstefanko-plugins/swarm-do/prepared_plan.schema.json#v1",
+  "title": "swarm-do prepared plan artifact",
+  "description": "Prepared run artifact emitted by /swarmdaddy:prepare. Single source of truth across review->normalize->decompose->acceptance->execution. Status state machine: draft -> ready_for_acceptance -> accepted (or -> needs_input -> ready_for_acceptance); -> stale (recoverable); -> rejected (terminal).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "repo_root",
+    "git_base_ref",
+    "git_base_sha",
+    "source_plan_path",
+    "source_plan_sha",
+    "prepared_plan_path",
+    "prepared_plan_sha",
+    "inspect_artifact",
+    "phase_map",
+    "review_findings",
+    "review_iteration_count",
+    "accepted_fixes",
+    "work_unit_artifacts",
+    "acceptance",
+    "status",
+    "created_at",
+    "ready_at",
+    "accepted_at"
+  ],
+  "properties": {
+    "schema_version": { "type": "integer", "enum": [1] },
+    "run_id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "repo_root": { "type": "string", "minLength": 1 },
+    "git_base_ref": { "type": "string", "minLength": 1 },
+    "git_base_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "source_plan_path": { "type": "string", "minLength": 1 },
+    "source_plan_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "prepared_plan_path": { "type": "string", "minLength": 1 },
+    "prepared_plan_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "inspect_artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "sha": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "phase_map": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "phase_id",
+          "title",
+          "complexity",
+          "kind",
+          "content_sha",
+          "plan_context_sha",
+          "cache_key",
+          "requires_decomposition"
+        ],
+        "properties": {
+          "phase_id": { "type": "string", "minLength": 1 },
+          "title": { "type": "string" },
+          "complexity": {
+            "type": "string",
+            "enum": ["simple", "moderate", "hard"]
+          },
+          "kind": { "type": ["string", "null"] },
+          "content_sha": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "plan_context_sha": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "cache_key": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "requires_decomposition": { "type": "boolean" }
+        }
+      }
+    },
+    "review_findings": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "review_iteration_count": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 3
+    },
+    "accepted_fixes": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "work_unit_artifacts": {
+      "type": "object",
+      "description": "Map of phase_id -> work_units.v2 sidecar descriptor. Keys MUST be phase_ids that exist in phase_map (validated at load time).",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "sha": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "artifact": { "type": ["object", "null"] }
+        }
+      }
+    },
+    "acceptance": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "accepted_by",
+            "accepted_at",
+            "accepted_source_sha",
+            "accepted_prepared_sha"
+          ],
+          "properties": {
+            "accepted_by": { "type": "string", "minLength": 1 },
+            "accepted_at": { "type": "string", "minLength": 1 },
+            "accepted_source_sha": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "accepted_prepared_sha": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+          }
+        }
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "ready_for_acceptance",
+        "needs_input",
+        "accepted",
+        "stale",
+        "rejected"
+      ]
+    },
+    "created_at": { "type": "string", "minLength": 1 },
+    "ready_at": { "type": ["string", "null"] },
+    "accepted_at": { "type": ["string", "null"] },
+    "rejection_reason": { "type": ["string", "null"] }
+  }
+}

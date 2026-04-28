@@ -742,6 +742,7 @@ def cmd_run_state(args: argparse.Namespace) -> int:
 def cmd_plan(args: argparse.Namespace) -> int:
     from .decompose import decompose_plan_phase
     from .plan import inspect_plan, write_inspect_run
+    from .prepare import accept_prepared, reject_prepared
 
     try:
         if args.plan_command == "inspect":
@@ -793,6 +794,22 @@ def cmd_plan(args: argparse.Namespace) -> int:
                 else:
                     print(json.dumps(result.artifact, indent=2, sort_keys=True))
             return 0 if not result.lint.errors or args.allow_rejected else 1
+        if args.plan_command == "accept":
+            path = accept_prepared(args.run_id, accepted_by=args.accepted_by)
+            msg = {"status": "accepted", "run_id": args.run_id, "path": str(path)}
+            if args.json:
+                print(json.dumps(msg, indent=2, sort_keys=True))
+            else:
+                print(f"swarm: plan accept: {path}")
+            return 0
+        if args.plan_command == "reject":
+            path = reject_prepared(args.run_id, reason=args.reason)
+            msg = {"status": "rejected", "run_id": args.run_id, "path": str(path)}
+            if args.json:
+                print(json.dumps(msg, indent=2, sort_keys=True))
+            else:
+                print(f"swarm: plan reject: {path}")
+            return 0
     except Exception as exc:
         print(f"swarm: plan {args.plan_command}: {exc}", file=sys.stderr)
         return 1
@@ -1106,6 +1123,16 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--write")
     p.add_argument("--bd-epic-id")
     p.add_argument("--allow-rejected", action="store_true")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_plan)
+    p = plan_sub.add_parser("accept")
+    p.add_argument("run_id")
+    p.add_argument("--accepted-by", default="human")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_plan)
+    p = plan_sub.add_parser("reject")
+    p.add_argument("run_id")
+    p.add_argument("--reason", default="")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_plan)
 
