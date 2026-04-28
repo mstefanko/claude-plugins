@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/07/schema#",
+  "$id": "https://mstefanko-plugins/swarm-do/telemetry/observations.schema.json#v2",
+  "title": "swarm-do observation record",
+  "description": "Hook and subprocess observations written without starting a second LLM observer session.",
+  "type": "object",
+  "required": [
+    "ts",
+    "run_id",
+    "event_type",
+    "schema_ok"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "ts": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "run_id": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "phase_id": {
+      "type": ["string", "null"]
+    },
+    "event_type": {
+      "type": "string"
+    },
+    "tool": {
+      "type": ["string", "null"]
+    },
+    "file_paths": {
+      "type": ["array", "null"],
+      "items": { "type": "string" }
+    },
+    "bead_ids": {
+      "type": ["array", "null"],
+      "items": { "type": "string" }
+    },
+    "diff_size_bytes": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "source": {
+      "type": ["string", "null"],
+      "enum": ["claude-hook", "swarm-run-exit", "manual", null]
+    },
+    "details": {
+      "type": ["object", "null"],
+      "additionalProperties": true,
+      "properties": {
+        "role": { "type": ["string", "null"] },
+        "stage_id": { "type": ["string", "null"] },
+        "unit_id": { "type": ["string", "null"] },
+        "structured_event_count": { "type": "integer", "minimum": 0 },
+        "tool_call_count": { "type": "integer", "minimum": 0 },
+        "tool_category_counts": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "uncategorized_tool_count": { "type": "integer", "minimum": 0 },
+        "repeated_read_histogram": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["file_path", "count"],
+            "properties": {
+              "file_path": { "type": "string" },
+              "count": { "type": "integer", "minimum": 0 }
+            }
+          }
+        },
+        "source_read_count": { "type": "integer", "minimum": 0 },
+        "bd_show_count": { "type": "integer", "minimum": 0 },
+        "first_edit_tool_call_index": { "type": ["integer", "null"], "minimum": 1 },
+        "first_test_tool_call_index": { "type": ["integer", "null"], "minimum": 1 },
+        "markers": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "token_usage": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "schema_ok": {
+      "type": "boolean"
+    }
+  }
+}

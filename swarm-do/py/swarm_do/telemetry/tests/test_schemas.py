@@ -14,7 +14,7 @@ from swarm_do.telemetry.schemas import (
 
 class LoadSchemaTests(unittest.TestCase):
     def test_load_returns_dict_for_each_ledger(self) -> None:
-        for ledger in ("runs", "findings", "outcomes", "adjudications", "finding_outcomes"):
+        for ledger in ("runs", "findings", "outcomes", "adjudications", "finding_outcomes", "observations"):
             schema = load_schema(ledger)
             self.assertIsInstance(schema, dict, msg=f"ledger={ledger}")
 
@@ -71,6 +71,44 @@ class ValidateRowTests(unittest.TestCase):
                 "unit_tool_call_count": 12,
             }
         )
+        self.assertEqual(validate_value(row, schema), [])
+
+    def test_observations_v2_details_validate(self) -> None:
+        from swarm_do.telemetry.schemas import validate_value
+
+        schema = load_schema("observations")
+        self.assertEqual(
+            schema.get("$id"),
+            "https://mstefanko-plugins/swarm-do/telemetry/observations.schema.json#v2",
+        )
+        row = {
+            "ts": "2026-04-24T00:00:00Z",
+            "run_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            "phase_id": "agent-writer",
+            "event_type": "writer_exit",
+            "tool": "swarm-run",
+            "file_paths": None,
+            "bead_ids": ["bd-1"],
+            "diff_size_bytes": 10,
+            "source": "swarm-run-exit",
+            "details": {
+                "role": "agent-writer",
+                "stage_id": "agent-writer",
+                "unit_id": "unit-a",
+                "structured_event_count": 7,
+                "tool_call_count": 6,
+                "tool_category_counts": {"read": 2, "edit": 1},
+                "uncategorized_tool_count": 0,
+                "repeated_read_histogram": [{"file_path": "py/a.py", "count": 2}],
+                "source_read_count": 2,
+                "bd_show_count": 1,
+                "first_edit_tool_call_index": 5,
+                "first_test_tool_call_index": 6,
+                "markers": {"needs_context_count": 0},
+                "token_usage": {"cache_hit_ratio": 0.25},
+            },
+            "schema_ok": True,
+        }
         self.assertEqual(validate_value(row, schema), [])
 
 

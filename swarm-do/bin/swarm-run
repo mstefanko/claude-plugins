@@ -34,6 +34,8 @@ Env:
   SWARM_EFFORT_OVERRIDE=xhigh   escalate codex effort (codex backend only)
   SWARM_CODEX_REVIEW_TIMEOUT_SECONDS=60
                                 discard agent-codex-review after this many seconds
+  SWARM_STAGE_ID / SWARM_UNIT_ID
+                                optional telemetry grouping labels for observations
 
 Examples:
   swarm-run --backend codex --issue bd-42
@@ -278,7 +280,7 @@ RUN_ID="$(PYTHONPATH="${_PY_ROOT}:${PYTHONPATH:-}" python3 -c 'from swarm_do.tel
 # ---------------------------------------------------------------------------
 _swarm_telemetry_write() {
   local _final_rc="$1"
-  local _ended _wall _hash _run_id _row _obs _tel_dir _base_sha _head_sha _diff_bytes _repo
+  local _ended _wall _hash _run_id _row _obs _tel_dir _base_sha _head_sha _diff_bytes _repo _metrics _stage_id _unit_id
   local _preset_name _pipeline_name _pipeline_hash _config_hash _context_py_root
 
   # Guard: CLAUDE_PLUGIN_DATA must be set and non-empty.
@@ -324,6 +326,18 @@ _swarm_telemetry_write() {
     _pipeline_name="$(PYTHONPATH="${_context_py_root}:${PYTHONPATH:-}" python3 -m swarm_do.pipeline.context pipeline_name 2>/dev/null || true)"
     _pipeline_hash="$(PYTHONPATH="${_context_py_root}:${PYTHONPATH:-}" python3 -m swarm_do.pipeline.context pipeline_hash 2>/dev/null || true)"
     _config_hash="$(PYTHONPATH="${_context_py_root}:${PYTHONPATH:-}" python3 -m swarm_do.pipeline.config_hash 2>/dev/null || true)"
+    _stage_id="${SWARM_STAGE_ID:-$ROLE}"
+    _unit_id="${SWARM_UNIT_ID:-}"
+    if [[ -f "${OUT_FILE:-}" ]]; then
+      if [[ -n "$_unit_id" ]]; then
+        _metrics="$(PYTHONPATH="${_context_py_root}:${PYTHONPATH:-}" python3 -m swarm_do.telemetry.run_observations "$OUT_FILE" --role "$ROLE" --stage-id "$_stage_id" --unit-id "$_unit_id" 2>/dev/null || true)"
+      else
+        _metrics="$(PYTHONPATH="${_context_py_root}:${PYTHONPATH:-}" python3 -m swarm_do.telemetry.run_observations "$OUT_FILE" --role "$ROLE" --stage-id "$_stage_id" 2>/dev/null || true)"
+      fi
+    else
+      _metrics=""
+    fi
+    [[ -n "$_metrics" ]] || _metrics='{}'
 
     mkdir -p "$_tel_dir"
 
@@ -348,6 +362,7 @@ _swarm_telemetry_write() {
       --argjson base_sha "$(if [[ -n "$_base_sha" ]]; then printf '"%s"' "$_base_sha"; else echo "null"; fi)" \
       --argjson head_sha "$(if [[ -n "$_head_sha" ]]; then printf '"%s"' "$_head_sha"; else echo "null"; fi)" \
       --argjson diff_size_bytes "$(if [[ "$_diff_bytes" =~ ^[0-9]+$ ]]; then printf '%s' "$_diff_bytes"; else echo "null"; fi)" \
+      --argjson metrics "$_metrics" \
       '{
         run_id:             $run_id,
         timestamp_start:    $ts_start,
@@ -369,12 +384,12 @@ _swarm_telemetry_write() {
         base_sha:           $base_sha,
         head_sha:           $head_sha,
         diff_size_bytes:    $diff_size_bytes,
-        input_tokens:       null,
-        cached_input_tokens: null,
-        output_tokens:      null,
+        input_tokens:       ($metrics.token_usage.input_tokens // null),
+        cached_input_tokens: ($metrics.token_usage.cache_read_input_tokens // $metrics.token_usage.cached_input_tokens // null),
+        output_tokens:      ($metrics.token_usage.output_tokens // null),
         estimated_cost_usd: null,
         wall_clock_seconds: $wall,
-        tool_call_count:    null,
+        tool_call_count:    (if (($metrics.structured_event_count // 0) > 0) then ($metrics.tool_call_count // null) else null end),
         cap_hit:            null,
         budget_breach:      null,
         schema_ok:          true,
@@ -393,6 +408,7 @@ _swarm_telemetry_write() {
       --arg issue_id "$ISSUE" \
       --argjson exit_code "$_final_rc" \
       --argjson diff_size_bytes "$(if [[ "$_diff_bytes" =~ ^[0-9]+$ ]]; then printf '%s' "$_diff_bytes"; else echo "null"; fi)" \
+      --argjson metrics "$_metrics" \
       '{
         ts: $ts,
         run_id: $run_id,
@@ -403,9 +419,9 @@ _swarm_telemetry_write() {
         bead_ids: [$issue_id],
         diff_size_bytes: $diff_size_bytes,
         source: "swarm-run-exit",
-        details: {exit_code: $exit_code},
+        details: ($metrics + {exit_code: $exit_code}),
         schema_ok: true
-      } | del(.details)')"
+      }')"
     printf '%s\n' "$_obs" >> "${_tel_dir}/observations.jsonl"
   } || { echo "swarm-run: telemetry write failed (non-fatal)" >&2; true; }
 }
@@ -415,10 +431,10 @@ _swarm_exit_handler() {
   if [[ -n "${LOCK_FILE:-}" ]]; then
     rm -f "$LOCK_FILE"
   fi
-  rm -f "$OUT_FILE"
   if [[ "${DRY_RUN:-0}" -ne 1 ]]; then
     _swarm_telemetry_write "$_rc"
   fi
+  rm -f "$OUT_FILE"
   exit "$_rc"
 }
 

@@ -16,7 +16,7 @@ The ledger table below is generated — do not hand-edit inside the markers; run
 | finding_outcomes | finding_outcomes.jsonl | `swarm-do/schemas/telemetry/finding_outcomes.schema.json` | 1 |
 | findings | findings.jsonl | `swarm-do/schemas/telemetry/findings.v2.schema.json` | 2 |
 | knowledge | knowledge.jsonl | `swarm-do/schemas/telemetry/knowledge.schema.json` | 1 |
-| observations | observations.jsonl | `swarm-do/schemas/telemetry/observations.schema.json` | 1 |
+| observations | observations.jsonl | `swarm-do/schemas/telemetry/observations.v2.schema.json` | 2 |
 | outcomes | outcomes.jsonl | `swarm-do/schemas/telemetry/outcomes.schema.json` | 1 |
 | run_events | run_events.jsonl | `swarm-do/schemas/telemetry/run_events.schema.json` | 1 |
 | runs | runs.jsonl | `swarm-do/schemas/telemetry/runs.v2.schema.json` | 2 |
@@ -117,7 +117,14 @@ Records low-level tool and stop/exit observations from hooks or subprocess traps
 without launching a second LLM observer session. The schema intentionally allows
 `null` for fields that are not available in every event source.
 
-Schema: `observations.schema.json#v1`
+Schema: `observations.v2.schema.json#v2`, with v1 retained as fallback.
+
+`swarm-run` exit observations include a best-effort `details` object with
+tool-category counts, repeated source-read histogram, first edit/test tool-call
+positions, `bd show` count, `NEEDS_CONTEXT` / `NEEDS_RESEARCH` /
+`[UNVERIFIED]` counters, and cache token usage when the backend stream exposes
+it. Extraction is fail-open; unobservable values stay null or zero rather than
+blocking the run.
 
 ### `knowledge.jsonl` — advisory extracted facts
 
