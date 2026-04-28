@@ -22,7 +22,12 @@ class InspectTests(unittest.TestCase):
         self.assertTrue(reports[0].requires_decomposition)
 
     def test_inferred_simple_when_scope_is_small(self) -> None:
+        # Explicit File Targets section required after AC6 (no fallback to
+        # `referenced_files` for inspect_phase.file_paths).
         text = """### Phase 1: Tiny docs
+
+Files affected
+- README.md
 
 - Update `README.md`.
 """

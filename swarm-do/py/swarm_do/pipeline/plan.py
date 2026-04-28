@@ -1,4 +1,24 @@
-"""Plan parsing and inspect heuristics for plan-prepare."""
+"""Plan parsing and inspect heuristics for plan-prepare.
+
+Parser semantics (Tier 1+2 fixes):
+
+- Phase titles support em-dash / en-dash / ASCII-dash / colon separators and
+  trailing ``**`` from bold-wrapped headings; ``_strip_tags`` normalizes the
+  edges and strips ``(complexity: ..., kind: ...)`` tags.
+- ``_extract_referenced_files`` only scans inline backtick spans; tokens that
+  appear inside fenced code blocks are NOT promoted to ``referenced_files``.
+- ``_extract_explicit_files`` populates ``allowed_files`` only from the first
+  ``### Files to create / modify`` (or ``Files Affected`` / ``File Targets``)
+  section under each phase. The reader walks until the next markdown heading
+  rather than a fixed line slice, so long File Targets tables are captured
+  in full.
+- ``_looks_like_path`` requires either a ``KNOWN_TOP_LEVEL_DIRS`` prefix or a
+  recognized file extension (see ``PATH_EXTENSION_RE``); narrative slash
+  tokens such as ``accept/reject`` or ``yes/no`` are rejected.
+- ``inspect_phase`` no longer falls back to ``referenced_files`` when
+  ``explicit_files`` is empty — phases without a Files section produce empty
+  ``file_paths`` rather than leaking narrative paths into ``allowed_files``.
+"""
 
 from __future__ import annotations
 
@@ -33,9 +53,58 @@ BACKTICK_RE = re.compile(r"`([^`\n]+)`")
 PATH_TOKEN_RE = re.compile(
     r"(?<![\w.-])([A-Za-z0-9_./-]+(?:\.[A-Za-z0-9]+|/[A-Za-z0-9_./-]+))(?![\w.-])"
 )
-FILE_SECTION_RE = re.compile(r"^\s{0,3}(?:#{1,6}\s*)?(?:file targets|files affected|files)\b", re.IGNORECASE)
+FILE_SECTION_RE = re.compile(
+    r"^\s{0,3}(?:#{1,6}\s*)?(?:\*\*)?(?:file targets|files affected|files to create(?:\s*/\s*modify)?|files)\b",
+    re.IGNORECASE,
+)
+HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+\S")
 FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
 BULLET_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+", re.MULTILINE)
+# Anchor set for ``_looks_like_path``. A token is treated as a path only when
+# its first segment is in this set (e.g. ``py/...``, ``schemas/...``) or when
+# the whole token ends in a recognized extension (``PATH_EXTENSION_RE``).
+# Without this guard, narrative slash tokens like ``accept/reject``,
+# ``yes/no``, ``read/write`` get promoted into ``referenced_files`` and pollute
+# the inspector's ``allowed_files``. To extend: add the new top-level repo
+# directory name (lowercase, no leading slash) — keep this in sync with the
+# real top-level entries in the repo root.
+#   py            — python sources for swarm-do
+#   swarm-do      — plugin tree (commands, skills, agents, role-specs, ...)
+#   bin           — CLI entry points
+#   docs          — long-form documentation and ADRs
+#   schemas       — JSON Schemas for plan / work-unit artifacts
+#   commands      — slash-command markdown
+#   skills        — skill definitions
+#   permissions   — permission bundles
+#   role-specs    — agent role specifications
+#   agents        — agent definitions
+#   tests         — fixture / golden tests
+#   roles         — role registry
+#   rubrics       — review rubrics
+#   presets       — preset configurations
+#   pipelines     — pipeline definitions
+#   hooks         — hook scripts
+KNOWN_TOP_LEVEL_DIRS = {
+    "py",
+    "swarm-do",
+    "bin",
+    "docs",
+    "schemas",
+    "commands",
+    "skills",
+    "permissions",
+    "role-specs",
+    "agents",
+    "tests",
+    "roles",
+    "rubrics",
+    "presets",
+    "pipelines",
+    "hooks",
+}
+PATH_EXTENSION_RE = re.compile(
+    r"\.(py|md|json|jsonl|yaml|yml|toml|sh|txt|ts|tsx|js|jsx|css|html)$"
+)
 ENGINE_KEYWORDS = {
     "engine",
     "pipeline",
@@ -116,7 +185,7 @@ def inspect_phase(phase: ParsedPhase, thresholds: Mapping[str, Any] | None = Non
     if thresholds:
         values.update({key: value for key, value in thresholds.items() if value is not None})
 
-    files = _dedupe(phase.explicit_files or phase.referenced_files)
+    files = _dedupe(phase.explicit_files)
     estimated_files = len(files) if files else None
     if phase.complexity in COMPLEXITIES:
         complexity = phase.complexity
@@ -240,27 +309,56 @@ def _extract_tags(text: str) -> dict[str, str]:
 
 
 def _strip_tags(title: str) -> str:
-    return TAG_RE.sub("", title).strip(" -")
+    """Strip TAG_RE complexity markers and trim leading/trailing punctuation.
+
+    Handles em-dash, en-dash, ASCII dash, colon, and bold markers (``*``)
+    that surround the title body. Also collapses trailing ``*+`` runs left
+    behind when ``TAG_RE`` chews the parenthesized body out of ``*(...)*``.
+    """
+
+    without_tag = TAG_RE.sub("", title)
+    leading_stripped = re.sub(r"^[\s\-—–:*]+", "", without_tag)
+    trailing_stripped = re.sub(r"\s*\*+\s*$", "", leading_stripped)
+    trailing_stripped = re.sub(r"[\s\-—–:*]+$", "", trailing_stripped)
+    return trailing_stripped.strip()
 
 
 def _extract_explicit_files(lines: list[str]) -> list[str]:
+    """Extract explicit file paths from File Targets / Files-affected sections.
+
+    Reads the section body until the next markdown heading (``#``..``######``)
+    instead of imposing a fixed line cap, so large File-Targets tables are
+    captured in full.
+    """
+
     paths: list[str] = []
-    for idx, line in enumerate(lines):
+    idx = 0
+    total = len(lines)
+    while idx < total:
+        line = lines[idx]
         if not FILE_SECTION_RE.match(line):
+            idx += 1
             continue
-        for candidate in lines[idx + 1 : idx + 80]:
-            if candidate.startswith("### "):
-                break
-            if not candidate.strip() and paths:
+        cursor = idx + 1
+        while cursor < total:
+            candidate = lines[cursor]
+            if HEADING_RE.match(candidate):
                 break
             paths.extend(_paths_from_text(candidate))
+            cursor += 1
+        idx = cursor
     return _dedupe(paths)
 
 
 def _extract_referenced_files(text: str) -> list[str]:
+    """Collect path-like tokens from inline backticks only.
+
+    Code fences are reference-only and must not contribute to file
+    extraction; they routinely contain command arguments (e.g. ``rg``
+    patterns) that look like paths but are not the phase's own scope.
+    """
+
     paths: list[str] = []
-    for fence in FENCE_RE.findall(text):
-        paths.extend(_paths_from_text(fence))
     for match in BACKTICK_RE.finditer(text):
         paths.extend(_paths_from_text(match.group(1)))
     return _dedupe(paths)
@@ -283,8 +381,11 @@ def _looks_like_path(value: str) -> bool:
     if value.startswith("/"):
         return False
     if "/" in value:
-        return True
-    return bool(re.search(r"\.(py|md|json|jsonl|yaml|yml|toml|sh|txt|ts|tsx|js|jsx|css|html)$", value))
+        head = value.split("/", 1)[0]
+        if head in KNOWN_TOP_LEVEL_DIRS:
+            return True
+        return bool(PATH_EXTENSION_RE.search(value))
+    return bool(PATH_EXTENSION_RE.search(value))
 
 
 def _infer_complexity(phase: ParsedPhase, files: list[str], thresholds: Mapping[str, Any]) -> tuple[str, str]:
