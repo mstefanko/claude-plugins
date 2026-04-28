@@ -1,3 +1,13 @@
+<!--
+  Golden-test fixture for swarm_do.pipeline.decompose. NOT a real plan — do
+  not feed this to ``bin/swarm plan decompose`` against a live run. Phases
+  here are crafted to exercise specific parser paths (em-dash titles,
+  fenced path tokens, narrative backticks, no-File-Targets phase, Verification
+  fence). The matching expected artifact lives at
+  ``decompose_golden_expected.json``; ``test_decompose_golden.py`` snapshots
+  the two byte-for-byte.
+-->
+
 # Decompose Golden Fixture Plan
 
 This plan exercises every parser path in the decomposer.

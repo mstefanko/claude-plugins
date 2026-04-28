@@ -1,4 +1,14 @@
-"""Work-unit artifact producer for plan-prepare."""
+"""Work-unit artifact producer for plan-prepare.
+
+Heading recognition (Tier 1+2 fixes):
+
+- ``_acceptance_criteria`` matches any heading level (``#`` through ``######``)
+  or a bold-wrapped line (``**Acceptance Criteria**``) — case-insensitive.
+- ``_validation_commands`` matches both ``Verification`` and
+  ``Validation Commands`` aliases under any heading prefix and captures the
+  contents of the first fenced code block, stopping at ``Expected Results``
+  or the next heading.
+"""
 
 from __future__ import annotations
 

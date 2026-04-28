@@ -1,4 +1,24 @@
-"""Plan parsing and inspect heuristics for plan-prepare."""
+"""Plan parsing and inspect heuristics for plan-prepare.
+
+Parser semantics (Tier 1+2 fixes):
+
+- Phase titles support em-dash / en-dash / ASCII-dash / colon separators and
+  trailing ``**`` from bold-wrapped headings; ``_strip_tags`` normalizes the
+  edges and strips ``(complexity: ..., kind: ...)`` tags.
+- ``_extract_referenced_files`` only scans inline backtick spans; tokens that
+  appear inside fenced code blocks are NOT promoted to ``referenced_files``.
+- ``_extract_explicit_files`` populates ``allowed_files`` only from the first
+  ``### Files to create / modify`` (or ``Files Affected`` / ``File Targets``)
+  section under each phase. The reader walks until the next markdown heading
+  rather than a fixed line slice, so long File Targets tables are captured
+  in full.
+- ``_looks_like_path`` requires either a ``KNOWN_TOP_LEVEL_DIRS`` prefix or a
+  recognized file extension (see ``PATH_EXTENSION_RE``); narrative slash
+  tokens such as ``accept/reject`` or ``yes/no`` are rejected.
+- ``inspect_phase`` no longer falls back to ``referenced_files`` when
+  ``explicit_files`` is empty — phases without a Files section produce empty
+  ``file_paths`` rather than leaking narrative paths into ``allowed_files``.
+"""
 
 from __future__ import annotations
 
@@ -40,6 +60,30 @@ FILE_SECTION_RE = re.compile(
 HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+\S")
 FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
 BULLET_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+", re.MULTILINE)
+# Anchor set for ``_looks_like_path``. A token is treated as a path only when
+# its first segment is in this set (e.g. ``py/...``, ``schemas/...``) or when
+# the whole token ends in a recognized extension (``PATH_EXTENSION_RE``).
+# Without this guard, narrative slash tokens like ``accept/reject``,
+# ``yes/no``, ``read/write`` get promoted into ``referenced_files`` and pollute
+# the inspector's ``allowed_files``. To extend: add the new top-level repo
+# directory name (lowercase, no leading slash) — keep this in sync with the
+# real top-level entries in the repo root.
+#   py            — python sources for swarm-do
+#   swarm-do      — plugin tree (commands, skills, agents, role-specs, ...)
+#   bin           — CLI entry points
+#   docs          — long-form documentation and ADRs
+#   schemas       — JSON Schemas for plan / work-unit artifacts
+#   commands      — slash-command markdown
+#   skills        — skill definitions
+#   permissions   — permission bundles
+#   role-specs    — agent role specifications
+#   agents        — agent definitions
+#   tests         — fixture / golden tests
+#   roles         — role registry
+#   rubrics       — review rubrics
+#   presets       — preset configurations
+#   pipelines     — pipeline definitions
+#   hooks         — hook scripts
 KNOWN_TOP_LEVEL_DIRS = {
     "py",
     "swarm-do",
