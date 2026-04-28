@@ -36,12 +36,12 @@ class DecomposeDiagnosticTests(unittest.TestCase):
         self.assertEqual(diag["split_decision"], "single")
         self.assertEqual(diag["file_count"], 1)
         self.assertEqual(diag["directory_count"], 1)
-        self.assertEqual(diag["cluster_signals"], ["."])
+        self.assertEqual(diag["cluster_signals"], ["docs"])
         self.assertEqual(diag["unit_count"], 1)
         self.assertEqual(diag["depends_on"], [{"unit_id": "unit-1", "depends_on": []}])
         self.assertEqual(diag["lint_error_count"], 0)
 
-    def test_split_by_prefix_diagnostic(self) -> None:
+    def test_split_by_semantic_cluster_diagnostic(self) -> None:
         plan = (
             "### Phase 2: Multi (complexity: hard, kind: feature)\n\n"
             "Files affected\n"
@@ -57,12 +57,10 @@ class DecomposeDiagnosticTests(unittest.TestCase):
         diag = build_decompose_diagnostic(phase, result, plan_path=path)
 
         self.assertIn(diag["complexity"], {"moderate", "hard", "too_large"})
-        self.assertEqual(diag["split_decision"], "split-by-prefix")
-        self.assertEqual(sorted(diag["cluster_signals"]), ["docs", "py"])
+        self.assertEqual(diag["split_decision"], "split-by-semantic-cluster")
+        self.assertEqual(sorted(diag["cluster_signals"]), ["docs", "py/a", "py/b"])
         self.assertGreaterEqual(diag["unit_count"], 2)
-        # Default chain: every unit after the first depends on the previous one.
-        non_first = [d for d in diag["depends_on"] if d["depends_on"]]
-        self.assertTrue(non_first)
+        self.assertTrue(all(not d["depends_on"] for d in diag["depends_on"]))
 
 
 if __name__ == "__main__":

@@ -125,6 +125,37 @@ class ResumeTests(unittest.TestCase):
             self.assertEqual(report.resume_from, {"phase_id": "plan-prepare", "work_unit_id": None})
             self.assertEqual(resume_exit_code(report), READY_TO_RESUME)
 
+    def test_accepted_prepared_artifact_without_dispatch_event_reports_prepared(self) -> None:
+        with isolated_data_dir() as root:
+            run_dir = root / "runs" / RUN_ID
+            run_dir.mkdir(parents=True)
+            artifact_path = run_dir / "prepared_plan.v1.json"
+            artifact_path.write_text(
+                json.dumps(
+                    {
+                        "run_id": RUN_ID,
+                        "status": "accepted",
+                        "prepared_plan_path": "data/runs/accepted/prepared.md",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            index_row = {
+                "run_id": RUN_ID,
+                "bd_epic_id": "swarm-123",
+                "status": "accepted",
+                "prepared_artifact_path": str(artifact_path),
+            }
+            with (root / "runs" / "index.jsonl").open("w", encoding="utf-8") as f:
+                f.write(json.dumps(index_row) + "\n")
+
+            report = build_resume_report("swarm-123")
+
+            self.assertEqual(report.status, "prepared")
+            self.assertEqual(report.checkpoint_path, artifact_path)
+            self.assertEqual(report.resume_from, {"phase_id": "plan-prepare", "work_unit_id": None})
+            self.assertEqual(resume_exit_code(report), READY_TO_RESUME)
+
 
 class RunStateTests(unittest.TestCase):
     def test_active_run_write_and_checkpoint_round_trip(self) -> None:

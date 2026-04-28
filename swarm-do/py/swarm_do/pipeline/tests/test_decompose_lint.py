@@ -49,6 +49,50 @@ class DecomposeLintTests(unittest.TestCase):
         lint = schema_lint_work_units(artifact)
         self.assertTrue(any("overlapping allowed_files" in error for error in lint.errors))
 
+    def test_semantic_clusters_do_not_chain_independent_units(self) -> None:
+        phase = parse_plan_text(
+            "### Phase 4: Prepare (complexity: moderate, kind: feature)\n\n"
+            "### File Targets\n\n"
+            "| Path | Action |\n"
+            "| --- | --- |\n"
+            "| `py/swarm_do/pipeline/plan.py` | EXTEND parser |\n"
+            "| `py/swarm_do/pipeline/cli.py` | EXTEND CLI |\n"
+            "| `docs/testing-strategy.md` | EXTEND docs |\n\n"
+            "### Acceptance Criteria\n\n"
+            "- Parser emits stable findings.\n"
+            "- CLI validates prepare runs.\n"
+            "- Docs describe the smoke command.\n\n"
+            "### Verification Commands\n\n"
+            "```\npython3 -m unittest discover -s py/swarm_do/pipeline/tests -p 'test_decompose*.py'\n```\n"
+        )[0]
+        result = decompose_phase(phase)
+
+        self.assertFalse(result.lint.errors)
+        units = result.artifact["work_units"]
+        parser_unit = next(unit for unit in units if "py/swarm_do/pipeline/plan.py" in unit["allowed_files"])
+        cli_unit = next(unit for unit in units if "py/swarm_do/pipeline/cli.py" in unit["allowed_files"])
+        docs_unit = next(unit for unit in units if "docs/testing-strategy.md" in unit["allowed_files"])
+        self.assertIn(parser_unit["id"], cli_unit["depends_on"])
+        self.assertEqual(docs_unit["depends_on"], [])
+
+    def test_acceptance_heavy_single_file_splits_with_real_file_dependency(self) -> None:
+        phase = parse_plan_text(
+            "### Phase 9: Parser (complexity: moderate, kind: feature)\n\n"
+            "### File Targets\n\n"
+            "- `py/swarm_do/pipeline/plan.py`\n\n"
+            "### Acceptance Criteria\n\n"
+            "- AC1 plan parser.\n- AC2 plan parser.\n- AC3 plan parser.\n"
+            "- AC4 plan parser.\n- AC5 plan parser.\n- AC6 plan parser.\n\n"
+            "### Verification Commands\n\n```\npython3 -m unittest py.swarm_do.pipeline.tests.test_plan_parser\n```\n"
+        )[0]
+        result = decompose_phase(phase)
+
+        self.assertFalse(result.lint.errors)
+        units = result.artifact["work_units"]
+        self.assertGreater(len(units), 1)
+        self.assertEqual(units[1]["depends_on"], [units[0]["id"]])
+        self.assertLessEqual(max(len(unit["acceptance_criteria"]) for unit in units), 5)
+
 
 def parse_plan_text(text: str):
     with tempfile.TemporaryDirectory() as td:

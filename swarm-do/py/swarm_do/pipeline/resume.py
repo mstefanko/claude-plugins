@@ -63,10 +63,13 @@ def build_resume_report(bd_epic_id: str) -> ResumeReport:
     checkpoint = _checkpoint_for_run(run_id) if isinstance(run_id, str) else None
     if checkpoint is None and isinstance(run_id, str):
         checkpoint = _run_json_for_run(run_id)
+    prepared_artifact = _prepared_artifact_for_run(run_id, index_row=index_row) if isinstance(run_id, str) else None
+    prepared_data = _load_json(prepared_artifact) if prepared_artifact else {}
     checkpoint_data = _load_json(checkpoint) if checkpoint else {}
     drift = _checkpoint_drift(bd_epic_id, checkpoint_data, latest_event)
     completed = _completed_units(checkpoint_data, rows, run_id)
     resume_from = _resume_from(checkpoint_data, latest_event)
+    prepared_waiting = _accepted_prepared_without_dispatch(prepared_data, latest_event)
 
     if not run_id:
         status = STATUS_NOT_FOUND
@@ -76,6 +79,11 @@ def build_resume_report(bd_epic_id: str) -> ResumeReport:
     elif _is_complete(checkpoint_data, latest_event):
         status = STATUS_COMPLETE
         resume_from = None
+    elif prepared_waiting:
+        status = STATUS_PREPARED
+        resume_from = {"phase_id": "plan-prepare", "work_unit_id": None}
+        if checkpoint is None:
+            checkpoint = prepared_artifact
     elif checkpoint_data.get("status") == STATUS_PREPARED:
         status = STATUS_PREPARED
     else:
@@ -170,6 +178,41 @@ def _run_json_for_run(run_id: str | None) -> Path | None:
         return None
     path = resolve_data_dir() / "runs" / run_id / "run.json"
     return path if path.is_file() else None
+
+
+def _prepared_artifact_for_run(
+    run_id: str | None,
+    *,
+    index_row: dict[str, Any] | None,
+) -> Path | None:
+    if not run_id:
+        return None
+    indexed = index_row.get("prepared_artifact_path") if index_row else None
+    candidates = []
+    if isinstance(indexed, str) and indexed:
+        candidates.append(Path(indexed))
+    candidates.append(resolve_data_dir() / "runs" / run_id / "prepared_plan.v1.json")
+    for path in candidates:
+        if path.is_file():
+            return path
+    return None
+
+
+def _accepted_prepared_without_dispatch(
+    prepared: dict[str, Any],
+    latest_event: dict[str, Any] | None,
+) -> bool:
+    if prepared.get("status") != "accepted":
+        return False
+    if latest_event is None:
+        return True
+    return latest_event.get("event_type") not in {
+        "prepared_dispatch_started",
+        "checkpoint_written",
+        "retry_started",
+        "resume_started",
+        "resume_completed",
+    }
 
 
 def _latest_index_for_epic(bd_epic_id: str) -> dict[str, Any] | None:

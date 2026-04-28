@@ -60,6 +60,12 @@ FILE_SECTION_RE = re.compile(
 HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+\S")
 FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
 BULLET_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+", re.MULTILINE)
+AC_SECTION_RE = re.compile(r"^\s{0,3}(?:#{1,6}\s*)?(?:\*\*)?acceptance criteria\b", re.IGNORECASE)
+VALIDATION_SECTION_RE = re.compile(
+    r"^\s{0,3}(?:#{1,6}\s*)?(?:\*\*)?(?:verification|validation)\s+commands?\b",
+    re.IGNORECASE,
+)
+AMBIGUOUS_VERB_RE = re.compile(r"\b(?:maybe|consider|etc\.?|and so on|tbd)\b", re.IGNORECASE)
 # Anchor set for ``_looks_like_path``. A token is treated as a path only when
 # its first segment is in this set (e.g. ``py/...``, ``schemas/...``) or when
 # the whole token ends in a recognized extension (``PATH_EXTENSION_RE``).
@@ -218,6 +224,175 @@ def inspect_plan(path: str | Path, *, phase_id: str | None = None, thresholds: M
     return [inspect_phase(phase, thresholds=thresholds) for phase in phases]
 
 
+def lint_plan(path: str | Path, *, thresholds: Mapping[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Return deterministic prepare-gate findings for an implementation plan."""
+
+    target = Path(path)
+    text = target.read_text(encoding="utf-8")
+    return lint_plan_text(text, source_name=str(target), thresholds=thresholds)
+
+
+def lint_plan_text(
+    text: str,
+    *,
+    source_name: str = "<memory>",
+    thresholds: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    values = dict(DEFAULT_THRESHOLDS)
+    if thresholds:
+        values.update({key: value for key, value in thresholds.items() if value is not None})
+
+    lines = text.splitlines()
+    findings: list[dict[str, Any]] = []
+    phase_heading_matches = [
+        (idx + 1, PHASE_HEADING_RE.match(line))
+        for idx, line in enumerate(lines)
+        if PHASE_HEADING_RE.match(line)
+    ]
+    if not phase_heading_matches:
+        findings.append(
+            _finding(
+                "no_phase_headings",
+                "safe_fix",
+                None,
+                f"{source_name}:1",
+                "Plan has no canonical phase headings; prepare will wrap it in a single phase.",
+            )
+        )
+    seen: dict[str, int] = {}
+    for line_no, match in phase_heading_matches:
+        assert match is not None
+        phase_id = match.group("id").strip().rstrip(":")
+        if phase_id in seen:
+            findings.append(
+                _finding(
+                    "duplicate_phase_ids",
+                    "blocking",
+                    phase_id,
+                    f"{source_name}:{line_no}",
+                    f"Phase id {phase_id!r} duplicates line {seen[phase_id]}.",
+                )
+            )
+        else:
+            seen[phase_id] = line_no
+
+    for phase in parse_plan_from_text(text):
+        report = inspect_phase(phase, thresholds=values)
+        if not _has_section(phase.text, AC_SECTION_RE):
+            findings.append(
+                _finding(
+                    "missing_acceptance_criteria",
+                    "blocking",
+                    phase.phase_id,
+                    f"{source_name}:{phase.start_line}",
+                    "Phase is missing an Acceptance Criteria section.",
+                )
+            )
+        if not _has_section(phase.text, VALIDATION_SECTION_RE):
+            findings.append(
+                _finding(
+                    "missing_validation_commands",
+                    "blocking",
+                    phase.phase_id,
+                    f"{source_name}:{phase.start_line}",
+                    "Phase is missing a Verification Commands or Validation Commands section.",
+                )
+            )
+        if phase.referenced_files and not phase.explicit_files:
+            findings.append(
+                _finding(
+                    "missing_file_targets_when_referenced",
+                    "blocking",
+                    phase.phase_id,
+                    f"{source_name}:{phase.start_line}",
+                    "Phase references files but has no File Targets section.",
+                )
+            )
+        if report.complexity == "too_large" or (
+            phase.implementation_bullets > int(values["moderate_max_bullets"])
+            and (report.estimated_files or 0) > int(values["simple_max_files"])
+        ):
+            severity = "blocking" if report.complexity == "too_large" else "advisory"
+            findings.append(
+                _finding(
+                    "phase_too_broad",
+                    severity,
+                    phase.phase_id,
+                    f"{source_name}:{phase.start_line}",
+                    "Phase is too broad for one writer unit; split it or rely on prepare decomposition.",
+                )
+            )
+        ambiguous = AMBIGUOUS_VERB_RE.search(phase.text)
+        if ambiguous:
+            findings.append(
+                _finding(
+                    "ambiguous_verbs",
+                    "advisory",
+                    phase.phase_id,
+                    f"{source_name}:{phase.start_line}",
+                    f"Ambiguous planning term {ambiguous.group(0)!r} should be tightened before dispatch.",
+                )
+            )
+        if phase.complexity is None and report.complexity == "hard":
+            findings.append(
+                _finding(
+                    "untagged_hard_phase",
+                    "advisory",
+                    phase.phase_id,
+                    f"{source_name}:{phase.start_line}",
+                    "Phase inferred as hard but has no explicit complexity tag.",
+                )
+            )
+    return findings
+
+
+def parse_plan_from_text(text: str) -> list[ParsedPhase]:
+    lines = text.splitlines()
+    matches: list[tuple[int, re.Match[str]]] = []
+    for idx, line in enumerate(lines):
+        match = PHASE_HEADING_RE.match(line)
+        if match:
+            matches.append((idx, match))
+    if not matches:
+        title = "Plan"
+        for line in lines:
+            stripped = line.strip(" #")
+            if stripped:
+                title = stripped
+                break
+        return [_build_phase("plan", title, lines, 0, len(lines))]
+    phases: list[ParsedPhase] = []
+    for offset, (line_idx, match) in enumerate(matches):
+        end_idx = matches[offset + 1][0] if offset + 1 < len(matches) else len(lines)
+        phase_id = match.group("id").strip().rstrip(":")
+        title = _strip_tags(match.group("title").strip()) or f"Phase {phase_id}"
+        phases.append(_build_phase(phase_id, title, lines, line_idx, end_idx))
+    return phases
+
+
+def canonical_plan_text(phases: list[ParsedPhase]) -> str:
+    """Emit stable phase markdown without mutating the source plan."""
+
+    chunks: list[str] = []
+    for phase in phases:
+        report = inspect_phase(phase)
+        kind = phase.kind or "task"
+        body = _phase_body_without_heading(phase)
+        heading = f"### Phase {phase.phase_id}: {phase.title} (complexity: {report.complexity}, kind: {kind})"
+        chunk = heading
+        if body:
+            chunk += "\n\n" + body.strip()
+        chunks.append(chunk.rstrip())
+    return "\n\n".join(chunks).rstrip() + "\n"
+
+
+def write_canonical_plan(phases: list[ParsedPhase], dest: str | Path) -> Path:
+    target = Path(dest)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(canonical_plan_text(phases), encoding="utf-8")
+    return target
+
+
 def write_inspect_run(
     plan_path: str | Path,
     reports: list[InspectionReport],
@@ -294,6 +469,27 @@ def _build_phase(phase_id: str, title: str, lines: list[str], start_idx: int, en
         explicit_files=explicit_files,
         referenced_files=referenced_files,
     )
+
+
+def _finding(code: str, severity: str, phase_id: str | None, location: str, message: str) -> dict[str, Any]:
+    return {
+        "code": code,
+        "severity": severity,
+        "phase_id": phase_id,
+        "location": location,
+        "message": message,
+    }
+
+
+def _has_section(text: str, pattern: re.Pattern[str]) -> bool:
+    return any(pattern.match(line.strip()) for line in text.splitlines())
+
+
+def _phase_body_without_heading(phase: ParsedPhase) -> str:
+    lines = phase.text.splitlines()
+    if lines and PHASE_HEADING_RE.match(lines[0]):
+        return "\n".join(lines[1:]).strip()
+    return phase.text.strip()
 
 
 def _extract_tags(text: str) -> dict[str, str]:

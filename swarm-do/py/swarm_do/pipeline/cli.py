@@ -7,7 +7,7 @@ import json
 import shutil
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from .actions import (
     cancel_run,
@@ -435,6 +435,117 @@ def cmd_review(args: argparse.Namespace) -> int:
     return _cmd_output_profile(args, profile_id="review")
 
 
+def cmd_prepare(args: argparse.Namespace) -> int:
+    from .prepare import accept_prepared, prepare_plan_run, prepared_acceptance_summary, reject_prepared
+
+    try:
+        if args.accept:
+            summary = prepared_acceptance_summary(args.accept)
+            if summary["stale_reasons"]:
+                print(
+                    f"swarm: prepare accept: prepared artifact is stale: {', '.join(summary['stale_reasons'])}",
+                    file=sys.stderr,
+                )
+                return 1
+            path = accept_prepared(args.accept, accepted_by=args.accepted_by)
+            summary["status"] = "accepted"
+            summary["artifact_path"] = str(path)
+            if args.json:
+                print(json.dumps(summary, indent=2, sort_keys=True))
+            else:
+                _print_prepare_acceptance_summary(summary)
+                print(f"Status: ACCEPTED")
+            return 0
+        if args.reject:
+            path = reject_prepared(args.reject, reason=args.reason or "")
+            payload = {"run_id": args.reject, "status": "rejected", "artifact_path": str(path)}
+            if args.json:
+                print(json.dumps(payload, indent=2, sort_keys=True))
+            else:
+                print(f"prepared artifact rejected: {path}")
+                print("Status: REJECTED")
+            return 0
+        if not args.plan_path:
+            print("swarm: prepare: plan_path is required unless --accept or --reject is used", file=sys.stderr)
+            return 1
+        result = prepare_plan_run(
+            args.plan_path,
+            dry_run=args.dry_run,
+            write=not args.dry_run,
+        )
+        if args.json:
+            print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+        else:
+            _print_prepare_result(result)
+        return 0 if result.status != "needs_input" else 1
+    except Exception as exc:
+        print(f"swarm: prepare: {exc}", file=sys.stderr)
+        return 1
+
+
+def _print_prepare_result(result: Any) -> None:
+    print(f"prepared run: {result.run_id}")
+    print(f"prepared plan: {result.prepared_plan_path}")
+    if result.artifact_path:
+        print(f"artifact: {result.artifact_path}")
+    print(f"findings: {len(result.lint_findings)}")
+    print(f"work_unit_errors: {len(result.work_unit_errors)}")
+    print(f"cache_hits: {result.cache_hits}")
+    print(f"Status: {result.to_dict()['status_label']}")
+
+
+def _print_prepare_acceptance_summary(summary: Mapping[str, Any]) -> None:
+    print(f"prepared plan: {summary.get('prepared_plan_path')}")
+    print(f"findings: {summary.get('review_finding_count')}")
+    print(f"safe_fix proposals: {summary.get('safe_fix_count')}")
+    print(f"work units: {summary.get('work_unit_count')}")
+    print(f"allowed files: {summary.get('allowed_file_count')}")
+    print(f"validation commands: {summary.get('validation_command_count')}")
+    print(f"source sha: {summary.get('source_plan_sha')}")
+    print(f"prepared sha: {summary.get('prepared_plan_sha')}")
+    print(f"git base: {summary.get('git_base_ref')} {summary.get('git_base_sha')}")
+
+
+def cmd_do(args: argparse.Namespace) -> int:
+    if not args.prepared:
+        print(
+            "swarm: do: the helper CLI currently supports prepared dispatch only; "
+            "use /swarmdaddy:do <plan-path> for legacy orchestration",
+            file=sys.stderr,
+        )
+        return 1
+    prepared_ref = args.prepared if isinstance(args.prepared, str) else args.target
+    if not prepared_ref:
+        print("swarm: do: --prepared requires a run id or artifact path", file=sys.stderr)
+        return 1
+
+    from .prepare import verify_prepared_for_dispatch
+    from .run_state import active_run_path, write_active_run
+
+    try:
+        result = verify_prepared_for_dispatch(prepared_ref)
+        payload = result.to_dict()
+        if not args.no_write_state:
+            state_path = write_active_run(
+                active_run_path(resolve_data_dir()),
+                result.to_run_state(bd_epic_id=args.bd_epic_id),
+            )
+            payload["active_run_path"] = str(state_path)
+        if args.json:
+            print(json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            print(f"prepared dispatch: {result.run_id}")
+            print(f"prepared plan: {result.prepared_plan_path}")
+            print(f"work-unit artifacts: {len(result.work_unit_artifacts)}")
+            if "active_run_path" in payload:
+                print(f"active run: {payload['active_run_path']}")
+            print("Status: READY_FOR_DISPATCH")
+        return 0
+    except Exception as exc:
+        print(f"swarm: do --prepared: {exc}", file=sys.stderr)
+        return 1
+
+
 def cmd_pipeline_list(args: argparse.Namespace) -> int:
     for item in list_pipelines():
         print(f"{item.name}\t{item.origin}")
@@ -742,9 +853,20 @@ def cmd_run_state(args: argparse.Namespace) -> int:
 def cmd_plan(args: argparse.Namespace) -> int:
     from .decompose import decompose_plan_phase
     from .plan import inspect_plan, write_inspect_run
-    from .prepare import accept_prepared, reject_prepared
+    from .prepare import accept_prepared, prepare_plan_run, reject_prepared
 
     try:
+        if args.plan_command == "prepare":
+            result = prepare_plan_run(
+                args.plan_path,
+                dry_run=args.dry_run,
+                write=bool(args.write and not args.dry_run),
+            )
+            if args.json:
+                print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+            else:
+                _print_prepare_result(result)
+            return 0 if result.status != "needs_input" else 1
         if args.plan_command == "inspect":
             reports = inspect_plan(args.plan_path, phase_id=args.phase)
             payload: dict[str, Any] = {"schema_version": 1, "reports": [report.to_dict() for report in reports]}
@@ -1082,6 +1204,29 @@ def _build_parser() -> argparse.ArgumentParser:
     review.add_argument("--dry-run", action="store_true")
     review.set_defaults(func=cmd_review)
 
+    do = sub.add_parser("do")
+    do.add_argument("target", nargs="?", help="legacy plan path, or prepared artifact path with --prepared")
+    do.add_argument("--prepared", nargs="?", const=True, metavar="RUN_ID_OR_PATH")
+    do.add_argument("--bd-epic-id")
+    do.add_argument("--no-write-state", action="store_true")
+    do.add_argument("--json", action="store_true")
+    do.set_defaults(func=cmd_do)
+
+    prepare = sub.add_parser("prepare")
+    prepare.add_argument("plan_path", nargs="?", help="plan path to prepare")
+    prepare.add_argument("--dry-run", action="store_true")
+    prepare.add_argument(
+        "--auto-mechanical-fixes",
+        action="store_true",
+        help="reserved for slash-command policy; deterministic fixes are always summarized",
+    )
+    prepare.add_argument("--accept", metavar="RUN_ID")
+    prepare.add_argument("--reject", metavar="RUN_ID")
+    prepare.add_argument("--accepted-by", default="human")
+    prepare.add_argument("--reason", default="")
+    prepare.add_argument("--json", action="store_true")
+    prepare.set_defaults(func=cmd_prepare)
+
     handoff = sub.add_parser("handoff")
     handoff.add_argument("issue_id")
     handoff.add_argument("--to", required=True, choices=["claude", "codex"])
@@ -1111,6 +1256,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
     plan = sub.add_parser("plan")
     plan_sub = plan.add_subparsers(dest="plan_command")
+    p = plan_sub.add_parser("prepare")
+    p.add_argument("plan_path")
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--write", action="store_true")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_plan)
     p = plan_sub.add_parser("inspect")
     p.add_argument("plan_path")
     p.add_argument("--phase")

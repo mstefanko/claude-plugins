@@ -28,6 +28,7 @@ import os
 import re
 import subprocess
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
@@ -101,6 +102,97 @@ class ReviewLoopResult:
     review_findings: tuple[dict[str, Any], ...]
     review_iteration_count: int
     status: str
+
+
+@dataclass(frozen=True)
+class PrepareRunResult:
+    """Result from the deterministic prepare command profile."""
+
+    run_id: str
+    status: str
+    payload: dict[str, Any]
+    lint_findings: tuple[dict[str, Any], ...]
+    work_unit_errors: tuple[str, ...]
+    prepared_plan_path: str
+    artifact_path: str | None
+    cache_hits: int
+
+    def to_dict(self) -> dict[str, Any]:
+        work_units = self.payload.get("work_unit_artifacts") or {}
+        return {
+            "run_id": self.run_id,
+            "status": self.status,
+            "prepared_plan_path": self.prepared_plan_path,
+            "artifact_path": self.artifact_path,
+            "lint_findings": list(self.lint_findings),
+            "work_unit_errors": list(self.work_unit_errors),
+            "review_iteration_count": self.payload.get("review_iteration_count", 0),
+            "phase_count": len(self.payload.get("phase_map") or []),
+            "work_unit_count": sum(
+                len((descriptor.get("artifact") or {}).get("work_units") or [])
+                for descriptor in work_units.values()
+                if isinstance(descriptor, Mapping)
+            ),
+            "cache_hits": self.cache_hits,
+            "status_label": _prepare_status_label(self.status),
+        }
+
+
+@dataclass(frozen=True)
+class PreparedDispatchResult:
+    """Accepted prepared artifact verified for pure dispatch consumption."""
+
+    run_id: str
+    status: str
+    artifact_path: str
+    source_plan_path: str
+    prepared_plan_path: str
+    inspect_artifact_path: str
+    git_base_ref: str
+    git_base_sha: str
+    phase_map: tuple[dict[str, Any], ...]
+    review_findings: tuple[dict[str, Any], ...]
+    work_unit_artifacts: dict[str, dict[str, Any]]
+
+    def to_dict(self) -> dict[str, Any]:
+        work_units = [
+            unit
+            for descriptor in self.work_unit_artifacts.values()
+            for unit in ((descriptor.get("artifact") or {}).get("work_units") or [])
+            if isinstance(unit, Mapping)
+        ]
+        return {
+            "run_id": self.run_id,
+            "status": self.status,
+            "ready_for_dispatch": True,
+            "artifact_path": self.artifact_path,
+            "source_plan_path": self.source_plan_path,
+            "prepared_plan_path": self.prepared_plan_path,
+            "inspect_artifact_path": self.inspect_artifact_path,
+            "git_base_ref": self.git_base_ref,
+            "git_base_sha": self.git_base_sha,
+            "phase_count": len(self.phase_map),
+            "review_finding_count": len(self.review_findings),
+            "work_unit_artifact_count": len(self.work_unit_artifacts),
+            "work_unit_count": len(work_units),
+        }
+
+    def to_run_state(self, *, bd_epic_id: str | None = None) -> dict[str, Any]:
+        return {
+            "run_id": self.run_id,
+            "bd_epic_id": bd_epic_id,
+            "phase_id": "prepared-dispatch",
+            "child_bead_ids": [],
+            "work_units": _dispatch_work_units(self.work_unit_artifacts),
+            "prepared_artifact_path": self.artifact_path,
+            "prepared_plan_path": self.prepared_plan_path,
+            "prepared_inspect_path": self.inspect_artifact_path,
+            "phase_map": list(self.phase_map),
+            "review_findings": list(self.review_findings),
+            "work_unit_artifacts": self.work_unit_artifacts,
+            "integration_branch_head": None,
+            "status": "prepared",
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -291,6 +383,533 @@ def run_plan_review_loop(
             raise ValueError("plan normalizer must return non-empty markdown")
 
     raise AssertionError("unreachable review loop state")
+
+
+# ---------------------------------------------------------------------------
+# Deterministic prepare command profile
+# ---------------------------------------------------------------------------
+
+
+def prepare_plan_run(
+    plan_path: str | os.PathLike[str],
+    *,
+    dry_run: bool = False,
+    write: bool = True,
+    run_id: str | None = None,
+    data_dir: Path | None = None,
+    repo_root: Path | None = None,
+    bd_epic_id: str | None = None,
+    decompose_workers: int = 4,
+) -> PrepareRunResult:
+    """Produce ``prepared.md`` plus a prepared-plan artifact.
+
+    This helper is intentionally deterministic and Beads-free. It performs the
+    non-model part of ``/swarmdaddy:prepare``: lint, canonical plan write,
+    inspect, deterministic work-unit sidecars, schema/trust validation, and
+    ready/needs-input status assignment. Model safe-fix proposals are outside
+    this function and remain operator-reviewed summaries.
+    """
+
+    from .decompose import synthesize_work_units
+    from .plan import canonical_plan_text, lint_plan_text, new_run_id, parse_plan
+    from .validation import schema_lint_work_units
+
+    root = (Path(repo_root) if repo_root is not None else REPO_ROOT).resolve(strict=False)
+    source_rel = canonicalize(plan_path, repo_root=root)
+    source_abs = root / source_rel
+    if not source_abs.is_file():
+        raise FileNotFoundError(f"plan not found: {source_rel}")
+
+    actual_run_id = run_id or new_run_id()
+    base_data = Path(data_dir) if data_dir is not None else resolve_data_dir()
+    artifact_dir = _repo_visible_run_dir(actual_run_id, data_dir=base_data, repo_root=root)
+    prepared_rel = artifact_dir.relative_to(root) / "prepared.md"
+    inspect_rel = artifact_dir.relative_to(root) / "inspect.v1.json"
+    work_units_dir = artifact_dir / "work_units"
+
+    phases = parse_plan(source_abs)
+    lint_findings = tuple(lint_plan_text(source_abs.read_text(encoding="utf-8"), source_name=str(source_rel)))
+    prepared_text = canonical_plan_text(phases)
+    source_sha = _sha256_file(source_abs)
+    prepared_sha = _sha256_bytes(prepared_text.encode("utf-8"))
+    git_base_sha = _git_head_sha(root, "HEAD") or ("0" * 40)
+    now = utc_now()
+
+    phase_entries: list[dict[str, Any]] = []
+    phase_by_id = {phase.phase_id: phase for phase in phases}
+    for phase in phases:
+        from .plan import inspect_phase
+
+        report = inspect_phase(phase)
+        content_sha = _sha256_bytes(phase.text.encode("utf-8"))
+        plan_context_sha = _sha256_bytes(
+            json.dumps(
+                {
+                    "phase_id": phase.phase_id,
+                    "title": phase.title,
+                    "files": report.file_paths,
+                    "acceptance_count": _count_acceptance_criteria(phase),
+                },
+                sort_keys=True,
+            ).encode("utf-8")
+        )
+        phase_entries.append(
+            {
+                "phase_id": phase.phase_id,
+                "title": phase.title,
+                "complexity": _schema_complexity(report.complexity),
+                "kind": phase.kind,
+                "content_sha": content_sha,
+                "plan_context_sha": plan_context_sha,
+                "cache_key": _compute_cache_key(
+                    content_sha=content_sha,
+                    prepared_plan_sha=prepared_sha,
+                    plan_context_sha=plan_context_sha,
+                ),
+                "requires_decomposition": bool(report.requires_decomposition),
+            }
+        )
+
+    work_unit_errors: list[str] = []
+    cache_hits = 0
+
+    def build_sidecar(entry: Mapping[str, Any]) -> tuple[str, dict[str, Any], list[str], bool]:
+        phase_id = str(entry["phase_id"])
+        phase = phase_by_id[phase_id]
+        sidecar_name = f"{_safe_path_id(phase_id)}.{str(entry['cache_key'])[:12]}.work_units.v2.json"
+        sidecar_abs = work_units_dir / sidecar_name
+        sidecar_rel = sidecar_abs.relative_to(root)
+        if write and sidecar_abs.is_file():
+            try:
+                artifact = json.loads(sidecar_abs.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                artifact = None
+            if isinstance(artifact, dict):
+                lint = schema_lint_work_units(artifact, max_writer_tool_calls=40)
+                if not lint.errors:
+                    return phase_id, {
+                        "path": str(sidecar_rel),
+                        "sha": _sha256_file(sidecar_abs),
+                        "artifact": artifact,
+                    }, [], True
+
+        artifact = synthesize_work_units(phase, plan_path=str(source_rel), bd_epic_id=bd_epic_id)
+        lint = schema_lint_work_units(artifact, max_writer_tool_calls=40)
+        errors = list(lint.errors)
+        if write:
+            sidecar_abs.parent.mkdir(parents=True, exist_ok=True)
+            sidecar_abs.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            sidecar_sha = _sha256_file(sidecar_abs)
+        else:
+            sidecar_sha = _sha256_bytes((json.dumps(artifact, sort_keys=True) + "\n").encode("utf-8"))
+        return phase_id, {"path": str(sidecar_rel), "sha": sidecar_sha, "artifact": artifact}, errors, False
+
+    work_unit_artifacts: dict[str, dict[str, Any]] = {}
+    workers = max(1, min(decompose_workers, len(phase_entries) or 1))
+    if workers == 1:
+        for entry in phase_entries:
+            phase_id, descriptor, errors, hit = build_sidecar(entry)
+            work_unit_artifacts[phase_id] = descriptor
+            work_unit_errors.extend(errors)
+            cache_hits += int(hit)
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(build_sidecar, entry) for entry in phase_entries]
+            for future in as_completed(futures):
+                phase_id, descriptor, errors, hit = future.result()
+                work_unit_artifacts[phase_id] = descriptor
+                work_unit_errors.extend(errors)
+                cache_hits += int(hit)
+        work_unit_artifacts = {entry["phase_id"]: work_unit_artifacts[entry["phase_id"]] for entry in phase_entries}
+
+    status = STATUS_NEEDS_INPUT if _has_blocking_lint(lint_findings) or work_unit_errors else STATUS_READY
+    inspect_payload = {
+        "schema_version": 1,
+        "run_id": actual_run_id,
+        "plan_path": str(source_rel),
+        "plan_sha": source_sha,
+        "created_at": now,
+        "reports": [
+            {
+                "phase_id": entry["phase_id"],
+                "title": entry["title"],
+                "complexity": entry["complexity"],
+                "kind": entry["kind"],
+                "requires_decomposition": entry["requires_decomposition"],
+            }
+            for entry in phase_entries
+        ],
+    }
+    inspect_sha = _sha256_bytes((json.dumps(inspect_payload, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+
+    payload: dict[str, Any] = {
+        "schema_version": SCHEMA_VERSION,
+        "run_id": actual_run_id,
+        "repo_root": str(root.resolve(strict=False)),
+        "git_base_ref": "HEAD",
+        "git_base_sha": git_base_sha,
+        "source_plan_path": str(source_rel),
+        "source_plan_sha": source_sha,
+        "prepared_plan_path": str(prepared_rel),
+        "prepared_plan_sha": prepared_sha,
+        "inspect_artifact": {"path": str(inspect_rel), "sha": inspect_sha},
+        "phase_map": phase_entries,
+        "review_findings": list(lint_findings),
+        "review_iteration_count": 1,
+        "accepted_fixes": [],
+        "work_unit_artifacts": work_unit_artifacts,
+        "acceptance": None,
+        "status": status,
+        "created_at": now,
+        "ready_at": now if status == STATUS_READY else None,
+        "accepted_at": None,
+    }
+
+    artifact_path: Path | None = None
+    if write and not dry_run:
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        (root / prepared_rel).write_text(prepared_text, encoding="utf-8")
+        (root / inspect_rel).write_text(
+            json.dumps(inspect_payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        artifact_path = write_prepared_artifact(
+            run_id=actual_run_id,
+            payload=payload,
+            data_dir=base_data,
+            repo_root=root,
+        )
+
+    return PrepareRunResult(
+        run_id=actual_run_id,
+        status=status,
+        payload=payload,
+        lint_findings=lint_findings,
+        work_unit_errors=tuple(work_unit_errors),
+        prepared_plan_path=str(prepared_rel),
+        artifact_path=str(artifact_path) if artifact_path else None,
+        cache_hits=cache_hits,
+    )
+
+
+def prepared_acceptance_summary(
+    run_id: str,
+    *,
+    data_dir: Path | None = None,
+    repo_root: Path | None = None,
+) -> dict[str, Any]:
+    payload = load_prepared_artifact(run_id, data_dir=data_dir, repo_root=repo_root)
+    drift = check_stale(payload, repo_root=_resolve_repo_root(payload, repo_root=repo_root))
+    work_unit_artifacts = payload.get("work_unit_artifacts") or {}
+    work_units = [
+        unit
+        for descriptor in work_unit_artifacts.values()
+        if isinstance(descriptor, Mapping)
+        for unit in ((descriptor.get("artifact") or {}).get("work_units") or [])
+        if isinstance(unit, Mapping)
+    ]
+    return {
+        "run_id": run_id,
+        "status": payload.get("status"),
+        "prepared_plan_path": payload.get("prepared_plan_path"),
+        "review_finding_count": len(payload.get("review_findings") or []),
+        "safe_fix_count": sum(1 for item in payload.get("review_findings") or [] if item.get("severity") == "safe_fix"),
+        "work_unit_count": len(work_units),
+        "allowed_file_count": len({path for unit in work_units for path in unit.get("allowed_files", [])}),
+        "validation_command_count": len({cmd for unit in work_units for cmd in unit.get("validation_commands", [])}),
+        "source_plan_sha": payload.get("source_plan_sha"),
+        "prepared_plan_sha": payload.get("prepared_plan_sha"),
+        "git_base_ref": payload.get("git_base_ref"),
+        "git_base_sha": payload.get("git_base_sha"),
+        "stale_reasons": list(drift.reasons) if drift is not None else [],
+    }
+
+
+def verify_prepared_for_dispatch(
+    prepared: str | os.PathLike[str],
+    *,
+    data_dir: Path | None = None,
+    repo_root: Path | None = None,
+) -> PreparedDispatchResult:
+    """Load an accepted prepared artifact and fail closed before dispatch.
+
+    Phase 5 keeps ``/swarmdaddy:do --prepared`` as pure consumption:
+    no prepare, no decompose, and no preset ``decompose.mode`` lookup. This
+    helper re-runs the Phase 1 schema/trust checks, stale checks, sidecar hash
+    checks, and work-unit linting before a dispatcher can create Beads children.
+    """
+
+    payload, artifact_path = _load_prepared_reference(
+        prepared, data_dir=data_dir, repo_root=repo_root
+    )
+    current = payload["status"]
+    if current != STATUS_ACCEPTED:
+        raise InvalidPreparedTransition(
+            f"prepared dispatch requires status {STATUS_ACCEPTED!r}; got {current!r}"
+        )
+    root = _validated_dispatch_repo_root(payload, repo_root=repo_root)
+    _round_trip_paths(payload, repo_root=root)
+    drift = check_stale(payload, repo_root=root)
+    if drift is not None:
+        raise ValueError(
+            f"prepared dispatch: prepared artifact is stale: {', '.join(drift.reasons)}"
+        )
+
+    work_unit_artifacts = _verify_dispatch_sidecars(payload, repo_root=root)
+    return PreparedDispatchResult(
+        run_id=payload["run_id"],
+        status=payload["status"],
+        artifact_path=str(artifact_path),
+        source_plan_path=payload["source_plan_path"],
+        prepared_plan_path=payload["prepared_plan_path"],
+        inspect_artifact_path=payload["inspect_artifact"]["path"],
+        git_base_ref=payload["git_base_ref"],
+        git_base_sha=payload["git_base_sha"],
+        phase_map=tuple(dict(item) for item in payload["phase_map"]),
+        review_findings=tuple(dict(item) for item in payload["review_findings"]),
+        work_unit_artifacts=work_unit_artifacts,
+    )
+
+
+def _load_prepared_reference(
+    prepared: str | os.PathLike[str],
+    *,
+    data_dir: Path | None,
+    repo_root: Path | None,
+) -> tuple[dict[str, Any], Path]:
+    text = os.fspath(prepared)
+    if _ULID_RE.match(text):
+        payload = load_prepared_artifact(text, data_dir=data_dir, repo_root=repo_root)
+        return payload, _artifact_path(run_id=text, data_dir=data_dir)
+
+    candidate = Path(text)
+    if not candidate.is_absolute():
+        base = Path(repo_root) if repo_root is not None else REPO_ROOT
+        candidate = base / candidate
+    if not candidate.is_file():
+        raise FileNotFoundError(f"prepared artifact not found: {candidate}")
+    payload = json.loads(candidate.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("prepared artifact must decode to a JSON object")
+    _validate_against_schema(payload)
+    _round_trip_paths(payload, repo_root=_resolve_repo_root(payload, repo_root=repo_root))
+    return payload, candidate
+
+
+def _validated_dispatch_repo_root(
+    payload: Mapping[str, Any],
+    *,
+    repo_root: Path | None,
+) -> Path:
+    declared = Path(str(payload["repo_root"]))
+    if not declared.is_absolute():
+        raise ValueError("prepared dispatch: repo_root must be absolute")
+    declared_root = declared.resolve(strict=False)
+    if repo_root is not None and declared_root != Path(repo_root).resolve(strict=False):
+        raise ValueError("prepared dispatch: repo_root does not match requested repo root")
+    root = declared_root
+    if not root.is_dir():
+        raise ValueError(f"prepared dispatch: repo_root is not a directory: {root}")
+    return root
+
+
+def _verify_dispatch_sidecars(
+    payload: Mapping[str, Any],
+    *,
+    repo_root: Path,
+) -> dict[str, dict[str, Any]]:
+    run_dir = (repo_root / payload["prepared_plan_path"]).parent.resolve(strict=False)
+    if not run_dir.is_dir():
+        raise ValueError(f"prepared dispatch: run directory missing: {run_dir}")
+
+    _verify_hashed_sidecar(
+        payload["inspect_artifact"],
+        label="inspect_artifact",
+        run_dir=run_dir,
+        repo_root=repo_root,
+    )
+
+    phase_ids = {str(item["phase_id"]) for item in payload["phase_map"]}
+    descriptors = payload["work_unit_artifacts"]
+    if set(descriptors.keys()) != phase_ids:
+        missing = sorted(phase_ids - set(descriptors.keys()))
+        extra = sorted(set(descriptors.keys()) - phase_ids)
+        raise ValueError(
+            "prepared dispatch: work_unit_artifacts must cover every phase"
+            f" (missing={missing}, extra={extra})"
+        )
+
+    verified: dict[str, dict[str, Any]] = {}
+    for phase_id, descriptor in descriptors.items():
+        sidecar_path = _verify_hashed_sidecar(
+            descriptor,
+            label=f"work_unit_artifacts[{phase_id}]",
+            run_dir=run_dir,
+            repo_root=repo_root,
+        )
+        artifact = _read_json_object(sidecar_path, label=f"work_unit_artifacts[{phase_id}]")
+        embedded = descriptor.get("artifact")
+        if embedded is not None and embedded != artifact:
+            raise ValueError(
+                f"prepared dispatch: work_unit_artifacts[{phase_id}].artifact "
+                "does not match sidecar"
+            )
+        _validate_dispatch_work_units(
+            artifact,
+            repo_root=repo_root,
+            label=f"work_unit_artifacts[{phase_id}]",
+        )
+        verified[phase_id] = {
+            "path": descriptor["path"],
+            "sha": descriptor["sha"],
+            "artifact": artifact,
+        }
+    return verified
+
+
+def _verify_hashed_sidecar(
+    descriptor: Mapping[str, Any],
+    *,
+    label: str,
+    run_dir: Path,
+    repo_root: Path,
+) -> Path:
+    rel = canonicalize(descriptor["path"], repo_root=repo_root)
+    path = (repo_root / rel).resolve(strict=False)
+    if not path.is_relative_to(run_dir):
+        raise ValueError(f"prepared dispatch: {label}.path is outside run dir")
+    if not path.is_file():
+        raise ValueError(f"prepared dispatch: {label}.path missing: {rel}")
+    actual_sha = _sha256_file(path)
+    if actual_sha != descriptor["sha"]:
+        raise ValueError(f"prepared dispatch: {label}.sha mismatch")
+    return path
+
+
+def _read_json_object(path: Path, *, label: str) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"prepared dispatch: {label} is not valid JSON") from exc
+    if not isinstance(value, dict):
+        raise ValueError(f"prepared dispatch: {label} must be a JSON object")
+    return value
+
+
+def _validate_dispatch_work_units(
+    artifact: Mapping[str, Any],
+    *,
+    repo_root: Path,
+    label: str,
+) -> None:
+    from .validation import schema_lint_work_units
+
+    lint = schema_lint_work_units(artifact)
+    if lint.errors:
+        raise ValueError(
+            f"prepared dispatch: {label} failed work-unit lint: {'; '.join(lint.errors)}"
+        )
+    for unit_idx, unit in enumerate(artifact.get("work_units") or []):
+        if not isinstance(unit, Mapping):
+            continue
+        for key in ("allowed_files", "files", "context_files", "blocked_files"):
+            values = unit.get(key)
+            if values is None:
+                continue
+            if not isinstance(values, list):
+                continue
+            for value in values:
+                if isinstance(value, str):
+                    _validate_scope_pattern(
+                        value,
+                        repo_root=repo_root,
+                        label=f"{label}.work_units[{unit_idx}].{key}",
+                    )
+
+
+def _validate_scope_pattern(value: str, *, repo_root: Path, label: str) -> None:
+    if value.strip() == "":
+        raise ValueError(f"prepared dispatch: {label} contains empty path")
+    candidate = Path(value)
+    if candidate.is_absolute():
+        raise ValueError(f"prepared dispatch: {label} contains absolute path: {value}")
+    if any(part == ".." for part in candidate.parts):
+        raise ValueError(f"prepared dispatch: {label} contains .. segment: {value}")
+    root = repo_root.resolve(strict=False)
+    resolved = (root / candidate).resolve(strict=False)
+    if not resolved.is_relative_to(root):
+        raise ValueError(f"prepared dispatch: {label} escapes repo: {value}")
+
+
+def _dispatch_work_units(
+    work_unit_artifacts: Mapping[str, Mapping[str, Any]]
+) -> list[dict[str, Any]]:
+    units: list[dict[str, Any]] = []
+    for phase_id, descriptor in work_unit_artifacts.items():
+        artifact = descriptor.get("artifact")
+        if not isinstance(artifact, Mapping):
+            continue
+        for unit in artifact.get("work_units") or []:
+            if not isinstance(unit, Mapping):
+                continue
+            unit_id = unit.get("id")
+            if isinstance(unit_id, str):
+                state_unit = dict(unit)
+                state_unit["phase_id"] = str(phase_id)
+                state_unit["id"] = f"{phase_id}:{unit_id}"
+                units.append(state_unit)
+    return units
+
+
+def _prepare_status_label(status: str) -> str:
+    if status == STATUS_READY:
+        return "READY_FOR_ACCEPTANCE"
+    if status == STATUS_REJECTED:
+        return "REJECTED"
+    if status == STATUS_ACCEPTED:
+        return "ACCEPTED"
+    return "NEEDS_INPUT"
+
+
+def _repo_visible_run_dir(run_id: str, *, data_dir: Path, repo_root: Path) -> Path:
+    """Return the run dir used by paths embedded in the prepared artifact."""
+
+    root = repo_root.resolve(strict=False)
+    candidate = (Path(data_dir) / "runs" / run_id).resolve(strict=False)
+    if candidate.is_relative_to(root):
+        return candidate
+    return root / "data" / "runs" / run_id
+
+
+def _safe_path_id(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "-", value).strip("-") or "phase"
+
+
+_AC_LINE_RE = re.compile(r"^(?:#{1,6}\s+|\*\*)?acceptance criteria", re.IGNORECASE)
+_NEXT_SECTION_RE = re.compile(r"^(?:#{1,6}\s+|\*\*)\S")
+
+
+def _count_acceptance_criteria(phase: Any) -> int:
+    count = 0
+    capture = False
+    for raw in str(phase.text).splitlines():
+        stripped = raw.strip()
+        if not capture:
+            capture = bool(_AC_LINE_RE.match(stripped))
+            continue
+        if _NEXT_SECTION_RE.match(stripped) and not _AC_LINE_RE.match(stripped):
+            break
+        if re.match(r"\s*[-*+]\s+", raw):
+            count += 1
+    return count
+
+
+def _schema_complexity(value: str) -> str:
+    return value if value in {"simple", "moderate", "hard"} else "hard"
+
+
+def _has_blocking_lint(findings: Iterable[Mapping[str, Any]]) -> bool:
+    return any(finding_blocks_prepare(finding) for finding in findings)
 
 
 # ---------------------------------------------------------------------------
@@ -765,8 +1384,6 @@ def reject_prepared(
             f"reject_prepared: cannot reject from status {current!r}"
         )
     payload["status"] = STATUS_REJECTED
-    if reason:
-        payload["rejection_reason"] = reason
     return write_prepared_artifact(
         run_id=run_id, payload=payload, data_dir=data_dir, repo_root=repo_root
     )
@@ -850,13 +1467,31 @@ def check_stale(
             current_text = source_plan_path.read_text(encoding="utf-8")
         except OSError:
             current_text = ""
+        phase_hashes: dict[str, str] = {}
+        if current_text:
+            try:
+                from .plan import parse_plan_from_text
+
+                phase_hashes = {
+                    phase.phase_id: _sha256_bytes(phase.text.encode("utf-8"))
+                    for phase in parse_plan_from_text(current_text)
+                }
+            except Exception:
+                phase_hashes = {}
+        whole_plan_sha = _sha256_bytes(current_text.encode("utf-8"))
         for phase in artifact["phase_map"]:
+            content_sha = phase_hashes.get(phase["phase_id"], whole_plan_sha)
             recomputed = _compute_cache_key(
-                content_sha=_sha256_bytes(current_text.encode("utf-8")),
+                content_sha=content_sha,
                 prepared_plan_sha=artifact["prepared_plan_sha"],
                 plan_context_sha=phase["plan_context_sha"],
             )
-            if recomputed != phase["cache_key"]:
+            legacy_recomputed = _compute_cache_key(
+                content_sha=whole_plan_sha,
+                prepared_plan_sha=artifact["prepared_plan_sha"],
+                plan_context_sha=phase["plan_context_sha"],
+            )
+            if recomputed != phase["cache_key"] and legacy_recomputed != phase["cache_key"]:
                 drift.append(f"phase:{phase['phase_id']}")
 
     if drift:
@@ -869,6 +1504,8 @@ __all__ = [
     "MAX_PLAN_REVIEW_ITERATIONS",
     "PREPARE_POLICY_VERSION",
     "PLAN_REVIEW_SEVERITIES",
+    "PreparedDispatchResult",
+    "PrepareRunResult",
     "ReviewLoopResult",
     "SCHEMA_VERSION",
     "STATUS_ACCEPTED",
@@ -885,9 +1522,12 @@ __all__ = [
     "finding_blocks_prepare",
     "load_prepared_artifact",
     "mark_ready_for_acceptance",
+    "prepare_plan_run",
+    "prepared_acceptance_summary",
     "reject_prepared",
     "run_plan_review_loop",
     "validate_plan_review_finding",
     "validate_plan_review_findings",
+    "verify_prepared_for_dispatch",
     "write_prepared_artifact",
 ]

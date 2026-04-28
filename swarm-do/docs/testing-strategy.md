@@ -111,10 +111,11 @@ The right move is incremental:
 
 6. Add scenario smoke tests.
    Cover actual operator flows without live agents:
-   `bin/swarm research --dry-run`, `bin/swarm design --dry-run`,
-   `bin/swarm review --dry-run`, `bin/swarm preset dry-run`, permission
-   dry-runs, provider doctor with stubbed executables, run-state checkpoint,
-   resume manifests, and work-unit batching.
+  `bin/swarm research --dry-run`, `bin/swarm design --dry-run`,
+  `bin/swarm review --dry-run`, `bin/swarm prepare <plan-path> --dry-run`,
+  `bin/swarm plan prepare <plan-path> --dry-run --json`,
+  `bin/swarm preset dry-run`, permission dry-runs, provider doctor with stubbed
+  executables, run-state checkpoint, resume manifests, and work-unit batching.
 
 7. Clean current green-run noise.
    Fix the sqlite `ResourceWarning` sources and keep expected drift output

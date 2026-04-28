@@ -6,10 +6,7 @@
     "work_units": [
       {
         "acceptance_criteria": [
-          "AC1 schema file exists.",
-          "AC2 prepared run shape persisted.",
-          "AC3 idempotent prepare invocation.",
-          "AC4 hash recorded in run.json."
+          "AC1 schema file exists."
         ],
         "allowed_files": [
           "schemas/prepared_plan.schema.json"
@@ -26,7 +23,7 @@
           "commands exit 0 or produce the documented approval output"
         ],
         "failure_reason": null,
-        "goal": "Implement phase 1 slice 1/2 for schemas/prepared_plan.schema.json.",
+        "goal": "Implement phase 1 schema slice 1/2 for schemas/prepared_plan.schema.json.",
         "handoff_count": 0,
         "handoff_notes": "",
         "id": "unit-1-1",
@@ -44,10 +41,8 @@
       },
       {
         "acceptance_criteria": [
-          "AC1 schema file exists.",
           "AC2 prepared run shape persisted.",
-          "AC3 idempotent prepare invocation.",
-          "AC4 hash recorded in run.json."
+          "AC3 idempotent prepare invocation."
         ],
         "allowed_files": [
           "py/swarm_do/pipeline/prepare.py",
@@ -59,14 +54,12 @@
           "py/swarm_do/pipeline/plan.py",
           "schemas/prepared_plan.schema.json"
         ],
-        "depends_on": [
-          "unit-1-1"
-        ],
+        "depends_on": [],
         "expected_results": [
           "commands exit 0 or produce the documented approval output"
         ],
         "failure_reason": null,
-        "goal": "Implement phase 1 slice 2/2 for py/swarm_do/pipeline/prepare.py, py/swarm_do/pipeline/run_state.py.",
+        "goal": "Implement phase 1 orchestration slice 2/2 for py/swarm_do/pipeline/prepare.py, py/swarm_do/pipeline/run_state.py.",
         "handoff_count": 0,
         "handoff_notes": "",
         "id": "unit-1-2",
@@ -170,7 +163,40 @@
           "py/swarm_do/pipeline/d.py",
           "py/swarm_do/pipeline/e.py",
           "py/swarm_do/pipeline/f.py",
-          "py/swarm_do/pipeline/g.py",
+          "py/swarm_do/pipeline/g.py"
+        ],
+        "beads_id": null,
+        "blocked_files": [],
+        "context_files": [
+          "py/swarm_do/pipeline/h.py",
+          "py/swarm_do/pipeline/i.py",
+          "py/swarm_do/pipeline/j.py",
+          "py/swarm_do/pipeline/k.py"
+        ],
+        "depends_on": [],
+        "expected_results": [
+          "commands exit 0 or produce the documented approval output"
+        ],
+        "failure_reason": null,
+        "goal": "Implement phase 4 py/swarm_do/pipeline slice 1/2 for py/swarm_do/pipeline/a.py, py/swarm_do/pipeline/b.py, py/swarm_do/pipeline/c.py, py/swarm_do/pipeline/d.py, py/swarm_do/pipeline/e.py, py/swarm_do/pipeline/f.py, py/swarm_do/pipeline/g.py.",
+        "handoff_count": 0,
+        "handoff_notes": "",
+        "id": "unit-4-1",
+        "retry_count": 0,
+        "risk_tags": [],
+        "status": "pending",
+        "title": "Big table phase (1/2)",
+        "validation_commands": [
+          "rg -n \"TODO\" docs/swarmdaddy-prepare-gate-plan.md || true",
+          "python3 -m mypy py/swarm_do/pipeline"
+        ],
+        "worktree_branch": null
+      },
+      {
+        "acceptance_criteria": [
+          "AC1 every file gets a doctring."
+        ],
+        "allowed_files": [
           "py/swarm_do/pipeline/h.py",
           "py/swarm_do/pipeline/i.py",
           "py/swarm_do/pipeline/j.py",
@@ -178,20 +204,28 @@
         ],
         "beads_id": null,
         "blocked_files": [],
-        "context_files": [],
+        "context_files": [
+          "py/swarm_do/pipeline/a.py",
+          "py/swarm_do/pipeline/b.py",
+          "py/swarm_do/pipeline/c.py",
+          "py/swarm_do/pipeline/d.py",
+          "py/swarm_do/pipeline/e.py",
+          "py/swarm_do/pipeline/f.py",
+          "py/swarm_do/pipeline/g.py"
+        ],
         "depends_on": [],
         "expected_results": [
           "commands exit 0 or produce the documented approval output"
         ],
         "failure_reason": null,
-        "goal": "Implement phase 4: Big table phase.",
+        "goal": "Implement phase 4 py/swarm_do/pipeline slice 2/2 for py/swarm_do/pipeline/h.py, py/swarm_do/pipeline/i.py, py/swarm_do/pipeline/j.py, py/swarm_do/pipeline/k.py.",
         "handoff_count": 0,
         "handoff_notes": "",
-        "id": "unit-4",
+        "id": "unit-4-2",
         "retry_count": 0,
         "risk_tags": [],
         "status": "pending",
-        "title": "Big table phase",
+        "title": "Big table phase (2/2)",
         "validation_commands": [
           "rg -n \"TODO\" docs/swarmdaddy-prepare-gate-plan.md || true",
           "python3 -m mypy py/swarm_do/pipeline"

@@ -110,14 +110,25 @@ def synthesize_work_units(
 ) -> dict[str, Any]:
     report = inspect_phase(phase)
     files = report.file_paths or ["."]
-    if report.complexity == "simple":
-        groups = [files]
-    else:
-        groups = _file_groups(files, max_units=max_units)
-    units = []
-    for idx, group in enumerate(groups, 1):
-        unit_id = _unit_id(phase.phase_id, idx, len(groups))
-        units.append(_unit(unit_id, phase, group, idx, len(groups), depends_on=[] if idx == 1 else [units[idx - 2]["id"]]))
+    plans = _semantic_unit_plans(phase, files, max_units=max_units) if report.complexity != "simple" else [
+        {"files": files, "category": "phase", "acceptance_criteria": _acceptance_criteria(phase), "serial_key": None}
+    ]
+    units: list[dict[str, Any]] = []
+    for idx, plan in enumerate(plans, 1):
+        unit_id = _unit_id(phase.phase_id, idx, len(plans))
+        units.append(
+            _unit(
+                unit_id,
+                phase,
+                list(plan["files"]),
+                idx,
+                len(plans),
+                depends_on=[],
+                category=str(plan.get("category") or "phase"),
+                acceptance_criteria=list(plan.get("acceptance_criteria") or _acceptance_criteria(phase)),
+            )
+        )
+    _assign_semantic_dependencies(units, plans)
     return {
         "schema_version": 2,
         "plan_path": str(plan_path) if plan_path is not None else None,
@@ -126,17 +137,27 @@ def synthesize_work_units(
     }
 
 
-def _unit(unit_id: str, phase: ParsedPhase, files: list[str], idx: int, total: int, *, depends_on: list[str]) -> dict[str, Any]:
+def _unit(
+    unit_id: str,
+    phase: ParsedPhase,
+    files: list[str],
+    idx: int,
+    total: int,
+    *,
+    depends_on: list[str],
+    category: str = "phase",
+    acceptance_criteria: list[str] | None = None,
+) -> dict[str, Any]:
     title_suffix = "" if total == 1 else f" ({idx}/{total})"
     return {
         "id": unit_id,
         "title": f"{phase.title}{title_suffix}",
-        "goal": _goal(phase, files, idx, total),
+        "goal": _goal(phase, files, idx, total, category=category),
         "depends_on": depends_on,
         "context_files": _context_files(phase, files),
         "allowed_files": files,
         "blocked_files": [],
-        "acceptance_criteria": _acceptance_criteria(phase),
+        "acceptance_criteria": acceptance_criteria or _acceptance_criteria(phase),
         "validation_commands": _validation_commands(phase),
         "expected_results": ["commands exit 0 or produce the documented approval output"],
         "risk_tags": _risk_tags(phase),
@@ -211,15 +232,195 @@ def _file_groups(files: list[str], *, max_units: int) -> list[list[str]]:
     return values
 
 
+def _semantic_unit_plans(phase: ParsedPhase, files: list[str], *, max_units: int) -> list[dict[str, Any]]:
+    criteria = _acceptance_criteria(phase)
+    action_map = _file_action_map(phase)
+    buckets: dict[tuple[str, str], list[str]] = {}
+    for path in files:
+        category = _semantic_category(path)
+        action = action_map.get(path, "")
+        buckets.setdefault((category, action), []).append(path)
+
+    plans: list[dict[str, Any]] = []
+    for (category, action), bucket_files in buckets.items():
+        max_files = _max_files_for_budget(criteria)
+        for file_chunk in _chunks(bucket_files, max_files):
+            selected = _criteria_for_group(criteria, file_chunk, category)
+            serial_key = None
+            if len(selected) > 5:
+                serial_key = f"criteria:{category}:{','.join(file_chunk)}"
+                for criteria_chunk in _chunks(selected, 5):
+                    plans.append(
+                        {
+                            "files": file_chunk,
+                            "category": category,
+                            "action": action,
+                            "acceptance_criteria": criteria_chunk,
+                            "serial_key": serial_key,
+                        }
+                    )
+            else:
+                plans.append(
+                    {
+                        "files": file_chunk,
+                        "category": category,
+                        "action": action,
+                        "acceptance_criteria": selected,
+                        "serial_key": serial_key,
+                    }
+                )
+
+    if not plans:
+        return [{"files": files or ["."], "category": "phase", "acceptance_criteria": criteria, "serial_key": None}]
+    if len(plans) > max_units:
+        return _merge_tail_plans(plans, max_units)
+    return plans
+
+
+def _assign_semantic_dependencies(units: list[dict[str, Any]], plans: list[dict[str, Any]]) -> None:
+    category_ids: dict[str, list[str]] = {}
+    serial_previous: dict[str, str] = {}
+    previous_for_file: dict[str, str] = {}
+    for unit, plan in zip(units, plans):
+        category_ids.setdefault(str(plan.get("category") or "phase"), []).append(unit["id"])
+
+    for unit, plan in zip(units, plans):
+        deps: set[str] = set()
+        serial_key = plan.get("serial_key")
+        if isinstance(serial_key, str):
+            previous = serial_previous.get(serial_key)
+            if previous:
+                deps.add(previous)
+            serial_previous[serial_key] = unit["id"]
+
+        category = str(plan.get("category") or "phase")
+        category_parts = set(category.split("+"))
+        if "cli" in category_parts:
+            for dependency_category in ("parser", "schema", "orchestration"):
+                deps.update(category_ids.get(dependency_category, []))
+        elif "tests" in category_parts:
+            for dependency_category, ids in category_ids.items():
+                dependency_parts = set(dependency_category.split("+"))
+                if dependency_parts.isdisjoint({"tests", "docs"}):
+                    deps.update(ids)
+
+        for path in unit.get("allowed_files", []):
+            for previous_path, previous in previous_for_file.items():
+                if _path_scopes_overlap(path, previous_path):
+                    deps.add(previous)
+            previous_for_file[path] = unit["id"]
+        deps.discard(unit["id"])
+        unit["depends_on"] = sorted(deps)
+
+
+def _semantic_category(path: str) -> str:
+    lowered = path.lower()
+    name = Path(path).name.lower()
+    if lowered.startswith(("docs/", "readme")) or name.endswith(".md"):
+        return "docs"
+    if lowered.startswith(("commands/", "bin/")) or name == "cli.py":
+        return "cli"
+    if "/tests/" in lowered or lowered.endswith("/tests") or lowered.startswith("tests/") or name in {"tests"} or name.startswith("test_"):
+        return "tests"
+    if lowered.startswith("schemas/") or name in {"validation.py"}:
+        return "schema"
+    if name in {"plan.py", "decompose.py"} or any(token in lowered for token in ("parser", "grammar", "lint")):
+        return "parser"
+    if name in {"prepare.py", "run_state.py", "resume.py", "executor.py", "work_units.py", "worktrees.py"}:
+        return "orchestration"
+    if lowered.startswith(("role-specs/", "agents/", "roles/", "permissions/")):
+        return "roles"
+    if "/tui/" in lowered or lowered.startswith("py/swarm_do/tui/"):
+        return "tui"
+    parent = str(Path(path).parent)
+    return parent if parent != "." else "phase"
+
+
+def _path_scopes_overlap(left: str, right: str) -> bool:
+    if left == right:
+        return True
+    left_norm = left.rstrip("/")
+    right_norm = right.rstrip("/")
+    return left_norm.startswith(right_norm + "/") or right_norm.startswith(left_norm + "/")
+
+
+def _file_action_map(phase: ParsedPhase) -> dict[str, str]:
+    actions: dict[str, str] = {}
+    for line in phase.text.splitlines():
+        paths = re.findall(r"`([^`\n]+)`", line)
+        if not paths:
+            continue
+        lowered = line.lower()
+        action = ""
+        for candidate in ("create", "add", "extend", "modify", "update", "test", "delete"):
+            if candidate in lowered:
+                action = candidate
+                break
+        if not action:
+            continue
+        for path in paths:
+            actions[path] = action
+    return actions
+
+
+def _max_files_for_budget(criteria: list[str]) -> int:
+    criteria_count = min(len(criteria), 5)
+    return max(1, (40 - 8 - (2 * criteria_count)) // 4)
+
+
+def _criteria_for_group(criteria: list[str], files: list[str], category: str) -> list[str]:
+    if not criteria:
+        return ["Phase objective is implemented for the allowed file scope."]
+    tokens = {category.lower()}
+    for path in files:
+        p = Path(path)
+        tokens.add(path.lower())
+        tokens.add(p.name.lower())
+        if p.stem:
+            tokens.add(p.stem.lower())
+    selected = [
+        criterion
+        for criterion in criteria
+        if any(token and token in criterion.lower() for token in tokens)
+    ]
+    return selected or list(criteria)
+
+
+def _chunks(values: list[Any], size: int) -> list[list[Any]]:
+    return [values[idx : idx + max(1, size)] for idx in range(0, len(values), max(1, size))]
+
+
+def _merge_tail_plans(plans: list[dict[str, Any]], max_units: int) -> list[dict[str, Any]]:
+    if max_units < 1 or len(plans) <= max_units:
+        return plans
+    head = [dict(plan) for plan in plans[: max_units - 1]]
+    tail_files: list[str] = []
+    tail_criteria: list[str] = []
+    tail_categories: list[str] = []
+    for plan in plans[max_units - 1 :]:
+        tail_files.extend(str(path) for path in plan.get("files", []))
+        tail_criteria.extend(str(item) for item in plan.get("acceptance_criteria", []))
+        tail_categories.append(str(plan.get("category") or "phase"))
+    head.append(
+        {
+            "files": list(dict.fromkeys(tail_files)),
+            "category": "+".join(sorted(set(tail_categories))) or "phase",
+            "acceptance_criteria": list(dict.fromkeys(tail_criteria)) or ["Phase objective is implemented."],
+            "serial_key": None,
+        }
+    )
+    return head
+
+
 def _unit_id(phase_id: str, idx: int, total: int) -> str:
     stem = re.sub(r"[^a-z0-9-]+", "-", phase_id.lower()).strip("-") or "phase"
     return f"unit-{stem}" if total == 1 else f"unit-{stem}-{idx}"
 
 
-def _goal(phase: ParsedPhase, files: list[str], idx: int, total: int) -> str:
+def _goal(phase: ParsedPhase, files: list[str], idx: int, total: int, *, category: str = "phase") -> str:
     if total == 1:
         return f"Implement phase {phase.phase_id}: {phase.title}."
-    return f"Implement phase {phase.phase_id} slice {idx}/{total} for {', '.join(files)}."
+    return f"Implement phase {phase.phase_id} {category} slice {idx}/{total} for {', '.join(files)}."
 
 
 def _context_files(phase: ParsedPhase, files: list[str]) -> list[str]:
@@ -330,16 +531,14 @@ def build_decompose_diagnostic(
     report = inspect_phase(phase)
     files = report.file_paths or ["."]
     bullet_count = sum(1 for line in phase.text.splitlines() if _BULLET_RE.match(line))
-    cluster_signals = sorted(
-        {path.split("/", 1)[0] if "/" in path else "." for path in files}
-    )
+    cluster_signals = sorted({_semantic_category(path) for path in files})
 
     if report.complexity == "simple":
         split_decision = "single"
     elif len(cluster_signals) > max_units:
-        split_decision = "round-robin-chunked"
+        split_decision = "semantic-merge-capped"
     else:
-        split_decision = "split-by-prefix"
+        split_decision = "split-by-semantic-cluster"
 
     units = result.artifact.get("work_units", []) or []
     depends_on = [

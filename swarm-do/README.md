@@ -258,6 +258,11 @@ only after material local CLI or command-contract drift.
   Supported flags include `--codex-review auto|on|off`,
   `--risk low|moderate|high`, `--decompose=off|inspect|enforce`,
   `--force-simple <phase_id>`, `--force-decompose <phase_id>`, and `--auto`.
+- `/swarmdaddy:prepare <plan-path> [--dry-run]`: produce `prepared.md`, a
+  prepared-plan artifact, and per-phase `work_units.v2` sidecars, then stop at
+  `READY_FOR_ACCEPTANCE`. Use `/swarmdaddy:prepare --accept <run-id>` or
+  `--reject <run-id>` as a separate action; prepare never creates writer
+  issues, worktrees, merges, or pull requests.
 - `/swarmdaddy:configure`: open the TUI configuration console. In cmux it opens
   a right split pane; otherwise it uses the current interactive terminal or
   prints manual launch instructions.
@@ -297,6 +302,20 @@ here instead.
    run-event mappings to find the right resume point.
 8. A clean full run ends with one consolidated PR into `main`.
 
+## Two-Step Prepare Gate
+
+`/swarmdaddy:prepare` is the operator-facing gate for bounded work units:
+
+```bash
+bin/swarm prepare docs/plan.md
+bin/swarm prepare --accept <run-id>
+```
+
+The first command writes the prepared artifacts and prints finding counts,
+safe-fix summaries, work-unit counts, allowed-file scope, validation commands,
+hashes, and git base. The second command re-runs schema, trust-boundary, and
+stale checks before flipping the artifact to `accepted`.
+
 ## Output-Only Profiles
 
 Output-only profiles use the same preset, pipeline, role, permission, and
@@ -328,6 +347,9 @@ bin/swarm preset rename <old-name> <new-name>
 bin/swarm preset delete <name>
 bin/swarm preset dry-run <name> <plan-path>
 bin/swarm preset migrate
+bin/swarm prepare <plan-path> [--dry-run]
+bin/swarm prepare --accept <run-id>
+bin/swarm plan prepare <plan-path> [--dry-run] [--write] [--json]
 bin/swarm preset adopt <archived-yaml> --template <stock-preset> [--name <name>]
 
 bin/swarm pipeline list

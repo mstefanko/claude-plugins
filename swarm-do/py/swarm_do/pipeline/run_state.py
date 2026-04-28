@@ -97,6 +97,12 @@ def write_checkpoint_from_active(
         "retry_counts": _dict_or_empty(active_state.get("retry_counts")),
         "integration_branch_head": active_state.get("integration_branch_head"),
         "status": active_state.get("status", "incomplete"),
+        "prepared_artifact_path": active_state.get("prepared_artifact_path"),
+        "prepared_plan_path": active_state.get("prepared_plan_path"),
+        "prepared_inspect_path": active_state.get("prepared_inspect_path"),
+        "phase_map": _dict_list(active_state.get("phase_map")),
+        "review_findings": _dict_list(active_state.get("review_findings")),
+        "work_unit_artifacts": _dict_or_empty(active_state.get("work_unit_artifacts")),
     }
     path = checkpoint_path(base, run_id)
     _atomic_json_write(path, checkpoint)
@@ -135,6 +141,12 @@ def _active_run_payload(state: Mapping[str, Any]) -> dict[str, Any]:
         "handoff_counts": _dict_or_empty(state.get("handoff_counts")),
         "integration_branch_head": state.get("integration_branch_head"),
         "status": state.get("status", "incomplete"),
+        "prepared_artifact_path": state.get("prepared_artifact_path"),
+        "prepared_plan_path": state.get("prepared_plan_path"),
+        "prepared_inspect_path": state.get("prepared_inspect_path"),
+        "phase_map": _dict_list(state.get("phase_map")),
+        "review_findings": _dict_list(state.get("review_findings")),
+        "work_unit_artifacts": _dict_or_empty(state.get("work_unit_artifacts")),
     }
     if not isinstance(payload["run_id"], str) or not payload["run_id"]:
         raise ValueError("active run state requires run_id")
@@ -174,6 +186,12 @@ def _string_list(value: Any) -> list[str]:
 
 def _dict_or_empty(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _dict_list(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [dict(item) for item in value if isinstance(item, dict)]
 
 
 def _work_units(value: Any) -> list[dict[str, Any]]:

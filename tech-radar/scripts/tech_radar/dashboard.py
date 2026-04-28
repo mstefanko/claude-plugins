@@ -5,9 +5,10 @@ import os
 import webbrowser
 from datetime import datetime, timezone
 
+from rich.markup import escape
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Horizontal, ScrollableContainer
+from textual.containers import Horizontal, ScrollableContainer
 from textual.screen import ModalScreen
 from textual.widgets import (
     DataTable,
@@ -39,15 +40,57 @@ CATEGORY_ABBREV = {
     "mcp": "mcp",
 }
 
-STATUS_EMOJI = {
-    "watching": "👀",
-    "tested": "✅",
-    "rejected": "❌",
-    "adopted": "🏆",
-    "new": "·",
+STATUS_BADGES = {
+    "new": ("NEW", "black on #7aa2f7"),
+    "watching": ("WATCH", "black on #e0af68"),
+    "tested": ("TESTED", "black on #9ece6a"),
+    "adopted": ("ADOPT", "black on #7dcfff"),
+    "rejected": ("REJECT", "white on #f7768e"),
+    "archived": ("ARCH", "black on #565f89"),
+}
+
+STATUS_NAME_STYLE = {
+    "new": "bold",
+    "watching": "bold #9ece6a",
+    "tested": "dim",
+    "adopted": "bold #7dcfff",
+    "rejected": "dim",
+    "archived": "dim",
+}
+
+STATUS_HINTS = {
+    "new": "triage",
+    "watching": "watchlist",
+    "tested": "tested",
+    "adopted": "in stack",
+    "rejected": "dismissed",
+    "archived": "archived",
+}
+
+CATEGORY_BADGE_STYLES = {
+    "stack-match": "white on #3d59a1",
+    "interest-match": "black on #bb9af7",
+    "plugin": "black on #7dcfff",
+    "general": "black on #565f89",
+    "frontend": "black on #9ece6a",
+    "selfhosted": "black on #e0af68",
+    "mcp": "black on #f7768e",
 }
 
 SORT_COLUMNS = ["stars", "delta", "category", "name"]
+TAB_STATUS = {
+    "Watching": "watching",
+    "Tested": "tested",
+    "Adopted": "adopted",
+    "Rejected": "rejected",
+}
+TAB_IDS = {
+    "tab-all": "All",
+    "tab-watching": "Watching",
+    "tab-tested": "Tested",
+    "tab-adopted": "Adopted",
+    "tab-rejected": "Rejected",
+}
 
 VERTICAL_CYCLE = [None, "frontend", "selfhosted", "mcp"]
 VERTICAL_LABELS = {None: "All", "frontend": "Frontend", "selfhosted": "Self-Hosted", "mcp": "MCP"}
@@ -81,6 +124,76 @@ def _format_delta_pct(pct: float | None) -> str:
         return "—"
     sign = "+" if pct >= 0 else ""
     return f"{sign}{pct:.1f}%"
+
+
+def _format_delta_pct_markup(pct: float | None) -> str:
+    label = _format_delta_pct(pct)
+    if pct is None:
+        return f"[dim]{label}[/]"
+    if pct > 0:
+        return f"[#9ece6a]{label}[/]"
+    if pct < 0:
+        return f"[#f7768e]{label}[/]"
+    return f"[dim]{label}[/]"
+
+
+def _badge(label: str, style: str) -> str:
+    return f"[{style}] {escape(label)} [/]"
+
+
+def _status_badge(status: str | None) -> str:
+    label, style = STATUS_BADGES.get(status or "new", STATUS_BADGES["new"])
+    return _badge(label, style)
+
+
+def _category_badge(category: str | None) -> str:
+    if not category:
+        return ""
+    label = CATEGORY_ABBREV.get(category, category[:3]).upper()
+    style = CATEGORY_BADGE_STYLES.get(category, CATEGORY_BADGE_STYLES["general"])
+    return _badge(label, style)
+
+
+def _json_list(value: object) -> list[str]:
+    if not value:
+        return []
+    if isinstance(value, list):
+        return [str(item) for item in value if item]
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return [value] if value and value != "[]" else []
+        if isinstance(parsed, list):
+            return [str(item) for item in parsed if item]
+    return []
+
+
+def _format_date(value: str | None) -> str:
+    if not value:
+        return ""
+    return value[:10]
+
+
+def _join_metadata(parts: list[str]) -> str:
+    return " | ".join(escape(part) for part in parts if part)
+
+
+def _format_project_relevance(value: object) -> str:
+    if not value:
+        return ""
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return value
+    else:
+        parsed = value
+    if isinstance(parsed, dict):
+        return "\n".join(f"{key}: {val}" for key, val in parsed.items())
+    if isinstance(parsed, list):
+        return "\n".join(str(item) for item in parsed)
+    return str(parsed)
 
 
 def _staleness(scan_date_str: str | None) -> tuple[str, str]:
@@ -153,6 +266,55 @@ class AnnotationModal(ModalScreen[dict | None]):
             self.dismiss(None)
 
 
+class HelpModal(ModalScreen[None]):
+    """Keyboard help overlay."""
+
+    BINDINGS = [
+        Binding("escape", "close", "Close", show=False),
+        Binding("q", "close", "Close", show=False),
+    ]
+
+    def compose(self) -> ComposeResult:
+        yield Static("[bold]Tech Radar Keys[/bold]", classes="detail-heading")
+        yield Static(
+            "\n".join(
+                [
+                    "[bold]Navigate[/bold]",
+                    "  j/k or arrows     Move between rows",
+                    "  tab / shift+tab   Switch status tabs",
+                    "  ctrl+d / ctrl+u   Scroll preview",
+                    "",
+                    "[bold]View[/bold]",
+                    "  p                 Toggle preview pane",
+                    "  s / S             Cycle sort / reverse sort",
+                    "  / / escape        Search / clear search",
+                    "  P                 Cycle project filter",
+                    "  v                 Cycle vertical filter",
+                    "",
+                    "[bold]Act[/bold]",
+                    "  w                 Toggle watch",
+                    "  t                 Mark tested",
+                    "  a                 Mark adopted",
+                    "  r                 Reject with note",
+                    "  o / c             Open URL / copy URL",
+                    "",
+                    "[bold]System[/bold]",
+                    "  ?                 Show this help",
+                    "  q                 Quit",
+                ]
+            ),
+            id="help-content",
+        )
+        yield Button("Close", variant="primary", id="btn-close-help")
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-close-help":
+            self.dismiss(None)
+
+
 # ---------------------------------------------------------------------------
 # Main App
 # ---------------------------------------------------------------------------
@@ -174,8 +336,11 @@ class TechRadarApp(App):
         Binding("a", "adopted", "Adopted"),
         Binding("o", "open_url", "Open URL"),
         Binding("c", "copy_url", "Copy URL"),
-        Binding("p", "cycle_project", "Project"),
+        Binding("p", "toggle_preview", "Preview"),
+        Binding("P", "cycle_project", "Project"),
         Binding("v", "cycle_vertical", "Vertical"),
+        Binding("ctrl+d", "preview_page_down", "Preview Down", show=False),
+        Binding("ctrl+u", "preview_page_up", "Preview Up", show=False),
         Binding("slash", "search", "Search"),
         Binding("question_mark", "help", "Help"),
         Binding("escape", "dismiss_search", "Dismiss", show=False),
@@ -194,15 +359,16 @@ class TechRadarApp(App):
         self._project_names: list[str] = []
         self._row_data: dict[str, dict] = {}  # row_key -> full row dict
         self._last_scan_date: str | None = None
+        self._preview_visible = True
 
     def compose(self) -> ComposeResult:
-        yield Static("Tech Radar Dashboard   Project: All   Last scan: …", id="header-bar")
+        yield Static("Tech Radar   project: All   scan: …", id="header-bar")
         yield Tabs(
-            Tab("All", id="tab-all"),
-            Tab("Watching", id="tab-watching"),
-            Tab("Tested", id="tab-tested"),
-            Tab("Adopted", id="tab-adopted"),
-            Tab("Rejected", id="tab-rejected"),
+            Tab("All 0", id="tab-all"),
+            Tab("Watching 0", id="tab-watching"),
+            Tab("Tested 0", id="tab-tested"),
+            Tab("Adopted 0", id="tab-adopted"),
+            Tab("Rejected 0", id="tab-rejected"),
             id="tab-bar",
         )
         yield Input(placeholder="Search repos…", id="search-input")
@@ -224,8 +390,15 @@ class TechRadarApp(App):
         # Setup table columns
         table = self.query_one("#main-table", DataTable)
         table.cursor_type = "row"
-        table.add_columns("Repo", "★", "Δ%", "Description")
+        table.zebra_stripes = True
+        table.add_column("Repository", key="repo", width=58)
+        table.add_column("Stars", key="stars", width=10)
+        table.add_column("Growth", key="growth", width=9)
+        table.add_column("Status", key="status", width=11)
 
+        if self.size.width < 110:
+            self._preview_visible = False
+            self._sync_preview_visibility(notify=False)
         self._update_header()
         self._load_repos()
 
@@ -238,13 +411,21 @@ class TechRadarApp(App):
         vertical_label = VERTICAL_LABELS.get(self._vertical_filter, "All")
         stale_label, stale_class = _staleness(self._last_scan_date)
         sort_arrow = "▼" if self._sort_direction == "DESC" else "▲"
-        search_indicator = f"   🔍 '{self._search_query}'" if self._search_query else ""
-        vertical_indicator = f"   Vertical: {vertical_label}" if self._vertical_filter else ""
+        search_indicator = (
+            f"   [dim]search:[/] {escape(self._search_query)}"
+            if self._search_query else ""
+        )
+        vertical_indicator = (
+            f"   [dim]vertical:[/] {escape(vertical_label)}"
+            if self._vertical_filter else ""
+        )
+        preview_label = "on" if self._preview_visible else "off"
         header = self.query_one("#header-bar", Static)
         header.update(
-            f"Tech Radar Dashboard   Project: {project_label}{vertical_indicator}   "
-            f"Last scan: [{stale_class}]{stale_label}[/]   "
-            f"Sort: {self._sort_column} {sort_arrow}{search_indicator}"
+            f"[bold]Tech Radar[/]   [dim]project:[/] {escape(project_label)}"
+            f"{vertical_indicator}   [dim]scan:[/] [{stale_class}]{stale_label}[/]   "
+            f"[dim]sort:[/] {escape(self._sort_column)} {sort_arrow}   "
+            f"[dim]preview:[/] {preview_label}{search_indicator}"
         )
 
     # ------------------------------------------------------------------

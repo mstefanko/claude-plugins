@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
 from swarm_do.pipeline.plan import inspect_plan, write_inspect_run
+
+
+RUN_ID = "01ARZ3NDEKTSV4RRFFQ69G5FAV"
 
 
 class InspectTests(unittest.TestCase):
@@ -45,10 +49,13 @@ Files affected
             plan = Path(td) / "plan.md"
             plan.write_text("### Phase 1: Tiny\n- Update `README.md`.\n", encoding="utf-8")
             reports = inspect_plan(plan)
-            payload = write_inspect_run(plan, reports, data_dir=data, run_id="01ARZ3NDEKTSV4RRFFQ69G5FAV", bd_epic_id="bd-1")
+            payload = write_inspect_run(plan, reports, data_dir=data, run_id=RUN_ID, bd_epic_id="bd-1")
             self.assertTrue(Path(payload["inspect_path"]).is_file())
             self.assertTrue((data / "runs" / "index.jsonl").is_file())
             self.assertIn('"status":"prepared"', (data / "runs" / "index.jsonl").read_text(encoding="utf-8"))
+            run_payload = json.loads((data / "runs" / RUN_ID / "run.json").read_text(encoding="utf-8"))
+            self.assertNotIn("prepared_plan_path", run_payload)
+            self.assertNotIn("work_unit_artifacts", run_payload)
 
 
 if __name__ == "__main__":

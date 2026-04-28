@@ -5,7 +5,7 @@ description: Orchestrator prompt for the /swarmdaddy:do slash command. Not invok
 
 # Do Plan
 
-You are the Claude dispatcher for the SwarmDaddy pipeline engine. `/swarmdaddy:do <plan-path>` is for real plan files only. `$ARGUMENTS` may also include operator flags such as `--codex-review auto|on|off`, `--risk low|moderate|high`, `--decompose=off|inspect|enforce`, `--force-simple <phase_id>`, `--force-decompose <phase_id>`, and `--auto`; parse those flags before treating the remaining token as the plan path.
+You are the Claude dispatcher for the SwarmDaddy pipeline engine. `/swarmdaddy:do <plan-path>` is for real plan files only unless `$ARGUMENTS` includes `--prepared <run-id>` or `<prepared-artifact-path> --prepared`, which starts from an accepted prepared artifact. `$ARGUMENTS` may also include operator flags such as `--codex-review auto|on|off`, `--risk low|moderate|high`, `--decompose=off|inspect|enforce`, `--force-simple <phase_id>`, `--force-decompose <phase_id>`, and `--auto`; parse those flags before treating the remaining token as the plan path or prepared artifact reference.
 
 `/swarmdaddy:brainstorm`, `/swarmdaddy:research`, `/swarmdaddy:design`, and
 `/swarmdaddy:review` are separate output-only command profiles. They use their
@@ -134,31 +134,49 @@ does not depend solely on PreCompact firing:
 
 ## Plan-Prepare Stage
 
+If `$ARGUMENTS` includes `--prepared`, skip the legacy plan-prepare stage and
+run the prepared dispatch gate before creating any Beads child issues:
+
+```bash
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" do --prepared <run-id-or-artifact-path> --json
+```
+
+This helper loads the prepared artifact, requires `status="accepted"`,
+rechecks source/prepared hashes, git base, sidecar hashes, path containment,
+and work-unit lint, writes the dispatcher active-run record, and returns the
+prepared plan path plus embedded work-unit artifact summary. Treat any non-zero
+exit as a hard refusal before child issue creation. In prepared mode, do not run
+`bin/swarm prepare`, `bin/swarm plan inspect`, or `agent-decompose`; ignore the
+active preset's `[decompose].mode` because work units were produced during
+prepare.
+
 Between preflight and research, run the deterministic prepare layer:
 
 ```bash
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" plan inspect <plan-path> --json
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" prepare <plan-path>
 ```
 
-This writes `runs/<run_id>/inspect.v1.json`, `runs/<run_id>/run.json`, and a
-`runs/index.jsonl` row with `status="prepared"`. A prepared run is not
-executable yet; create no Beads child issues until decomposition is accepted.
+This writes `prepared.md`, `prepared_plan.v1.json`, `inspect.v1.json`, and one
+`work_units.v2` sidecar per phase. A prepared run is not executable yet; create
+no Beads child issues until the operator accepts the artifact with:
 
-Use the active preset's `[decompose].mode`, overridden by
-`--decompose=off|inspect|enforce`:
+```bash
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" prepare --accept <run-id>
+```
+
+The legacy `/swarmdaddy:do <plan-path>` path still honors the active preset's
+`[decompose].mode`, overridden by `--decompose=off|inspect|enforce`:
 
 - `off`: continue with the legacy stage graph.
 - `inspect`: keep the inspect artifact and telemetry, but do not gate behavior.
 - `enforce`: create or load a `work_units.v2` artifact before writer/spec-review
   issue creation.
 
-For `enforce`, simple phases synthesize one unit deterministically. Moderate and
-hard phases run `agent-decompose` against the single phase only, lint with
-`swarm work-units lint`, then continue. Hard phases and inferred
-classifications require operator acceptance unless `--auto` allows the case.
-`too_large` always halts unless the operator supplies `--force-simple` or
-manually splits the phase. If decompose output fails lint, retry once with the
-lint errors; on a second failure write `<phase>.rejected.json` and escalate.
+In `/swarmdaddy:prepare`, simple phases synthesize one unit deterministically.
+Moderate and hard phases are decomposed inside prepare and cached by phase
+cache key. Semantic units split by parser/grammar, orchestration, CLI, tests,
+docs, schemas, and file-target actions; independent units stay in the same
+topological layer, while CLI and tests depend only on real API/source units.
 
 Create one epic/run issue at inspect time if Beads is available, but create no
 unit child issues before the accepted artifact exists. Child issue bodies for

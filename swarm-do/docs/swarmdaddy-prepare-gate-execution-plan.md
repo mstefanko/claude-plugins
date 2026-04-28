@@ -468,6 +468,8 @@ python3 -m unittest discover -s py/swarm_do/pipeline/tests -p 'test_plan_prepare
 | `skills/swarmdaddy/SKILL.md` | EXTEND |
 | `README.md` | EXTEND |
 | `py/swarm_do/pipeline/cli.py` | EXTEND (`cmd_prepare`) |
+| `py/swarm_do/pipeline/decompose.py` | EXTEND (semantic work-unit clustering) |
+| `py/swarm_do/pipeline/tests/test_decompose*.py` | EXTEND |
 | `py/swarm_do/pipeline/tests/test_command_profiles.py` | EXTEND |
 | `docs/testing-strategy.md` | EXTEND |
 
@@ -492,14 +494,31 @@ python3 -m unittest discover -s py/swarm_do/pipeline/tests -p 'test_plan_prepare
    7. write `prepared.md` + prepared artifact + `work_unit_artifacts`
    8. exit with `Status: READY_FOR_ACCEPTANCE | NEEDS_INPUT | REJECTED`
 
-3. **Accept mode** (`--accept <run-id>`):
+3. **Semantic decomposition inside prepare.** Fold in the semantic
+   decomposition slice from `docs/subagent-efficiency-plan.md` here, because
+   Phase 4 is the producer of prepared `work_unit_artifacts`; Phase 5 consumes
+   accepted artifacts and must not decompose again.
+   - Teach deterministic decomposition to cluster by phase sections and file
+     target actions, not just top-level path prefixes. Signals include lint
+     rules, parser/grammar, canonical writer, orchestration, CLI, tests, docs,
+     acceptance criteria count/type, validation command scope, expected result
+     scope, and `estimate_unit_budget`.
+   - Force a split before writer dispatch when estimated writer tool calls
+     exceed 40 or acceptance criteria exceed 5.
+   - Emit independent units in the same topological layer when `allowed_files`
+     are disjoint and no API dependency exists.
+   - Emit `depends_on` only for real semantic dependencies, such as CLI work
+     depending on stable parser/writer APIs.
+   - Stop chaining every split unit by default.
+
+4. **Accept mode** (`--accept <run-id>`):
    - re-run schema + trust-boundary + stale checks
    - print: prepared plan path, finding counts, proposed safe-fix summary,
      work-unit count, allowed-file summary, validation-command summary,
      hash + git-base summary
    - transition `ready_for_acceptance -> accepted` only after explicit operator confirmation
 
-4. **CLI handler** `cmd_prepare(args)` in `cli.py`.
+5. **CLI handler** `cmd_prepare(args)` in `cli.py`.
    - **copy-from:** `cmd_design`/`cmd_research` profile handler shape.
    - **copy-from test scaffold:** `py/swarm_do/pipeline/tests/test_command_profiles.py:1-40`
      (`_dry_run` helper).
@@ -512,6 +531,10 @@ python3 -m unittest discover -s py/swarm_do/pipeline/tests -p 'test_plan_prepare
 - Prepare cannot create writer issues, worktrees, merges, or PRs.
 - Decompose runs in parallel across moderate/hard phases inside prepare;
   cache-key hits skip redundant agent calls on iteration.
+- Prepared work-unit artifacts use semantic clustering; oversized units fail
+  budget lint before they reach a writer.
+- Independent work units appear in the same topological layer; units serialize
+  only for shared files or real API/contract dependencies.
 - Accepted artifacts always carry `work_unit_artifacts` for every phase.
 - `/swarmdaddy:prepare` never marks artifacts accepted without a separate accept action.
 - Model-labeled `safe_fix` proposals shown as summary, not auto-applied.
@@ -527,6 +550,10 @@ bin/swarm plan prepare docs/swarmdaddy-prepare-gate-plan.md --dry-run --json
 
 - ❌ Do not allow `cmd_prepare` to call writer/spec-review/review/docs lanes.
 - ❌ Do not run a second `agent-decompose` outside this phase's pipeline.
+- ❌ Do not preserve directory-prefix-only decomposition when the phase exposes
+  clearer semantic units.
+- ❌ Do not chain independent work units merely because they were generated in
+  sequence.
 - ❌ Do not auto-apply model `safe_fix`s under any flag.
 - ❌ Do not initialize Beads inside `cmd_prepare` deterministic paths.
 
@@ -615,6 +642,7 @@ bin/swarm plan inspect docs/swarmdaddy-prepare-gate-plan.md --no-write --json
 | `py/swarm_do/pipeline/tests/test_prepare_artifact.py` | EXTEND |
 | `docs/eval-recipes.md` | EXTEND |
 | `docs/adr/0006-prepare-gate-contract.md` | EXTEND |
+| `docs/subagent-efficiency-plan.md` | UPDATE with experiment outcome refs if needed |
 
 #### Implementation tasks
 
@@ -645,7 +673,29 @@ bin/swarm plan inspect docs/swarmdaddy-prepare-gate-plan.md --no-write --json
    - decomposition rejections not ↑
    - wall-clock within budget
 
-4. **ADR `0006-prepare-gate-contract.md`** — document architecture decisions
+4. **Downstream gating criteria.** Fold in the gating slice from
+   `docs/subagent-efficiency-plan.md` here, because Phase 6 decides whether
+   prepare-gate behavior is safe to promote.
+   - Measure whether writer receives only the unit contract plus needed
+     context when a work unit is active.
+   - Measure whether spec-review checks the unit acceptance matrix and changed
+     files without re-litigating unrelated parent-phase text.
+   - Measure whether docs can be skipped for code-only changes with no
+     `doc_impact: true` marker from analysis, writer, or diff classification.
+   - Measure whether review stages can start from deterministic post-writer
+     summaries and request source reads only when insufficient.
+
+5. **Controlled experiments.** Record comparisons in `docs/eval-recipes.md`
+   before enabling Phase 7 convenience behavior:
+   - current decomposition vs semantic decomposition across 10 phases
+   - prompt-only tightening vs decompose-only tightening
+   - test-first vs implement-then-test for parser/CLI tasks
+   - notes-only analysis vs source-allowed analysis on hard phases
+   - metrics: mean and p95 unit tool calls, wall-clock, input/output tokens,
+     cache hit ratio, repeated source reads, handoffs, `NEEDS_CONTEXT`,
+     spec mismatches, review failures, and doc-stage skip rate
+
+6. **ADR `0006-prepare-gate-contract.md`** — document architecture decisions
    already locked in design plan lines 78-105.
 
 #### Acceptance criteria
@@ -653,6 +703,10 @@ bin/swarm plan inspect docs/swarmdaddy-prepare-gate-plan.md --no-write --json
 - Prepare events validate against `run_events.schema.json`.
 - Existing telemetry tests still pass.
 - Eval docs document promote/hold/rollback criteria for `--prepare --continue`.
+- Eval docs include controlled-experiment results or an explicit hold decision
+  for semantic decomposition, prompt tightening, and downstream gating.
+- Phase 7 remains blocked unless Phase 6 shows non-regressive `NEEDS_CONTEXT`,
+  spec-mismatch, review-failure, and doc-stage skip metrics.
 
 #### Verification commands
 
@@ -665,6 +719,10 @@ python3 -m unittest discover -s py/swarm_do/pipeline/tests -p 'test_prepare*.py'
 
 - ❌ Do not invent a typed emit API ahead of need; keep using `append_run_event`.
 - ❌ Do not bypass `schema_ok` validation when emitting.
+- ❌ Do not enable downstream docs/spec-review gating by default until the
+  Phase 6 scorecard shows it is non-regressive.
+- ❌ Do not promote semantic decomposition on wall-clock/tool-call wins alone;
+  spec mismatch and review failure rates must not increase.
 
 ---
 
