@@ -119,6 +119,14 @@ new command surfaces.
    - `bin/swarm-telemetry dogfood-check`
    - `bin/swarm-telemetry experiment-report`
 
+### Files
+
+| File | Change |
+| --- | --- |
+| `docs/examples/selftest.ok.json` | New fixture: shape of `bin/swarm selftest --json` healthy output. |
+| `docs/examples/security-audit.warning.json` | New fixture: shape of `bin/swarm security audit --json` with one warning. |
+| `docs/examples/activity-observation.jsonl` | New fixture: shape of one sanitized activity-observation row. |
+
 ### Acceptance
 
 - There is a written schema-level contract for each new output before runtime

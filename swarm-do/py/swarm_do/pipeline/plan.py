@@ -60,9 +60,16 @@ FILE_SECTION_RE = re.compile(
 HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+\S")
 FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
 BULLET_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+", re.MULTILINE)
-AC_SECTION_RE = re.compile(r"^\s{0,3}(?:#{1,6}\s*)?(?:\*\*)?acceptance criteria\b", re.IGNORECASE)
+AC_SECTION_RE = re.compile(
+    r"^\s{0,3}(?:#{1,6}\s*)?(?:\*\*)?acceptance(?:\s+criteria)?\b",
+    re.IGNORECASE,
+)
 VALIDATION_SECTION_RE = re.compile(
     r"^\s{0,3}(?:#{1,6}\s*)?(?:\*\*)?(?:verification|validation)\s+commands?\b",
+    re.IGNORECASE,
+)
+PLAN_LEVEL_TEST_SECTION_RE = re.compile(
+    r"^\s{0,3}#{1,6}\s+(?:test\s+strategy|definition\s+of\s+done|verification\s+commands?|validation\s+commands?)\b",
     re.IGNORECASE,
 )
 AMBIGUOUS_VERB_RE = re.compile(r"\b(?:maybe|consider|etc\.?|and so on|tbd)\b", re.IGNORECASE)
@@ -244,6 +251,9 @@ def lint_plan_text(
 
     lines = text.splitlines()
     findings: list[dict[str, Any]] = []
+    plan_level_test_section_present = any(
+        PLAN_LEVEL_TEST_SECTION_RE.match(line) for line in lines
+    )
     phase_heading_matches = [
         (idx + 1, PHASE_HEADING_RE.match(line))
         for idx, line in enumerate(lines)
@@ -289,15 +299,27 @@ def lint_plan_text(
                 )
             )
         if not _has_section(phase.text, VALIDATION_SECTION_RE):
-            findings.append(
-                _finding(
-                    "missing_validation_commands",
-                    "blocking",
-                    phase.phase_id,
-                    f"{source_name}:{phase.start_line}",
-                    "Phase is missing a Verification Commands or Validation Commands section.",
+            if plan_level_test_section_present:
+                findings.append(
+                    _finding(
+                        "validation_commands_from_plan_level",
+                        "advisory",
+                        phase.phase_id,
+                        f"{source_name}:{phase.start_line}",
+                        "Phase has no Verification/Validation Commands section; "
+                        "using plan-level Test Strategy / Definition Of Done as fallback.",
+                    )
                 )
-            )
+            else:
+                findings.append(
+                    _finding(
+                        "missing_validation_commands",
+                        "blocking",
+                        phase.phase_id,
+                        f"{source_name}:{phase.start_line}",
+                        "Phase is missing a Verification Commands or Validation Commands section.",
+                    )
+                )
         if phase.referenced_files and not phase.explicit_files:
             findings.append(
                 _finding(
