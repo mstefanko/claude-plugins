@@ -12,11 +12,24 @@ from pathlib import Path
 from unittest import mock
 
 from swarm_do.pipeline.cli import cmd_brainstorm, cmd_design, cmd_do, cmd_prepare, cmd_research, cmd_review
-from swarm_do.pipeline.prepare import accept_prepared, load_prepared_artifact, prepare_plan_run
+from swarm_do.pipeline.prepare import (
+    InvalidPreparedTransition,
+    StalePreparedArtifactError,
+    accept_prepared,
+    load_prepared_artifact,
+    prepare_plan_run,
+)
 from swarm_do.pipeline.run_state import active_run_path, load_active_run
 
 
 RUN_ID = "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+
+
+def _read_run_events(data_dir: Path) -> list[dict]:
+    path = data_dir / "telemetry" / "run_events.jsonl"
+    if not path.is_file():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 class CommandProfileTests(unittest.TestCase):
@@ -180,6 +193,25 @@ class CommandProfileTests(unittest.TestCase):
         self.assertEqual(code, 0, stderr.getvalue())
         self.assertEqual(json.loads(stdout.getvalue())["run_id"], RUN_ID)
 
+    def test_do_prepared_rejects_ambiguous_refs(self) -> None:
+        _repo, data, _artifact_path = self._accepted_prepared_run()
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        args = argparse.Namespace(
+            target="extra-ref",
+            prepared=RUN_ID,
+            bd_epic_id=None,
+            no_write_state=False,
+            json=True,
+        )
+
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            code = cmd_do(args)
+
+        self.assertEqual(code, 1)
+        self.assertFalse(active_run_path(data).exists())
+        self.assertIn("not both", stderr.getvalue())
+
     def test_do_prepare_continue_accepts_safe_artifact_and_writes_active_run(self) -> None:
         data = Path(self.td.name)
         repo = data / "repo-auto"
@@ -209,6 +241,50 @@ class CommandProfileTests(unittest.TestCase):
         artifact = load_prepared_artifact(payload["run_id"], data_dir=data, repo_root=repo)
         self.assertEqual(artifact["status"], "accepted")
         self.assertEqual(artifact["acceptance"]["accepted_by"], "auto-continue")
+
+    def test_do_prepare_continue_distinguishes_accept_failures(self) -> None:
+        cases = (
+            (
+                StalePreparedArtifactError("prepared artifact is stale: source_plan_sha", ("source_plan_sha",)),
+                3,
+                "stale",
+            ),
+            (InvalidPreparedTransition("cannot accept from stale"), 2, "transition"),
+        )
+        for exc, expected_code, failure_type in cases:
+            with self.subTest(failure_type=failure_type):
+                data = Path(self.td.name)
+                repo = data / f"repo-{failure_type}"
+                repo.mkdir()
+                self._write_ready_plan_repo(repo)
+                stdout = io.StringIO()
+                stderr = io.StringIO()
+                args = argparse.Namespace(
+                    target="plan.md",
+                    prepared=None,
+                    prepare=True,
+                    prepare_continue=True,
+                    bd_epic_id="swarm-123",
+                    no_write_state=False,
+                    json=True,
+                )
+
+                with mock.patch("swarm_do.pipeline.prepare.REPO_ROOT", repo), mock.patch(
+                    "swarm_do.pipeline.prepare.accept_prepared", side_effect=exc
+                ), redirect_stdout(stdout), redirect_stderr(stderr):
+                    code = cmd_do(args)
+
+                self.assertEqual(code, expected_code)
+                self.assertIn(str(exc), stderr.getvalue())
+                self.assertFalse(active_run_path(data).exists())
+                failures = [
+                    event
+                    for event in _read_run_events(data)
+                    if event["event_type"] == "prepare_continue_failed"
+                    and event["details"]["failure_type"] == failure_type
+                ]
+                self.assertTrue(failures)
+                self.assertEqual(failures[-1]["bd_epic_id"], "swarm-123")
 
     def test_do_prepare_continue_stops_on_advisory_without_state_write(self) -> None:
         data = Path(self.td.name)
@@ -277,7 +353,7 @@ class CommandProfileTests(unittest.TestCase):
                 )
             )
 
-        self.assertEqual(code, 1)
+        self.assertEqual(code, 2)
         self.assertFalse(active_run_path(data).exists())
         self.assertIn("accepted", stderr.getvalue())
 
@@ -300,7 +376,7 @@ class CommandProfileTests(unittest.TestCase):
                 )
             )
 
-        self.assertEqual(code, 1)
+        self.assertEqual(code, 2)
         self.assertFalse(active_run_path(data).exists())
         self.assertIn("sha mismatch", stderr.getvalue())
 

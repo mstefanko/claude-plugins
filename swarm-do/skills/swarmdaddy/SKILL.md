@@ -311,11 +311,15 @@ report in the same worktree and attaches that objective output before launching
   --repo <unit-worktree> \
   --base-ref <integration-branch-or-sha> \
   --writer-return-file <writer-notes.txt> \
+  --emit-run-event \
+  --run-id <run-id> \
   --json
 ```
 
 The report includes changed files, diff stat, `blocked_files` violations,
-validation command results, test summary, and writer budget status.
+validation command results, test summary, and writer budget status. When
+`--base-ref` is omitted, the helper uses `git_base_sha` or `git_base_ref` from
+the work-unit artifact before falling back to `HEAD`.
 6. Merge only units with an `APPROVED` spec-review verdict. The coordinator
 uses the helper to check out the integration branch and merge with
 `git merge --no-ff`; workers must never merge themselves or update cross-unit

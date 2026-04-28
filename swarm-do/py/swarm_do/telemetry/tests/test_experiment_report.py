@@ -122,6 +122,20 @@ class ExperimentReportTests(unittest.TestCase):
         self.assertEqual(report["summary"]["variants"], ["A"])
         self.assertEqual(report["by_variant"][0]["source_read_count"], 1)
 
+    def test_empty_variant_filter_does_not_count_unmatched_observations(self) -> None:
+        report = aggregate_experiment_report(
+            [{"run_id": "R1", "variant": "A", "phase_kind": "feature", "phase_complexity": "simple", "base_sha": "a" * 40}],
+            [{"run_id": "R1", "event_type": "writer_exit", "details": {"source_read_count": 9}}],
+            [{"run_id": "R1", "event_type": "prepare_dispatch_started"}],
+            variant="missing",
+        )
+
+        self.assertEqual(report["summary"]["run_count"], 0)
+        self.assertEqual(report["summary"]["observation_count"], 0)
+        self.assertEqual(report["summary"]["run_event_count"], 0)
+        self.assertEqual(report["by_variant"], [])
+        self.assertEqual(report["summary"]["unknown_safety_metrics"], ["runs"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -15,6 +15,7 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -609,7 +610,7 @@ class PrepareTelemetryEventTests(unittest.TestCase):
             )
             data = tmp / "data"
 
-            prepare.prepare_plan_run("plan.md", repo_root=repo, data_dir=data, run_id=RUN_ID)
+            prepare.prepare_plan_run("plan.md", repo_root=repo, data_dir=data, run_id=RUN_ID, bd_epic_id="swarm-123")
             prepare.accept_prepared(RUN_ID, data_dir=data, repo_root=repo)
             prepare.verify_prepared_for_dispatch(RUN_ID, data_dir=data, repo_root=repo)
 
@@ -618,6 +619,48 @@ class PrepareTelemetryEventTests(unittest.TestCase):
             event_types = [event["event_type"] for event in events]
             self.assertIn("prepare_accepted", event_types)
             self.assertIn("prepare_dispatch_started", event_types)
+            dispatch = [event for event in events if event["event_type"] == "prepare_dispatch_started"][-1]
+            self.assertEqual(dispatch["bd_epic_id"], "swarm-123")
+
+    def test_dispatch_rejects_sidecars_from_different_run_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            repo = tmp / "repo"
+            repo.mkdir()
+            _git_init_repo(repo)
+            (repo / "README.md").write_text("# Test\n", encoding="utf-8")
+            (repo / "plan.md").write_text(
+                "### Phase 1: Docs (complexity: simple, kind: docs)\n\n"
+                "### File Targets\n\n"
+                "- `README.md`\n\n"
+                "### Acceptance Criteria\n\n"
+                "- README is updated.\n\n"
+                "### Verification Commands\n\n"
+                "```\ntrue\n```\n",
+                encoding="utf-8",
+            )
+            data = tmp / "data"
+            other_run_id = "01BRZ3NDEKTSV4RRFFQ69G5FAV"
+
+            prepare.prepare_plan_run("plan.md", repo_root=repo, data_dir=data, run_id=RUN_ID)
+            prepare.accept_prepared(RUN_ID, data_dir=data, repo_root=repo)
+            payload = prepare.load_prepared_artifact(RUN_ID, data_dir=data, repo_root=repo)
+            run_dir_rel = Path(payload["prepared_plan_path"]).parent
+            other_run_dir_rel = run_dir_rel.parent / other_run_id
+            shutil.copytree(repo / run_dir_rel, repo / other_run_dir_rel)
+
+            def rehome_sidecar(path_text: str) -> str:
+                rel = Path(path_text)
+                return str(other_run_dir_rel / rel.relative_to(run_dir_rel))
+
+            payload["prepared_plan_path"] = str(other_run_dir_rel / "prepared.md")
+            payload["inspect_artifact"]["path"] = rehome_sidecar(payload["inspect_artifact"]["path"])
+            for descriptor in payload["work_unit_artifacts"].values():
+                descriptor["path"] = rehome_sidecar(descriptor["path"])
+            prepare.write_prepared_artifact(run_id=RUN_ID, payload=payload, data_dir=data)
+
+            with self.assertRaisesRegex(ValueError, "run directory does not match run_id"):
+                prepare.verify_prepared_for_dispatch(RUN_ID, data_dir=data, repo_root=repo)
 
     def test_stale_accept_rejection_emits_valid_event(self) -> None:
         with tempfile.TemporaryDirectory() as td:

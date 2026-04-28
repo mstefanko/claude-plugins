@@ -134,7 +134,10 @@ class ValidateRowTests(unittest.TestCase):
             "prepare_blocking_findings",
             "prepare_accepted",
             "prepare_stale_rejected",
+            "prepare_continue_failed",
             "prepare_dispatch_started",
+            "post_writer_report",
+            "dogfood_check",
         ):
             with self.subTest(event_type=event_type):
                 row = {

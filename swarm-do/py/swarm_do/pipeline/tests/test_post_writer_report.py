@@ -85,6 +85,25 @@ class PostWriterReportTests(unittest.TestCase):
         self.assertEqual(report["gate"]["status"], "failed")
         self.assertIn("budget_breach_tool_calls", report["gate"]["failure_reasons"])
 
+    def test_report_defaults_to_artifact_git_base_sha_for_committed_writer_change(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo = init_repo(Path(td))
+            base_sha = git_stdout(repo, "rev-parse", "HEAD")
+            write(repo / "py" / "a.py", "old\nnew\n")
+            git(repo, "add", "py/a.py")
+            git(repo, "commit", "-m", "writer change")
+
+            report = build_post_writer_report(
+                artifact([unit("unit-a", ["py/a.py"])], git_base_sha=base_sha),
+                "unit-a",
+                repo=repo,
+                writer_return=writer_return("unit-a", tool_calls=3),
+            )
+
+        self.assertEqual(report["base_ref"], base_sha)
+        self.assertEqual(report["changed_files"], ["py/a.py"])
+        self.assertEqual(report["diff_stat"]["files_changed"], 1)
+
     def test_cli_post_writer_emits_json_and_returns_gate_status(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -110,6 +129,7 @@ class PostWriterReportTests(unittest.TestCase):
                 max_handoffs=1,
                 telemetry_tool_call_count=None,
                 validation_timeout_seconds=None,
+                emit_run_event=False,
                 json=True,
             )
 
@@ -121,6 +141,44 @@ class PostWriterReportTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["gate"]["status"], "passed")
         self.assertEqual(payload["changed_files"], ["py/a.py"])
+
+    def test_cli_post_writer_can_emit_run_event(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            repo = init_repo(root / "repo")
+            write(repo / "py" / "a.py", "old\nnew\n")
+            artifact_path = root / "work-units.json"
+            artifact_path.write_text(json.dumps(artifact([unit("unit-a", ["py/a.py"])])), encoding="utf-8")
+            args = argparse.Namespace(
+                work_units_command="post-writer",
+                artifact=str(artifact_path),
+                unit_id="unit-a",
+                repo=str(repo),
+                base_ref="HEAD",
+                writer_return_file=None,
+                writer_return=writer_return("unit-a", tool_calls=2),
+                max_writer_tool_calls=60,
+                max_writer_output_bytes=60_000,
+                max_handoffs=1,
+                telemetry_tool_call_count=None,
+                validation_timeout_seconds=None,
+                emit_run_event=True,
+                run_id="01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                bd_epic_id="bd-1",
+                phase_id="phase-1",
+                data_dir=str(root / "data"),
+                json=True,
+            )
+
+            with contextlib.redirect_stdout(io.StringIO()):
+                exit_code = cmd_work_units(args)
+            events = (root / "data" / "telemetry" / "run_events.jsonl").read_text(encoding="utf-8").splitlines()
+            event = json.loads(events[-1])
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(event["event_type"], "post_writer_report")
+        self.assertEqual(event["bd_epic_id"], "bd-1")
+        self.assertEqual(event["details"]["gate_status"], "passed")
 
 
 def init_repo(path: Path) -> Path:
@@ -134,8 +192,11 @@ def init_repo(path: Path) -> Path:
     return path
 
 
-def artifact(units: list[dict]) -> dict:
-    return {"schema_version": 2, "plan_path": None, "bd_epic_id": "bd-1", "work_units": units}
+def artifact(units: list[dict], *, git_base_sha: str | None = None) -> dict:
+    payload = {"schema_version": 2, "plan_path": None, "bd_epic_id": "bd-1", "work_units": units}
+    if git_base_sha:
+        payload["git_base_sha"] = git_base_sha
+    return payload
 
 
 def unit(
@@ -187,6 +248,16 @@ def write(path: Path, text: str) -> None:
 
 def git(repo: Path, *args: str) -> None:
     subprocess.run(["git", "-C", str(repo), *args], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+
+def git_stdout(repo: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(repo), *args],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    ).stdout.strip()
 
 
 if __name__ == "__main__":

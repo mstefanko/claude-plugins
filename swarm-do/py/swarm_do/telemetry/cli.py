@@ -130,6 +130,9 @@ def _build_parser() -> argparse.ArgumentParser:
     from .subcommands import experiment_report as _experiment_report_cmd
     _experiment_report_cmd.add_subparser(subparsers)
 
+    from .subcommands import dogfood_check as _dogfood_check_cmd
+    _dogfood_check_cmd.add_subparser(subparsers)
+
     return parser
 
 
@@ -225,6 +228,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if ns.subcommand == "experiment-report":
         from .subcommands import experiment_report as _er_cmd
         return _er_cmd.run(ns)
+    if ns.subcommand == "dogfood-check":
+        from .subcommands import dogfood_check as _df_cmd
+        return _df_cmd.run(ns)
 
     parser.error(f"unknown subcommand: {ns.subcommand}")
     return 2  # unreachable; parser.error raises SystemExit

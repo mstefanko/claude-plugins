@@ -148,9 +148,9 @@ def aggregate_experiment_report(
     observation_rows = 0
     for row in observations:
         run_id = row.get("run_id")
-        if run_ids and run_id not in run_ids:
-            continue
         if not isinstance(run_id, str):
+            continue
+        if run_id not in run_ids:
             continue
         observations_by_run[run_id].append(row)
         observation_rows += 1
@@ -159,9 +159,9 @@ def aggregate_experiment_report(
     event_rows = 0
     for row in run_events:
         run_id = row.get("run_id")
-        if run_ids and run_id not in run_ids:
-            continue
         if not isinstance(run_id, str):
+            continue
+        if run_id not in run_ids:
             continue
         events_by_run[run_id].append(row)
         event_rows += 1

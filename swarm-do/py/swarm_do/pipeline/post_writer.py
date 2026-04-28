@@ -20,7 +20,7 @@ def build_post_writer_report(
     unit_id: str,
     *,
     repo: str | Path = ".",
-    base_ref: str = "HEAD",
+    base_ref: str | None = None,
     writer_return: str = "",
     max_writer_tool_calls: int = 60,
     max_writer_output_bytes: int = 60_000,
@@ -33,8 +33,9 @@ def build_post_writer_report(
 
     unit = _find_unit(artifact, unit_id)
     repo_path = Path(repo)
-    changed_files = changed_files_since(repo_path, base_ref)
-    diff_stat = diff_stat_since(repo_path, base_ref)
+    resolved_base_ref = _resolve_base_ref(artifact, base_ref)
+    changed_files = changed_files_since(repo_path, resolved_base_ref)
+    diff_stat = diff_stat_since(repo_path, resolved_base_ref)
     blocked_violations = unit_blocked_file_violations(unit, changed_files)
     validation_results = (
         run_validation_commands(unit, repo=repo_path, timeout_seconds=validation_timeout_seconds)
@@ -55,6 +56,7 @@ def build_post_writer_report(
     return {
         "schema_version": SCHEMA_VERSION,
         "work_unit_id": unit_id,
+        "base_ref": resolved_base_ref,
         "unit_contract": _unit_contract(unit),
         "acceptance_matrix": _acceptance_matrix(unit, test_summary),
         "changed_files": changed_files,
@@ -172,6 +174,16 @@ def _find_unit(artifact: Mapping[str, Any], unit_id: str) -> Mapping[str, Any]:
         if isinstance(unit, Mapping) and unit.get("id") == unit_id:
             return unit
     raise ValueError(f"work unit not found: {unit_id}")
+
+
+def _resolve_base_ref(artifact: Mapping[str, Any], base_ref: str | None) -> str:
+    if isinstance(base_ref, str) and base_ref.strip():
+        return base_ref.strip()
+    for key in ("git_base_sha", "git_base_ref"):
+        value = artifact.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return "HEAD"
 
 
 def _unit_contract(unit: Mapping[str, Any]) -> dict[str, Any]:

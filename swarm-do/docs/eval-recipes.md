@@ -132,10 +132,16 @@ observation/run-event metrics above:
 ```bash
 bin/swarm-telemetry experiment-report --batch <batch-id>
 bin/swarm-telemetry experiment-report --batch <batch-id> --format json
+bin/swarm-telemetry dogfood-check --batch <batch-id>
 ```
 
 The generic SQL surface can also read `observations.jsonl` and
 `run_events.jsonl` alongside `runs.jsonl` for ad hoc follow-up queries.
+The `PreCompact` hook writes the same advisory check to
+`${CLAUDE_PLUGIN_DATA}/dogfood/latest.md` during active runs and records a
+`dogfood_check` run event when the active run id is available. The hook is
+advisory: it can recommend HOLD or PROMOTE_CANDIDATE, but rollout status still
+requires an operator-reviewed batch manifest.
 
 Compare pipelines by phase kind and complexity:
 

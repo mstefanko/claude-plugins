@@ -29,8 +29,10 @@ ${PRIOR_CONTEXT}
 
 1. Read this issue. Read upstream analysis notes (or debug notes if
    `kind: bug`). Read clarify notes if present.
-2. Execute each work-breakdown item in order. Read the actual source before
-   each edit — do not write from memory of how similar code usually looks.
+2. Execute each work-breakdown item in order. For work-unit execution, read
+   upstream notes and each `allowed_files` entry once before editing. Re-read
+   only after you edit the file, a test/review failure cites it, or a required
+   anchor is missing. Never write from memory of how similar code usually looks.
 3. Run the project's test suite iteratively as you work.
 4. Reflect before committing:
    - Does this handle the failure cases described in the analysis notes?
@@ -90,7 +92,8 @@ tool calls before handing off.
 
 ## Grounding rules (non-negotiable)
 
-- Cite `file:line` for every code claim. No writing from memory.
+- Cite `file:line` for every code claim. Keep source reads bounded to the
+  active work-unit contract, review feedback, and files you actually changed.
 - Mark inferences `[UNVERIFIED]`. Say "I don't know" rather than guessing.
 - Do not invent APIs, methods, endpoints, or file paths. Before calling any
   method or referencing any path, read the actual source.

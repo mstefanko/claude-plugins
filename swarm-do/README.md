@@ -541,6 +541,7 @@ bin/swarm-telemetry dump <ledger>
 bin/swarm-telemetry validate [<ledger>]
 bin/swarm-telemetry query '<sql>'
 bin/swarm-telemetry report [--since Nd] [--role R] [--bucket K]
+bin/swarm-telemetry dogfood-check [--batch ID] [--format json|markdown]
 bin/swarm-telemetry sample-for-adjudication --count N [--since Nd] [--output-root PATH]
 bin/swarm-telemetry join-outcomes [--since Nd] [--repo PATH] [--dry-run]
 bin/swarm-telemetry purge --older-than Nd [--ledger <ledger>] [--dry-run]
@@ -550,6 +551,7 @@ bin/swarm-telemetry purge --older-than Nd [--ledger <ledger>] [--dry-run]
 | Subcommand | What it does |
 |------------|--------------|
 | `contract-usage` | Role-contract violation report from observations.jsonl × permissions/<role>.json. |
+| `dogfood-check` | Advisory HOLD/PROMOTE_CANDIDATE check from dogfood telemetry. |
 | `dump` | Pretty-print a JSONL ledger as a JSON array. |
 | `experiment-report` | Join runs, observations, and run_events for controlled dogfood scorecards. |
 | `join-outcomes` | Correlate findings with post-merge maintainer actions. |

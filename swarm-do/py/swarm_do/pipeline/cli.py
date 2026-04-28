@@ -519,6 +519,13 @@ def cmd_do(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 1
+    if isinstance(args.prepared, str) and args.target:
+        print(
+            "swarm: do: pass the prepared run id or artifact path either with "
+            "--prepared=RUN_ID_OR_PATH or as the positional target, not both",
+            file=sys.stderr,
+        )
+        return 1
     prepared_ref = args.prepared if isinstance(args.prepared, str) else args.target
     if not prepared_ref:
         print("swarm: do: --prepared requires a run id or artifact path", file=sys.stderr)
@@ -538,8 +545,15 @@ def _cmd_do_prepare_continue(args: argparse.Namespace) -> int:
         print("swarm: do --prepare --continue: plan path is required", file=sys.stderr)
         return 1
 
-    from .prepare import accept_prepared, auto_continue_decision, prepare_plan_run
+    from .prepare import (
+        InvalidPreparedTransition,
+        StalePreparedArtifactError,
+        accept_prepared,
+        auto_continue_decision,
+        prepare_plan_run,
+    )
 
+    result: Any | None = None
     try:
         result = prepare_plan_run(
             args.target,
@@ -564,9 +578,41 @@ def _cmd_do_prepare_continue(args: argparse.Namespace) -> int:
             return 1
         accept_prepared(result.run_id, accepted_by="auto-continue")
         return _dispatch_prepared(args, result.run_id, error_prefix="swarm: do --prepare --continue")
+    except StalePreparedArtifactError as exc:
+        _record_prepare_continue_failure(args, result, failure_type="stale", exc=exc)
+        print(f"swarm: do --prepare --continue: {exc}", file=sys.stderr)
+        return 3
+    except InvalidPreparedTransition as exc:
+        _record_prepare_continue_failure(args, result, failure_type="transition", exc=exc)
+        print(f"swarm: do --prepare --continue: {exc}", file=sys.stderr)
+        return 2
+    except (FileNotFoundError, ValueError) as exc:
+        _record_prepare_continue_failure(args, result, failure_type="validation", exc=exc)
+        print(f"swarm: do --prepare --continue: {exc}", file=sys.stderr)
+        return 2
     except Exception as exc:
+        _record_prepare_continue_failure(args, result, failure_type="unexpected", exc=exc)
         print(f"swarm: do --prepare --continue: {exc}", file=sys.stderr)
         return 1
+
+
+def _record_prepare_continue_failure(
+    args: argparse.Namespace,
+    result: Any | None,
+    *,
+    failure_type: str,
+    exc: BaseException,
+) -> None:
+    if result is None or not isinstance(getattr(result, "run_id", None), str):
+        return
+    from .prepare import record_prepare_continue_failed
+
+    record_prepare_continue_failed(
+        result.run_id,
+        failure_type=failure_type,
+        message=str(exc),
+        bd_epic_id=getattr(args, "bd_epic_id", None) or getattr(result, "bd_epic_id", None),
+    )
 
 
 def _dispatch_prepared(
@@ -575,7 +621,11 @@ def _dispatch_prepared(
     *,
     error_prefix: str,
 ) -> int:
-    from .prepare import verify_prepared_for_dispatch
+    from .prepare import (
+        InvalidPreparedTransition,
+        StalePreparedArtifactError,
+        verify_prepared_for_dispatch,
+    )
     from .run_state import active_run_path, write_active_run
 
     try:
@@ -597,6 +647,12 @@ def _dispatch_prepared(
                 print(f"active run: {payload['active_run_path']}")
             print("Status: READY_FOR_DISPATCH")
         return 0
+    except StalePreparedArtifactError as exc:
+        print(f"{error_prefix}: {exc}", file=sys.stderr)
+        return 3
+    except (InvalidPreparedTransition, FileNotFoundError, ValueError) as exc:
+        print(f"{error_prefix}: {exc}", file=sys.stderr)
+        return 2
     except Exception as exc:
         print(f"{error_prefix}: {exc}", file=sys.stderr)
         return 1
@@ -1101,6 +1157,8 @@ def cmd_work_units(args: argparse.Namespace) -> int:
                 telemetry_tool_call_count=args.telemetry_tool_call_count,
                 validation_timeout_seconds=args.validation_timeout_seconds,
             )
+            if getattr(args, "emit_run_event", False):
+                _emit_post_writer_run_event(args, artifact, payload)
             gate = payload.get("gate") if isinstance(payload, Mapping) else {}
             exit_code = 0 if isinstance(gate, Mapping) and gate.get("status") == "passed" else 1
         else:
@@ -1127,6 +1185,59 @@ def cmd_work_units(args: argparse.Namespace) -> int:
             else:
                 print("resume_point: complete")
     return exit_code
+
+
+def _emit_post_writer_run_event(
+    args: argparse.Namespace,
+    artifact: Mapping[str, Any],
+    report: Mapping[str, Any],
+) -> None:
+    from .paths import resolve_data_dir
+    from .run_state import append_run_event
+
+    run_id = getattr(args, "run_id", None) or artifact.get("run_id")
+    if not isinstance(run_id, str) or not run_id:
+        raise ValueError("--emit-run-event requires --run-id or artifact.run_id")
+    unit_id = report.get("work_unit_id")
+    if not isinstance(unit_id, str):
+        unit_id = getattr(args, "unit_id", None)
+    gate = report.get("gate") if isinstance(report.get("gate"), Mapping) else {}
+    diff_stat = report.get("diff_stat") if isinstance(report.get("diff_stat"), Mapping) else {}
+    test_summary = report.get("test_summary") if isinstance(report.get("test_summary"), Mapping) else {}
+    budget = report.get("budget_status") if isinstance(report.get("budget_status"), Mapping) else {}
+    append_run_event(
+        Path(args.data_dir) if getattr(args, "data_dir", None) else resolve_data_dir(),
+        {
+            "run_id": run_id,
+            "event_type": "post_writer_report",
+            "bd_epic_id": getattr(args, "bd_epic_id", None) or artifact.get("bd_epic_id"),
+            "phase_id": getattr(args, "phase_id", None) or _phase_id_from_unit_id(unit_id),
+            "work_unit_id": unit_id,
+            "child_bead_ids": None,
+            "reason": None,
+            "retry_count": None,
+            "handoff_count": None,
+            "integration_branch_head": None,
+            "details": {
+                "base_ref": report.get("base_ref"),
+                "gate_status": gate.get("status"),
+                "failure_reasons": gate.get("failure_reasons") if isinstance(gate.get("failure_reasons"), list) else [],
+                "changed_file_count": len(report.get("changed_files") or []),
+                "blocked_file_violation_count": len(report.get("blocked_file_violations") or []),
+                "validation_status": test_summary.get("status"),
+                "budget_status": budget.get("status"),
+                "files_changed": diff_stat.get("files_changed"),
+            },
+            "schema_ok": True,
+        },
+    )
+
+
+def _phase_id_from_unit_id(unit_id: Any) -> str | None:
+    if not isinstance(unit_id, str) or ":" not in unit_id:
+        return None
+    phase_id, _sep, _rest = unit_id.partition(":")
+    return phase_id or None
 
 
 def cmd_worktrees(args: argparse.Namespace) -> int:
@@ -1406,7 +1517,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("artifact")
     p.add_argument("--unit-id", required=True)
     p.add_argument("--repo", default=".")
-    p.add_argument("--base-ref", default="HEAD")
+    p.add_argument("--base-ref")
     p.add_argument("--writer-return-file")
     p.add_argument("--writer-return")
     p.add_argument("--max-writer-tool-calls", type=int, default=60)
@@ -1414,6 +1525,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-handoffs", type=int, default=1)
     p.add_argument("--telemetry-tool-call-count", type=int)
     p.add_argument("--validation-timeout-seconds", type=int)
+    p.add_argument("--emit-run-event", action="store_true")
+    p.add_argument("--run-id")
+    p.add_argument("--bd-epic-id")
+    p.add_argument("--phase-id")
+    p.add_argument("--data-dir")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_work_units)
 

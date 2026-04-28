@@ -71,7 +71,14 @@ REVIEW_PROVIDER_SELECTIONS = {"auto", "explicit", "off"}
 MCO_PROVIDER_ORDER = ("claude", "codex", "gemini", "opencode", "qwen")
 MCO_PROVIDERS = set(MCO_PROVIDER_ORDER)
 REVIEW_PROVIDER_POLICY_KEYS = {"selection", "min_success", "max_parallel", "include", "exclude"}
-WORK_UNIT_TOP_KEYS = {"schema_version", "plan_path", "bd_epic_id", "work_units"}
+WORK_UNIT_TOP_KEYS = {
+    "schema_version",
+    "plan_path",
+    "bd_epic_id",
+    "git_base_ref",
+    "git_base_sha",
+    "work_units",
+}
 WORK_UNIT_KEYS = {
     "id",
     "title",
@@ -549,9 +556,13 @@ def schema_lint_work_units(
     schema_version = artifact.get("schema_version")
     if schema_version not in {1, 2}:
         errors.append("work_units: schema_version must be 1 or 2")
-    for key in ("plan_path", "bd_epic_id"):
+    for key in ("plan_path", "bd_epic_id", "git_base_ref"):
         if key in artifact and artifact[key] is not None and not isinstance(artifact[key], str):
             errors.append(f"work_units: {key} must be a string or null")
+    if "git_base_sha" in artifact and artifact["git_base_sha"] is not None:
+        value = artifact["git_base_sha"]
+        if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{40}", value):
+            errors.append("work_units: git_base_sha must be a 40-char hex digest or null")
 
     units = artifact.get("work_units")
     if not isinstance(units, list) or not units:

@@ -33,6 +33,9 @@
       "type": "string",
       "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
     },
+    "bd_epic_id": {
+      "type": ["string", "null"]
+    },
     "repo_root": { "type": "string", "minLength": 1 },
     "git_base_ref": { "type": "string", "minLength": 1 },
     "git_base_sha": {

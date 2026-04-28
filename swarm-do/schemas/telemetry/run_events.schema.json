@@ -41,7 +41,10 @@
         "prepare_blocking_findings",
         "prepare_accepted",
         "prepare_stale_rejected",
-        "prepare_dispatch_started"
+        "prepare_continue_failed",
+        "prepare_dispatch_started",
+        "post_writer_report",
+        "dogfood_check"
       ]
     },
     "bd_epic_id": {

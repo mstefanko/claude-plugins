@@ -31,3 +31,30 @@ write_checkpoint_from_active(
     reason="precompact",
 )
 PY
+
+run_id="$(PYTHONPATH="${plugin_root}/py:${PYTHONPATH:-}" python3 - "$active" <<'PY' 2>/dev/null || true
+import json
+import sys
+
+try:
+    value = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    value = {}
+run_id = value.get("run_id") if isinstance(value, dict) else None
+if isinstance(run_id, str):
+    print(run_id)
+PY
+)"
+
+if [[ -n "$run_id" ]]; then
+  PYTHONPATH="${plugin_root}/py:${PYTHONPATH:-}" python3 -m swarm_do.telemetry.cli dogfood-check \
+    --format markdown \
+    --output "$data_dir/dogfood/latest.md" \
+    --append-run-event \
+    --run-id "$run_id" \
+    --source precompact-hook >/dev/null 2>&1 || true
+else
+  PYTHONPATH="${plugin_root}/py:${PYTHONPATH:-}" python3 -m swarm_do.telemetry.cli dogfood-check \
+    --format markdown \
+    --output "$data_dir/dogfood/latest.md" >/dev/null 2>&1 || true
+fi

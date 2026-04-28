@@ -95,6 +95,14 @@ class InvalidPreparedTransition(ValueError):
     """
 
 
+class StalePreparedArtifactError(ValueError):
+    """Raised when a prepared artifact no longer matches its source inputs."""
+
+    def __init__(self, message: str, reasons: Iterable[str] = ()) -> None:
+        super().__init__(message)
+        self.reasons = tuple(reasons)
+
+
 @dataclass(frozen=True)
 class ReviewLoopResult:
     """Result of the bounded plan-review / normalize loop."""
@@ -111,6 +119,7 @@ class PrepareRunResult:
     """Result from the deterministic prepare command profile."""
 
     run_id: str
+    bd_epic_id: str | None
     status: str
     payload: dict[str, Any]
     lint_findings: tuple[dict[str, Any], ...]
@@ -123,6 +132,7 @@ class PrepareRunResult:
         work_units = self.payload.get("work_unit_artifacts") or {}
         return {
             "run_id": self.run_id,
+            "bd_epic_id": self.bd_epic_id,
             "status": self.status,
             "prepared_plan_path": self.prepared_plan_path,
             "artifact_path": self.artifact_path,
@@ -159,6 +169,7 @@ class PreparedDispatchResult:
     """Accepted prepared artifact verified for pure dispatch consumption."""
 
     run_id: str
+    bd_epic_id: str | None
     status: str
     artifact_path: str
     source_plan_path: str
@@ -179,6 +190,7 @@ class PreparedDispatchResult:
         ]
         return {
             "run_id": self.run_id,
+            "bd_epic_id": self.bd_epic_id,
             "status": self.status,
             "ready_for_dispatch": True,
             "artifact_path": self.artifact_path,
@@ -196,10 +208,10 @@ class PreparedDispatchResult:
     def to_run_state(self, *, bd_epic_id: str | None = None) -> dict[str, Any]:
         return {
             "run_id": self.run_id,
-            "bd_epic_id": bd_epic_id,
+            "bd_epic_id": bd_epic_id if bd_epic_id is not None else self.bd_epic_id,
             "phase_id": "prepared-dispatch",
             "child_bead_ids": [],
-            "work_units": _dispatch_work_units(self.work_unit_artifacts),
+            "work_units": _dispatch_work_units(self.work_unit_artifacts, phase_map=self.phase_map),
             "prepared_artifact_path": self.artifact_path,
             "prepared_plan_path": self.prepared_plan_path,
             "prepared_inspect_path": self.inspect_artifact_path,
@@ -338,6 +350,26 @@ def _validate_run_event(row: Mapping[str, Any]) -> None:
     errors = validate_value(dict(row), load_schema("run_events"))
     if errors:
         raise ValueError("run_event schema invalid: " + "; ".join(errors))
+
+
+def record_prepare_continue_failed(
+    run_id: str,
+    *,
+    failure_type: str,
+    message: str,
+    data_dir: Path | None = None,
+    bd_epic_id: str | None = None,
+) -> Path:
+    """Append a validated prepare-continue failure event."""
+
+    return _append_prepare_event(
+        data_dir,
+        run_id=run_id,
+        event_type="prepare_continue_failed",
+        bd_epic_id=bd_epic_id,
+        details={"failure_type": failure_type, "message": message},
+        reason=message,
+    )
 
 
 def _severity_counts(findings: Iterable[Mapping[str, Any]]) -> dict[str, int]:
@@ -488,6 +520,9 @@ def prepare_plan_run(
     inspect, deterministic work-unit sidecars, schema/trust validation, and
     ready/needs-input status assignment. Model safe-fix proposals are outside
     this function and remain operator-reviewed summaries.
+
+    Concurrent ``prepare_plan_run`` calls with the same ``run_id`` are
+    unsupported; work-unit sidecar cache files assume a single writer per run.
     """
 
     from .decompose import synthesize_work_units
@@ -599,6 +634,8 @@ def prepare_plan_run(
                     }, [], True
 
         artifact = synthesize_work_units(phase, plan_path=str(source_rel), bd_epic_id=bd_epic_id)
+        artifact["git_base_ref"] = "HEAD"
+        artifact["git_base_sha"] = git_base_sha
         lint = schema_lint_work_units(artifact, max_writer_tool_calls=40)
         errors = list(lint.errors)
         if write:
@@ -650,6 +687,7 @@ def prepare_plan_run(
     payload: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "run_id": actual_run_id,
+        "bd_epic_id": bd_epic_id,
         "repo_root": str(root.resolve(strict=False)),
         "git_base_ref": "HEAD",
         "git_base_sha": git_base_sha,
@@ -743,6 +781,7 @@ def prepare_plan_run(
 
     return PrepareRunResult(
         run_id=actual_run_id,
+        bd_epic_id=bd_epic_id,
         status=status,
         payload=payload,
         lint_findings=lint_findings,
@@ -1003,8 +1042,9 @@ def verify_prepared_for_dispatch(
             },
             reason=", ".join(drift.reasons),
         )
-        raise ValueError(
-            f"prepared dispatch: prepared artifact is stale: {', '.join(drift.reasons)}"
+        raise StalePreparedArtifactError(
+            f"prepared dispatch: prepared artifact is stale: {', '.join(drift.reasons)}",
+            drift.reasons,
         )
 
     work_unit_artifacts = _verify_dispatch_sidecars(payload, repo_root=root)
@@ -1012,6 +1052,7 @@ def verify_prepared_for_dispatch(
         _event_data_dir_for_artifact(artifact_path, data_dir),
         run_id=payload["run_id"],
         event_type="prepare_dispatch_started",
+        bd_epic_id=payload.get("bd_epic_id") if isinstance(payload.get("bd_epic_id"), str) else None,
         details={
             "artifact_path": str(artifact_path),
             "prepared_plan_path": payload["prepared_plan_path"],
@@ -1021,6 +1062,7 @@ def verify_prepared_for_dispatch(
     )
     return PreparedDispatchResult(
         run_id=payload["run_id"],
+        bd_epic_id=payload.get("bd_epic_id") if isinstance(payload.get("bd_epic_id"), str) else None,
         status=payload["status"],
         artifact_path=str(artifact_path),
         source_plan_path=payload["source_plan_path"],
@@ -1081,7 +1123,12 @@ def _verify_dispatch_sidecars(
     *,
     repo_root: Path,
 ) -> dict[str, dict[str, Any]]:
-    run_dir = (repo_root / payload["prepared_plan_path"]).parent.resolve(strict=False)
+    prepared_rel = canonicalize(payload["prepared_plan_path"], repo_root=repo_root)
+    run_dir = (repo_root / prepared_rel).parent.resolve(strict=False)
+    if run_dir.name != payload["run_id"]:
+        raise ValueError(
+            "prepared dispatch: prepared_plan_path run directory does not match run_id"
+        )
     if not run_dir.is_dir():
         raise ValueError(f"prepared dispatch: run directory missing: {run_dir}")
 
@@ -1205,13 +1252,21 @@ def _validate_scope_pattern(value: str, *, repo_root: Path, label: str) -> None:
 
 
 def _dispatch_work_units(
-    work_unit_artifacts: Mapping[str, Mapping[str, Any]]
+    work_unit_artifacts: Mapping[str, Mapping[str, Any]],
+    *,
+    phase_map: Iterable[Mapping[str, Any]] = (),
 ) -> list[dict[str, Any]]:
     units: list[dict[str, Any]] = []
+    phase_meta = {
+        str(item.get("phase_id")): item
+        for item in phase_map
+        if isinstance(item, Mapping) and isinstance(item.get("phase_id"), str)
+    }
     for phase_id, descriptor in work_unit_artifacts.items():
         artifact = descriptor.get("artifact")
         if not isinstance(artifact, Mapping):
             continue
+        meta = phase_meta.get(str(phase_id), {})
         for unit in artifact.get("work_units") or []:
             if not isinstance(unit, Mapping):
                 continue
@@ -1219,6 +1274,10 @@ def _dispatch_work_units(
             if isinstance(unit_id, str):
                 state_unit = dict(unit)
                 state_unit["phase_id"] = str(phase_id)
+                if isinstance(meta.get("kind"), str):
+                    state_unit["phase_kind"] = meta["kind"]
+                if isinstance(meta.get("complexity"), str):
+                    state_unit["phase_complexity"] = meta["complexity"]
                 state_unit["id"] = f"{phase_id}:{unit_id}"
                 units.append(state_unit)
     return units
@@ -1719,8 +1778,9 @@ def accept_prepared(
             },
             reason=", ".join(drift.reasons),
         )
-        raise ValueError(
-            f"accept_prepared: prepared artifact is stale: {drift.reasons}"
+        raise StalePreparedArtifactError(
+            f"accept_prepared: prepared artifact is stale: {', '.join(drift.reasons)}",
+            drift.reasons,
         )
     now = utc_now()
     payload["status"] = STATUS_ACCEPTED
@@ -1910,6 +1970,7 @@ __all__ = [
     "STATUS_READY",
     "STATUS_REJECTED",
     "STATUS_STALE",
+    "StalePreparedArtifactError",
     "StaleReason",
     "WORK_UNITS_SCHEMA_VERSION",
     "accept_prepared",
@@ -1920,6 +1981,7 @@ __all__ = [
     "mark_ready_for_acceptance",
     "prepare_plan_run",
     "prepared_acceptance_summary",
+    "record_prepare_continue_failed",
     "reject_prepared",
     "run_plan_review_loop",
     "validate_plan_review_finding",

@@ -207,7 +207,7 @@ def _accepted_prepared_without_dispatch(
     if latest_event is None:
         return True
     return latest_event.get("event_type") not in {
-        "prepared_dispatch_started",
+        "prepare_dispatch_started",
         "checkpoint_written",
         "retry_started",
         "resume_started",
