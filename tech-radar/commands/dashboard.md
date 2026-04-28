@@ -22,8 +22,10 @@ Never pass `--web` manually — the command handles detection internally.
 **Singleton behavior:** If a dashboard is already running, the command prints the existing URL/pane and exits immediately.
 
 Features:
-- **Repos tab**: DataTable of all repos from the latest scan, sortable by stars/delta/category
-- **Verdicts tab**: Browse Claude's evaluation verdicts
-- **Search tab**: FTS5 full-text search across repos and verdicts
-- Detail panel with sparkline history, annotation status, and HN context
-- Keyboard-driven annotation workflow (approve/reject/bookmark)
+- Status tabs with counts for All, Watching, Tested, Adopted, and Rejected
+- Two-line repo rows: primary repo/growth signals first, muted description and metadata second
+- Colored badges for status, category, rising, and under-radar flags
+- Detail preview panel with verdicts, project relevance, sparkline history, annotation status, and HN context
+- Keyboard-driven annotation workflow (`w`, `t`, `a`, `r`)
+- `p` toggles the preview pane, `ctrl+d` / `ctrl+u` scroll it, `P` cycles project filters
+- `/` searches repos via FTS5; `?` opens the full keybinding help overlay

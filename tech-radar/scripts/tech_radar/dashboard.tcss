@@ -6,10 +6,11 @@ Screen {
 #header-bar {
     height: 1;
     width: 100%;
-    background: $primary;
+    background: $surface;
     color: $text;
     text-style: bold;
     padding: 0 2;
+    border-bottom: tall $primary;
 }
 
 #tab-bar {
@@ -35,27 +36,38 @@ Screen {
 }
 
 #main-table {
-    width: 3fr;
+    width: 1fr;
     height: 100%;
     scrollbar-gutter: stable;
 }
 
 #detail {
-    width: 1fr;
+    width: 44;
     height: 100%;
-    border-left: tall $primary;
+    border-left: tall $primary-darken-1;
     padding: 1 2;
     overflow-y: auto;
+    scrollbar-gutter: stable;
+    background: $surface;
+}
+
+#detail.hidden {
+    display: none;
 }
 
 DataTable > .datatable--header {
-    background: $primary-darken-2;
+    background: $surface-darken-1;
     color: $text;
     text-style: bold;
 }
 
 DataTable > .datatable--cursor {
-    background: $primary-lighten-1;
+    background: $primary-darken-1;
+    color: $text;
+}
+
+DataTable > .datatable--hover {
+    background: $primary-darken-2;
 }
 
 .status-watching { color: $warning; }
@@ -88,5 +100,19 @@ AnnotationModal {
 
 AnnotationModal TextArea {
     height: 4;
+    margin: 1 0;
+}
+
+HelpModal {
+    align: center middle;
+    width: 68;
+    height: auto;
+    max-height: 90%;
+    border: thick $primary;
+    padding: 1 2;
+    background: $surface;
+}
+
+#help-content {
     margin: 1 0;
 }
