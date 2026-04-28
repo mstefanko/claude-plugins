@@ -41,6 +41,10 @@
     "last_429_at"
   ],
   "properties": {
+    "variant": {
+      "type": ["string", "null"],
+      "description": "Optional A/B grouping label (set via SWARM_VARIANT env). Used to compare runs across config or prompt experiments."
+    },
     "work_unit_id": { "type": ["string", "null"] },
     "decompose_complexity": {
       "type": ["string", "null"],

@@ -109,6 +109,16 @@ def analyze_backend_output(
     calls = _extract_tool_calls(events)
     inferred_unit_id = unit_id or _extract_unit_id(text)
     resolved_stage_id = stage_id or role
+    call_categories = {
+        str(call.get("id")): _categorize_tool_call(call)
+        for call in calls
+        if call.get("id") is not None
+    }
+    call_commands = {
+        str(call.get("id")): _call_command(call)
+        for call in calls
+        if call.get("id") is not None
+    }
 
     category_counts: Counter[str] = Counter({category: 0 for category in TOOL_CATEGORIES})
     repeated_reads: Counter[str] = Counter()
@@ -117,6 +127,8 @@ def analyze_backend_output(
     source_read_count = 0
     bd_show_count = 0
     uncategorized_count = 0
+    read_positions: dict[str, list[int]] = {}
+    edit_positions: dict[str, list[int]] = {}
 
     for index, call in enumerate(calls, start=1):
         category = _categorize_tool_call(call)
@@ -135,11 +147,19 @@ def analyze_backend_output(
             bd_show_count += 1
 
         if category == "read":
-            file_paths = _read_file_paths(call)
+            file_paths = _call_file_paths(call)
             if file_paths:
                 source_read_count += 1
                 for file_path in file_paths:
                     repeated_reads[file_path] += 1
+                    read_positions.setdefault(file_path, []).append(index)
+        elif category == "edit":
+            edit_paths = _call_file_paths(call) or _patch_target_paths(call)
+            for file_path in edit_paths:
+                edit_positions.setdefault(file_path, []).append(index)
+
+    read_before_edit = _compute_read_before_edit(read_positions, edit_positions)
+    tool_output_bytes = _aggregate_tool_output_bytes(events, call_categories, call_commands)
 
     token_usage = _extract_token_usage(events)
     markers = {
@@ -164,6 +184,8 @@ def analyze_backend_output(
         "bd_show_count": bd_show_count,
         "first_edit_tool_call_index": first_edit_index,
         "first_test_tool_call_index": first_test_index,
+        "read_before_edit": read_before_edit,
+        "tool_output_bytes": tool_output_bytes,
         "markers": markers,
         "token_usage": token_usage,
     }
@@ -352,7 +374,193 @@ def _is_bd_show(command: str) -> bool:
     return re.search(_SHELL_PREFIX_RE + r"bd\s+show\b", command.strip().lower()) is not None
 
 
-def _read_file_paths(call: Mapping[str, Any]) -> list[str]:
+def _compute_read_before_edit(
+    read_positions: Mapping[str, list[int]],
+    edit_positions: Mapping[str, list[int]],
+) -> dict[str, Any]:
+    """Per-file and aggregate read-before-edit metrics.
+
+    Only files that received at least one edit are counted. The aggregate ratio
+    is reads-on-edited-files-before-first-edit / total-reads-on-edited-files.
+    """
+
+    per_file: list[dict[str, Any]] = []
+    reads_before_total = 0
+    reads_after_total = 0
+
+    for file_path, edit_indexes in sorted(edit_positions.items()):
+        first_edit = min(edit_indexes)
+        reads = read_positions.get(file_path, [])
+        before = sum(1 for r in reads if r < first_edit)
+        after = sum(1 for r in reads if r >= first_edit)
+        reads_before_total += before
+        reads_after_total += after
+        per_file.append(
+            {
+                "file_path": file_path,
+                "reads_before_first_edit": before,
+                "reads_after_first_edit": after,
+                "edit_count": len(edit_indexes),
+            }
+        )
+
+    total_reads_on_edited_files = reads_before_total + reads_after_total
+    ratio: float | None
+    if total_reads_on_edited_files > 0:
+        ratio = round(reads_before_total / total_reads_on_edited_files, 6)
+    else:
+        ratio = None
+
+    return {
+        "ratio": ratio,
+        "reads_before_first_edit": reads_before_total,
+        "reads_after_first_edit": reads_after_total,
+        "total_reads_on_edited_files": total_reads_on_edited_files,
+        "per_file": per_file,
+    }
+
+
+def _aggregate_tool_output_bytes(
+    events: Iterable[Mapping[str, Any]],
+    call_categories: Mapping[str, str | None],
+    call_commands: Mapping[str, str | None],
+) -> dict[str, Any]:
+    """Sum tool-output bytes per category.
+
+    Walks events looking for ``function_call_output`` (Codex) and
+    ``tool_result`` (Claude) records, matches their ``call_id`` /
+    ``tool_use_id`` against the category map built from the corresponding
+    tool call, and sums byte sizes. Outputs without a matching call are
+    bucketed under ``unmatched``.
+    """
+
+    by_category: Counter[str] = Counter({category: 0 for category in TOOL_CATEGORIES})
+    bd_show_bytes = 0
+    unmatched_bytes = 0
+    total_bytes = 0
+    seen: set[tuple[str, int]] = set()
+
+    for event in events:
+        for obj in _walk_dicts(event):
+            obj_type = str(obj.get("type") or "")
+            if obj_type not in {"function_call_output", "tool_result"}:
+                continue
+            call_id = (
+                obj.get("call_id")
+                or obj.get("tool_use_id")
+                or obj.get("id")
+            )
+            output = obj.get("output")
+            if output is None:
+                output = obj.get("content")
+            output_bytes = _output_byte_size(output)
+            if output_bytes <= 0:
+                continue
+
+            key = (str(call_id or "anon"), output_bytes)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            total_bytes += output_bytes
+            category = call_categories.get(str(call_id)) if call_id is not None else None
+            if category in TOOL_CATEGORIES:
+                by_category[category] += output_bytes
+            else:
+                unmatched_bytes += output_bytes
+
+            command = call_commands.get(str(call_id)) if call_id is not None else None
+            if command and _is_bd_show(command):
+                bd_show_bytes += output_bytes
+
+    return {
+        "by_category": dict(by_category),
+        "bd_show_output_bytes": bd_show_bytes,
+        "unmatched_output_bytes": unmatched_bytes,
+        "total_tool_output_bytes": total_bytes,
+    }
+
+
+def _output_byte_size(value: Any) -> int:
+    if value is None:
+        return 0
+    if isinstance(value, str):
+        return len(value.encode("utf-8", errors="replace"))
+    if isinstance(value, list):
+        total = 0
+        for item in value:
+            if isinstance(item, Mapping):
+                # Anthropic content-block shape: {"type": "text", "text": "..."}
+                text = item.get("text")
+                if isinstance(text, str):
+                    total += len(text.encode("utf-8", errors="replace"))
+                    continue
+                content = item.get("content")
+                if isinstance(content, str):
+                    total += len(content.encode("utf-8", errors="replace"))
+                    continue
+            if isinstance(item, str):
+                total += len(item.encode("utf-8", errors="replace"))
+        return total
+    if isinstance(value, Mapping):
+        text = value.get("text") or value.get("content") or value.get("output")
+        if isinstance(text, str):
+            return len(text.encode("utf-8", errors="replace"))
+    return 0
+
+
+def _empty_tool_output_bytes() -> dict[str, Any]:
+    return {
+        "by_category": {category: 0 for category in TOOL_CATEGORIES},
+        "bd_show_output_bytes": 0,
+        "unmatched_output_bytes": 0,
+        "total_tool_output_bytes": 0,
+    }
+
+
+_PATCH_FILE_RE = re.compile(
+    r"^\*\*\*\s+(?:Update|Add|Delete)\s+File:\s*(.+)$",
+    re.MULTILINE,
+)
+
+
+def _patch_target_paths(call: Mapping[str, Any]) -> list[str]:
+    """Extract target file paths from an `apply_patch`-style call envelope."""
+
+    name = str(call.get("name") or "").lower()
+    if "apply" not in name and "patch" not in name:
+        return []
+
+    candidate: Any = call.get("input")
+    if isinstance(candidate, Mapping):
+        for key in ("input", "patch", "diff", "content"):
+            value = candidate.get(key)
+            if isinstance(value, str) and "*** " in value:
+                candidate = value
+                break
+    if not isinstance(candidate, str):
+        return []
+
+    return sorted(
+        {
+            _clean_path(match)
+            for match in _PATCH_FILE_RE.findall(candidate)
+            if _clean_path(match)
+        }
+    )
+
+
+def _empty_read_before_edit() -> dict[str, Any]:
+    return {
+        "ratio": None,
+        "reads_before_first_edit": 0,
+        "reads_after_first_edit": 0,
+        "total_reads_on_edited_files": 0,
+        "per_file": [],
+    }
+
+
+def _call_file_paths(call: Mapping[str, Any]) -> list[str]:
     value = call.get("input")
     paths: list[str] = []
 
@@ -577,6 +785,8 @@ def main(argv: list[str] | None = None) -> int:
             "bd_show_count": 0,
             "first_edit_tool_call_index": None,
             "first_test_tool_call_index": None,
+            "read_before_edit": _empty_read_before_edit(),
+            "tool_output_bytes": _empty_tool_output_bytes(),
             "markers": {
                 "needs_context_count": 0,
                 "needs_research_count": 0,

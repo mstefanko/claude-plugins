@@ -113,6 +113,12 @@ def _build_parser() -> argparse.ArgumentParser:
     jo_parser.add_argument("--repo", dest="repo", default=None)
     jo_parser.add_argument("--dry-run", dest="dry_run", action="store_true")
 
+    from .subcommands import roundtrips as _roundtrips_cmd
+    _roundtrips_cmd.add_subparser(subparsers)
+
+    from .subcommands import contract_usage as _contract_cmd
+    _contract_cmd.add_subparser(subparsers)
+
     return parser
 
 
@@ -199,6 +205,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if ns.subcommand == "join-outcomes":
         from .subcommands import join_outcomes as _jo_cmd
         return _jo_cmd.run(ns)
+    if ns.subcommand == "roundtrips":
+        from .subcommands import roundtrips as _rt_cmd
+        return _rt_cmd.run(ns)
+    if ns.subcommand == "contract-usage":
+        from .subcommands import contract_usage as _cu_cmd
+        return _cu_cmd.run(ns)
 
     parser.error(f"unknown subcommand: {ns.subcommand}")
     return 2  # unreachable; parser.error raises SystemExit

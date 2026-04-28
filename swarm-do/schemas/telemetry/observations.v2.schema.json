@@ -75,6 +75,58 @@
         "bd_show_count": { "type": "integer", "minimum": 0 },
         "first_edit_tool_call_index": { "type": ["integer", "null"], "minimum": 1 },
         "first_test_tool_call_index": { "type": ["integer", "null"], "minimum": 1 },
+        "read_before_edit": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ratio",
+            "reads_before_first_edit",
+            "reads_after_first_edit",
+            "total_reads_on_edited_files",
+            "per_file"
+          ],
+          "properties": {
+            "ratio": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+            "reads_before_first_edit": { "type": "integer", "minimum": 0 },
+            "reads_after_first_edit": { "type": "integer", "minimum": 0 },
+            "total_reads_on_edited_files": { "type": "integer", "minimum": 0 },
+            "per_file": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["file_path", "reads_before_first_edit", "reads_after_first_edit", "edit_count"],
+                "properties": {
+                  "file_path": { "type": "string" },
+                  "reads_before_first_edit": { "type": "integer", "minimum": 0 },
+                  "reads_after_first_edit": { "type": "integer", "minimum": 0 },
+                  "edit_count": { "type": "integer", "minimum": 0 }
+                }
+              }
+            }
+          }
+        },
+        "tool_output_bytes": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "by_category": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
+            "bd_show_output_bytes": { "type": "integer", "minimum": 0 },
+            "unmatched_output_bytes": { "type": "integer", "minimum": 0 },
+            "total_tool_output_bytes": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "persona_bytes": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "shared_md_bytes": { "type": "integer", "minimum": 0 },
+            "overlay_md_bytes": { "type": "integer", "minimum": 0 },
+            "lens_variant_bytes": { "type": "integer", "minimum": 0 },
+            "total_persona_bytes": { "type": "integer", "minimum": 0 },
+            "total_prompt_bytes": { "type": "integer", "minimum": 0 }
+          }
+        },
         "markers": {
           "type": "object",
           "additionalProperties": true

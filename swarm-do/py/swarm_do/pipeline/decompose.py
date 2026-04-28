@@ -307,3 +307,66 @@ def _write_if_requested(path: str | Path | None, artifact: Mapping[str, Any]) ->
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+_BULLET_RE = re.compile(r"^\s*[-*+]\s+")
+
+
+def build_decompose_diagnostic(
+    phase: ParsedPhase,
+    result: DecomposeResult,
+    *,
+    plan_path: str | Path | None = None,
+    max_units: int = 8,
+) -> dict[str, Any]:
+    """Snapshot of decomposition inputs and decisions for telemetry.
+
+    Returns a JSON-serializable dict suitable for embedding in an
+    observations.jsonl row with ``event_type='decompose_diagnostic'``. Pure
+    data — does no I/O. Callers stamp ``run_id`` / ``phase_id`` / timestamps
+    when writing the row.
+    """
+
+    report = inspect_phase(phase)
+    files = report.file_paths or ["."]
+    bullet_count = sum(1 for line in phase.text.splitlines() if _BULLET_RE.match(line))
+    cluster_signals = sorted(
+        {path.split("/", 1)[0] if "/" in path else "." for path in files}
+    )
+
+    if report.complexity == "simple":
+        split_decision = "single"
+    elif len(cluster_signals) > max_units:
+        split_decision = "round-robin-chunked"
+    else:
+        split_decision = "split-by-prefix"
+
+    units = result.artifact.get("work_units", []) or []
+    depends_on = [
+        {
+            "unit_id": unit.get("id"),
+            "depends_on": list(unit.get("depends_on", []) or []),
+        }
+        for unit in units
+        if isinstance(unit, Mapping)
+    ]
+
+    lint = result.lint
+    return {
+        "phase_id": phase.phase_id,
+        "plan_path": str(plan_path) if plan_path is not None else None,
+        "complexity": report.complexity,
+        "bullet_count": bullet_count,
+        "file_count": len(files),
+        "directory_count": len(cluster_signals),
+        "cluster_signals": cluster_signals,
+        "split_decision": split_decision,
+        "max_units": max_units,
+        "unit_count": len(units),
+        "depends_on": depends_on,
+        "retry_count": result.retry_count,
+        "escalated": result.escalated,
+        "rejected_path": result.rejected_path,
+        "lint_error_count": len(lint.errors) if lint else 0,
+        "lint_warning_count": len(lint.warnings) if lint else 0,
+    }

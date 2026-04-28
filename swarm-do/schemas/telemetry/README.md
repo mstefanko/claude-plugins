@@ -123,8 +123,25 @@ Schema: `observations.v2.schema.json#v2`, with v1 retained as fallback.
 tool-category counts, repeated source-read histogram, first edit/test tool-call
 positions, `bd show` count, `NEEDS_CONTEXT` / `NEEDS_RESEARCH` /
 `[UNVERIFIED]` counters, and cache token usage when the backend stream exposes
-it. Extraction is fail-open; unobservable values stay null or zero rather than
+it. The signal-2 efficiency rollout adds:
+
+- `read_before_edit` — per-file and aggregate ratio of reads-before-first-edit
+  vs total reads on edited files (writer self-reread signal).
+- `tool_output_bytes` — per-category byte sums of tool outputs
+  (`function_call_output` / `tool_result`), with `bd_show_output_bytes`
+  separated so beads context cost is distinguishable from source-read cost.
+- `persona_bytes` — `shared_md_bytes`, `overlay_md_bytes`, `lens_variant_bytes`,
+  `total_persona_bytes`, and `total_prompt_bytes` recorded once at prompt
+  assembly. Codex pathway captures this via `swarm-run`; Claude/Agent pathway
+  callers may run `bin/load-role.sh --manifest <role>` to obtain the same
+  breakdown.
+
+Extraction is fail-open; unobservable values stay null or zero rather than
 blocking the run.
+
+`runs.jsonl` rows now also include an optional `variant` field, populated from
+the `SWARM_VARIANT` environment variable. Use this to tag A/B comparisons
+across config or prompt experiments without spawning a second ledger.
 
 ### `knowledge.jsonl` — advisory extracted facts
 
@@ -261,4 +278,4 @@ shape. Treat those as legacy rows when rebuilding derived indexes.
 - `bin/_lib/normalize-path.sh` — produces `file_normalized` for `stable_finding_hash_v1` input
 - `bin/swarm-run` — writer to `runs.jsonl` (EXIT trap, fail-open guard); wires `extract-phase.sh` after codex step
 - `bin/extract-phase.sh` — writer to `findings.jsonl` (codex-only; fail-open; Phase 9b)
-- `bin/swarm-telemetry` — reporter and write utility (Phase 9c read-only; Phase 9d adds `join-outcomes`); `query`, `report`, `dump`, `validate`, `join-outcomes` subcommands; see `swarm-do/README.md §bin/swarm-telemetry` for full usage
+- `bin/swarm-telemetry` — reporter and write utility (Phase 9c read-only; Phase 9d adds `join-outcomes`); `query`, `report`, `dump`, `validate`, `join-outcomes`, `roundtrips`, `contract-usage` subcommands; see `swarm-do/README.md §bin/swarm-telemetry` for full usage. `roundtrips` groups runs.jsonl by `work_unit_id` × role for writer/review iteration counts; `contract-usage` joins observations.jsonl × `permissions/<role>.json` and emits per-run violations of the role's permission contract.

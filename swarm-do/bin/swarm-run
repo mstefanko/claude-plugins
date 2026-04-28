@@ -244,6 +244,24 @@ PROMPT="$(cat "$SHARED_MD"; printf '\n\n---\n\n'; cat "$OVERLAY_MD"
     "$ROLE" "${LENS:-none}" "$BACKEND" "$MODEL" "$EFFORT" "$MODE" "$CLEAN_CONTEXT"
 )"
 
+# Persona-bundle byte breakdown (recorded once at assembly time, persisted to
+# telemetry on exit). Per-file bytes are the on-disk size of the persona
+# fragments concatenated above; total_prompt_bytes is the full assembled
+# string so callers can compare persona share vs full payload.
+_swarm_file_bytes() {
+  local f="$1"
+  if [[ -n "$f" && -f "$f" ]]; then
+    wc -c <"$f" 2>/dev/null | tr -d ' \n' || printf 0
+  else
+    printf 0
+  fi
+}
+SHARED_MD_BYTES="$(_swarm_file_bytes "$SHARED_MD")"
+OVERLAY_MD_BYTES="$(_swarm_file_bytes "$OVERLAY_MD")"
+LENS_VARIANT_BYTES="$(_swarm_file_bytes "$LENS_VARIANT_PATH")"
+TOTAL_PERSONA_BYTES=$(( ${SHARED_MD_BYTES:-0} + ${OVERLAY_MD_BYTES:-0} + ${LENS_VARIANT_BYTES:-0} ))
+TOTAL_PROMPT_BYTES="$(printf '%s' "$PROMPT" | wc -c | tr -d ' ')"
+
 echo "swarm-run: rig=$BEADS_RIG backend=$BACKEND role=$ROLE lens=${LENS:-none} model=$MODEL effort=$EFFORT mode=$MODE issue=$ISSUE dry_run=$DRY_RUN"
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -280,7 +298,7 @@ RUN_ID="$(PYTHONPATH="${_PY_ROOT}:${PYTHONPATH:-}" python3 -c 'from swarm_do.tel
 # ---------------------------------------------------------------------------
 _swarm_telemetry_write() {
   local _final_rc="$1"
-  local _ended _wall _hash _run_id _row _obs _tel_dir _base_sha _head_sha _diff_bytes _repo _metrics _stage_id _unit_id
+  local _ended _wall _hash _run_id _row _obs _tel_dir _base_sha _head_sha _diff_bytes _repo _metrics _stage_id _unit_id _variant
   local _preset_name _pipeline_name _pipeline_hash _config_hash _context_py_root
 
   # Guard: CLAUDE_PLUGIN_DATA must be set and non-empty.
@@ -328,6 +346,7 @@ _swarm_telemetry_write() {
     _config_hash="$(PYTHONPATH="${_context_py_root}:${PYTHONPATH:-}" python3 -m swarm_do.pipeline.config_hash 2>/dev/null || true)"
     _stage_id="${SWARM_STAGE_ID:-$ROLE}"
     _unit_id="${SWARM_UNIT_ID:-}"
+    _variant="${SWARM_VARIANT:-}"
     if [[ -f "${OUT_FILE:-}" ]]; then
       if [[ -n "$_unit_id" ]]; then
         _metrics="$(PYTHONPATH="${_context_py_root}:${PYTHONPATH:-}" python3 -m swarm_do.telemetry.run_observations "$OUT_FILE" --role "$ROLE" --stage-id "$_stage_id" --unit-id "$_unit_id" 2>/dev/null || true)"
@@ -338,6 +357,18 @@ _swarm_telemetry_write() {
       _metrics=""
     fi
     [[ -n "$_metrics" ]] || _metrics='{}'
+
+    # Splice persona-bundle byte breakdown into the metrics payload. Pure data
+    # merge — keeps the analyzer focused on transcripts while observations get
+    # the full picture.
+    _persona_payload="$(jq -n \
+      --argjson shared "${SHARED_MD_BYTES:-0}" \
+      --argjson overlay "${OVERLAY_MD_BYTES:-0}" \
+      --argjson lens "${LENS_VARIANT_BYTES:-0}" \
+      --argjson persona_total "${TOTAL_PERSONA_BYTES:-0}" \
+      --argjson prompt_total "${TOTAL_PROMPT_BYTES:-0}" \
+      '{shared_md_bytes: $shared, overlay_md_bytes: $overlay, lens_variant_bytes: $lens, total_persona_bytes: $persona_total, total_prompt_bytes: $prompt_total}' 2>/dev/null || echo '{}')"
+    _metrics="$(jq --argjson persona "$_persona_payload" '. + {persona_bytes: $persona}' <<<"$_metrics" 2>/dev/null || printf '%s' "$_metrics")"
 
     mkdir -p "$_tel_dir"
 
@@ -362,6 +393,7 @@ _swarm_telemetry_write() {
       --argjson base_sha "$(if [[ -n "$_base_sha" ]]; then printf '"%s"' "$_base_sha"; else echo "null"; fi)" \
       --argjson head_sha "$(if [[ -n "$_head_sha" ]]; then printf '"%s"' "$_head_sha"; else echo "null"; fi)" \
       --argjson diff_size_bytes "$(if [[ "$_diff_bytes" =~ ^[0-9]+$ ]]; then printf '%s' "$_diff_bytes"; else echo "null"; fi)" \
+      --argjson variant "$(if [[ -n "$_variant" ]]; then printf '%s' "$_variant" | jq -Rs .; else echo "null"; fi)" \
       --argjson metrics "$_metrics" \
       '{
         run_id:             $run_id,
@@ -384,6 +416,7 @@ _swarm_telemetry_write() {
         base_sha:           $base_sha,
         head_sha:           $head_sha,
         diff_size_bytes:    $diff_size_bytes,
+        variant:            $variant,
         input_tokens:       ($metrics.token_usage.input_tokens // null),
         cached_input_tokens: ($metrics.token_usage.cache_read_input_tokens // $metrics.token_usage.cached_input_tokens // null),
         output_tokens:      ($metrics.token_usage.output_tokens // null),
