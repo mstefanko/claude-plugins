@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-_VALID_CONSUMERS = frozenset({"agents", "roles-shared"})
+_VALID_CONSUMERS = frozenset({"agents", "roles-shared", "permissions"})
 _NAME_RE = re.compile(r"^agent-[a-z0-9][a-z0-9-]*$")
 _STAMP_RE = re.compile(r"^<!-- generated from role-specs/[^\n]+-->\n")
 
@@ -23,6 +23,8 @@ class RoleSpec:
     description: str
     consumers: tuple[str, ...]
     body_text: str
+    tools: tuple[str, ...] = ()
+    disallowed_tools: tuple[str, ...] = ()
 
 
 def _parse_frontmatter(text: str) -> tuple[dict[str, object], str]:
@@ -108,11 +110,23 @@ def load(path: Path) -> RoleSpec:
         raise ValueError(f"'consumers' must be a list in {path}")
     consumers: tuple[str, ...] = tuple(str(c) for c in raw_consumers)
 
+    raw_tools = fields.get("tools", [])
+    if not isinstance(raw_tools, list):
+        raise ValueError(f"'tools' must be a list in {path}")
+    tools: tuple[str, ...] = tuple(str(t) for t in raw_tools)
+
+    raw_disallowed = fields.get("disallowedTools", [])
+    if not isinstance(raw_disallowed, list):
+        raise ValueError(f"'disallowedTools' must be a list in {path}")
+    disallowed_tools: tuple[str, ...] = tuple(str(t) for t in raw_disallowed)
+
     spec = RoleSpec(
         name=name,
         description=description,
         consumers=consumers,
         body_text=body,
+        tools=tools,
+        disallowed_tools=disallowed_tools,
     )
     validate(spec, path=path)
     return spec
@@ -189,6 +203,16 @@ def parse_markdown(text: str) -> RoleSpec:
         raw_consumers = []
     consumers: tuple[str, ...] = tuple(str(c) for c in raw_consumers)
 
+    raw_tools = fields.get("tools", [])
+    if not isinstance(raw_tools, list):
+        raw_tools = []
+    tools: tuple[str, ...] = tuple(str(t) for t in raw_tools)
+
+    raw_disallowed = fields.get("disallowedTools", [])
+    if not isinstance(raw_disallowed, list):
+        raw_disallowed = []
+    disallowed_tools: tuple[str, ...] = tuple(str(t) for t in raw_disallowed)
+
     # Strip exactly one leading newline that was inserted by the renderer
     # between the frontmatter block and the body.
     if body.startswith("\n"):
@@ -199,4 +223,6 @@ def parse_markdown(text: str) -> RoleSpec:
         description=description,
         consumers=consumers,
         body_text=body,
+        tools=tools,
+        disallowed_tools=disallowed_tools,
     )

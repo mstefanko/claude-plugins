@@ -38,13 +38,26 @@ class PermissionPresetTests(unittest.TestCase):
                 fragment = load_fragment(role)
                 self.assertEqual(fragment["role"], role)
 
-    def test_role_registry_schema_and_fragments_stay_in_lockstep(self) -> None:
-        schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
-        schema_roles = set(schema["properties"]["role"]["enum"])
-        fragment_roles = {path.stem for path in permission_dir().glob("*.json")}
+    def test_role_registry_and_fragments_stay_in_lockstep(self) -> None:
+        """``ROLE_NAMES`` is derived from ``permissions/*.json`` filesystem.
 
-        self.assertEqual(ROLE_NAMES, schema_roles)
+        With the new model, the schema validates structure (``role`` field is a
+        ``pattern``, not an enum), and the role-spec / generator emits the JSON
+        artifacts. The lockstep contract is therefore: the role-specs that
+        declare the ``permissions`` consumer must exactly match the on-disk
+        ``permissions/*.json`` set, and ``ROLE_NAMES`` must mirror that set.
+        """
+        from swarm_do.roles.spec import load as load_spec
+
+        fragment_roles = {path.stem for path in permission_dir().glob("*.json")}
+        spec_roles_with_perms: set[str] = set()
+        for spec_path in sorted(ROLE_SPECS_DIR.glob("agent-*.md")):
+            spec = load_spec(spec_path)
+            if "permissions" in spec.consumers:
+                spec_roles_with_perms.add(spec.name[len("agent-"):])
+
         self.assertEqual(ROLE_NAMES, fragment_roles)
+        self.assertEqual(spec_roles_with_perms, fragment_roles)
 
     def test_registered_role_specs_with_fragments_load(self) -> None:
         for spec_path in sorted(ROLE_SPECS_DIR.glob("agent-*.md")):

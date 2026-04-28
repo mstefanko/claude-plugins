@@ -5,6 +5,11 @@ name: agent-implementation-advisor
 description: Read-only implementation advisor that surfaces risks, debugging hypotheses, and validation strategy before the single writer acts. It provides structured evidence, not coaching or edits.
 consumers:
   - agents
+  - permissions
+tools:
+  - Bash(bd:*)
+  - Bash(rg:*)
+  - Read
 ---
 
 

@@ -3,6 +3,16 @@ name: agent-research-merge
 description: Synthesizes parallel sub-research outputs into a single unified research report. Runs after all sub-researchers close, before clarify and analysis. Reads only beads notes — no source file access except for items explicitly flagged UNVERIFIED by sub-researchers.
 consumers:
   - agents
+  - permissions
+tools:
+  - Bash(bd:*)
+  - Read
+disallowedTools:
+  - Bash(rg:*)
+  - Edit
+  - Glob
+  - Grep
+  - Write
 ---
 
 # Role: agent-research-merge

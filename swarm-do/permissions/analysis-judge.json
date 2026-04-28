@@ -1,18 +1,19 @@
 {
-  "schema_version": 1,
-  "role": "analysis-judge",
+  "_generated": "generated from role-specs/agent-<name>.md \u2014 do not edit; run `python3 -m swarm_do.roles gen --write` to update",
   "merge_policy": "deny-wins",
   "permissions": {
     "allow": [
-      "Read",
-      "Bash(bd:*)"
+      "Bash(bd:*)",
+      "Read"
     ],
     "deny": [
-      "Grep",
-      "Glob",
+      "Bash(rg:*)",
       "Edit",
-      "Write",
-      "Bash(rg:*)"
+      "Glob",
+      "Grep",
+      "Write"
     ]
-  }
+  },
+  "role": "analysis-judge",
+  "schema_version": 1
 }

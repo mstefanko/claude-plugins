@@ -46,16 +46,28 @@ If there is no active preset, the runtime uses the `default` pipeline and routin
 
 `DOGFOOD` means opt-in plugin wiring is allowed through the active preset, not default-on Codex review.
 
-4. Check role permission presets before dispatching mutable work:
+4. Check the permission contract before dispatching mutable work:
 
 ```bash
 "$CLAUDE_PLUGIN_ROOT/bin/swarm" permissions check
 ```
 
-Missing permissions are a hard preflight failure for automated runs. Surface the
-printed JSON patch-style diff to the operator and suggest
-`bin/swarm permissions install --role <role> --dry-run` for inspection before any
-write.
+This validates four orthogonal things: every `role-specs/agent-<name>.md` parses;
+the generator output (`agents/`, `permissions/`) is in sync with the role-specs;
+the dispatcher's `swarm-do/.claude/settings.local.json` contains the coordinator
+minimum allowlist; and the role registry agrees with the filesystem. Per-agent
+tool restrictions live in agent-file YAML frontmatter (Claude Code's native
+mechanism), not merged into the dispatcher's settings file. A non-zero exit is a
+hard preflight failure for automated runs. To install or refresh the dispatcher's
+allowlist, run:
+
+```bash
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" permissions install            # idempotent
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" permissions install --dry-run  # preview
+```
+
+To refresh derived role artifacts after editing a role-spec, run
+`python3 -m swarm_do.roles gen --write`.
 
 ## Engine Boundary
 
@@ -86,7 +98,7 @@ but stay within the selected output-only profile:
 "$CLAUDE_PLUGIN_ROOT/bin/swarm" research --dry-run <optional-existing-path>
 "$CLAUDE_PLUGIN_ROOT/bin/swarm" design --dry-run <optional-existing-path>
 "$CLAUDE_PLUGIN_ROOT/bin/swarm" review --dry-run <optional-existing-path>
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" permissions check --role <profile-permission-role>
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" permissions check
 "$CLAUDE_PLUGIN_ROOT/bin/swarm" brainstorm <optional-existing-path>
 "$CLAUDE_PLUGIN_ROOT/bin/swarm" research <optional-existing-path>
 "$CLAUDE_PLUGIN_ROOT/bin/swarm" design <optional-existing-path>

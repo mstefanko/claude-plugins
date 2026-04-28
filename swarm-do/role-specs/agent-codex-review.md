@@ -4,6 +4,13 @@ description: Blocking-issues-only pipeline reviewer (backend-neutral contract). 
 consumers:
   - agents
   - roles-shared
+  - permissions
+tools:
+  - Bash(codex:*)
+  - Bash(git diff:*)
+  - Bash(git show:*)
+  - Bash(rg:*)
+  - Read
 ---
 
 # Role: agent-codex-review (backend-neutral contract)

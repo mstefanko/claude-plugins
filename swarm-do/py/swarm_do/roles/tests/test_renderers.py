@@ -93,7 +93,8 @@ class TestToSharedMd(unittest.TestCase):
         for name in ("agent-plan-review", "agent-plan-normalizer"):
             with self.subTest(name=name):
                 spec = load(specs_dir / f"{name}.md")
-                self.assertEqual(spec.consumers, ("agents", "roles-shared"))
+                self.assertIn("agents", spec.consumers)
+                self.assertIn("roles-shared", spec.consumers)
                 self.assertIn("generated from role-specs", to_agents_md(spec))
                 self.assertIn("generated from role-specs", to_shared_md(spec))
 

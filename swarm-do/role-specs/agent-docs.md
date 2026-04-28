@@ -3,6 +3,12 @@ name: agent-docs
 description: Swarm pipeline documentation updater. Edits .md files and doc comments only — no source code. Reads writer notes to understand what changed before editing anything. Runs in parallel with agent-review after writer closes.
 consumers:
   - agents
+  - permissions
+tools:
+  - Bash(bd:*)
+  - Edit
+  - Read
+  - Write
 ---
 
 # Role: agent-docs

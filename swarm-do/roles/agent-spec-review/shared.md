@@ -6,6 +6,13 @@ description: Swarm pipeline spec-compliance checker. Confirms the writer's code 
 consumers:
   - agents
   - roles-shared
+  - permissions
+tools:
+  - Bash(git diff:*)
+  - Bash(git show:*)
+  - Bash(rg:*)
+  - Bash(sed:*)
+  - Read
 ---
 
 

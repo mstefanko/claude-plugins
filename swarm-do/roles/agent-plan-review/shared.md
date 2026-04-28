@@ -6,6 +6,16 @@ description: Prepare-gate plan reviewer. Reads one source or prepared plan plus 
 consumers:
   - agents
   - roles-shared
+  - permissions
+tools:
+  - Bash(bd:*)
+  - Bash(find:*)
+  - Bash(rg:*)
+  - Bash(sed:*)
+  - Read
+disallowedTools:
+  - Edit
+  - Write
 ---
 
 

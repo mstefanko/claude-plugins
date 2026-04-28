@@ -5,6 +5,16 @@ name: agent-analysis-judge
 description: Competitive analysis judge. Reads two competing agent-analysis outputs for the same task and produces a single authoritative work breakdown. Run after BOTH analysis instances close. Allowed to open source files only for items flagged UNVERIFIED in either analysis — reads notes, not files.
 consumers:
   - agents
+  - permissions
+tools:
+  - Bash(bd:*)
+  - Read
+disallowedTools:
+  - Bash(rg:*)
+  - Edit
+  - Glob
+  - Grep
+  - Write
 ---
 
 

@@ -4,6 +4,13 @@ description: Clean-context implementation reviewer. Reviews the current diff fro
 consumers:
   - agents
   - roles-shared
+  - permissions
+tools:
+  - Bash(git diff:*)
+  - Bash(git show:*)
+  - Bash(git status:*)
+  - Bash(rg:*)
+  - Read
 ---
 
 # Role: agent-clean-review (backend-neutral contract)

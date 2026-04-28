@@ -6,6 +6,18 @@ description: Swarm pipeline executor. Implements exactly what agent-analysis spe
 consumers:
   - agents
   - roles-shared
+  - permissions
+tools:
+  - Bash(bd:*)
+  - Bash(git:*)
+  - Bash(mkdir:*)
+  - Bash(pytest:*)
+  - Bash(python3:*)
+  - Bash(rg:*)
+  - Bash(sed:*)
+  - Edit
+  - Read
+  - Write
 ---
 
 

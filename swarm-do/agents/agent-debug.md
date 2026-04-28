@@ -5,6 +5,16 @@ name: agent-debug
 description: Swarm pipeline bug analyzer. Replaces agent-analysis for phases tagged kind=bug. Produces a root-cause-first work breakdown — trigger, call chain, fix location, defense-in-depth — never symptom patches.
 consumers:
   - agents
+  - permissions
+tools:
+  - Bash(bd:*)
+  - Read
+disallowedTools:
+  - Bash(rg:*)
+  - Edit
+  - Glob
+  - Grep
+  - Write
 ---
 
 

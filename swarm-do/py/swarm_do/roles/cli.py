@@ -16,7 +16,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from .render import to_agents_md, to_shared_md
+from .render import to_agents_md, to_permissions_json, to_shared_md
 from .spec import load
 
 # The role-specs directory is relative to the repo root.  We locate it by
@@ -43,6 +43,14 @@ def _find_repo_root() -> Path:
 
 
 _STAMP_PREFIX = "<!-- generated from role-specs/"
+_JSON_STAMP_KEY = '"_generated":'
+
+
+def _has_generated_stamp(target: Path, content: str) -> bool:
+    """True when an existing target carries the appropriate generator marker."""
+    if target.suffix == ".json":
+        return _JSON_STAMP_KEY in content
+    return content.startswith(_STAMP_PREFIX)
 
 
 def _target_paths(repo_root: Path, spec_path: Path) -> list[tuple[Path, str]]:
@@ -60,6 +68,11 @@ def _target_paths(repo_root: Path, spec_path: Path) -> list[tuple[Path, str]]:
         role_dir = repo_root / "swarm-do" / "roles" / spec.name
         target = role_dir / "shared.md"
         results.append((target, to_shared_md(spec)))
+
+    if "permissions" in spec.consumers:
+        short_name = spec.name[len("agent-"):]
+        target = repo_root / "swarm-do" / "permissions" / f"{short_name}.json"
+        results.append((target, to_permissions_json(spec)))
 
     return results
 
@@ -193,7 +206,7 @@ def _cmd_gen(args: argparse.Namespace) -> int:
                 # overwrite (it's hand-authored content), unless --force is set.
                 if target.exists() and not force_mode:
                     existing = target.read_text(encoding="utf-8")
-                    if not existing.startswith(_STAMP_PREFIX):
+                    if not _has_generated_stamp(target, existing):
                         errors.append(
                             f"ABORT: {target} exists but has no generated stamp. "
                             "This file appears to be hand-authored. "

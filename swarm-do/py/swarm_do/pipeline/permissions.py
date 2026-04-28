@@ -13,26 +13,25 @@ from typing import Any, Mapping
 from .paths import REPO_ROOT
 
 
-ROLE_NAMES = {
-    "analysis",
-    "analysis-judge",
-    "writer",
-    "spec-review",
-    "review",
-    "research",
-    "research-merge",
-    "clarify",
-    "debug",
-    "docs",
-    "codex-review",
-    "clean-review",
-    "provider-review",
-    "brainstorm",
-    "implementation-advisor",
-    "plan-review",
-    "plan-normalizer",
-}
+def _discover_role_names() -> set[str]:
+    """Source of truth: the permissions/<role>.json filesystem set.
+
+    Derived rather than hardcoded so adding a role-spec with the ``permissions``
+    consumer + running ``python3 -m swarm_do.roles gen --write`` is enough to
+    register it. Avoids three-way drift between hardcoded registry, schema enum,
+    and filesystem.
+    """
+    perm_dir = REPO_ROOT / "permissions"
+    if not perm_dir.is_dir():
+        return set()
+    return {p.stem for p in perm_dir.glob("*.json")}
+
+
+ROLE_NAMES = _discover_role_names()
 MERGE_POLICIES = {"deny-wins"}
+
+COORDINATOR_MINIMUM_ALLOW: tuple[str, ...] = ("Bash(bd:*)", "Read")
+COORDINATOR_MINIMUM_DENY: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

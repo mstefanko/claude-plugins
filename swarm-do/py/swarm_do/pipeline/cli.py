@@ -25,7 +25,7 @@ from .diff import diff_user_pipeline, diff_user_preset, stock_drift_for_pipeline
 from .engine import graph_lines
 from .graph_source import resolve_preset_graph
 from .migrate_inline import adopt_archived_pipeline, migrate_user_pipelines
-from .paths import current_preset_path, resolve_data_dir, user_presets_dir
+from .paths import REPO_ROOT, current_preset_path, resolve_data_dir, user_presets_dir
 from .registry import (
     find_pipeline,
     find_preset,
@@ -867,49 +867,179 @@ def cmd_cancel(args: argparse.Namespace) -> int:
 
 
 def cmd_permissions_check(args: argparse.Namespace) -> int:
-    from .permissions import ROLE_NAMES, default_settings_path, diff_role, format_diff, load_fragment, load_settings
+    """Validate the permission contract.
 
+    Four orthogonal checks (per the proven plugin pattern — per-agent tool
+    restrictions live in agent-file YAML frontmatter; the dispatcher's
+    settings.local.json holds only a minimum coordinator allowlist):
+
+      (a) Every ``role-specs/agent-<name>.md`` parses cleanly.
+      (b) Every spec that lists ``permissions`` in its consumers has a
+          matching ``permissions/<short-name>.json`` derived artifact, and the
+          generator reports no drift (``swarm_do.roles gen --check``).
+      (c) The dispatcher settings file contains the coordinator minimum
+          allowlist (``Bash(bd:*)``, ``Read``). The merge-conflict gate that
+          previously tried to fold every role into one settings file is
+          intentionally absent — role tools are spawn-time restrictions read
+          from agent frontmatter, not install-time merges.
+      (d) ``ROLE_NAMES`` (derived from the filesystem) and the role-specs
+          with the ``permissions`` consumer agree.
+    """
+
+    from .permissions import (
+        COORDINATOR_MINIMUM_ALLOW,
+        COORDINATOR_MINIMUM_DENY,
+        ROLE_NAMES,
+        default_settings_path,
+        load_settings,
+    )
+
+    repo_root = REPO_ROOT
+    role_specs_dir = repo_root / "role-specs"
     target = Path(args.path) if args.path else default_settings_path(args.scope)
+
+    failures: list[str] = []
+    notes: list[str] = []
+
+    notes.append(f"target: {target.resolve()}")
+
+    # (a) role-spec parse
+    spec_paths = sorted(role_specs_dir.glob("agent-*.md"))
+    permissions_specs: list[str] = []
+    if not spec_paths:
+        failures.append(f"no role-specs found under {role_specs_dir}")
+    else:
+        from swarm_do.roles.spec import load as load_spec
+
+        for spec_path in spec_paths:
+            try:
+                spec = load_spec(spec_path)
+            except Exception as exc:
+                failures.append(f"role-spec parse: {spec_path.name}: {exc}")
+                continue
+            if "permissions" in spec.consumers:
+                permissions_specs.append(spec.name[len("agent-"):])
+        notes.append(f"role-specs parsed: {len(spec_paths)}")
+        notes.append(f"role-specs with permissions consumer: {len(permissions_specs)}")
+
+    # (b) generator drift
+    try:
+        from swarm_do.roles.cli import _cmd_gen
+
+        gen_args = argparse.Namespace(
+            command="gen",
+            write=False,
+            check=True,
+            force=False,
+            readme_section=None,
+        )
+        # _cmd_gen prints to stdout when there is drift; capture status only.
+        import contextlib
+        import io
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+            gen_status = _cmd_gen(gen_args)
+        if gen_status != 0:
+            failures.append("generator drift detected (run `python3 -m swarm_do.roles gen --write`)")
+            failures.append(buf.getvalue().rstrip())
+    except Exception as exc:
+        failures.append(f"generator check failed: {exc}")
+    else:
+        notes.append("generator: in sync")
+
+    # (c) coordinator minimum allowlist
     try:
         settings = load_settings(target)
-        roles = args.role or sorted(ROLE_NAMES)
-        diffs = [diff_role(settings, load_fragment(role)) for role in roles]
     except ValueError as exc:
-        print(f"swarm: permissions check: {exc}", file=sys.stderr)
+        failures.append(f"settings load: {exc}")
+        settings = {}
+    permissions = settings.get("permissions") or {}
+    allow = set(permissions.get("allow") or [])
+    deny = set(permissions.get("deny") or [])
+    missing_allow = [rule for rule in COORDINATOR_MINIMUM_ALLOW if rule not in allow]
+    missing_deny = [rule for rule in COORDINATOR_MINIMUM_DENY if rule not in deny]
+    if missing_allow or missing_deny:
+        failures.append(
+            "coordinator minimum allowlist not present in settings: "
+            f"missing allow={missing_allow}, missing deny={missing_deny}"
+        )
+    else:
+        notes.append("coordinator allowlist: ok")
+
+    # (d) registry/filesystem agree
+    if set(permissions_specs) != ROLE_NAMES:
+        only_specs = sorted(set(permissions_specs) - ROLE_NAMES)
+        only_disk = sorted(ROLE_NAMES - set(permissions_specs))
+        failures.append(
+            "registry drift: role-specs with permissions consumer vs permissions/*.json: "
+            f"only-in-specs={only_specs}, only-in-fragments={only_disk}"
+        )
+    else:
+        notes.append(f"role registry: in sync ({len(ROLE_NAMES)} roles)")
+
+    print("\n".join(notes))
+    if failures:
+        print()
+        for line in failures:
+            print(f"FAIL: {line}", file=sys.stderr)
         return 1
-    print(f"target: {target.resolve()}")
-    print("\n".join(format_diff(diff) for diff in diffs))
-    return 0 if all(diff.ok for diff in diffs) else 1
+    print("OK — permissions contract is consistent.")
+    return 0
 
 
 def cmd_permissions_install(args: argparse.Namespace) -> int:
+    """Write the dispatcher's coordinator minimum allowlist.
+
+    The legacy ``--role <X>`` merge-mode is intentionally removed — per-agent
+    tool restrictions live in agent-file YAML frontmatter, not in this
+    settings file. Use ``python3 -m swarm_do.roles gen --write`` to refresh
+    derived artifacts under ``permissions/``.
+    """
+
     from .permissions import (
+        COORDINATOR_MINIMUM_ALLOW,
+        COORDINATOR_MINIMUM_DENY,
         default_settings_path,
-        diff_role,
-        format_diff,
-        load_fragment,
         load_settings,
-        merge_role,
-        uninstall_role,
         write_settings_atomic,
     )
+
+    if args.role:
+        print(
+            "swarm: permissions install: --role is no longer supported. "
+            "Per-agent tool restrictions live in role-specs/agent-<role>.md "
+            "frontmatter and propagate via `python3 -m swarm_do.roles gen --write`. "
+            "Use `swarm permissions install --scope coordinator` to write the "
+            "dispatcher's minimum allowlist.",
+            file=sys.stderr,
+        )
+        return 1
 
     target = Path(args.path) if args.path else default_settings_path(args.scope)
     try:
         settings = load_settings(target)
-        fragments = [load_fragment(role) for role in args.role]
-        before_diffs = [diff_role(settings, fragment) for fragment in fragments]
-        merged = settings
-        for fragment in fragments:
-            merged = uninstall_role(merged, fragment) if args.rollback else merge_role(merged, fragment)
     except ValueError as exc:
         print(f"swarm: permissions install: {exc}", file=sys.stderr)
         return 1
+
+    merged: dict[str, Any] = dict(settings)
+    permissions = merged.setdefault("permissions", {})
+    if not isinstance(permissions, dict):
+        print(
+            "swarm: permissions install: settings.permissions must be an object",
+            file=sys.stderr,
+        )
+        return 1
+    existing_allow = list(permissions.get("allow") or [])
+    existing_deny = list(permissions.get("deny") or [])
+    permissions["allow"] = sorted({*existing_allow, *COORDINATOR_MINIMUM_ALLOW})
+    permissions["deny"] = sorted({*existing_deny, *COORDINATOR_MINIMUM_DENY})
+
     print(f"target: {target.resolve()}")
-    print("\n".join(format_diff(diff) for diff in before_diffs))
-    print(json.dumps(merged.get("permissions", {}), indent=2, sort_keys=True))
+    print(json.dumps(permissions, indent=2, sort_keys=True))
     if args.dry_run:
-        return 0 if not any(diff.conflicts for diff in before_diffs) else 1
+        return 0
     backup = write_settings_atomic(target, merged)
     print(f"wrote {target.resolve()}")
     if backup.exists():
@@ -1564,19 +1694,17 @@ def _build_parser() -> argparse.ArgumentParser:
     permissions = sub.add_parser("permissions")
     permissions_sub = permissions.add_subparsers(dest="permissions_command")
     p = permissions_sub.add_parser("check")
-    from .permissions import ROLE_NAMES
-
-    permission_roles = sorted(ROLE_NAMES)
-    p.add_argument("--role", action="append", choices=permission_roles)
     p.add_argument("--scope", choices=["repo", "user"], default="repo")
     p.add_argument("--path")
+    # --role kept for back-compat; ignored by the new check semantics.
+    p.add_argument("--role", action="append")
     p.set_defaults(func=cmd_permissions_check)
     p = permissions_sub.add_parser("install")
-    p.add_argument("--role", action="append", required=True, choices=permission_roles)
     p.add_argument("--scope", choices=["repo", "user"], default="repo")
     p.add_argument("--path")
     p.add_argument("--dry-run", action="store_true")
-    p.add_argument("--rollback", action="store_true")
+    # --role retained so legacy invocations error out with a useful message.
+    p.add_argument("--role", action="append")
     p.set_defaults(func=cmd_permissions_install)
     return parser
 

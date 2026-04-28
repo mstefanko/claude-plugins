@@ -6,28 +6,11 @@
   "required": ["schema_version", "role", "merge_policy", "permissions"],
   "additionalProperties": false,
   "properties": {
+    "_generated": { "type": "string" },
     "schema_version": { "type": "integer", "enum": [1] },
     "role": {
       "type": "string",
-      "enum": [
-        "analysis",
-        "analysis-judge",
-        "brainstorm",
-        "clarify",
-        "clean-review",
-        "codex-review",
-        "debug",
-        "docs",
-        "implementation-advisor",
-        "plan-normalizer",
-        "plan-review",
-        "provider-review",
-        "research",
-        "research-merge",
-        "review",
-        "spec-review",
-        "writer"
-      ]
+      "pattern": "^[a-z][a-z0-9-]*$"
     },
     "merge_policy": { "type": "string", "enum": ["deny-wins"] },
     "permissions": {

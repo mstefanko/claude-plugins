@@ -4,6 +4,13 @@ description: Swarm pipeline verifier. Runs tests and confirms implementation mat
 consumers:
   - agents
   - roles-shared
+  - permissions
+tools:
+  - Bash(git diff:*)
+  - Bash(git show:*)
+  - Bash(rg:*)
+  - Bash(sed:*)
+  - Read
 ---
 
 # Role: agent-review (backend-neutral contract)

@@ -1,15 +1,16 @@
 {
-  "schema_version": 1,
-  "role": "codex-review",
+  "_generated": "generated from role-specs/agent-<name>.md \u2014 do not edit; run `python3 -m swarm_do.roles gen --write` to update",
   "merge_policy": "deny-wins",
   "permissions": {
     "allow": [
-      "Read",
       "Bash(codex:*)",
       "Bash(git diff:*)",
       "Bash(git show:*)",
-      "Bash(rg:*)"
+      "Bash(rg:*)",
+      "Read"
     ],
     "deny": []
-  }
+  },
+  "role": "codex-review",
+  "schema_version": 1
 }

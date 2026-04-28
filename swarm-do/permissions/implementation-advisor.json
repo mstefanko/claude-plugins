@@ -1,13 +1,14 @@
 {
-  "schema_version": 1,
-  "role": "implementation-advisor",
+  "_generated": "generated from role-specs/agent-<name>.md \u2014 do not edit; run `python3 -m swarm_do.roles gen --write` to update",
   "merge_policy": "deny-wins",
   "permissions": {
     "allow": [
-      "Read",
       "Bash(bd:*)",
-      "Bash(rg:*)"
+      "Bash(rg:*)",
+      "Read"
     ],
     "deny": []
-  }
+  },
+  "role": "implementation-advisor",
+  "schema_version": 1
 }

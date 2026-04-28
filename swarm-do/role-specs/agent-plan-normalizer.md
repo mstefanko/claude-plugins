@@ -4,6 +4,17 @@ description: Prepare-gate canonical plan normalizer. Writes only the prepared pl
 consumers:
   - agents
   - roles-shared
+  - permissions
+tools:
+  - Bash(bd:*)
+  - Bash(python3:*)
+  - Bash(rg:*)
+  - Bash(sed:*)
+  - Edit
+  - Read
+  - Write
+disallowedTools:
+  - Bash(git:*)
 ---
 
 # Role: agent-plan-normalizer

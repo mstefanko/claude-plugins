@@ -5,6 +5,10 @@ name: agent-brainstorm
 description: Output-only ideation agent. Generates divergent options, tradeoffs, and synthesis notes without producing an implementation plan, writer handoff, branch, or PR.
 consumers:
   - agents
+  - permissions
+tools:
+  - Bash(bd:*)
+  - Read
 ---
 
 

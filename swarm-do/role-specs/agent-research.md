@@ -3,6 +3,13 @@ name: agent-research
 description: Swarm pipeline fact-finder. Reads codebase, searches memory, gathers raw findings. No opinions or recommendations — pure discovery. Use at the start of a swarm pipeline before analysis or clarify.
 consumers:
   - agents
+  - permissions
+tools:
+  - Bash(bd:*)
+  - Bash(find:*)
+  - Bash(rg:*)
+  - Bash(sed:*)
+  - Read
 ---
 
 # Role: agent-research

@@ -3,6 +3,16 @@ name: agent-analysis
 description: Swarm pipeline planner. Evaluates approaches and produces a concrete work breakdown for the writer. Trusts research notes — only opens source files for items marked UNVERIFIED. Runs in parallel with agent-clarify after research closes.
 consumers:
   - agents
+  - permissions
+tools:
+  - Bash(bd:*)
+  - Read
+disallowedTools:
+  - Bash(rg:*)
+  - Edit
+  - Glob
+  - Grep
+  - Write
 ---
 
 # Role: agent-analysis

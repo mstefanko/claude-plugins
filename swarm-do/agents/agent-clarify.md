@@ -5,6 +5,16 @@ name: agent-clarify
 description: Swarm pipeline pre-flight checker. Reads research notes via bd show only — no source file access. Surfaces blockers and ambiguities before implementation begins. Runs in parallel with agent-analysis after research closes.
 consumers:
   - agents
+  - permissions
+tools:
+  - Bash(bd:*)
+disallowedTools:
+  - Bash(rg:*)
+  - Edit
+  - Glob
+  - Grep
+  - Read
+  - Write
 ---
 
 
