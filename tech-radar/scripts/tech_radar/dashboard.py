@@ -86,6 +86,7 @@ TAB_STATUS = {
 }
 TAB_IDS = {
     "tab-all": "All",
+    "tab-latest": "Latest",
     "tab-watching": "Watching",
     "tab-tested": "Tested",
     "tab-adopted": "Adopted",
@@ -365,6 +366,7 @@ class TechRadarApp(App):
         yield Static("Tech Radar   project: All   scan: …", id="header-bar")
         yield Tabs(
             Tab("All 0", id="tab-all"),
+            Tab("Latest 0", id="tab-latest"),
             Tab("Watching 0", id="tab-watching"),
             Tab("Tested 0", id="tab-tested"),
             Tab("Adopted 0", id="tab-adopted"),
@@ -463,26 +465,114 @@ class TechRadarApp(App):
 
         return "".join(f" AND {clause}" for clause in clauses)
 
+    def _latest_per_repo_snapshot_join_sql(self) -> str:
+        return """
+            JOIN (
+                SELECT repo_id, MAX(scan_id) AS scan_id
+                FROM scan_snapshots
+                GROUP BY repo_id
+            ) latest_ss ON latest_ss.repo_id = r.id
+            JOIN scan_snapshots ss ON ss.repo_id = latest_ss.repo_id
+                AND ss.scan_id = latest_ss.scan_id
+        """
+
     def _status_counts(self, latest_scan_id: int, fts_ids: set[int] | None) -> dict[str, int]:
-        params: list = [latest_scan_id]
+        params: list = []
         sql = """
             SELECT COALESCE(a.status, 'new') as status, COUNT(*)
             FROM repos r
-            JOIN scan_snapshots ss ON ss.repo_id = r.id
+        """
+        sql += self._latest_per_repo_snapshot_join_sql()
+        sql += """
             LEFT JOIN annotations a ON a.repo_id = r.id
-            WHERE ss.scan_id = ?
+            WHERE 1 = 1
         """
         sql += self._common_filter_sql(params, fts_ids)
         sql += " GROUP BY COALESCE(a.status, 'new')"
 
         raw_counts = {row[0]: row[1] for row in self._db.execute(sql, params).fetchall()}
+
+        latest_params: list = [latest_scan_id]
+        latest_sql = """
+            SELECT COUNT(*)
+            FROM repos r
+            JOIN scan_snapshots ss ON ss.repo_id = r.id
+            LEFT JOIN annotations a ON a.repo_id = r.id
+            WHERE ss.scan_id = ?
+              AND COALESCE(a.status, 'new') != 'rejected'
+        """
+        latest_sql += self._common_filter_sql(latest_params, fts_ids)
+        latest_count = self._db.execute(latest_sql, latest_params).fetchone()[0]
+
         return {
             "All": sum(count for status, count in raw_counts.items() if status != "rejected"),
+            "Latest": latest_count,
             "Watching": raw_counts.get("watching", 0),
             "Tested": raw_counts.get("tested", 0),
             "Adopted": raw_counts.get("adopted", 0),
             "Rejected": raw_counts.get("rejected", 0),
         }
+
+    def _repo_query_sql(self, latest_scan_id: int, fts_ids: set[int] | None) -> tuple[str, list]:
+        sql = """
+            SELECT r.id, r.full_name, r.url, r.description, r.language, r.topics,
+                   r.homepage, r.license, r.archived, r.first_seen,
+                   ss.stars, ss.stars_delta, ss.stars_delta_pct,
+                   ss.category, ss.is_under_radar, ss.is_rising,
+                   ss.matched_keywords, ss.matched_projects, ss.hn_context,
+                   COALESCE(a.status, 'new') as annotation_status,
+                   a.notes as annotation_notes, a.tested_date, a.rejection_reason,
+                   v.verdict_text, v.project_relevance
+            FROM repos r
+        """
+        params: list = []
+        if self._current_tab == "Latest":
+            sql += """
+            JOIN scan_snapshots ss ON ss.repo_id = r.id
+        """
+        else:
+            sql += self._latest_per_repo_snapshot_join_sql()
+
+        sql += """
+            LEFT JOIN annotations a ON a.repo_id = r.id
+            LEFT JOIN verdicts v ON v.repo_id = r.id
+                AND v.scan_id = (SELECT MAX(v2.scan_id) FROM verdicts v2 WHERE v2.repo_id = r.id)
+        """
+
+        if self._current_tab == "Latest":
+            sql += " WHERE ss.scan_id = ?"
+            params.append(latest_scan_id)
+        else:
+            sql += " WHERE 1 = 1"
+
+        tab_status = TAB_STATUS.get(self._current_tab)
+        if tab_status:
+            sql += " AND COALESCE(a.status, 'new') = ?"
+            params.append(tab_status)
+        elif self._current_tab in ("All", "Latest"):
+            # Hide rejected repos from browsing tabs — they have their own tab.
+            sql += " AND COALESCE(a.status, 'new') != 'rejected'"
+
+        sql += self._common_filter_sql(params, fts_ids)
+
+        sort_map = {
+            "stars": "ss.stars",
+            "delta": "ss.stars_delta_pct",
+            "category": "ss.category",
+            "name": "r.full_name",
+        }
+        order_col = sort_map.get(self._sort_column, "ss.stars")
+        promotion_sort = ""
+        if self._current_tab == "All":
+            promotion_sort = (
+                "CASE COALESCE(a.status, 'new') "
+                "WHEN 'watching' THEN 0 "
+                "WHEN 'adopted' THEN 0 "
+                "ELSE 1 END, "
+            )
+        sql += f" ORDER BY {promotion_sort}{order_col} {self._sort_direction}"
+
+        return sql, params
 
     def _update_tab_counts(self, counts: dict[str, int]) -> None:
         for tab_id, label in TAB_IDS.items():
@@ -559,55 +649,7 @@ class TechRadarApp(App):
         fts_ids = self._search_repo_ids()
         self._update_tab_counts(self._status_counts(latest_scan_id, fts_ids))
 
-        # Build query
-        sql = """
-            SELECT r.id, r.full_name, r.url, r.description, r.language, r.topics,
-                   r.homepage, r.license, r.archived, r.first_seen,
-                   ss.stars, ss.stars_delta, ss.stars_delta_pct,
-                   ss.category, ss.is_under_radar, ss.is_rising,
-                   ss.matched_keywords, ss.matched_projects, ss.hn_context,
-                   COALESCE(a.status, 'new') as annotation_status,
-                   a.notes as annotation_notes, a.tested_date, a.rejection_reason,
-                   v.verdict_text, v.project_relevance
-            FROM repos r
-            JOIN scan_snapshots ss ON ss.repo_id = r.id
-            LEFT JOIN annotations a ON a.repo_id = r.id
-            LEFT JOIN verdicts v ON v.repo_id = r.id
-                AND v.scan_id = (SELECT MAX(v2.scan_id) FROM verdicts v2 WHERE v2.repo_id = r.id)
-            WHERE ss.scan_id = ?
-        """
-        params: list = [latest_scan_id]
-
-        # Tab filter
-        tab_status = TAB_STATUS.get(self._current_tab)
-        if tab_status:
-            sql += " AND COALESCE(a.status, 'new') = ?"
-            params.append(tab_status)
-        elif self._current_tab == "All":
-            # Hide rejected repos from All tab — they have their own tab
-            sql += " AND COALESCE(a.status, 'new') != 'rejected'"
-
-        sql += self._common_filter_sql(params, fts_ids)
-
-        # Sort
-        sort_map = {
-            "stars": "ss.stars",
-            "delta": "ss.stars_delta_pct",
-            "category": "ss.category",
-            "name": "r.full_name",
-        }
-        order_col = sort_map.get(self._sort_column, "ss.stars")
-        promotion_sort = ""
-        if self._current_tab == "All":
-            # Boost watching/adopted to top, everything else below
-            promotion_sort = (
-                "CASE COALESCE(a.status, 'new') "
-                "WHEN 'watching' THEN 0 "
-                "WHEN 'adopted' THEN 0 "
-                "ELSE 1 END, "
-            )
-        sql += f" ORDER BY {promotion_sort}{order_col} {self._sort_direction}"
-
+        sql, params = self._repo_query_sql(latest_scan_id, fts_ids)
         rows = self._db.execute(sql, params).fetchall()
         columns = [
             "id", "full_name", "url", "description", "language", "topics",

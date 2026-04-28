@@ -22,7 +22,7 @@ Never pass `--web` manually — the command handles detection internally.
 **Singleton behavior:** If a dashboard is already running, the command prints the existing URL/pane and exits immediately.
 
 Features:
-- Status tabs with counts for All, Watching, Tested, Adopted, and Rejected
+- Tabs for All persisted repos, the Latest scan, Watching, Tested, Adopted, and Rejected
 - Two-line repo rows: primary repo/growth signals first, muted description and metadata second
 - Colored badges for status, category, rising, and under-radar flags
 - Detail preview panel with verdicts, project relevance, sparkline history, annotation status, and HN context
