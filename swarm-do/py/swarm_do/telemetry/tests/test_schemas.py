@@ -14,7 +14,16 @@ from swarm_do.telemetry.schemas import (
 
 class LoadSchemaTests(unittest.TestCase):
     def test_load_returns_dict_for_each_ledger(self) -> None:
-        for ledger in ("runs", "findings", "outcomes", "adjudications", "finding_outcomes", "observations"):
+        for ledger in (
+            "runs",
+            "findings",
+            "outcomes",
+            "adjudications",
+            "finding_outcomes",
+            "run_events",
+            "observations",
+            "knowledge",
+        ):
             schema = load_schema(ledger)
             self.assertIsInstance(schema, dict, msg=f"ledger={ledger}")
 
@@ -110,6 +119,32 @@ class ValidateRowTests(unittest.TestCase):
             "schema_ok": True,
         }
         self.assertEqual(validate_value(row, schema), [])
+
+    def test_run_events_accept_prepare_event_types(self) -> None:
+        from swarm_do.telemetry.schemas import validate_value
+
+        schema = load_schema("run_events")
+        for event_type in (
+            "prepare_started",
+            "prepare_lint_findings",
+            "prepare_review_findings",
+            "prepare_safe_fixes_accepted",
+            "prepare_safe_fixes_proposed_unaccepted",
+            "prepare_ready_for_acceptance",
+            "prepare_blocking_findings",
+            "prepare_accepted",
+            "prepare_stale_rejected",
+            "prepare_dispatch_started",
+        ):
+            with self.subTest(event_type=event_type):
+                row = {
+                    "run_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                    "timestamp": "2026-04-28T00:00:00Z",
+                    "event_type": event_type,
+                    "details": {},
+                    "schema_ok": True,
+                }
+                self.assertEqual(validate_value(row, schema), [])
 
 
 if __name__ == "__main__":

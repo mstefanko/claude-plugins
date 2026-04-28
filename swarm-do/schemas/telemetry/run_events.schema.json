@@ -31,7 +31,17 @@
         "handoff_reason",
         "retry_started",
         "retry_exhausted",
-        "worktree_merge_conflict"
+        "worktree_merge_conflict",
+        "prepare_started",
+        "prepare_lint_findings",
+        "prepare_review_findings",
+        "prepare_safe_fixes_accepted",
+        "prepare_safe_fixes_proposed_unaccepted",
+        "prepare_ready_for_acceptance",
+        "prepare_blocking_findings",
+        "prepare_accepted",
+        "prepare_stale_rejected",
+        "prepare_dispatch_started"
       ]
     },
     "bd_epic_id": {

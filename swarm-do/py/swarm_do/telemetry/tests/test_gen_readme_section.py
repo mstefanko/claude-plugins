@@ -7,8 +7,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from .. import gen as telemetry_gen
-from ..gen import (
+from swarm_do.telemetry import gen as telemetry_gen
+from swarm_do.telemetry.gen import (
     MARKER_BEGIN_TELEMETRY_README,
     MARKER_END_TELEMETRY_README,
     cmd_readme_section_check,

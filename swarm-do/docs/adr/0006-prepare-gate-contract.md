@@ -52,6 +52,34 @@ the prepare gate. The five locked-in decisions:
    not import `bd`. Tests run with no rig. This keeps the prepare gate
    usable in repositories that have not initialized the Beads stealth rig.
 
+## Phase 6 Measurement Addendum
+
+Phase 6 adds observation-only telemetry for promotion decisions. It does not
+enable `--prepare --continue`, semantic decomposition promotion, docs gating,
+or spec-review gating by default.
+
+Additional decisions:
+
+1. **Prepare emits lifecycle rows, not a new ledger.** Prepare uses the
+   existing `telemetry/run_events.jsonl` ledger and `append_run_event` writer.
+   Rows are validated against `schemas/telemetry/run_events.schema.json` before
+   they are appended.
+2. **`/swarmdaddy:do --prepared` remains pure consumption.** Dispatch emits
+   `prepare_dispatch_started` only after the accepted artifact passes schema,
+   trust-boundary, stale, sidecar hash, and work-unit lint checks. It still
+   performs no decomposition and ignores the legacy `decompose.mode` preset
+   field.
+3. **Plan review remains bounded.** The prepare lifecycle records lint,
+   review, safe-fix, ready, accepted, stale-rejected, and dispatch events, but
+   the review/normalize loop still caps at 3 iterations before `needs_input`.
+4. **Acceptance remains singular.** `prepare_accepted` means the operator
+   accepted the whole prepared package: review findings, prepared markdown,
+   and work-unit artifacts together.
+5. **Phase 7 needs scorecard evidence.** `docs/eval-recipes.md` owns the
+   promote/hold/rollback scorecard. Phase 7 may proceed only when dogfood data
+   shows non-regressive `NEEDS_CONTEXT`, spec-mismatch, review-failure, stale
+   dispatch, and doc-stage skip metrics.
+
 ## Consequences
 
 - Future phases (2-8) layer review findings, decomposition, acceptance UX,

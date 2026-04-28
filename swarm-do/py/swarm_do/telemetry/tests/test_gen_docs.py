@@ -7,8 +7,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from .. import gen as telemetry_gen
-from ..gen import (
+from swarm_do.telemetry import gen as telemetry_gen
+from swarm_do.telemetry.gen import (
     MARKER_BEGIN_TELEMETRY_DOCS,
     MARKER_END_TELEMETRY_DOCS,
     cmd_docs_check,
@@ -16,7 +16,7 @@ from ..gen import (
     render_ledger_table,
     replace_between_markers,
 )
-from ..registry import LEDGERS, PLUGIN_ROOT
+from swarm_do.telemetry.registry import LEDGERS, PLUGIN_ROOT
 
 
 class TestReplaceBetweenMarkers(unittest.TestCase):

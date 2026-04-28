@@ -148,6 +148,25 @@ def _minimal_payload(
     }
 
 
+def _read_run_events(data_dir: Path) -> list[dict]:
+    path = data_dir / "telemetry" / "run_events.jsonl"
+    if not path.is_file():
+        return []
+    return [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+def _assert_run_events_validate(test: unittest.TestCase, events: list[dict]) -> None:
+    from swarm_do.telemetry.schemas import load_schema, validate_value
+
+    schema = load_schema("run_events")
+    for event in events:
+        test.assertEqual(validate_value(event, schema), [], msg=event)
+
+
 class CanonicalizeTests(unittest.TestCase):
     def test_relative_path_round_trips(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -483,6 +502,120 @@ class StaleDetectionTests(unittest.TestCase):
         sr = StaleReason(reasons=("a", "b"))
         with self.assertRaises(Exception):
             sr.reasons = ("c",)  # type: ignore[misc]
+
+
+class PrepareTelemetryEventTests(unittest.TestCase):
+    def test_prepare_run_emits_valid_ready_events(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            repo = tmp / "repo"
+            repo.mkdir()
+            (repo / "README.md").write_text("# Test\n", encoding="utf-8")
+            (repo / "plan.md").write_text(
+                "### Phase 1: Docs (complexity: simple, kind: docs)\n\n"
+                "### File Targets\n\n"
+                "- `README.md`\n\n"
+                "### Acceptance Criteria\n\n"
+                "- README is updated.\n\n"
+                "### Verification Commands\n\n"
+                "```\ntrue\n```\n",
+                encoding="utf-8",
+            )
+            data = tmp / "data"
+
+            prepare.prepare_plan_run("plan.md", repo_root=repo, data_dir=data, run_id=RUN_ID)
+
+            events = _read_run_events(data)
+            _assert_run_events_validate(self, events)
+            event_types = [event["event_type"] for event in events]
+            for event_type in (
+                "prepare_started",
+                "prepare_lint_findings",
+                "prepare_review_findings",
+                "prepare_safe_fixes_accepted",
+                "prepare_safe_fixes_proposed_unaccepted",
+                "prepare_ready_for_acceptance",
+            ):
+                self.assertIn(event_type, event_types)
+            self.assertNotIn("prepare_blocking_findings", event_types)
+
+    def test_prepare_run_emits_valid_blocking_findings_event(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            repo = tmp / "repo"
+            repo.mkdir()
+            (repo / "plan.md").write_text(
+                "### Phase 1: Docs (complexity: simple, kind: docs)\n\n"
+                "### File Targets\n\n"
+                "- `README.md`\n\n"
+                "### Implementation\n\n"
+                "- Update the README.\n",
+                encoding="utf-8",
+            )
+            data = tmp / "data"
+
+            result = prepare.prepare_plan_run("plan.md", repo_root=repo, data_dir=data, run_id=RUN_ID)
+
+            self.assertEqual(result.status, STATUS_NEEDS_INPUT)
+            events = _read_run_events(data)
+            _assert_run_events_validate(self, events)
+            self.assertIn("prepare_blocking_findings", [event["event_type"] for event in events])
+
+    def test_accept_and_dispatch_emit_valid_events(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            repo = tmp / "repo"
+            repo.mkdir()
+            _git_init_repo(repo)
+            (repo / "README.md").write_text("# Test\n", encoding="utf-8")
+            (repo / "plan.md").write_text(
+                "### Phase 1: Docs (complexity: simple, kind: docs)\n\n"
+                "### File Targets\n\n"
+                "- `README.md`\n\n"
+                "### Acceptance Criteria\n\n"
+                "- README is updated.\n\n"
+                "### Verification Commands\n\n"
+                "```\ntrue\n```\n",
+                encoding="utf-8",
+            )
+            data = tmp / "data"
+
+            prepare.prepare_plan_run("plan.md", repo_root=repo, data_dir=data, run_id=RUN_ID)
+            prepare.accept_prepared(RUN_ID, data_dir=data, repo_root=repo)
+            prepare.verify_prepared_for_dispatch(RUN_ID, data_dir=data, repo_root=repo)
+
+            events = _read_run_events(data)
+            _assert_run_events_validate(self, events)
+            event_types = [event["event_type"] for event in events]
+            self.assertIn("prepare_accepted", event_types)
+            self.assertIn("prepare_dispatch_started", event_types)
+
+    def test_stale_accept_rejection_emits_valid_event(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            repo, src_sha, prep_sha, base_sha = _make_repo(tmp)
+            data = tmp / "data"
+            payload = _minimal_payload(
+                run_id=RUN_ID,
+                repo_root=repo,
+                source_plan_sha=src_sha,
+                prepared_plan_sha=prep_sha,
+                git_base_sha=base_sha,
+            )
+            write_prepared_artifact(run_id=RUN_ID, payload=payload, data_dir=data)
+            mark_ready_for_acceptance(RUN_ID, data_dir=data, repo_root=repo)
+            (repo / "plan.md").write_text("### Phase 1: Tiny\n- Mutated.\n", encoding="utf-8")
+
+            with self.assertRaises(ValueError):
+                accept_prepared(RUN_ID, data_dir=data, repo_root=repo)
+
+            events = _read_run_events(data)
+            _assert_run_events_validate(self, events)
+            stale_events = [
+                event for event in events if event["event_type"] == "prepare_stale_rejected"
+            ]
+            self.assertEqual(len(stale_events), 1)
+            self.assertIn("source_plan_sha", stale_events[0]["details"]["stale_reasons"])
 
 
 class CliSubcommandTests(unittest.TestCase):

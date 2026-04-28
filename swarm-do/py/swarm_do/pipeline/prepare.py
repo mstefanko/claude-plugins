@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
 from .paths import REPO_ROOT, resolve_data_dir
-from .run_state import utc_now
+from .run_state import append_run_event, utc_now
 
 # ---------------------------------------------------------------------------
 # Module constants
@@ -77,6 +77,7 @@ _ARTIFACT_NAME = "prepared_plan.v1.json"
 _PATH_FIELDS = ("source_plan_path", "prepared_plan_path")
 PLAN_REVIEW_SEVERITIES = frozenset({"blocking", "safe_fix", "advisory"})
 MAX_PLAN_REVIEW_ITERATIONS = 3
+_PREPARE_EVENT_PHASE_ID = "plan-prepare"
 
 
 # ---------------------------------------------------------------------------
@@ -283,6 +284,70 @@ def _compute_cache_key(
 
 
 # ---------------------------------------------------------------------------
+# Prepare telemetry events
+# ---------------------------------------------------------------------------
+
+
+def _append_prepare_event(
+    data_dir: Path | None,
+    *,
+    run_id: str,
+    event_type: str,
+    details: Mapping[str, Any] | None = None,
+    bd_epic_id: str | None = None,
+    phase_id: str | None = _PREPARE_EVENT_PHASE_ID,
+    reason: str | None = None,
+) -> Path:
+    row: dict[str, Any] = {
+        "run_id": run_id,
+        "timestamp": utc_now(),
+        "event_type": event_type,
+        "bd_epic_id": bd_epic_id,
+        "phase_id": phase_id,
+        "work_unit_id": None,
+        "child_bead_ids": None,
+        "reason": reason,
+        "retry_count": None,
+        "handoff_count": None,
+        "integration_branch_head": None,
+        "details": dict(details or {}),
+        "schema_ok": True,
+    }
+    _validate_run_event(row)
+    return append_run_event(Path(data_dir) if data_dir is not None else resolve_data_dir(), row)
+
+
+def _validate_run_event(row: Mapping[str, Any]) -> None:
+    from swarm_do.telemetry.schemas import load_schema, validate_value
+
+    errors = validate_value(dict(row), load_schema("run_events"))
+    if errors:
+        raise ValueError("run_event schema invalid: " + "; ".join(errors))
+
+
+def _severity_counts(findings: Iterable[Mapping[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for finding in findings:
+        severity = finding.get("severity")
+        key = severity if isinstance(severity, str) and severity else "unknown"
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _safe_fix_count(findings: Iterable[Mapping[str, Any]]) -> int:
+    return sum(1 for finding in findings if finding.get("severity") == "safe_fix")
+
+
+def _event_data_dir_for_artifact(artifact_path: Path, data_dir: Path | None) -> Path:
+    if data_dir is not None:
+        return Path(data_dir)
+    path = artifact_path.resolve(strict=False)
+    if path.name == _ARTIFACT_NAME and path.parent.parent.name == "runs":
+        return path.parent.parent.parent
+    return resolve_data_dir()
+
+
+# ---------------------------------------------------------------------------
 # Phase 3 plan-review contract
 # ---------------------------------------------------------------------------
 
@@ -422,6 +487,19 @@ def prepare_plan_run(
 
     actual_run_id = run_id or new_run_id()
     base_data = Path(data_dir) if data_dir is not None else resolve_data_dir()
+    emit_events = bool(write and not dry_run)
+    if emit_events:
+        _append_prepare_event(
+            base_data,
+            run_id=actual_run_id,
+            event_type="prepare_started",
+            bd_epic_id=bd_epic_id,
+            details={
+                "source_plan_path": str(source_rel),
+                "dry_run": dry_run,
+                "write": write,
+            },
+        )
     artifact_dir = _repo_visible_run_dir(actual_run_id, data_dir=base_data, repo_root=root)
     prepared_rel = artifact_dir.relative_to(root) / "prepared.md"
     inspect_rel = artifact_dir.relative_to(root) / "inspect.v1.json"
@@ -429,6 +507,18 @@ def prepare_plan_run(
 
     phases = parse_plan(source_abs)
     lint_findings = tuple(lint_plan_text(source_abs.read_text(encoding="utf-8"), source_name=str(source_rel)))
+    if emit_events:
+        _append_prepare_event(
+            base_data,
+            run_id=actual_run_id,
+            event_type="prepare_lint_findings",
+            bd_epic_id=bd_epic_id,
+            details={
+                "finding_count": len(lint_findings),
+                "severity_counts": _severity_counts(lint_findings),
+                "blocking_count": sum(1 for finding in lint_findings if finding_blocks_prepare(finding)),
+            },
+        )
     prepared_text = canonical_plan_text(phases)
     source_sha = _sha256_file(source_abs)
     prepared_sha = _sha256_bytes(prepared_text.encode("utf-8"))
@@ -579,6 +669,62 @@ def prepare_plan_run(
             data_dir=base_data,
             repo_root=root,
         )
+        review_findings = payload["review_findings"]
+        safe_fix_proposed = _safe_fix_count(review_findings)
+        safe_fix_accepted = len(payload["accepted_fixes"])
+        _append_prepare_event(
+            base_data,
+            run_id=actual_run_id,
+            event_type="prepare_review_findings",
+            bd_epic_id=bd_epic_id,
+            details={
+                "finding_count": len(review_findings),
+                "severity_counts": _severity_counts(review_findings),
+            },
+        )
+        _append_prepare_event(
+            base_data,
+            run_id=actual_run_id,
+            event_type="prepare_safe_fixes_accepted",
+            bd_epic_id=bd_epic_id,
+            details={"accepted_count": safe_fix_accepted},
+        )
+        _append_prepare_event(
+            base_data,
+            run_id=actual_run_id,
+            event_type="prepare_safe_fixes_proposed_unaccepted",
+            bd_epic_id=bd_epic_id,
+            details={
+                "proposed_unaccepted_count": max(0, safe_fix_proposed - safe_fix_accepted),
+                "safe_fix_finding_count": safe_fix_proposed,
+            },
+        )
+        if status == STATUS_READY:
+            _append_prepare_event(
+                base_data,
+                run_id=actual_run_id,
+                event_type="prepare_ready_for_acceptance",
+                bd_epic_id=bd_epic_id,
+                details={
+                    "prepared_plan_path": str(prepared_rel),
+                    "artifact_path": str(artifact_path),
+                    "phase_count": len(phase_entries),
+                    "work_unit_error_count": len(work_unit_errors),
+                },
+            )
+        if status == STATUS_NEEDS_INPUT:
+            _append_prepare_event(
+                base_data,
+                run_id=actual_run_id,
+                event_type="prepare_blocking_findings",
+                bd_epic_id=bd_epic_id,
+                details={
+                    "blocking_finding_count": sum(
+                        1 for finding in review_findings if finding_blocks_prepare(finding)
+                    ),
+                    "work_unit_error_count": len(work_unit_errors),
+                },
+            )
 
     return PrepareRunResult(
         run_id=actual_run_id,
@@ -651,11 +797,34 @@ def verify_prepared_for_dispatch(
     _round_trip_paths(payload, repo_root=root)
     drift = check_stale(payload, repo_root=root)
     if drift is not None:
+        _append_prepare_event(
+            _event_data_dir_for_artifact(artifact_path, data_dir),
+            run_id=payload["run_id"],
+            event_type="prepare_stale_rejected",
+            details={
+                "stale_reasons": list(drift.reasons),
+                "status": current,
+                "artifact_path": str(artifact_path),
+                "dispatch": True,
+            },
+            reason=", ".join(drift.reasons),
+        )
         raise ValueError(
             f"prepared dispatch: prepared artifact is stale: {', '.join(drift.reasons)}"
         )
 
     work_unit_artifacts = _verify_dispatch_sidecars(payload, repo_root=root)
+    _append_prepare_event(
+        _event_data_dir_for_artifact(artifact_path, data_dir),
+        run_id=payload["run_id"],
+        event_type="prepare_dispatch_started",
+        details={
+            "artifact_path": str(artifact_path),
+            "prepared_plan_path": payload["prepared_plan_path"],
+            "work_unit_artifact_count": len(work_unit_artifacts),
+            "phase_count": len(payload["phase_map"]),
+        },
+    )
     return PreparedDispatchResult(
         run_id=payload["run_id"],
         status=payload["status"],
@@ -1306,9 +1475,20 @@ def mark_ready_for_acceptance(
         )
     payload["status"] = STATUS_READY
     payload["ready_at"] = utc_now()
-    return write_prepared_artifact(
+    path = write_prepared_artifact(
         run_id=run_id, payload=payload, data_dir=data_dir, repo_root=repo_root
     )
+    _append_prepare_event(
+        data_dir,
+        run_id=run_id,
+        event_type="prepare_ready_for_acceptance",
+        details={
+            "previous_status": current,
+            "artifact_path": str(path),
+            "phase_count": len(payload.get("phase_map") or []),
+        },
+    )
+    return path
 
 
 def accept_prepared(
@@ -1335,6 +1515,16 @@ def accept_prepared(
     resolved_root = _resolve_repo_root(payload, repo_root=repo_root)
     drift = check_stale(payload, repo_root=resolved_root)
     if drift is not None:
+        _append_prepare_event(
+            data_dir,
+            run_id=run_id,
+            event_type="prepare_stale_rejected",
+            details={
+                "stale_reasons": list(drift.reasons),
+                "status": current,
+            },
+            reason=", ".join(drift.reasons),
+        )
         raise ValueError(
             f"accept_prepared: prepared artifact is stale: {drift.reasons}"
         )
@@ -1347,9 +1537,21 @@ def accept_prepared(
         "accepted_source_sha": payload["source_plan_sha"],
         "accepted_prepared_sha": payload["prepared_plan_sha"],
     }
-    return write_prepared_artifact(
+    path = write_prepared_artifact(
         run_id=run_id, payload=payload, data_dir=data_dir, repo_root=repo_root
     )
+    _append_prepare_event(
+        data_dir,
+        run_id=run_id,
+        event_type="prepare_accepted",
+        details={
+            "accepted_by": accepted_by,
+            "artifact_path": str(path),
+            "source_plan_sha": payload["source_plan_sha"],
+            "prepared_plan_sha": payload["prepared_plan_sha"],
+        },
+    )
+    return path
 
 
 _REJECT_FROM_STATES = frozenset(

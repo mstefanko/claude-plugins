@@ -441,13 +441,16 @@ def cmd_prepare(args: argparse.Namespace) -> int:
     try:
         if args.accept:
             summary = prepared_acceptance_summary(args.accept)
-            if summary["stale_reasons"]:
-                print(
-                    f"swarm: prepare accept: prepared artifact is stale: {', '.join(summary['stale_reasons'])}",
-                    file=sys.stderr,
-                )
-                return 1
-            path = accept_prepared(args.accept, accepted_by=args.accepted_by)
+            try:
+                path = accept_prepared(args.accept, accepted_by=args.accepted_by)
+            except ValueError:
+                if summary["stale_reasons"]:
+                    print(
+                        f"swarm: prepare accept: prepared artifact is stale: {', '.join(summary['stale_reasons'])}",
+                        file=sys.stderr,
+                    )
+                    return 1
+                raise
             summary["status"] = "accepted"
             summary["artifact_path"] = str(path)
             if args.json:
