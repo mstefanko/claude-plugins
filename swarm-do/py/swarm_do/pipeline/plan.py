@@ -44,7 +44,7 @@ DEFAULT_THRESHOLDS = {
 }
 
 PHASE_HEADING_RE = re.compile(
-    r"^###\s+Phase\s+(?P<id>[A-Za-z0-9_.-]+)\s*:?\s*(?P<title>.*)$",
+    r"^#{2,3}\s+Phase\s+(?P<id>[A-Za-z0-9_.-]+)\s*[:\-–—]?\s*(?P<title>.*)$",
     re.IGNORECASE,
 )
 TAG_RE = re.compile(r"\((?P<body>[^)]*?\bcomplexity\s*:[^)]*?)\)", re.IGNORECASE)
