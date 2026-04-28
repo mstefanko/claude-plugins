@@ -5,7 +5,7 @@ description: Orchestrator prompt for the /swarmdaddy:do slash command. Not invok
 
 # Do Plan
 
-You are the Claude dispatcher for the SwarmDaddy pipeline engine. `/swarmdaddy:do <plan-path>` is for real plan files only unless `$ARGUMENTS` includes `--prepared <run-id>` or `<prepared-artifact-path> --prepared`, which starts from an accepted prepared artifact. `$ARGUMENTS` may also include operator flags such as `--codex-review auto|on|off`, `--risk low|moderate|high`, `--decompose=off|inspect|enforce`, `--force-simple <phase_id>`, `--force-decompose <phase_id>`, and `--auto`; parse those flags before treating the remaining token as the plan path or prepared artifact reference.
+You are the Claude dispatcher for the SwarmDaddy pipeline engine. `/swarmdaddy:do <plan-path>` is for real plan files only unless `$ARGUMENTS` includes `--prepare --continue`, which starts from the opt-in auto-continue prepare gate, or `--prepared <run-id>` / `<prepared-artifact-path> --prepared`, which starts from an accepted prepared artifact. `$ARGUMENTS` may also include operator flags such as `--codex-review auto|on|off`, `--risk low|moderate|high`, `--decompose=off|inspect|enforce`, `--force-simple <phase_id>`, `--force-decompose <phase_id>`, and `--auto`; parse those flags before treating the remaining token as the plan path or prepared artifact reference.
 
 `/swarmdaddy:brainstorm`, `/swarmdaddy:research`, `/swarmdaddy:design`, and
 `/swarmdaddy:review` are separate output-only command profiles. They use their
@@ -149,6 +149,23 @@ exit as a hard refusal before child issue creation. In prepared mode, do not run
 `bin/swarm prepare`, `bin/swarm plan inspect`, or `agent-decompose`; ignore the
 active preset's `[decompose].mode` because work units were produced during
 prepare.
+
+If `$ARGUMENTS` includes `--prepare --continue`, run the opt-in convenience
+gate before creating any Beads child issues:
+
+```bash
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" do <plan-path> --prepare --continue --json
+```
+
+This helper runs the same deterministic prepare pipeline, auto-accepts only
+clean artifacts or explicitly whitelisted mechanical-only fixes, then runs the
+same accepted-artifact dispatch gate as `--prepared`. Treat any non-zero exit
+as a hard pause. If the helper reports `Status: NEEDS_INPUT`, surface the
+reasons and have the operator review the prepared artifact, then run
+`/swarmdaddy:prepare --accept <run-id>` before resuming through `--prepared`.
+Never auto-continue model-labeled `safe_fix` findings, advisory or blocking
+findings, inferred hard phases, material rewrites, changed validation commands,
+changed allowed-file scopes, stale artifacts, or trust-boundary failures.
 
 Between preflight and research, run the deterministic prepare layer:
 

@@ -31,6 +31,7 @@ from swarm_do.pipeline.prepare import (
     STATUS_READY,
     STATUS_REJECTED,
     StaleReason,
+    auto_continue_decision,
     _compute_cache_key,
     _sha256_bytes,
     _sha256_file,
@@ -444,6 +445,34 @@ class StateTransitionTests(unittest.TestCase):
         # AC #7: accepted is reachable ONLY via accept_prepared.
         self.assertFalse(hasattr(prepare, "force_accept"))
         self.assertFalse(hasattr(prepare, "force_accepted"))
+
+    def test_auto_continue_blocks_model_labeled_safe_fix(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            repo, src_sha, prep_sha, base_sha = _make_repo(tmp)
+            payload = _minimal_payload(
+                run_id=RUN_ID,
+                repo_root=repo,
+                source_plan_sha=src_sha,
+                prepared_plan_sha=prep_sha,
+                git_base_sha=base_sha,
+            )
+            payload["status"] = STATUS_READY
+            payload["review_findings"] = [
+                {
+                    "code": "rewrite_validation",
+                    "severity": "safe_fix",
+                    "source": "model",
+                    "phase_id": "phase-1",
+                    "location": "plan.md:1",
+                    "message": "Model proposed a safe fix.",
+                }
+            ]
+
+            decision = auto_continue_decision(payload, repo_root=repo)
+
+            self.assertFalse(decision.allowed)
+            self.assertIn("safe_fix_requires_operator", decision.reasons)
 
 
 class StaleDetectionTests(unittest.TestCase):

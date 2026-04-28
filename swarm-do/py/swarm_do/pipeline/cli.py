@@ -510,6 +510,8 @@ def _print_prepare_acceptance_summary(summary: Mapping[str, Any]) -> None:
 
 
 def cmd_do(args: argparse.Namespace) -> int:
+    if getattr(args, "prepare", False) or getattr(args, "prepare_continue", False):
+        return _cmd_do_prepare_continue(args)
     if not args.prepared:
         print(
             "swarm: do: the helper CLI currently supports prepared dispatch only; "
@@ -522,6 +524,57 @@ def cmd_do(args: argparse.Namespace) -> int:
         print("swarm: do: --prepared requires a run id or artifact path", file=sys.stderr)
         return 1
 
+    return _dispatch_prepared(args, prepared_ref, error_prefix="swarm: do --prepared")
+
+
+def _cmd_do_prepare_continue(args: argparse.Namespace) -> int:
+    if getattr(args, "prepared", None):
+        print("swarm: do --prepare --continue: cannot combine with --prepared", file=sys.stderr)
+        return 1
+    if not getattr(args, "prepare", False) or not getattr(args, "prepare_continue", False):
+        print("swarm: do --prepare: --continue is required for auto-continue", file=sys.stderr)
+        return 1
+    if not args.target:
+        print("swarm: do --prepare --continue: plan path is required", file=sys.stderr)
+        return 1
+
+    from .prepare import accept_prepared, auto_continue_decision, prepare_plan_run
+
+    try:
+        result = prepare_plan_run(
+            args.target,
+            dry_run=False,
+            write=True,
+            bd_epic_id=args.bd_epic_id,
+        )
+        decision = auto_continue_decision(
+            result.payload,
+            work_unit_errors=result.work_unit_errors,
+        )
+        if not decision.allowed:
+            payload = result.to_dict()
+            payload["auto_continue"] = decision.to_dict()
+            payload["status_label"] = "NEEDS_INPUT"
+            if args.json:
+                print(json.dumps(payload, indent=2, sort_keys=True))
+            else:
+                _print_prepare_result(result)
+                print(f"auto-continue blocked: {', '.join(decision.reasons)}")
+                print("Status: NEEDS_INPUT")
+            return 1
+        accept_prepared(result.run_id, accepted_by="auto-continue")
+        return _dispatch_prepared(args, result.run_id, error_prefix="swarm: do --prepare --continue")
+    except Exception as exc:
+        print(f"swarm: do --prepare --continue: {exc}", file=sys.stderr)
+        return 1
+
+
+def _dispatch_prepared(
+    args: argparse.Namespace,
+    prepared_ref: str,
+    *,
+    error_prefix: str,
+) -> int:
     from .prepare import verify_prepared_for_dispatch
     from .run_state import active_run_path, write_active_run
 
@@ -545,7 +598,7 @@ def cmd_do(args: argparse.Namespace) -> int:
             print("Status: READY_FOR_DISPATCH")
         return 0
     except Exception as exc:
-        print(f"swarm: do --prepared: {exc}", file=sys.stderr)
+        print(f"{error_prefix}: {exc}", file=sys.stderr)
         return 1
 
 
@@ -1208,8 +1261,10 @@ def _build_parser() -> argparse.ArgumentParser:
     review.set_defaults(func=cmd_review)
 
     do = sub.add_parser("do")
-    do.add_argument("target", nargs="?", help="legacy plan path, or prepared artifact path with --prepared")
+    do.add_argument("target", nargs="?", help="legacy plan path, plan path with --prepare --continue, or prepared artifact path with --prepared")
     do.add_argument("--prepared", nargs="?", const=True, metavar="RUN_ID_OR_PATH")
+    do.add_argument("--prepare", action="store_true", help="run the prepare gate before dispatch")
+    do.add_argument("--continue", dest="prepare_continue", action="store_true", help="auto-accept safe prepared output and continue dispatch")
     do.add_argument("--bd-epic-id")
     do.add_argument("--no-write-state", action="store_true")
     do.add_argument("--json", action="store_true")

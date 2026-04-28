@@ -258,6 +258,9 @@ only after material local CLI or command-contract drift.
   Supported flags include `--codex-review auto|on|off`,
   `--risk low|moderate|high`, `--decompose=off|inspect|enforce`,
   `--force-simple <phase_id>`, `--force-decompose <phase_id>`, and `--auto`.
+  Add `--prepare --continue` only when the plan is low-risk enough for the
+  helper to auto-accept a clean deterministic prepare artifact; it stops with
+  `Status: NEEDS_INPUT` whenever operator review is required.
 - `/swarmdaddy:prepare <plan-path> [--dry-run]`: produce `prepared.md`, a
   prepared-plan artifact, and per-phase `work_units.v2` sidecars, then stop at
   `READY_FOR_ACCEPTANCE`. Use `/swarmdaddy:prepare --accept <run-id>` or
@@ -316,6 +319,21 @@ safe-fix summaries, work-unit counts, allowed-file scope, validation commands,
 hashes, and git base. The second command re-runs schema, trust-boundary, and
 stale checks before flipping the artifact to `accepted`.
 
+Use the two-step flow for high-risk work, advisory findings, any model-labeled
+`safe_fix`, inferred hard phases, changed validation commands, changed
+allowed-file scopes, or material rewrites. For routine low-risk plans, the
+opt-in convenience path is:
+
+```bash
+bin/swarm do docs/plan.md --prepare --continue
+```
+
+It records the same prepared artifact, auto-accepts only when the deterministic
+safety checks pass, and then dispatches through the same `--prepared` verifier.
+If it returns `NEEDS_INPUT`, review the artifact and continue manually with
+`bin/swarm prepare --accept <run-id>` followed by
+`bin/swarm do --prepared <run-id>`.
+
 ## Output-Only Profiles
 
 Output-only profiles use the same preset, pipeline, role, permission, and
@@ -349,6 +367,8 @@ bin/swarm preset dry-run <name> <plan-path>
 bin/swarm preset migrate
 bin/swarm prepare <plan-path> [--dry-run]
 bin/swarm prepare --accept <run-id>
+bin/swarm do <plan-path> --prepare --continue
+bin/swarm do --prepared <run-id-or-artifact-path>
 bin/swarm plan prepare <plan-path> [--dry-run] [--write] [--json]
 bin/swarm preset adopt <archived-yaml> --template <stock-preset> [--name <name>]
 

@@ -44,6 +44,13 @@ class CommandProfileTests(unittest.TestCase):
         data = Path(self.td.name)
         repo = data / "repo"
         repo.mkdir()
+        self._write_ready_plan_repo(repo)
+        result = prepare_plan_run("plan.md", repo_root=repo, data_dir=data, run_id=RUN_ID)
+        accept_prepared(RUN_ID, data_dir=data, repo_root=repo)
+        assert result.artifact_path is not None
+        return repo, data, result.artifact_path
+
+    def _write_ready_plan_repo(self, repo: Path, *, extra_implementation: str = "") -> None:
         env = {
             **os.environ,
             "GIT_AUTHOR_NAME": "T",
@@ -62,16 +69,13 @@ class CommandProfileTests(unittest.TestCase):
             "- `README.md`\n\n"
             "### Implementation\n\n"
             "- Update the README.\n\n"
+            f"{extra_implementation}"
             "### Acceptance Criteria\n\n"
             "- README is updated.\n\n"
             "### Validation Commands\n\n"
             "```\ntrue\n```\n",
             encoding="utf-8",
         )
-        result = prepare_plan_run("plan.md", repo_root=repo, data_dir=data, run_id=RUN_ID)
-        accept_prepared(RUN_ID, data_dir=data, repo_root=repo)
-        assert result.artifact_path is not None
-        return repo, data, result.artifact_path
 
     def test_output_profile_dry_runs_validate_matching_stock_presets(self) -> None:
         cases = (
@@ -175,6 +179,66 @@ class CommandProfileTests(unittest.TestCase):
 
         self.assertEqual(code, 0, stderr.getvalue())
         self.assertEqual(json.loads(stdout.getvalue())["run_id"], RUN_ID)
+
+    def test_do_prepare_continue_accepts_safe_artifact_and_writes_active_run(self) -> None:
+        data = Path(self.td.name)
+        repo = data / "repo-auto"
+        repo.mkdir()
+        self._write_ready_plan_repo(repo)
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        args = argparse.Namespace(
+            target="plan.md",
+            prepared=None,
+            prepare=True,
+            prepare_continue=True,
+            bd_epic_id=None,
+            no_write_state=False,
+            json=True,
+        )
+
+        with mock.patch("swarm_do.pipeline.prepare.REPO_ROOT", repo), redirect_stdout(stdout), redirect_stderr(stderr):
+            code = cmd_do(args)
+
+        self.assertEqual(code, 0, stderr.getvalue())
+        payload = json.loads(stdout.getvalue())
+        self.assertTrue(payload["ready_for_dispatch"])
+        state = load_active_run(active_run_path(data))
+        self.assertIsNotNone(state)
+        self.assertEqual(state["status"], "prepared")
+        artifact = load_prepared_artifact(payload["run_id"], data_dir=data, repo_root=repo)
+        self.assertEqual(artifact["status"], "accepted")
+        self.assertEqual(artifact["acceptance"]["accepted_by"], "auto-continue")
+
+    def test_do_prepare_continue_stops_on_advisory_without_state_write(self) -> None:
+        data = Path(self.td.name)
+        repo = data / "repo-advisory"
+        repo.mkdir()
+        self._write_ready_plan_repo(repo, extra_implementation="- Maybe update more docs.\n\n")
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        args = argparse.Namespace(
+            target="plan.md",
+            prepared=None,
+            prepare=True,
+            prepare_continue=True,
+            bd_epic_id=None,
+            no_write_state=False,
+            json=True,
+        )
+
+        with mock.patch("swarm_do.pipeline.prepare.REPO_ROOT", repo), redirect_stdout(stdout), redirect_stderr(stderr):
+            code = cmd_do(args)
+
+        self.assertEqual(code, 1)
+        self.assertEqual(stderr.getvalue(), "")
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["status_label"], "NEEDS_INPUT")
+        self.assertFalse(payload["auto_continue"]["allowed"])
+        self.assertIn("advisory_findings", payload["auto_continue"]["reasons"])
+        self.assertFalse(active_run_path(data).exists())
+        artifact = load_prepared_artifact(payload["run_id"], data_dir=data, repo_root=repo)
+        self.assertEqual(artifact["status"], "ready_for_acceptance")
 
     def test_do_prepared_refuses_unaccepted_artifact_before_state_write(self) -> None:
         data = Path(self.td.name)

@@ -87,8 +87,10 @@ Required event coverage for each dogfood batch:
 - `prepare_stale_rejected` when stale acceptance or dispatch is refused
 - `prepare_dispatch_started` before execution from an accepted artifact
 
-Controlled-experiment status as of 2026-04-28: **HOLD**. Phase 7 remains
-blocked until the following comparisons are recorded with real dogfood data:
+Controlled-experiment status as of 2026-04-28: **HOLD FOR DEFAULT PROMOTION**.
+The Phase 7 `--prepare --continue` helper is opt-in only and remains governed
+by this scorecard; keep recommending the two-step gate until the following
+comparisons are recorded with real dogfood data:
 
 | Experiment | Required comparison | Current decision |
 |---|---|---|

@@ -78,6 +78,7 @@ _PATH_FIELDS = ("source_plan_path", "prepared_plan_path")
 PLAN_REVIEW_SEVERITIES = frozenset({"blocking", "safe_fix", "advisory"})
 MAX_PLAN_REVIEW_ITERATIONS = 3
 _PREPARE_EVENT_PHASE_ID = "plan-prepare"
+_AUTO_CONTINUE_PHASE_HEADING_RE = re.compile(r"^###\s+Phase\s+[A-Za-z0-9_.-]+\s*:?", re.IGNORECASE)
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +137,20 @@ class PrepareRunResult:
             ),
             "cache_hits": self.cache_hits,
             "status_label": _prepare_status_label(self.status),
+        }
+
+
+@dataclass(frozen=True)
+class AutoContinueDecision:
+    """Decision for the opt-in ``--prepare --continue`` convenience path."""
+
+    allowed: bool
+    reasons: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "allowed": self.allowed,
+            "reasons": list(self.reasons),
         }
 
 
@@ -769,6 +784,185 @@ def prepared_acceptance_summary(
         "git_base_sha": payload.get("git_base_sha"),
         "stale_reasons": list(drift.reasons) if drift is not None else [],
     }
+
+
+_AUTO_CONTINUE_MECHANICAL_SAFE_FIX_CODES = frozenset({"no_phase_headings"})
+
+
+def auto_continue_decision(
+    payload: Mapping[str, Any],
+    *,
+    work_unit_errors: Iterable[str] = (),
+    repo_root: Path | None = None,
+) -> AutoContinueDecision:
+    """Return whether a prepared artifact is safe to auto-accept.
+
+    Phase 7 deliberately keeps this stricter than manual acceptance. Clean
+    deterministic artifacts may continue; deterministic mechanical safe-fix
+    artifacts may continue only for explicitly whitelisted lint fixes. Anything
+    advisory, blocking, model-labeled, materially rewritten, stale-prone by
+    shape, or scope-changing stops for operator input.
+    """
+
+    reasons: list[str] = []
+    if payload.get("status") != STATUS_READY:
+        reasons.append(f"status_not_ready:{payload.get('status')}")
+
+    errors = [str(error) for error in work_unit_errors if str(error)]
+    if errors:
+        reasons.append("work_unit_errors")
+
+    findings = [finding for finding in payload.get("review_findings") or [] if isinstance(finding, Mapping)]
+    blocking = [finding for finding in findings if finding_blocks_prepare(finding)]
+    if blocking:
+        reasons.append("blocking_findings")
+
+    advisories = [finding for finding in findings if finding.get("severity") == "advisory"]
+    if advisories:
+        reasons.append("advisory_findings")
+
+    safe_fixes = [finding for finding in findings if finding.get("severity") == "safe_fix"]
+    unsafe_safe_fixes = [
+        finding
+        for finding in safe_fixes
+        if not _is_auto_continue_mechanical_safe_fix(finding)
+    ]
+    if unsafe_safe_fixes:
+        reasons.append("safe_fix_requires_operator")
+
+    unknown = [
+        finding
+        for finding in findings
+        if finding.get("severity") not in {"safe_fix", "advisory", "blocking", "error"}
+    ]
+    if unknown:
+        reasons.append("unknown_finding_severity")
+
+    if payload.get("accepted_fixes"):
+        reasons.append("accepted_fixes_present")
+
+    root = _resolve_repo_root(payload, repo_root=repo_root)
+    reasons.extend(_auto_continue_artifact_shape_reasons(payload, repo_root=root))
+
+    return AutoContinueDecision(allowed=not reasons, reasons=tuple(dict.fromkeys(reasons)))
+
+
+def _is_auto_continue_mechanical_safe_fix(finding: Mapping[str, Any]) -> bool:
+    code = finding.get("code")
+    if code not in _AUTO_CONTINUE_MECHANICAL_SAFE_FIX_CODES:
+        return False
+    source = " ".join(
+        str(finding.get(key) or "")
+        for key in ("source", "runner", "provider", "origin", "label")
+    ).lower()
+    return not any(marker in source for marker in ("model", "agent", "llm", "claude", "codex"))
+
+
+def _auto_continue_artifact_shape_reasons(
+    payload: Mapping[str, Any],
+    *,
+    repo_root: Path,
+) -> list[str]:
+    reasons: list[str] = []
+    try:
+        _round_trip_paths(payload, repo_root=repo_root)
+    except Exception:
+        return ["trust_boundary_validation_failed"]
+
+    source_path = repo_root / str(payload.get("source_plan_path") or "")
+    prepared_path = repo_root / str(payload.get("prepared_plan_path") or "")
+    if not source_path.is_file():
+        return ["source_plan_missing"]
+    if not prepared_path.is_file():
+        return ["prepared_plan_missing"]
+
+    try:
+        from .decompose import _validation_commands
+        from .plan import parse_plan_from_text
+
+        source_phases = parse_plan_from_text(source_path.read_text(encoding="utf-8"))
+        prepared_phases = parse_plan_from_text(prepared_path.read_text(encoding="utf-8"))
+    except Exception:
+        return ["plan_parse_failed"]
+
+    source_by_id = {phase.phase_id: phase for phase in source_phases}
+    prepared_by_id = {phase.phase_id: phase for phase in prepared_phases}
+    source_ids = set(source_by_id)
+    prepared_ids = set(prepared_by_id)
+    payload_ids = {str(item.get("phase_id")) for item in payload.get("phase_map") or [] if isinstance(item, Mapping)}
+
+    source_has_no_phase_headings = any(
+        finding.get("code") == "no_phase_headings"
+        and _is_auto_continue_mechanical_safe_fix(finding)
+        for finding in payload.get("review_findings") or []
+        if isinstance(finding, Mapping)
+    )
+    if source_ids != prepared_ids and not source_has_no_phase_headings:
+        reasons.append("material_rewrite_phase_ids")
+    if prepared_ids != payload_ids:
+        reasons.append("material_rewrite_payload_phase_ids")
+
+    for phase_id in sorted(source_ids & prepared_ids):
+        source_phase = source_by_id[phase_id]
+        prepared_phase = prepared_by_id[phase_id]
+        if _auto_continue_phase_body(source_phase.text) != _auto_continue_phase_body(prepared_phase.text):
+            reasons.append(f"material_rewrite_body:{phase_id}")
+        if tuple(source_phase.explicit_files) != tuple(prepared_phase.explicit_files):
+            reasons.append(f"allowed_file_scope_changed:{phase_id}")
+        if tuple(_validation_commands(source_phase)) != tuple(_validation_commands(prepared_phase)):
+            reasons.append(f"validation_commands_changed:{phase_id}")
+
+    for entry in payload.get("phase_map") or []:
+        if not isinstance(entry, Mapping):
+            continue
+        phase_id = str(entry.get("phase_id") or "")
+        source_phase = source_by_id.get(phase_id)
+        if entry.get("complexity") == "hard" and (source_phase is None or source_phase.complexity != "hard"):
+            reasons.append(f"inferred_hard_phase:{phase_id}")
+
+    work_unit_artifacts = payload.get("work_unit_artifacts") or {}
+    for phase_id, descriptor in work_unit_artifacts.items():
+        if not isinstance(descriptor, Mapping):
+            reasons.append(f"work_unit_descriptor_invalid:{phase_id}")
+            continue
+        source_phase = source_by_id.get(str(phase_id))
+        if source_phase is None:
+            continue
+        artifact = descriptor.get("artifact")
+        if not isinstance(artifact, Mapping):
+            reasons.append(f"work_unit_artifact_missing:{phase_id}")
+            continue
+        source_files = tuple(source_phase.explicit_files)
+        source_commands = tuple(_validation_commands(source_phase))
+        units = artifact.get("work_units") or []
+        if not isinstance(units, list) or not units:
+            reasons.append(f"work_units_missing:{phase_id}")
+            continue
+        allowed_union: list[str] = []
+        for unit in units:
+            if not isinstance(unit, Mapping):
+                reasons.append(f"work_unit_invalid:{phase_id}")
+                continue
+            unit_allowed = tuple(str(path) for path in unit.get("allowed_files", unit.get("files", [])) or [])
+            unit_commands = tuple(str(cmd) for cmd in unit.get("validation_commands") or [])
+            for path in unit_allowed:
+                if path not in allowed_union:
+                    allowed_union.append(path)
+            if unit_commands != source_commands:
+                reasons.append(f"validation_commands_changed:{phase_id}")
+            if not source_files or any(path not in source_files for path in unit_allowed):
+                reasons.append(f"allowed_file_scope_changed:{phase_id}")
+        if tuple(allowed_union) != source_files:
+            reasons.append(f"allowed_file_scope_changed:{phase_id}")
+
+    return reasons
+
+
+def _auto_continue_phase_body(text: str) -> str:
+    lines = text.splitlines()
+    if lines and _AUTO_CONTINUE_PHASE_HEADING_RE.match(lines[0]):
+        return "\n".join(lines[1:]).strip()
+    return text.strip()
 
 
 def verify_prepared_for_dispatch(
