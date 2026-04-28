@@ -50,6 +50,38 @@ provider review, or the TUI with ECC-style generic orchestration.
   to clean sensitive payloads.
 - Keep hooks cheap. Slow checks belong in `selftest`, TUI health, or explicit
   commands, not hot-path hook execution.
+- CLI surface convention: a flat verb (`bin/swarm selftest`) when the command
+  has one mode; a verb group (`bin/swarm security audit`, `bin/swarm codex
+  emit`) when two or more sibling verbs are planned. Decide at design time,
+  not after the second verb appears.
+- Every shipped feature must have an explicit off switch documented in the
+  rollback table. "Don't invoke it" is acceptable only for invoke-only
+  commands; anything that runs implicitly (hooks, auto-checks) needs an env
+  var or profile disable.
+
+## Resolved Decisions
+
+These were Open Questions in earlier drafts. Locking them now so phases can
+be executed without further design rounds.
+
+- **Selftest TUI exposure.** Phase 1 ships the `bin/swarm selftest` command
+  only. TUI binding is deferred to Phase 5, which already touches
+  `tui/state.py` and consumes the same JSON contract alongside unit
+  snapshots. Rationale: do not couple Foundation to TUI changes.
+- **Activity telemetry source.** Phase 4 starts with categorization of
+  existing run events only. The `PostToolUse` hook is a Phase 4 follow-up
+  PR, gated by `SWARM_HOOK_PROFILE=standard|strict` after Phase 2 controls
+  exist. Rationale: ship categorization without taking a hot-path hook
+  dependency in the same change.
+- **Unit snapshot retention.** Snapshots follow the policy in
+  `docs/adr/0001-telemetry-retention.md` — default 30-day retention with
+  operator override. Rationale: avoid unbounded plugin-data growth and keep
+  one retention story for the project.
+- **Codex file location.** Reference content lives at `docs/codex/`. The
+  `bin/swarm codex emit` command writes generated copies to an
+  operator-chosen path (default `.codex/swarmdaddy/`). Nothing is auto-
+  discovered. Rationale: decouple committed reference from emitted artifacts
+  and prevent accidental Codex auto-load.
 
 ## Non-Goals
 
@@ -92,6 +124,19 @@ new command surfaces.
 - There is a written schema-level contract for each new output before runtime
   code lands.
 - No existing command behavior changes in this phase.
+
+## Foundation Epic (Phases 1 + 2)
+
+Phases 1 and 2 ship as a single epic. Reasoning: shipping `selftest` without
+hook profile controls means later hooks (Phase 4) must be added without a
+reversible disable path; shipping hook profiles before there is a health
+command leaves operators without a single-screen readiness check. The pair
+is mutually load-bearing.
+
+Acceptance for the epic: every Phase 1 and Phase 2 acceptance criterion
+passes, the rollback levers in both phases work end-to-end, and one full
+dogfood pipeline run completes with `bin/swarm selftest` invoked at start
+and `SWARM_HOOK_PROFILE=standard` set throughout.
 
 ## Phase 1 - `bin/swarm selftest`
 
@@ -205,16 +250,33 @@ Profiles:
 | `py/swarm_do/pipeline/tests/test_hooks_profile.py` or shell fixture tests | Validate profile gating and disabled hooks. |
 | `README.md` | Document variables after implementation. |
 
+### Hook ID Registry
+
+Hook IDs are declared as the `id` field on each hook entry in
+`hooks/hooks.json`. The same value is matched (case-insensitive) against
+`SWARM_DISABLED_HOOKS`. Initial registry:
+
+| ID | Hook | Default profile gate |
+| --- | --- | --- |
+| `precompact` | `hooks/precompact.sh` | minimal+ |
+| `activity-observe` | (Phase 4) | standard+ |
+
+Any new hook must add a row to this table in the same PR that ships it.
+
 ### Implementation Notes
 
-- The wrapper should preserve stdin and stdout pass-through semantics.
-- Invalid profile values should fall back to `standard` and log a warning to
-  stderr, not fail the hook.
-- Disabled hook matching should be case-insensitive and comma-separated.
-- Keep the wrapper shell-only unless the hook matrix grows enough to justify a
+- The wrapper preserves stdin and stdout pass-through semantics. PreCompact
+  hooks receive a JSON document on stdin from Claude Code; the wrapper must
+  use unbuffered byte forwarding (`exec` after profile gating) and must not
+  line-buffer or transform the payload.
+- Invalid profile values fall back to `standard` and log a warning to stderr,
+  not fail the hook.
+- Disabled hook matching is case-insensitive and comma-separated. Whitespace
+  around IDs is trimmed.
+- Wrapper stays shell-only unless the hook matrix grows enough to justify a
   Python helper.
-- Do not add new hooks in the same PR except tests for the existing precompact
-  hook. Land the control plane first.
+- Do not add new hooks in the same PR except tests for the existing
+  precompact hook. Land the control plane first.
 
 ### Acceptance
 
@@ -270,17 +332,43 @@ Initial checks:
 | `schemas/security_audit.schema.json` | Optional if JSON output is persisted. |
 | `README.md` | Document command after implementation. |
 
+### Severity Map
+
+Findings ship with one of four severities. `--strict` upgrades high/critical
+to exit 1; medium/low remain advisory regardless of `--strict`.
+
+| Finding | Default severity |
+| --- | --- |
+| Role registered, fragment missing | high |
+| Fragment role not registered | medium |
+| Allow/deny conflict in same role | high |
+| `Bash(*)` or unscoped write in read-only role | critical |
+| Hook missing profile wrapper (after Phase 2) | high |
+| Hook command shell-interpolates unscoped input | critical |
+| Provider not read-only eligible | high |
+| Secret-shaped argv/manifest field (post-redaction) | critical |
+| Project `.claude/settings.json` broad permission | medium |
+| Project `.mcp.json` shell launcher / `npx -y` | high |
+| Common secret file not gitignored | low |
+| `pull_request_target` checkout of PR head | critical |
+
+These severities ship in `schemas/security_audit.schema.json` once the
+fixtures stabilize. Severity tuning during implementation is allowed; the
+table above is the merge target.
+
 ### Implementation Notes
 
-- Stay dependency-free. Use JSON parsing and small YAML-like text checks where
-  needed; do not add a full workflow YAML parser unless false positives become
-  painful.
+- Stay dependency-free. Use JSON parsing and small YAML-like text checks
+  where needed; do not add a full workflow YAML parser unless false
+  positives become painful.
 - Redact secret-shaped values before adding them to findings.
-- Treat repo-local scans as advisory by default. A user may have intentionally
-  broad local settings.
-- `--strict` should fail on high/critical findings.
-- Make the scanner path-contained. Do not read outside the requested repo or
-  plugin root.
+- Treat repo-local scans as advisory by default (medium/low). A user may
+  have intentionally broad local settings.
+- `--strict` fails on high/critical findings only.
+- Path containment is enforced at every read: resolve the candidate via
+  `Path(p).resolve(strict=False)` and reject unless
+  `resolved.is_relative_to(scope_root.resolve())`. Symlink escapes are
+  rejected, not followed.
 
 ### Acceptance
 
@@ -318,16 +406,34 @@ Add or extend observation rows with:
 }
 ```
 
+### Schema Migration
+
+Activity fields extend the existing
+`schemas/telemetry/run_events.schema.json` rather than introducing a
+parallel `observations.v2` stream. Strategy:
+
+- Add `tool_category`, `file_paths`, `action`, `redaction_applied`,
+  `input_summary`, `output_summary` as optional fields on the existing
+  event schema.
+- Bump the schema's `version` field. Old readers ignoring unknown fields
+  keep working; new readers tolerate missing fields by defaulting
+  `tool_category` to `"unknown"` and `file_paths` to `[]`.
+- `experiment_report` treats absent categorization as `"unknown"` and
+  continues to render the report. No mixed-stream logic, no dual files.
+- Phase 4 lands in two PRs: (a) categorization on existing events, then
+  (b) the optional `PostToolUse` hook with `id: activity-observe`. PR (b)
+  cannot land until Phase 2 ships.
+
 ### Files
 
 | File | Change |
 | --- | --- |
-| `schemas/telemetry/observations.v2.schema.json` | Add activity fields if not already present. |
+| `schemas/telemetry/run_events.schema.json` | Extend with optional activity fields; bump version. |
 | `py/swarm_do/telemetry/run_observations.py` | Add categorization and repeated-read support. |
-| `py/swarm_do/telemetry/subcommands/experiment_report.py` | Consume categories for scorecards. |
-| `hooks/activity_observe.py` or `hooks/activity-observe.sh` | Optional hook after Phase 2 profile controls land. |
+| `py/swarm_do/telemetry/subcommands/experiment_report.py` | Consume categories for scorecards; default missing to `"unknown"`. |
+| `hooks/activity_observe.py` or `hooks/activity-observe.sh` | Optional Phase 4b hook gated on `standard+` profile. |
 | `py/swarm_do/telemetry/tests/test_run_observations.py` | Add redaction and categorization fixtures. |
-| `py/swarm_do/telemetry/tests/test_experiment_report.py` | Add repeated-read and first-test-position fixture coverage. |
+| `py/swarm_do/telemetry/tests/test_experiment_report.py` | Add repeated-read, first-test-position, and missing-category fixture coverage. |
 
 ### Implementation Notes
 
@@ -385,11 +491,24 @@ process needs local copies.
 | `py/swarm_do/tui/state.py` | Surface latest unit statuses. |
 | `py/swarm_do/pipeline/tests/test_run_state.py` or existing resume tests | Add snapshot fixtures. |
 
+### Atomicity And Concurrency
+
+- All Markdown status writes use tmp + `os.replace` in the same directory.
+  No partial files visible to readers, no fsync per write.
+- `events.jsonl` is append-only with `O_APPEND`. Readers tolerate a
+  truncated final line (last record may be lost on crash).
+- A single writer per unit. The executor holds a per-unit advisory lock
+  (`fcntl.flock` on `units/<unit_id>/.lock`) so concurrent post-writer and
+  resume operations cannot interleave handoff updates.
+- Crash recovery: JSON state is authoritative; resume reconstructs Markdown
+  snapshots from `events.jsonl` if they are missing or older than the last
+  recorded event.
+
 ### Implementation Notes
 
 - Do not make Markdown snapshots authoritative over JSON state. They are
   operator-facing mirrors.
-- Status should be generated from structured state:
+- Status is generated from structured state:
   - `pending`
   - `running`
   - `needs_context`
@@ -397,7 +516,7 @@ process needs local copies.
   - `approved`
   - `merged`
   - `failed`
-- Handoff should include only bounded summaries, changed file paths, validation
+- Handoff includes only bounded summaries, changed file paths, validation
   commands/results, remaining risks, and next action.
 - Include source artifact paths in `task.md`, not copied phase text when the
   source is large.
@@ -447,10 +566,16 @@ Generated/reference content:
 - Do not ship MCP server defaults.
 - Do not write to `~/.codex`.
 - Do not pin a Codex model in generated config unless the user passes an
-  explicit flag.
+  explicit `--model` flag.
 - Reuse existing role specs instead of inventing Codex-only role behavior.
-- `doctor` should check that Codex is installed and that generated files are
-  current, but it should not require Codex for normal SwarmDaddy usage.
+- `doctor` detects Codex via `shutil.which("codex")`. Missing Codex reports
+  `installed: false` as advisory (never a hard failure). On platforms where
+  the Codex CLI is not supported, `doctor` reports
+  `unsupported_platform: true` and skips installation checks. Doctor never
+  requires Codex for normal SwarmDaddy usage.
+- Reference content under `docs/codex/` is committed; emitted artifacts
+  under `.codex/swarmdaddy/` are operator-controlled and gitignored by the
+  emit command's generated `.gitignore` stub.
 
 ### Acceptance
 
@@ -461,17 +586,19 @@ Generated/reference content:
 
 ## Rollout Order
 
-1. Phase 1 selftest.
-2. Phase 2 hook profiles.
-3. Phase 3 security audit.
-4. Phase 4 activity telemetry.
-5. Phase 5 unit snapshots.
+1. **Foundation epic:** Phase 1 selftest + Phase 2 hook profiles, merged
+   together. See Foundation Epic section above.
+2. Phase 3 security audit.
+3. Phase 4a activity telemetry — categorization on existing events.
+4. Phase 4b activity telemetry — `PostToolUse` hook, gated on Phase 2.
+5. Phase 5 unit snapshots (TUI binding lands here).
 6. Phase 6 Codex surface.
 
-This order matters. Selftest gives a health baseline. Hook profiles make future
-hook additions reversible. Security audit and activity telemetry then become
-observable without surprising every install. Unit snapshots and Codex support
-are operator-experience improvements once the guardrails are in place.
+This order matters. Foundation gives SwarmDaddy a health baseline and a
+reversible disable path before any new behavior ships. Security audit and
+activity telemetry then become observable without surprising every install.
+Unit snapshots and Codex support are operator-experience improvements once
+the guardrails are in place.
 
 ## Test Strategy
 
@@ -492,6 +619,35 @@ Additional targeted checks by phase:
 - Phase 5: resume tests with unit snapshot paths.
 - Phase 6: generated Codex files in a temp output directory.
 
+## Definition Of Done (per phase)
+
+A phase is not merged until all of the following pass:
+
+- `cd swarm-do && PYTHONPATH=py python3 -m unittest discover -s py -p 'test_*.py'`
+- `cd swarm-do && PYTHONPATH=py python3 -m swarm_do.telemetry.gen readme-section --check`
+- `cd swarm-do && PYTHONPATH=py python3 -m swarm_do.telemetry.gen docs --check`
+- All phase-specific Acceptance criteria above
+- README and CLI help updated for any new command surface
+- One dogfood pipeline run completes against a real plan with the new
+  feature exercised
+- Rollback lever from the table below is documented in the README and
+  exercised in at least one test
+
+## Rollback And Disable Levers
+
+Every phase ships with an off switch. If a feature misbehaves in the field,
+operators turn it off without redeploying the plugin.
+
+| Phase | Disable mechanism |
+| --- | --- |
+| 1 selftest | Invoke-only command. No implicit caller in Foundation; if Phase 5 wires a TUI auto-run, it must respect `SWARM_SELFTEST_AUTO=off`. |
+| 2 hook profiles | `SWARM_HOOK_PROFILE=minimal` or `SWARM_DISABLED_HOOKS=<id>` |
+| 3 security audit | Invoke-only. Add `SWARM_SECURITY_AUDIT_AUTO=off` for any caller (TUI, dogfood) that auto-runs it. |
+| 4a categorization | Data-driven; absent categories degrade reports gracefully — no env flag required. |
+| 4b activity hook | `SWARM_DISABLED_HOOKS=activity-observe` |
+| 5 unit snapshots | `SWARM_UNIT_SNAPSHOTS=off` env flag; defaults on. JSON state remains authoritative regardless. |
+| 6 Codex surface | Invoke-only commands; nothing is installed by default. |
+
 ## Risks
 
 - Selftest can become a junk drawer. Keep it a registry of existing checks plus
@@ -507,19 +663,21 @@ Additional targeted checks by phase:
 
 ## Open Questions
 
-- Should `selftest` live only under `bin/swarm`, or should `bin/swarm-tui`
-  expose the same check as `Ctrl+H` health?
-- Should activity observations use only existing SwarmDaddy events at first, or
-  add a gated `PostToolUse` hook immediately after Phase 2?
-- Should unit snapshots be retained with run artifacts forever, or follow the
-  telemetry retention policy from `docs/adr/0001-telemetry-retention.md`?
-- Should Codex surface files live at repo root under `.codex/`, or under
-  `docs/codex/` plus an explicit emitter to avoid accidental auto-discovery?
+None blocking. All forks present at the design stage are recorded in the
+Resolved Decisions section above. New questions raised during
+implementation should be answered in the implementing PR or appended here
+with their resolution.
 
 ## Final Recommendation
 
-Implement Phases 1 and 2 first as one small epic. They are the foundation:
-`selftest` gives SwarmDaddy a single health signal, and hook profiles make later
-observability/security hooks safe to adopt. Defer Codex files until the health
-and security commands exist; otherwise cross-harness support risks becoming
-another config surface without enough guardrails.
+Land the Foundation epic (Phase 1 + Phase 2 together) as the first PR.
+`selftest` gives SwarmDaddy a single health signal; hook profiles make
+later observability and security hooks safe to adopt. The two are
+mutually load-bearing — splitting them creates a window where Phase 1
+ships without a reversible disable path for the hooks Phase 4 will add.
+
+After Foundation merges and dogfoods cleanly for at least one full
+pipeline run, Phase 3 (security audit) ships next, then Phases 4a/4b, 5,
+and 6 in order. Defer Codex files until health and security commands
+exist; otherwise cross-harness support risks becoming another config
+surface without enough guardrails.

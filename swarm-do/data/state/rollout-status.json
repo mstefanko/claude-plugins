@@ -1,0 +1,52 @@
+{
+  "b1_dispatcher": {
+    "live_cutover_on": null,
+    "notes": "",
+    "rolled_back_on": null,
+    "shadow_started_on": null,
+    "status": "pending"
+  },
+  "pattern_5_trial": {
+    "completed_on": null,
+    "decision": "pending",
+    "notes": "",
+    "phases_sampled": 0,
+    "status": "pending"
+  },
+  "phase_0": {
+    "cohort_run_date": null,
+    "decided_on": "2026-04-28",
+    "decision": "DOGFOOD",
+    "notes": "Begin ECC-pattern-adoption dogfooding",
+    "selected_mode": "plugin"
+  },
+  "phase_1": {
+    "activated_on": null,
+    "rollback_reason": null,
+    "rolled_back_on": null,
+    "status": "pending"
+  },
+  "role_promotions": {
+    "agent-clarify": {
+      "measurement_ref": null,
+      "primary": "claude",
+      "promoted_on": null
+    },
+    "agent-docs": {
+      "measurement_ref": null,
+      "primary": "claude",
+      "promoted_on": null
+    },
+    "agent-spec-review": {
+      "measurement_ref": null,
+      "primary": "claude",
+      "promoted_on": null
+    },
+    "agent-writer.simple": {
+      "measurement_ref": null,
+      "primary": "claude",
+      "promoted_on": null
+    }
+  },
+  "schema_version": 1
+}
