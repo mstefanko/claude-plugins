@@ -301,9 +301,21 @@ one child beads issue, creates the unit worktree/branch, and runs
 "$CLAUDE_PLUGIN_ROOT/bin/swarm" worktrees add-unit --repo <repo> --run-id <run-id> --unit-id <unit-id> --json
 ```
 
-5. After writer completion, the coordinator runs deterministic validation in
-the same worktree, including `blocked_files` diff checks, and attaches that
-objective output before launching `agent-spec-review`.
+5. After writer completion, the coordinator runs the deterministic post-writer
+report in the same worktree and attaches that objective output before launching
+`agent-spec-review`:
+
+```bash
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" work-units post-writer <work-units.json> \
+  --unit-id <unit-id> \
+  --repo <unit-worktree> \
+  --base-ref <integration-branch-or-sha> \
+  --writer-return-file <writer-notes.txt> \
+  --json
+```
+
+The report includes changed files, diff stat, `blocked_files` violations,
+validation command results, test summary, and writer budget status.
 6. Merge only units with an `APPROVED` spec-review verdict. The coordinator
 uses the helper to check out the integration branch and merge with
 `git merge --no-ff`; workers must never merge themselves or update cross-unit

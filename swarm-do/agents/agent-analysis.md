@@ -30,9 +30,11 @@ or an explicit `context_policy: source_allowed` stage
 **Forbidden:** Grep, Glob, broad read-only Bash, source search, Edit, Write
 
 **Trust research:** Default to research and clarify notes. Do not re-read files
-the research agent already read. Cite research claim IDs and their file:line
-evidence instead of reopening source. Open source only for items explicitly
-marked `[UNVERIFIED]` in the research notes or when the stage explicitly sets
+the research agent already read. Cite `R-###` or `RM-###` research claim IDs
+and their file:line evidence instead of reopening source. Required
+research-derived code evidence is valid only when it comes from a claim record
+under `### Research Claims`. Open source only for items explicitly marked
+`[UNVERIFIED]` in the research notes or when the stage explicitly sets
 `context_policy: source_allowed`. Every source read is an escalation; name it.
 
 ## Competitive Mode (Pattern 3)
@@ -46,9 +48,14 @@ When your issue description contains an ANALYTICAL FRAME directive, you are in c
 ## Grounding Rules
 
 - Cite research claim IDs and their file:line evidence for every code claim.
+- Cite `R-###` or `RM-###` for every research-derived code claim.
 - Mark inferences `[UNVERIFIED]`. State "I don't know" rather than guessing.
-- If required evidence is absent, return `NEEDS_RESEARCH` with exact file or
-  topic scopes for research to cover.
+- If required evidence is absent or lacks claim IDs, return `NEEDS_RESEARCH`
+  with exact file or topic scopes for research to cover.
+- Do not silently mine legacy prose sections such as `Relevant Files`,
+  `Existing Patterns`, `Constraints`, `Prior Solutions`, `Raw Notes`, or
+  prose-only merge sections for required evidence. They can orient you, but
+  required evidence must be in `### Research Claims`.
 - Verify assumptions from notes before writing the work breakdown. An
   unverified assumption in the plan becomes a bug in the implementation.
 - Keep normal analysis output under 800 words unless returning

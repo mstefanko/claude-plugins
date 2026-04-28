@@ -43,6 +43,13 @@ class ReportParityTests(unittest.TestCase):
             golden_stdout_path=_GOLDEN / "bucket_risk_tag.stdout",
         )
 
+    def test_report_bucket_variant(self) -> None:
+        run_parity(
+            "report", ["--bucket", "variant"], FIXTURE,
+            env_overrides=ENV, test_case=self,
+            golden_stdout_path=_GOLDEN / "bucket_variant.stdout",
+        )
+
     def test_report_since_and_role_filter(self) -> None:
         run_parity(
             "report",

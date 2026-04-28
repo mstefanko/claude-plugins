@@ -1007,6 +1007,15 @@ def _load_unit_state_arg(args: argparse.Namespace) -> dict[str, Any]:
     return value
 
 
+def _load_writer_return_arg(args: argparse.Namespace) -> str:
+    if getattr(args, "writer_return_file", None):
+        if args.writer_return_file == "-":
+            return sys.stdin.read()
+        return Path(args.writer_return_file).read_text(encoding="utf-8")
+    value = getattr(args, "writer_return", None)
+    return value if isinstance(value, str) else ""
+
+
 def _migrate_work_units_artifact(artifact: dict[str, Any]) -> dict[str, Any]:
     migrated = dict(artifact)
     migrated["schema_version"] = 2
@@ -1033,6 +1042,7 @@ def _migrate_work_units_artifact(artifact: dict[str, Any]) -> dict[str, Any]:
 
 def cmd_work_units(args: argparse.Namespace) -> int:
     from .executor import execution_batches, load_work_units, next_resume_point, ready_work_units
+    from .post_writer import build_post_writer_report, format_post_writer_report
 
     try:
         if args.work_units_command == "migrate":
@@ -1066,13 +1076,33 @@ def cmd_work_units(args: argparse.Namespace) -> int:
             print(f"work-units OK: {args.artifact}")
             return 0
         artifact = load_work_units(args.artifact)
-        state = _load_unit_state_arg(args)
         if args.work_units_command == "ready":
+            state = _load_unit_state_arg(args)
             payload: Any = {"ready": ready_work_units(artifact, state)}
+            exit_code = 0
         elif args.work_units_command == "batches":
+            state = _load_unit_state_arg(args)
             payload = {"batches": execution_batches(artifact, state, args.parallelism)}
+            exit_code = 0
         elif args.work_units_command == "resume-point":
+            state = _load_unit_state_arg(args)
             payload = {"resume_point": next_resume_point(artifact, state)}
+            exit_code = 0
+        elif args.work_units_command == "post-writer":
+            payload = build_post_writer_report(
+                artifact,
+                args.unit_id,
+                repo=args.repo,
+                base_ref=args.base_ref,
+                writer_return=_load_writer_return_arg(args),
+                max_writer_tool_calls=args.max_writer_tool_calls,
+                max_writer_output_bytes=args.max_writer_output_bytes,
+                max_handoffs=args.max_handoffs,
+                telemetry_tool_call_count=args.telemetry_tool_call_count,
+                validation_timeout_seconds=args.validation_timeout_seconds,
+            )
+            gate = payload.get("gate") if isinstance(payload, Mapping) else {}
+            exit_code = 0 if isinstance(gate, Mapping) and gate.get("status") == "passed" else 1
         else:
             print("swarm: work-units: missing command", file=sys.stderr)
             return 1
@@ -1088,13 +1118,15 @@ def cmd_work_units(args: argparse.Namespace) -> int:
         elif isinstance(payload, dict) and "batches" in payload:
             for idx, batch in enumerate(payload["batches"], 1):
                 print(f"batch {idx}: {', '.join(batch)}")
+        elif isinstance(payload, dict) and payload.get("schema_version") == "post_writer_report.v1":
+            print(format_post_writer_report(payload))
         else:
             point = payload.get("resume_point") if isinstance(payload, dict) else None
             if point:
                 print(f"resume_point: {point['work_unit_id']} status={point['status']}")
             else:
                 print("resume_point: complete")
-    return 0
+    return exit_code
 
 
 def cmd_worktrees(args: argparse.Namespace) -> int:
@@ -1368,6 +1400,20 @@ def _build_parser() -> argparse.ArgumentParser:
     p = work_units_sub.add_parser("resume-point")
     p.add_argument("artifact")
     p.add_argument("--state-json-file")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_work_units)
+    p = work_units_sub.add_parser("post-writer")
+    p.add_argument("artifact")
+    p.add_argument("--unit-id", required=True)
+    p.add_argument("--repo", default=".")
+    p.add_argument("--base-ref", default="HEAD")
+    p.add_argument("--writer-return-file")
+    p.add_argument("--writer-return")
+    p.add_argument("--max-writer-tool-calls", type=int, default=60)
+    p.add_argument("--max-writer-output-bytes", type=int, default=60_000)
+    p.add_argument("--max-handoffs", type=int, default=1)
+    p.add_argument("--telemetry-tool-call-count", type=int)
+    p.add_argument("--validation-timeout-seconds", type=int)
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_work_units)
 

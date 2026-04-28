@@ -97,17 +97,21 @@ tool calls before handing off.
 
 ## Verification Gate (required before `DONE` / `DONE_WITH_CONCERNS`)
 
-Paste each item verbatim into your notes. Paraphrased results are not
-acceptable. If any step cannot run, the correct status is `BLOCKED` or
-`NEEDS_CONTEXT` — never `DONE` with failing tests.
+Run the focused checks needed to know the work is complete, but do not spend
+your output budget pasting deterministic evidence. After you return, the
+coordinator runs the post-writer report helper in your worktree. That helper
+computes changed files, diff stat, blocked-file violations, validation command
+results, test summary, and budget status before spec-review starts.
 
-1. Full test suite — exact command + exact output (pass/fail counts, failures).
-2. Linters / type-checkers — exact command + exact output.
-3. Anti-pattern grep — for each anti-pattern the analysis flagged, paste the
-   command + output. Zero hits required.
-4. Self-re-read — read every changed file end-to-end once more. Confirm no
-   invented APIs, no unverified paths, no `[UNVERIFIED]` markers remaining in
-   committed code, no TODOs outside the work breakdown.
+If a required check fails and you cannot fix it within scope, the correct
+status is `BLOCKED` or `NEEDS_CONTEXT` — never `DONE` with known failing tests.
+
+Before `DONE` / `DONE_WITH_CONCERNS`:
+
+1. Run the relevant tests, linters, type-checkers, and anti-pattern greps from
+   the work-unit contract or upstream analysis.
+2. Fix failures that are in scope.
+3. Include the final Writer Budget JSON block exactly as specified below.
 
 ## Status values
 
@@ -131,17 +135,7 @@ acceptable. If any step cannot run, the correct status is `BLOCKED` or
 - <path>: <what changed and why>
 
 ### Evidence
-#### Tests Run
-<exact command + exact output>
-
-#### Linters / Type-checkers
-<exact command + exact output>
-
-#### Anti-pattern Greps
-<for each anti-pattern from analysis: command + output>
-
-#### Self-re-read
-<one line per changed file confirming no inventions / unverified markers / unplanned TODOs>
+- <command>: PASS | FAIL | NOT_RUN — <brief reason if not PASS>
 
 ### Deviations from Plan
 <anything not in the work breakdown that was necessary — explain why>

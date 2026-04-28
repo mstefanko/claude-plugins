@@ -549,11 +549,14 @@ bin/swarm-telemetry purge --older-than Nd [--ledger <ledger>] [--dry-run]
 <!-- BEGIN: generated-by swarm_do.telemetry.gen readme-section -->
 | Subcommand | What it does |
 |------------|--------------|
+| `contract-usage` | Role-contract violation report from observations.jsonl × permissions/<role>.json. |
 | `dump` | Pretty-print a JSONL ledger as a JSON array. |
+| `experiment-report` | Join runs, observations, and run_events for controlled dogfood scorecards. |
 | `join-outcomes` | Correlate findings with post-merge maintainer actions. |
 | `purge` | Purge rows older than retention window |
 | `query` | Execute SQL against all ledgers loaded into sqlite3 :memory:. |
 | `report` | Stratified markdown report from runs.jsonl. |
+| `roundtrips` | Per-unit writer/review iteration counts derived from runs.jsonl. |
 | `sample-for-adjudication` |  Stratified random sample of non-adjudicated findings. |
 | `validate` | Validate every ledger row against its JSON schema. |
 <!-- END: generated-by swarm_do.telemetry.gen readme-section -->

@@ -88,6 +88,39 @@ class PipelineCatalogTests(unittest.TestCase):
         )
         self.assertEqual(get_lens("state-data").variant_name, "explorer-c")
 
+    def test_research_lenses_use_claim_first_contract(self) -> None:
+        removed_sections = {"Existing Patterns", "Constraints", "Prior Solutions", "Raw Notes"}
+        expected_sections = ("Research Claims", "Gaps / Follow-up Reads", "Relevant Files", "Sources")
+
+        for lens_id in ("prior-art-search", "codebase-map", "risk-discovery"):
+            with self.subTest(lens_id=lens_id):
+                contract = get_lens(lens_id).output_contract
+                self.assertEqual(contract.sections, expected_sections)
+                self.assertTrue(removed_sections.isdisjoint(contract.sections))
+                self.assertIn("claim-first", contract.schema_rule)
+                self.assertIn("R-### IDs", contract.schema_rule)
+                self.assertIn("[VERIFIED]", contract.allowed_tags["Research Claims"])
+                self.assertIn("[UNVERIFIED]", contract.allowed_tags["Research Claims"])
+                self.assertIn("[required]", contract.allowed_tags["Gaps / Follow-up Reads"])
+
+    def test_research_variants_bias_claims_not_removed_sections(self) -> None:
+        forbidden_section_requirements = (
+            "Make `### Relevant Files`",
+            "Make `### Constraints`",
+            "Make `### Prior Solutions`",
+            "In `### Existing Patterns`",
+        )
+
+        for lens_id in ("prior-art-search", "codebase-map", "risk-discovery"):
+            with self.subTest(lens_id=lens_id):
+                variant_file = get_lens(lens_id).variant_file
+                self.assertIsNotNone(variant_file)
+                text = variant_file.read_text(encoding="utf-8")
+                self.assertIn("claim-first", text)
+                self.assertIn("### Research Claims", text)
+                for forbidden in forbidden_section_requirements:
+                    self.assertNotIn(forbidden, text)
+
     def test_phase3_lenses_compile_to_role_specific_prompt_variants(self) -> None:
         research = compile_prompt_variant_fan_out(
             "agent-research",

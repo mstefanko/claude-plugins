@@ -57,9 +57,47 @@ Apply this at every step: initial file discovery, follow-on reads after grep res
 
 ## Grounding Rules
 
+- Publish findings as claim records under `### Research Claims`.
 - Cite file:line for every code claim. No writing from memory.
 - Mark inferences [UNVERIFIED]. State "I don't know" rather than guessing.
 - Read the actual files you cite — not just search results.
+- Give every claim a stable `R-###` ID so analysis can cite it directly.
+
+## Analysis-Ready Claim Contract
+
+Every code claim that analysis might rely on must be a Markdown claim record.
+Use prose only for orientation, never as the only evidence carrier.
+
+Each claim record must include:
+
+- stable ID: `R-###`
+- bracketed need: `[required]`, `[helpful]`, or `[not_needed]`
+- verification marker: `[VERIFIED]` or `[UNVERIFIED]`
+- `analysis_need: required | helpful | not_needed`
+- `Evidence:` with file:line anchors for verified claims, or `Follow-up:` with
+  the exact read still needed for unverified claims
+- short `Notes:` when useful; do not paste large source windows
+
+Use `analysis_need: required` only for claims the analysis agent must have to
+choose or reject an implementation approach. Use `helpful` for context that may
+shape risk or tests. Use `not_needed` for orientation that belongs in the notes
+but should not block analysis.
+
+Example:
+
+```markdown
+- R-001 [required] [VERIFIED] The pipeline catalog defines the research prompt
+  lens output contract.
+  analysis_need: required
+  Evidence: py/swarm_do/pipeline/catalog.py:156
+  Notes: Analysis can cite this claim directly instead of reopening the file.
+
+- R-002 [helpful] [UNVERIFIED] Generated role files may drift after role spec
+  changes.
+  analysis_need: helpful
+  Follow-up: run `PYTHONPATH=py python3 -m swarm_do.roles gen --check`
+  Notes: This is validation context, not source evidence.
+```
 
 ## Fan-Out Decision
 
@@ -111,7 +149,7 @@ For quicker tasks. Spawn sub-researchers as background Tasks, synthesize yoursel
 # NOTE: Custom subagent_type="agent-research" has a known bug (GitHub #20931).
 # Use general-purpose with role file read — fully equivalent since agent files are self-contained.
 Task(subagent_type="general-purpose",
-     prompt="Read ~/.claude/agents/agent-research.md for your role. Then: Research ONLY these files: [list]. Scope: <cluster A>. Output a compact report (file:line citations, no opinions). Do not stray into other modules.",
+     prompt="Read ~/.claude/agents/agent-research.md for your role. Then: Research ONLY these files: [list]. Scope: <cluster A>. Output Research Claims records (R-### IDs, file:line citations, no opinions). Do not stray into other modules.",
      run_in_background=True)
 Task(subagent_type="general-purpose",
      prompt="Read ~/.claude/agents/agent-research.md for your role. Then: Research ONLY these files: [list]. Scope: <cluster B>. ...",
@@ -136,24 +174,27 @@ Update issue notes with `bd update <id> --notes "..."`:
 ```
 ## Research Findings
 
+### Research Claims
+- R-001 [required] [VERIFIED] <one factual code claim analysis may cite>
+  analysis_need: required
+  Evidence: <path>:<line>
+  Notes: <short context; no pasted source window>
+
+- R-002 [helpful] [UNVERIFIED] <claim that still needs a targeted read>
+  analysis_need: helpful
+  Follow-up: <specific file, command, or source to read>
+  Notes: <why it may matter>
+
+### Gaps / Follow-up Reads
+- <claim ID or new R-###>: <specific missing read or input needed>
+
 ### Relevant Files
-- <path>: <one-line summary of what's relevant>
-
-### Existing Patterns
-<what already exists that the writer should follow>
-
-### Constraints
-<what must not break, what's depended on>
-
-### Prior Solutions
-<what claude-mem or prior work shows about this area>
-
-### Raw Notes
-<anything else worth knowing — observations, not recommendations>
+- <path>: <one-line summary of what's relevant; compact index only>
 
 ### Sources
-- <file:line or URL> — <what it confirmed>
-(Every finding above must map to an entry here. If you can't source it, remove it.)
+- <file:line, URL, memory query, or prior issue> — <what it confirmed>
+(Every verified claim must map to evidence here or inline. If you can't source
+it, mark it [UNVERIFIED] with Follow-up or remove it.)
 
 ## Status: COMPLETE | NEEDS_INPUT
 ```

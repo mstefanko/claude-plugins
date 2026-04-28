@@ -32,6 +32,27 @@ Read your assigned issue: `bd show <id>`. Find all sub-research issue IDs from t
 - **Gaps** — something no sub-researcher covered but that analysis will need (infer from what clarify will ask)
 - **Cross-cutting constraints** — something that must not break regardless of which module is changed
 
+## Analysis-Ready Merge Claim Contract
+
+Publish synthesized findings as claim records under `### Research Claims`.
+Every important synthesis point, conflict, and gap must have an `RM-###` ID so
+analysis can cite it directly.
+
+Each merged claim must include:
+
+- stable ID: `RM-###`
+- bracketed need: `[required]`, `[helpful]`, or `[not_needed]`
+- verification marker: `[VERIFIED]` or `[UNVERIFIED]`
+- `analysis_need: required | helpful | not_needed`
+- `Sources:` with source claim provenance like `<sub-issue-id>/R-###`
+- `Evidence:` only when you directly read source to resolve an `[UNVERIFIED]`
+  sub-research item
+- `Follow-up:` for unresolved conflicts or gaps
+
+Do not turn conflicts or gaps into prose-only sections. Represent them as
+claim records that analysis can cite, with a short note explaining the
+conflict or missing scope.
+
 ## Process
 
 1. Read the issue: `bd show <id>`
@@ -50,30 +71,28 @@ Update issue notes with `bd update <id> --notes "..."`:
 ```
 ## Research Findings (Synthesized from <N> sub-research reports)
 
-### Cross-Cutting Concerns
-<what spans multiple modules — shared deps, common patterns, interface contracts>
-<this section is your primary contribution — make it specific>
+### Research Claims
+- RM-001 [required] [VERIFIED] <cross-cutting finding analysis may cite>
+  analysis_need: required
+  Sources: <sub-issue-id>/R-001, <sub-issue-id>/R-004
+  Notes: <what only becomes clear across reports>
 
-### Conflicting Findings
-<where sub-researchers made different claims — cite sub-research IDs>
-<if none: "No conflicts found">
+- RM-002 [required] [UNVERIFIED] <conflict or gap analysis must resolve>
+  analysis_need: required
+  Sources: <sub-issue-id>/R-002, <sub-issue-id>/R-005
+  Follow-up: <specific read, issue, or human input needed>
+  Notes: <why the source claims conflict or what no sub-researcher covered>
 
-### Gaps
-<what no sub-researcher covered but analysis will need>
-<infer from: what would clarify ask that the research notes can't answer?>
+### Gaps / Follow-up Reads
+- <RM-###>: <specific unresolved conflict, missing read, or input needed>
 
 ### Relevant Files (consolidated)
 - <path>: <what's relevant — merge duplicates from sub-reports>
 
-### Existing Patterns
-<unified view of patterns the writer should follow — synthesize, don't repeat>
-
-### Constraints
-<what must not break — consolidated from all sub-research>
-
 ### Sources
-- Sub-research <id>: <what it contributed>
-(Don't re-cite every file:line — cite the sub-research issues. Add file:line only for items you read directly for UNVERIFIED resolution.)
+- <sub-issue-id>/R-### — <what it contributed>
+(Don't re-cite every file:line from sub-research. Add file:line only for
+items you read directly for UNVERIFIED resolution.)
 
 ## Status: COMPLETE | NEEDS_INPUT
 ```

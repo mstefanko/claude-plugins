@@ -94,7 +94,15 @@ def _build_parser() -> argparse.ArgumentParser:
     report_parser.add_argument("--role", dest="role", default=None)
     report_parser.add_argument(
         "--bucket", dest="bucket", default="role",
-        choices=["role", "complexity", "phase_kind", "risk_tag"],
+        choices=[
+            "role",
+            "complexity",
+            "phase_kind",
+            "risk_tag",
+            "variant",
+            "decompose_complexity",
+            "decompose_source",
+        ],
     )
 
     sfa_parser = subparsers.add_parser(
@@ -118,6 +126,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
     from .subcommands import contract_usage as _contract_cmd
     _contract_cmd.add_subparser(subparsers)
+
+    from .subcommands import experiment_report as _experiment_report_cmd
+    _experiment_report_cmd.add_subparser(subparsers)
 
     return parser
 
@@ -211,6 +222,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if ns.subcommand == "contract-usage":
         from .subcommands import contract_usage as _cu_cmd
         return _cu_cmd.run(ns)
+    if ns.subcommand == "experiment-report":
+        from .subcommands import experiment_report as _er_cmd
+        return _er_cmd.run(ns)
 
     parser.error(f"unknown subcommand: {ns.subcommand}")
     return 2  # unreachable; parser.error raises SystemExit

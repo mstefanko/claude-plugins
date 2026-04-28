@@ -53,9 +53,9 @@ def run(args: argparse.Namespace) -> int:
     filter_role: str = args.role or ""
     bucket: str = args.bucket or "role"
 
-    if bucket not in ("role", "complexity", "phase_kind", "risk_tag", "decompose_complexity", "decompose_source"):
+    if bucket not in ("role", "complexity", "phase_kind", "risk_tag", "variant", "decompose_complexity", "decompose_source"):
         print(
-            f"swarm-telemetry: report: --bucket must be one of: role complexity phase_kind risk_tag decompose_complexity decompose_source",
+            f"swarm-telemetry: report: --bucket must be one of: role complexity phase_kind risk_tag variant decompose_complexity decompose_source",
             file=sys.stderr,
         )
         return 1
@@ -126,6 +126,8 @@ def run(args: argparse.Namespace) -> int:
             if isinstance(tags, list) and len(tags) > 0:
                 return list(tags)
             return ["(untagged)"]
+        if bucket == "variant":
+            return [row.get("variant") or "(none)"]
         if bucket == "decompose_complexity":
             return [row.get("decompose_complexity") or "(none)"]
         if bucket == "decompose_source":

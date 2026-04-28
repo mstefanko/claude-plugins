@@ -92,6 +92,22 @@ The Phase 7 `--prepare --continue` helper is opt-in only and remains governed
 by this scorecard; keep recommending the two-step gate until the following
 comparisons are recorded with real dogfood data:
 
+A comparison counts as recorded only when it has a committed batch manifest
+under `docs/eval-batches/` or an equivalent linked evidence artifact. The
+manifest must list the phase ids, repo, Beads issue, phase kind, complexity,
+risk tags, base SHA, `SWARM_VARIANT` labels, excluded phases, and manual-only
+safety fields such as operator interventions, manual plan-review minutes, and
+missed docs fixes. Paired arms must run from isolated worktrees or clones at the
+same base SHA; otherwise record the result as dogfood evidence, not a
+controlled comparison.
+
+Before the first batch, add or verify a reproducible report path that joins the
+needed data from `runs.jsonl`, `observations.jsonl`, and `run_events.jsonl`.
+The report must cover repeated reads, first-test position, cache hit ratio,
+`NEEDS_CONTEXT` / `NEEDS_RESEARCH`, prepare lifecycle events, stale rejects,
+doc-stage skip decisions, and variant labels. If phase kind or complexity is
+null for a comparison row, keep the decision at HOLD.
+
 | Experiment | Required comparison | Current decision |
 |---|---|---|
 | Current decomposition vs semantic decomposition | 10 phases; compare mean and p95 unit tool calls, wall-clock, tokens, cache hit ratio, repeated source reads, handoffs, `NEEDS_CONTEXT`, spec mismatches, review failures | Hold; no Phase 6 dogfood batch recorded yet |
@@ -109,6 +125,17 @@ bin/swarm-telemetry report --since 30d --bucket phase_kind
 bin/swarm-telemetry report --since 30d --bucket complexity
 bin/swarm-telemetry report --since 30d --bucket risk_tag
 ```
+
+Controlled-experiment reports must additionally include the variant and
+observation/run-event metrics above:
+
+```bash
+bin/swarm-telemetry experiment-report --batch <batch-id>
+bin/swarm-telemetry experiment-report --batch <batch-id> --format json
+```
+
+The generic SQL surface can also read `observations.jsonl` and
+`run_events.jsonl` alongside `runs.jsonl` for ad hoc follow-up queries.
 
 Compare pipelines by phase kind and complexity:
 

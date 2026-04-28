@@ -36,6 +36,14 @@ Env:
                                 discard agent-codex-review after this many seconds
   SWARM_STAGE_ID / SWARM_UNIT_ID
                                 optional telemetry grouping labels for observations
+  SWARM_VARIANT                 optional A/B grouping label for telemetry
+  SWARM_PHASE_KIND / SWARM_PHASE_COMPLEXITY / SWARM_RISK_TAGS
+                                optional phase tags for stratified reports;
+                                SWARM_RISK_TAGS is a comma-separated list
+  SWARM_DECOMPOSE_COMPLEXITY / SWARM_DECOMPOSE_SOURCE
+                                optional work-unit decomposition labels
+  SWARM_UNIT_RETRY_COUNT / SWARM_UNIT_HANDOFF_COUNT
+                                optional deterministic unit counters
 
 Examples:
   swarm-run --backend codex --issue bd-42
@@ -299,6 +307,8 @@ RUN_ID="$(PYTHONPATH="${_PY_ROOT}:${PYTHONPATH:-}" python3 -c 'from swarm_do.tel
 _swarm_telemetry_write() {
   local _final_rc="$1"
   local _ended _wall _hash _run_id _row _obs _tel_dir _base_sha _head_sha _diff_bytes _repo _metrics _stage_id _unit_id _variant
+  local _phase_kind _phase_complexity _risk_tags _decompose_complexity _decompose_source
+  local _writer_status _review_verdict _unit_retry_count _unit_handoff_count _unit_spec_review_verdict
   local _preset_name _pipeline_name _pipeline_hash _config_hash _context_py_root
 
   # Guard: CLAUDE_PLUGIN_DATA must be set and non-empty.
@@ -347,6 +357,16 @@ _swarm_telemetry_write() {
     _stage_id="${SWARM_STAGE_ID:-$ROLE}"
     _unit_id="${SWARM_UNIT_ID:-}"
     _variant="${SWARM_VARIANT:-}"
+    _phase_kind="${SWARM_PHASE_KIND:-}"
+    _phase_complexity="${SWARM_PHASE_COMPLEXITY:-}"
+    _risk_tags="${SWARM_RISK_TAGS:-}"
+    _decompose_complexity="${SWARM_DECOMPOSE_COMPLEXITY:-}"
+    _decompose_source="${SWARM_DECOMPOSE_SOURCE:-}"
+    _writer_status="${SWARM_WRITER_STATUS:-}"
+    _review_verdict="${SWARM_REVIEW_VERDICT:-}"
+    _unit_retry_count="${SWARM_UNIT_RETRY_COUNT:-}"
+    _unit_handoff_count="${SWARM_UNIT_HANDOFF_COUNT:-}"
+    _unit_spec_review_verdict="${SWARM_UNIT_SPEC_REVIEW_VERDICT:-}"
     if [[ -f "${OUT_FILE:-}" ]]; then
       if [[ -n "$_unit_id" ]]; then
         _metrics="$(PYTHONPATH="${_context_py_root}:${PYTHONPATH:-}" python3 -m swarm_do.telemetry.run_observations "$OUT_FILE" --role "$ROLE" --stage-id "$_stage_id" --unit-id "$_unit_id" 2>/dev/null || true)"
@@ -386,6 +406,17 @@ _swarm_telemetry_write() {
       --argjson wall     "$_wall" \
       --arg role         "$ROLE" \
       --arg issue_id     "$ISSUE" \
+      --arg unit_id      "$_unit_id" \
+      --arg phase_kind   "$_phase_kind" \
+      --arg phase_complexity "$_phase_complexity" \
+      --arg risk_tags    "$_risk_tags" \
+      --arg decompose_complexity "$_decompose_complexity" \
+      --arg decompose_source "$_decompose_source" \
+      --arg writer_status "$_writer_status" \
+      --arg review_verdict "$_review_verdict" \
+      --arg unit_retry_count "$_unit_retry_count" \
+      --arg unit_handoff_count "$_unit_handoff_count" \
+      --arg unit_spec_review_verdict "$_unit_spec_review_verdict" \
       --argjson preset_name "$(if [[ -n "$_preset_name" ]]; then printf '%s' "$_preset_name" | jq -Rs .; else echo "null"; fi)" \
       --arg pipeline_name "${_pipeline_name:-default}" \
       --argjson pipeline_hash "$(if [[ -n "$_pipeline_hash" ]]; then printf '"%s"' "$_pipeline_hash"; else echo "null"; fi)" \
@@ -395,7 +426,12 @@ _swarm_telemetry_write() {
       --argjson diff_size_bytes "$(if [[ "$_diff_bytes" =~ ^[0-9]+$ ]]; then printf '%s' "$_diff_bytes"; else echo "null"; fi)" \
       --argjson variant "$(if [[ -n "$_variant" ]]; then printf '%s' "$_variant" | jq -Rs .; else echo "null"; fi)" \
       --argjson metrics "$_metrics" \
-      '{
+      'def maybe_string($s): if $s == "" then null else $s end;
+       def maybe_int($s): if ($s | test("^[0-9]+$")) then ($s | tonumber) else null end;
+       def maybe_tags($s): if $s == "" then null else ($s | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))) end;
+       def observed_tool_calls:
+         if (($metrics.structured_event_count // 0) > 0) then ($metrics.tool_call_count // null) else null end;
+       {
         run_id:             $run_id,
         timestamp_start:    $ts_start,
         timestamp_end:      $ts_end,
@@ -405,9 +441,9 @@ _swarm_telemetry_write() {
         prompt_bundle_hash: $hash,
         config_hash:        $config_hash,
         role:               $role,
-        phase_kind:         null,
-        phase_complexity:   null,
-        risk_tags:          null,
+        phase_kind:         maybe_string($phase_kind),
+        phase_complexity:   maybe_string($phase_complexity),
+        risk_tags:          maybe_tags($risk_tags),
         issue_id:           $issue_id,
         preset_name:        $preset_name,
         pipeline_name:      $pipeline_name,
@@ -422,14 +458,23 @@ _swarm_telemetry_write() {
         output_tokens:      ($metrics.token_usage.output_tokens // null),
         estimated_cost_usd: null,
         wall_clock_seconds: $wall,
-        tool_call_count:    (if (($metrics.structured_event_count // 0) > 0) then ($metrics.tool_call_count // null) else null end),
+        tool_call_count:    observed_tool_calls,
+        work_unit_id:       ($metrics.unit_id // maybe_string($unit_id)),
+        decompose_complexity: maybe_string($decompose_complexity),
+        decompose_source:   maybe_string($decompose_source),
+        unit_tool_call_count: observed_tool_calls,
+        unit_output_bytes:  ($metrics.tool_output_bytes.total_tool_output_bytes // null),
+        unit_handoff_count: maybe_int($unit_handoff_count),
+        unit_retry_count:   maybe_int($unit_retry_count),
+        unit_needs_context_count: ($metrics.markers.needs_context_count // null),
+        unit_spec_review_verdict: maybe_string($unit_spec_review_verdict),
         cap_hit:            null,
         budget_breach:      null,
         schema_ok:          true,
         exit_code:          $exit_code,
         setting_source:     null,
-        writer_status:      null,
-        review_verdict:     null,
+        writer_status:      maybe_string($writer_status),
+        review_verdict:     maybe_string($review_verdict),
         last_429_at:        null
       }')"
     printf '%s\n' "$_row" >> "${_tel_dir}/runs.jsonl"

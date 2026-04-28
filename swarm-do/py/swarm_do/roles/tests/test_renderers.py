@@ -102,7 +102,36 @@ class TestToSharedMd(unittest.TestCase):
         rendered = to_agents_md(spec)
         self.assertIn("NEEDS_RESEARCH", rendered)
         self.assertIn("context_policy: source_allowed", rendered)
+        self.assertIn("lacks claim IDs", rendered)
+        self.assertIn("Do not silently mine legacy prose sections", rendered)
         self.assertIn("do not emit schema-strict `work_units.v2`", rendered)
+
+    def test_research_spec_renders_claim_contract(self) -> None:
+        spec = load(_find_role_specs_dir() / "agent-research.md")
+        rendered = to_agents_md(spec)
+
+        for expected in (
+            "R-001",
+            "analysis_need",
+            "[VERIFIED]",
+            "[UNVERIFIED]",
+            "Gaps / Follow-up Reads",
+            "Follow-up:",
+        ):
+            self.assertIn(expected, rendered)
+
+    def test_research_merge_spec_renders_claim_contract(self) -> None:
+        spec = load(_find_role_specs_dir() / "agent-research-merge.md")
+        rendered = to_agents_md(spec)
+
+        for expected in (
+            "RM-001",
+            "<sub-issue-id>/R-###",
+            "conflict or gap",
+            "claim records",
+            "Gaps / Follow-up Reads",
+        ):
+            self.assertIn(expected, rendered)
 
 
 if __name__ == "__main__":

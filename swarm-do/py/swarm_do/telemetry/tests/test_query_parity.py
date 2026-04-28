@@ -51,6 +51,20 @@ class QueryParityTests(unittest.TestCase):
             golden_exit_path=_GOLDEN / "join_runs_findings.exit",
         )
 
+    def test_join_observations_run_events(self) -> None:
+        run_parity(
+            "query",
+            [
+                "SELECT o.run_id, o.event_type AS obs_event, e.event_type AS run_event "
+                "FROM observations o JOIN run_events e ON e.run_id = o.run_id "
+                "ORDER BY o.run_id"
+            ],
+            FIXTURE,
+            test_case=self,
+            golden_stdout_path=_GOLDEN / "join_observations_run_events.stdout",
+            golden_exit_path=_GOLDEN / "join_observations_run_events.exit",
+        )
+
     def test_query_error(self) -> None:
         run_parity(
             "query",

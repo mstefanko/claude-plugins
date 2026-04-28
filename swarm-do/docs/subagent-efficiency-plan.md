@@ -130,6 +130,16 @@ Implementation shape:
   another model observer.
 - Extend `observations.jsonl` or add a sidecar summary with tool category,
   operation, file paths, and work-unit id.
+- Add a reproducible experiment report path before dogfood runs begin. Either
+  extend `swarm-telemetry query/report` to expose `observations.jsonl` and
+  `run_events.jsonl`, or add a narrow `swarm-telemetry experiment-report`
+  command that joins `runs`, `observations`, and `run_events`.
+- Populate the optional `runs.v2` unit fields from the observation payload where
+  possible: `work_unit_id`, `unit_tool_call_count`, `unit_output_bytes`,
+  `unit_handoff_count`, and `unit_needs_context_count`.
+- Ensure phase tags are not silently null for experiment rows. Pull
+  `phase_kind`, `phase_complexity`, and `risk_tags` from the prepared
+  work-unit artifact, Beads issue metadata, or the batch manifest.
 - Update telemetry docs and fixtures so null token/tool values remain allowed
   where the backend cannot observe them.
 
@@ -139,6 +149,12 @@ Acceptance:
 - It can produce a baseline table for at least 10 real or fixture-backed phases.
 - It distinguishes repeated reads from first reads and `rg` source search from
   harmless `bd show` usage.
+- The report path can reproduce every scorecard metric in `docs/eval-recipes.md`
+  from fixture data, including repeated reads, first-test position, cache hit
+  ratio, prepare lifecycle events, and variant labels.
+- Top-level telemetry CLI surfaces accept the decomposition and variant buckets
+  needed by the scorecard, or the experiment report documents why those buckets
+  are owned by a separate subcommand.
 
 ### 2. Align Permissions with Role Contracts
 
@@ -269,12 +285,32 @@ Acceptance:
 
 ### 7. Run Controlled Experiments
 
+Do not start these runs until the reporting bridge above can reproduce the
+scorecard from fixture data. Real dogfood time is only useful if the rows answer
+the promotion question without manual reconstruction.
+
+Create one committed batch manifest per comparison round, such as
+`docs/eval-batches/prepare-gate-2026-04.md`, with:
+
+- the 10 phase ids, repo, Beads issue, phase kind, complexity, risk tags, and
+  base SHA
+- the exact experiment arms and `SWARM_VARIANT` labels used for each run
+- the selected worktree or clone path for each arm
+- excluded phases with reasons, so selection bias is visible
+- manual-only fields: operator interventions, manual plan-review minutes, missed
+  docs fixes, and any review/spec mismatch reason not captured in telemetry
+
+For paired arms, run each phase from isolated worktrees or clones at the same
+base SHA. If one arm mutates a repo before the other starts, the result is
+dogfood evidence, not a controlled comparison.
+
 Run these comparisons after instrumentation lands:
 
 - current decomposition vs semantic decomposition on 10 phases
 - prompt-only tightening vs decompose-only tightening
 - test-first vs implement-then-test for parser/CLI tasks
 - notes-only analysis vs source-allowed analysis on hard phases
+- downstream gating on prepared work-unit runs
 
 Metrics:
 
@@ -282,20 +318,28 @@ Metrics:
 - wall-clock time
 - input/output tokens and cache hit ratio
 - repeated source reads
+- first-test position and retry count
 - handoffs and `NEEDS_CONTEXT`
 - spec mismatches and review failures
+- prepare stale rejects and dispatch-start coverage
+- operator interventions and manual plan-review time
 - doc-stage skip rate
+- missed documentation fixes
 
 Decision rule:
 
 - Promote changes that lower tool calls or wall time without increasing
   `NEEDS_CONTEXT`, spec mismatch, or review failure rates.
+- Keep `HOLD` if any non-regressive safety metric is unknown, if phase tags are
+  null for comparison rows, or if paired runs did not start from the same base
+  SHA.
 - If source-allowed analysis materially reduces downstream failures on hard
   phases, keep it as an explicit escalation preset rather than the default.
 
 ## Priority Order
 
-1. Transcript/tool-call analyzer.
+1. Transcript/tool-call analyzer, telemetry field plumbing, and experiment
+   report bridge.
 2. Permission alignment and clarify fix.
 3. Analysis context policy and output cap.
 4. Semantic decomposition and dependency rules.

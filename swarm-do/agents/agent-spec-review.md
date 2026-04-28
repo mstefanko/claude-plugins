@@ -34,7 +34,12 @@ is agent-review's job.
    for `kind: bug`). Extract the work breakdown and acceptance criteria.
    For debug, treat `Fix location`, `Fix`, `Regression test`, `Defense-in-depth`,
    and `Blast radius` as the spec items.
-3. Read writer notes — changed files, verification gate evidence.
+3. Read the deterministic post-writer report first: unit contract,
+   acceptance matrix, changed files, blocked-file violations, validation
+   summary, test summary, and budget status. Then read writer notes for
+   implementation summary, deviations, retry context, and follow-up concerns.
+   Do not require writer-pasted command output when the post-writer report is
+   present.
 4. For each item in the upstream work breakdown:
    - Did the writer implement it? (cite `file:line`)
    - Does it match the specified approach? (cite `file:line`, compare to

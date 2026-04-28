@@ -155,14 +155,39 @@ ANALYSIS_CONTRACT = OutputContract(
 
 RESEARCH_CONTRACT = OutputContract(
     sections=(
+        "Research Claims",
+        "Gaps / Follow-up Reads",
         "Relevant Files",
-        "Existing Patterns",
-        "Constraints",
-        "Prior Solutions",
-        "Raw Notes",
         "Sources",
     ),
     allowed_tags={
+        "Research Claims": (
+            "[required]",
+            "[helpful]",
+            "[not_needed]",
+            "[VERIFIED]",
+            "[UNVERIFIED]",
+            "[ENTRY-POINT]",
+            "[CONFIG]",
+            "[HOT-PATH]",
+            "[TEST]",
+            "[FIXTURE]",
+            "[GENERATED]",
+            "[REUSE]",
+            "[ADAPT]",
+            "[REJECTED-EARLIER]",
+            "[NONE]",
+            "[REGRESSION-RISK]",
+            "[CONTRACT-CONSTRAINT]",
+            "[ENVIRONMENTAL]",
+            "[CULTURAL]",
+        ),
+        "Gaps / Follow-up Reads": (
+            "[required]",
+            "[helpful]",
+            "[not_needed]",
+            "[UNVERIFIED]",
+        ),
         "Relevant Files": (
             "[ENTRY-POINT]",
             "[CONFIG]",
@@ -171,21 +196,11 @@ RESEARCH_CONTRACT = OutputContract(
             "[FIXTURE]",
             "[GENERATED]",
         ),
-        "Prior Solutions": ("[REUSE]", "[ADAPT]", "[REJECTED-EARLIER]", "[NONE]"),
-        "Constraints": (
-            "[REGRESSION-RISK]",
-            "[CONTRACT-CONSTRAINT]",
-            "[ENVIRONMENTAL]",
-            "[CULTURAL]",
-        ),
-        "Raw Notes": (
-            "[REGRESSION-RISK]",
-            "[CONTRACT-CONSTRAINT]",
-            "[ENVIRONMENTAL]",
-            "[CULTURAL]",
-        ),
     },
-    schema_rule="Preserve the agent-research output schema, required sections, and COMPLETE | NEEDS_INPUT status vocabulary.",
+    schema_rule=(
+        "Preserve the agent-research claim-first output schema, R-### IDs, "
+        "analysis_need values, verification markers, and COMPLETE | NEEDS_INPUT status vocabulary."
+    ),
 )
 
 

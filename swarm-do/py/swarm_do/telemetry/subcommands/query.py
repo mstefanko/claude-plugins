@@ -28,7 +28,13 @@ _LEDGER_COLS: Dict[str, List[str]] = {
         "cached_input_tokens", "output_tokens", "estimated_cost_usd", "wall_clock_seconds",
         "tool_call_count", "cap_hit", "budget_breach", "schema_ok", "exit_code",
         "setting_source", "writer_status", "review_verdict", "last_429_at",
-        "risk_tags",
+        "risk_tags", "variant", "work_unit_id", "decompose_complexity",
+        "decompose_source", "unit_tool_call_count", "unit_output_bytes",
+        "unit_handoff_count", "unit_retry_count", "unit_needs_context_count",
+        "blocked_file_violation", "budget_breach_kind", "unit_spec_review_verdict",
+        "mem_prime_attempted", "mem_prime_axis", "mem_prime_obs_types",
+        "mem_prime_hit_count", "mem_prime_title_only", "mem_prime_tokens",
+        "mem_prime_skipped_reason",
     ],
     "findings": [
         "finding_id", "run_id", "timestamp", "role", "issue_id", "severity",
@@ -47,6 +53,20 @@ _LEDGER_COLS: Dict[str, List[str]] = {
         "finding_outcome_id", "finding_id", "observed_at", "maintainer_action",
         "followup_ref", "time_to_action_hours", "time_to_fix_hours",
         "recurrence_of", "schema_ok",
+    ],
+    "run_events": [
+        "run_id", "timestamp", "event_type", "bd_epic_id", "phase_id",
+        "work_unit_id", "child_bead_ids", "reason", "retry_count",
+        "handoff_count", "integration_branch_head", "details", "schema_ok",
+    ],
+    "observations": [
+        "ts", "run_id", "phase_id", "event_type", "tool", "file_paths",
+        "bead_ids", "diff_size_bytes", "source", "details", "schema_ok",
+    ],
+    "knowledge": [
+        "run_id", "timestamp", "phase_id", "file", "gotcha", "source",
+        "confidence", "adjudication_status", "regression_test_path",
+        "schema_ok",
     ],
 }
 

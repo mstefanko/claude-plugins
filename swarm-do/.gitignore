@@ -1,5 +1,6 @@
 # Local operator state.
 data/current-preset.txt
+data/active-run.json
 data/telemetry/
 data/runs/
 data/in-flight/
