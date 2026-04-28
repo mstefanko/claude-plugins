@@ -217,39 +217,69 @@ def _context_files(phase: ParsedPhase, files: list[str]) -> list[str]:
     return context[:8]
 
 
+_AC_HEADING_RE = re.compile(r"^(?:#{1,6}\s+|\*\*)?acceptance criteria", re.IGNORECASE)
+_NEXT_HEADING_RE = re.compile(r"^(?:#{1,6}\s+|\*\*)\S")
+
+
 def _acceptance_criteria(phase: ParsedPhase) -> list[str]:
-    lines = []
+    lines: list[str] = []
     capture = False
-    for line in phase.text.splitlines():
-        lower = line.lower().strip()
-        if lower.startswith("**acceptance criteria") or lower.startswith("acceptance criteria"):
-            capture = True
+    for raw in phase.text.splitlines():
+        stripped = raw.strip()
+        if not capture:
+            if _AC_HEADING_RE.match(stripped):
+                capture = True
             continue
-        if capture and line.startswith("### "):
+        if _NEXT_HEADING_RE.match(stripped) and not _AC_HEADING_RE.match(stripped):
             break
-        if capture and re.match(r"\s*[-*+]\s+", line):
-            lines.append(re.sub(r"^\s*[-*+]\s+", "", line).strip())
+        if re.match(r"\s*[-*+]\s+", raw):
+            lines.append(re.sub(r"^\s*[-*+]\s+", "", raw).strip())
     if lines:
         return lines
     return [f"Phase {phase.phase_id} objective is implemented for the allowed file scope."]
 
 
+_VC_HEADING_RE = re.compile(
+    r"^(?:#{1,6}\s+|\*\*)?(?:verification|validation)\s+commands?",
+    re.IGNORECASE,
+)
+_EXPECTED_HEADING_RE = re.compile(
+    r"^(?:#{1,6}\s+|\*\*)?expected\s+results?",
+    re.IGNORECASE,
+)
+
+
 def _validation_commands(phase: ParsedPhase) -> list[str]:
     commands: list[str] = []
     capture = False
+    in_fence = False
     for line in phase.text.splitlines():
         stripped = line.strip()
-        lower = stripped.lower()
-        if lower.startswith("**validation commands") or lower.startswith("validation commands"):
-            capture = True
+        if not capture:
+            if _VC_HEADING_RE.match(stripped):
+                capture = True
             continue
-        if capture and (lower.startswith("**expected results") or lower.startswith("expected results")):
+        # When inside a fenced block, capture the command lines verbatim;
+        # the fence delimiters themselves are skipped.
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            if stripped:
+                commands.append(stripped.strip("-*` "))
+            continue
+        # Outside a fence: stop on the next heading or Expected results.
+        if _EXPECTED_HEADING_RE.match(stripped):
             break
-        if capture and stripped.startswith("### "):
+        if _NEXT_HEADING_RE.match(stripped) and not _VC_HEADING_RE.match(stripped):
             break
-        if capture and stripped and not stripped.startswith("```"):
+        if stripped:
             commands.append(stripped.strip("-*` "))
-    return [command for command in commands if command and not command.lower().startswith("expected results")][:8]
+    return [
+        command
+        for command in commands
+        if command and not command.lower().startswith("expected results")
+    ][:8]
 
 
 def _risk_tags(phase: ParsedPhase) -> list[str]:

@@ -1,0 +1,203 @@
+{
+  "1": {
+    "bd_epic_id": null,
+    "plan_path": "tests/fixtures/decompose_golden_plan.md",
+    "schema_version": 2,
+    "work_units": [
+      {
+        "acceptance_criteria": [
+          "AC1 schema file exists.",
+          "AC2 prepared run shape persisted.",
+          "AC3 idempotent prepare invocation.",
+          "AC4 hash recorded in run.json."
+        ],
+        "allowed_files": [
+          "schemas/prepared_plan.schema.json"
+        ],
+        "beads_id": null,
+        "blocked_files": [],
+        "context_files": [
+          "py/swarm_do/pipeline/plan.py",
+          "py/swarm_do/pipeline/prepare.py",
+          "py/swarm_do/pipeline/run_state.py"
+        ],
+        "depends_on": [],
+        "expected_results": [
+          "commands exit 0 or produce the documented approval output"
+        ],
+        "failure_reason": null,
+        "goal": "Implement phase 1 slice 1/2 for schemas/prepared_plan.schema.json.",
+        "handoff_count": 0,
+        "handoff_notes": "",
+        "id": "unit-1-1",
+        "retry_count": 0,
+        "risk_tags": [
+          "schema"
+        ],
+        "status": "pending",
+        "title": "Prepared Run Artifact Contract (1/2)",
+        "validation_commands": [
+          "cd swarm-do && python3 -m unittest swarm_do.pipeline.tests.test_prepare_artifact -v",
+          "cd swarm-do && python3 -m unittest swarm_do.pipeline.tests.test_run_state -v"
+        ],
+        "worktree_branch": null
+      },
+      {
+        "acceptance_criteria": [
+          "AC1 schema file exists.",
+          "AC2 prepared run shape persisted.",
+          "AC3 idempotent prepare invocation.",
+          "AC4 hash recorded in run.json."
+        ],
+        "allowed_files": [
+          "py/swarm_do/pipeline/prepare.py",
+          "py/swarm_do/pipeline/run_state.py"
+        ],
+        "beads_id": null,
+        "blocked_files": [],
+        "context_files": [
+          "py/swarm_do/pipeline/plan.py",
+          "schemas/prepared_plan.schema.json"
+        ],
+        "depends_on": [
+          "unit-1-1"
+        ],
+        "expected_results": [
+          "commands exit 0 or produce the documented approval output"
+        ],
+        "failure_reason": null,
+        "goal": "Implement phase 1 slice 2/2 for py/swarm_do/pipeline/prepare.py, py/swarm_do/pipeline/run_state.py.",
+        "handoff_count": 0,
+        "handoff_notes": "",
+        "id": "unit-1-2",
+        "retry_count": 0,
+        "risk_tags": [
+          "schema"
+        ],
+        "status": "pending",
+        "title": "Prepared Run Artifact Contract (2/2)",
+        "validation_commands": [
+          "cd swarm-do && python3 -m unittest swarm_do.pipeline.tests.test_prepare_artifact -v",
+          "cd swarm-do && python3 -m unittest swarm_do.pipeline.tests.test_run_state -v"
+        ],
+        "worktree_branch": null
+      }
+    ]
+  },
+  "2": {
+    "bd_epic_id": null,
+    "plan_path": "tests/fixtures/decompose_golden_plan.md",
+    "schema_version": 2,
+    "work_units": [
+      {
+        "acceptance_criteria": [
+          "Phase 2 objective is implemented for the allowed file scope."
+        ],
+        "allowed_files": [
+          "docs/adr/0001-prepare-gate.md"
+        ],
+        "beads_id": null,
+        "blocked_files": [],
+        "context_files": [],
+        "depends_on": [],
+        "expected_results": [
+          "commands exit 0 or produce the documented approval output"
+        ],
+        "failure_reason": null,
+        "goal": "Implement phase 2: Simple docs touch.",
+        "handoff_count": 0,
+        "handoff_notes": "",
+        "id": "unit-2",
+        "retry_count": 0,
+        "risk_tags": [],
+        "status": "pending",
+        "title": "Simple docs touch",
+        "validation_commands": [],
+        "worktree_branch": null
+      }
+    ]
+  },
+  "3": {
+    "bd_epic_id": null,
+    "plan_path": "tests/fixtures/decompose_golden_plan.md",
+    "schema_version": 2,
+    "work_units": [
+      {
+        "acceptance_criteria": [
+          "Phase 3 objective is implemented for the allowed file scope."
+        ],
+        "allowed_files": [
+          "."
+        ],
+        "beads_id": null,
+        "blocked_files": [],
+        "context_files": [
+          "py/foo/bar.py",
+          "py/baz/qux.py"
+        ],
+        "depends_on": [],
+        "expected_results": [
+          "commands exit 0 or produce the documented approval output"
+        ],
+        "failure_reason": null,
+        "goal": "Implement phase 3: Narrative-only sweep.",
+        "handoff_count": 0,
+        "handoff_notes": "",
+        "id": "unit-3",
+        "retry_count": 0,
+        "risk_tags": [],
+        "status": "pending",
+        "title": "Narrative-only sweep",
+        "validation_commands": [],
+        "worktree_branch": null
+      }
+    ]
+  },
+  "4": {
+    "bd_epic_id": null,
+    "plan_path": "tests/fixtures/decompose_golden_plan.md",
+    "schema_version": 2,
+    "work_units": [
+      {
+        "acceptance_criteria": [
+          "AC1 every file gets a doctring.",
+          "AC2 mypy clean."
+        ],
+        "allowed_files": [
+          "py/swarm_do/pipeline/a.py",
+          "py/swarm_do/pipeline/b.py",
+          "py/swarm_do/pipeline/c.py",
+          "py/swarm_do/pipeline/d.py",
+          "py/swarm_do/pipeline/e.py",
+          "py/swarm_do/pipeline/f.py",
+          "py/swarm_do/pipeline/g.py",
+          "py/swarm_do/pipeline/h.py",
+          "py/swarm_do/pipeline/i.py",
+          "py/swarm_do/pipeline/j.py",
+          "py/swarm_do/pipeline/k.py"
+        ],
+        "beads_id": null,
+        "blocked_files": [],
+        "context_files": [],
+        "depends_on": [],
+        "expected_results": [
+          "commands exit 0 or produce the documented approval output"
+        ],
+        "failure_reason": null,
+        "goal": "Implement phase 4: Big table phase.",
+        "handoff_count": 0,
+        "handoff_notes": "",
+        "id": "unit-4",
+        "retry_count": 0,
+        "risk_tags": [],
+        "status": "pending",
+        "title": "Big table phase",
+        "validation_commands": [
+          "rg -n \"TODO\" docs/swarmdaddy-prepare-gate-plan.md || true",
+          "python3 -m mypy py/swarm_do/pipeline"
+        ],
+        "worktree_branch": null
+      }
+    ]
+  }
+}

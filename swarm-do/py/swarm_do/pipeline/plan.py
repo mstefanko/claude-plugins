@@ -33,9 +33,34 @@ BACKTICK_RE = re.compile(r"`([^`\n]+)`")
 PATH_TOKEN_RE = re.compile(
     r"(?<![\w.-])([A-Za-z0-9_./-]+(?:\.[A-Za-z0-9]+|/[A-Za-z0-9_./-]+))(?![\w.-])"
 )
-FILE_SECTION_RE = re.compile(r"^\s{0,3}(?:#{1,6}\s*)?(?:file targets|files affected|files)\b", re.IGNORECASE)
+FILE_SECTION_RE = re.compile(
+    r"^\s{0,3}(?:#{1,6}\s*)?(?:\*\*)?(?:file targets|files affected|files to create(?:\s*/\s*modify)?|files)\b",
+    re.IGNORECASE,
+)
+HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+\S")
 FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
 BULLET_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+", re.MULTILINE)
+KNOWN_TOP_LEVEL_DIRS = {
+    "py",
+    "swarm-do",
+    "bin",
+    "docs",
+    "schemas",
+    "commands",
+    "skills",
+    "permissions",
+    "role-specs",
+    "agents",
+    "tests",
+    "roles",
+    "rubrics",
+    "presets",
+    "pipelines",
+    "hooks",
+}
+PATH_EXTENSION_RE = re.compile(
+    r"\.(py|md|json|jsonl|yaml|yml|toml|sh|txt|ts|tsx|js|jsx|css|html)$"
+)
 ENGINE_KEYWORDS = {
     "engine",
     "pipeline",
@@ -116,7 +141,7 @@ def inspect_phase(phase: ParsedPhase, thresholds: Mapping[str, Any] | None = Non
     if thresholds:
         values.update({key: value for key, value in thresholds.items() if value is not None})
 
-    files = _dedupe(phase.explicit_files or phase.referenced_files)
+    files = _dedupe(phase.explicit_files)
     estimated_files = len(files) if files else None
     if phase.complexity in COMPLEXITIES:
         complexity = phase.complexity
@@ -240,27 +265,56 @@ def _extract_tags(text: str) -> dict[str, str]:
 
 
 def _strip_tags(title: str) -> str:
-    return TAG_RE.sub("", title).strip(" -")
+    """Strip TAG_RE complexity markers and trim leading/trailing punctuation.
+
+    Handles em-dash, en-dash, ASCII dash, colon, and bold markers (``*``)
+    that surround the title body. Also collapses trailing ``*+`` runs left
+    behind when ``TAG_RE`` chews the parenthesized body out of ``*(...)*``.
+    """
+
+    without_tag = TAG_RE.sub("", title)
+    leading_stripped = re.sub(r"^[\s\-—–:*]+", "", without_tag)
+    trailing_stripped = re.sub(r"\s*\*+\s*$", "", leading_stripped)
+    trailing_stripped = re.sub(r"[\s\-—–:*]+$", "", trailing_stripped)
+    return trailing_stripped.strip()
 
 
 def _extract_explicit_files(lines: list[str]) -> list[str]:
+    """Extract explicit file paths from File Targets / Files-affected sections.
+
+    Reads the section body until the next markdown heading (``#``..``######``)
+    instead of imposing a fixed line cap, so large File-Targets tables are
+    captured in full.
+    """
+
     paths: list[str] = []
-    for idx, line in enumerate(lines):
+    idx = 0
+    total = len(lines)
+    while idx < total:
+        line = lines[idx]
         if not FILE_SECTION_RE.match(line):
+            idx += 1
             continue
-        for candidate in lines[idx + 1 : idx + 80]:
-            if candidate.startswith("### "):
-                break
-            if not candidate.strip() and paths:
+        cursor = idx + 1
+        while cursor < total:
+            candidate = lines[cursor]
+            if HEADING_RE.match(candidate):
                 break
             paths.extend(_paths_from_text(candidate))
+            cursor += 1
+        idx = cursor
     return _dedupe(paths)
 
 
 def _extract_referenced_files(text: str) -> list[str]:
+    """Collect path-like tokens from inline backticks only.
+
+    Code fences are reference-only and must not contribute to file
+    extraction; they routinely contain command arguments (e.g. ``rg``
+    patterns) that look like paths but are not the phase's own scope.
+    """
+
     paths: list[str] = []
-    for fence in FENCE_RE.findall(text):
-        paths.extend(_paths_from_text(fence))
     for match in BACKTICK_RE.finditer(text):
         paths.extend(_paths_from_text(match.group(1)))
     return _dedupe(paths)
@@ -283,8 +337,11 @@ def _looks_like_path(value: str) -> bool:
     if value.startswith("/"):
         return False
     if "/" in value:
-        return True
-    return bool(re.search(r"\.(py|md|json|jsonl|yaml|yml|toml|sh|txt|ts|tsx|js|jsx|css|html)$", value))
+        head = value.split("/", 1)[0]
+        if head in KNOWN_TOP_LEVEL_DIRS:
+            return True
+        return bool(PATH_EXTENSION_RE.search(value))
+    return bool(PATH_EXTENSION_RE.search(value))
 
 
 def _infer_complexity(phase: ParsedPhase, files: list[str], thresholds: Mapping[str, Any]) -> tuple[str, str]:
