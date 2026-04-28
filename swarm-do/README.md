@@ -366,6 +366,8 @@ bin/swarm run-state clear
 
 bin/swarm plan inspect <plan-path> [--phase <id>] [--json] [--no-write]
 bin/swarm plan decompose <plan-path> --phase <id> [--write <path>] [--bd-epic-id <id>] [--allow-rejected] [--json]
+bin/swarm plan accept <run-id> [--accepted-by <name>] [--json]
+bin/swarm plan reject <run-id> [--reason <text>] [--json]
 
 bin/swarm work-units lint <artifact>
 bin/swarm work-units migrate <artifact> [--in-place]
