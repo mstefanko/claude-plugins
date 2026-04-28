@@ -332,12 +332,16 @@ bin/swarm plan prepare docs/swarmdaddy-prepare-gate-plan.md --dry-run --json
 |---|---|
 | `role-specs/agent-plan-review.md` | CREATE |
 | `role-specs/agent-plan-normalizer.md` | CREATE |
+| `role-specs/agent-analysis.md` | EXTEND (notes-only default contract) |
 | `agents/agent-plan-review.md` | GENERATED via `roles gen --write` |
 | `agents/agent-plan-normalizer.md` | GENERATED via `roles gen --write` |
+| `agents/agent-analysis.md` | GENERATED via `roles gen --write` |
 | `roles/agent-plan-review/shared.md` | GENERATED |
 | `roles/agent-plan-normalizer/shared.md` | GENERATED |
 | `permissions/plan-review.json` | CREATE |
 | `permissions/plan-normalizer.json` | CREATE |
+| `permissions/{analysis,debug,analysis-judge,research-merge,docs}.json` | CREATE |
+| `permissions/clarify.json` | MODIFY (remove source-read/search permissions) |
 | `py/swarm_do/pipeline/permissions.py` | EXTEND (`ROLE_NAMES`) |
 | `schemas/permissions.schema.json` | EXTEND (role enum) |
 | `py/swarm_do/pipeline/tests/test_permissions.py` | EXTEND (drift guard test) |
@@ -373,16 +377,42 @@ bin/swarm plan prepare docs/swarmdaddy-prepare-gate-plan.md --dry-run --json
    artifact.review_iteration_count = i + 1
    ```
 
-4. **Three-place lockstep** for new roles:
+4. **Permission alignment + three-place lockstep** for Phase 3 roles and
+   existing missing role contracts. This folds in the high-priority permission
+   slice from `docs/subagent-efficiency-plan.md` before the model-backed
+   prepare roles start running.
    - Add `plan-review`, `plan-normalizer` to `ROLE_NAMES` in
      `permissions.py:15`.
    - Add both to the `role` enum in `schemas/permissions.schema.json`.
    - Add fragment files `permissions/plan-review.json`, `permissions/plan-normalizer.json`.
-   - Add a regression test that fails when these three drift (Phase 0 §E
-     showed `clean-review`/`implementation-advisor` are already drifted —
-     do not propagate that bug).
+   - Also register and add fragments for existing role specs that currently
+     have no permission coverage: `analysis`, `debug`, `analysis-judge`,
+     `research-merge`, and `docs`.
+   - Fix `permissions/clarify.json` so `agent-clarify` cannot receive source
+     file access or broad search (`Read`, `Grep`, `Glob`, or `Bash(rg:*)`);
+     it may read Beads notes via `bd show`.
+   - Add regression tests that fail when `ROLE_NAMES`, the permissions schema
+     enum, and `permissions/<role>.json` fragments drift. The tests must also
+     fail if a fragment allows a tool the role spec explicitly forbids.
 
-5. **Regenerate role outputs**:
+5. **Analysis notes-only by default**. This folds in the companion
+   `agent-analysis` context-policy cleanup from
+   `docs/subagent-efficiency-plan.md`.
+   - Revise `role-specs/agent-analysis.md` so the grounding rules no longer
+     contradict the trust-research rule: cite research claim IDs and their
+     file:line evidence; read source only for `[UNVERIFIED]` gaps or an
+     explicit `context_policy: source_allowed` stage.
+   - Add `NEEDS_RESEARCH` as the status when required evidence is absent, with
+     exact file/topic scopes requested from research.
+   - Cap normal analysis output at 800 words and cap assumptions, risks, and
+     tests at five each unless returning `NEEDS_RESEARCH`.
+   - Remove schema-strict `work_units.v2` from normal analysis output when
+     prepare/decompose is active. `agent-decompose` and deterministic helpers
+     own work-unit artifacts in that path.
+   - Preserve the single `agent-analysis` dialect so existing lenses and
+     analysis fan-out continue to compose.
+
+6. **Regenerate role outputs**:
 
    ```
    python3 -m swarm_do.roles gen --write
@@ -392,6 +422,11 @@ bin/swarm plan prepare docs/swarmdaddy-prepare-gate-plan.md --dry-run --json
 
 - Role specs render into generated agent files (stamp present in `agents/`).
 - `load_fragment("plan-review")` and `load_fragment("plan-normalizer")` succeed.
+- `load_fragment(...)` succeeds for every registered role with a role spec,
+  including `analysis`, `debug`, `analysis-judge`, `research-merge`, and `docs`.
+- `agent-clarify` permissions deny source reads and source search by default.
+- `agent-analysis` defaults to research notes plus bounded `[UNVERIFIED]`
+  source escalation, not unrestricted source search.
 - Plan-review output has structured finding shape consumable by `prepare.py`.
 - Normalizer output passes `bin/swarm plan prepare` lint.
 - Blocking findings stop prepare before execution.
@@ -413,6 +448,9 @@ python3 -m unittest discover -s py/swarm_do/pipeline/tests -p 'test_plan_prepare
   contract is canonical-form rewrite ONLY.
 - ❌ Do not add the new roles to only one or two of the three registry
   locations.
+- ❌ Do not leave `agent-clarify` prompt-strict but permission-loose.
+- ❌ Do not let `agent-analysis` re-open source by default; source access is an
+  explicit escalation path, not the default contract.
 - ❌ Do not auto-apply model-labeled `safe_fix` findings. They are summarized
   for operator review (Phase 4).
 

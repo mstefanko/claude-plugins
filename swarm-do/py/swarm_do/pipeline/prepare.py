@@ -30,7 +30,7 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 from .paths import REPO_ROOT, resolve_data_dir
 from .run_state import utc_now
@@ -74,6 +74,8 @@ _ARTIFACT_NAME = "prepared_plan.v1.json"
 # Path fields that must round-trip through canonicalize() at load time.
 # (``repo_root`` is itself the trust root and is exempted.)
 _PATH_FIELDS = ("source_plan_path", "prepared_plan_path")
+PLAN_REVIEW_SEVERITIES = frozenset({"blocking", "safe_fix", "advisory"})
+MAX_PLAN_REVIEW_ITERATIONS = 3
 
 
 # ---------------------------------------------------------------------------
@@ -88,6 +90,17 @@ class InvalidPreparedTransition(ValueError):
     ValueError`` continue to handle the failure as fail-closed without
     needing module-specific imports.
     """
+
+
+@dataclass(frozen=True)
+class ReviewLoopResult:
+    """Result of the bounded plan-review / normalize loop."""
+
+    prepared_plan_text: str
+    lint_findings: tuple[dict[str, Any], ...]
+    review_findings: tuple[dict[str, Any], ...]
+    review_iteration_count: int
+    status: str
 
 
 # ---------------------------------------------------------------------------
@@ -175,6 +188,109 @@ def _compute_cache_key(
     ]
     payload = "\n".join(inputs)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 plan-review contract
+# ---------------------------------------------------------------------------
+
+
+def validate_plan_review_finding(finding: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a normalized plan-review finding or fail closed.
+
+    Shape is the Phase 3 role contract:
+    ``{severity, phase_id|None, location, reason, citation}``.
+    """
+
+    if not isinstance(finding, Mapping):
+        raise ValueError("plan review finding must be an object")
+    required = {"severity", "phase_id", "location", "reason", "citation"}
+    if set(finding.keys()) != required:
+        raise ValueError(
+            f"plan review finding keys must be exactly {sorted(required)}"
+        )
+    severity = finding["severity"]
+    if severity not in PLAN_REVIEW_SEVERITIES:
+        raise ValueError(
+            f"plan review finding severity must be one of {sorted(PLAN_REVIEW_SEVERITIES)}"
+        )
+    phase_id = finding["phase_id"]
+    if phase_id is not None and not isinstance(phase_id, str):
+        raise ValueError("plan review finding phase_id must be string or null")
+    normalized = {"severity": severity, "phase_id": phase_id}
+    for key in ("location", "reason", "citation"):
+        value = finding[key]
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"plan review finding {key} must be non-empty string")
+        normalized[key] = value
+    return normalized
+
+
+def validate_plan_review_findings(findings: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    return [validate_plan_review_finding(finding) for finding in findings]
+
+
+def finding_blocks_prepare(finding: Mapping[str, Any]) -> bool:
+    """Return true when a lint or review finding should keep prepare blocked."""
+
+    return finding.get("severity") in {"blocking", "error"}
+
+
+def run_plan_review_loop(
+    plan_text: str,
+    *,
+    lint_runner: Callable[[str], Iterable[Mapping[str, Any]]],
+    review_runner: Callable[[str, list[dict[str, Any]]], Iterable[Mapping[str, Any]]],
+    normalizer_runner: Callable[
+        [str, list[dict[str, Any]], list[dict[str, Any]]],
+        str,
+    ],
+    accepted_safe_fixes: Iterable[Mapping[str, Any]] = (),
+) -> ReviewLoopResult:
+    """Run lint -> plan-review -> normalize with the Phase 3 cap of 3.
+
+    The runners are injected so this module remains provider-neutral and
+    Beads-free. The normalizer is called only after a blocking finding and never
+    after the third review iteration.
+    """
+
+    if not isinstance(plan_text, str) or not plan_text:
+        raise ValueError("plan_text must be a non-empty string")
+    current_text = plan_text
+    all_lint_findings: list[dict[str, Any]] = []
+    all_review_findings: list[dict[str, Any]] = []
+    safe_fixes = [dict(item) for item in accepted_safe_fixes]
+
+    for iteration in range(1, MAX_PLAN_REVIEW_ITERATIONS + 1):
+        lint_findings = [dict(item) for item in lint_runner(current_text)]
+        review_findings = validate_plan_review_findings(
+            review_runner(current_text, lint_findings)
+        )
+        all_lint_findings.extend(lint_findings)
+        all_review_findings.extend(review_findings)
+
+        combined: list[Mapping[str, Any]] = [*lint_findings, *review_findings]
+        if not any(finding_blocks_prepare(finding) for finding in combined):
+            return ReviewLoopResult(
+                prepared_plan_text=current_text,
+                lint_findings=tuple(all_lint_findings),
+                review_findings=tuple(all_review_findings),
+                review_iteration_count=iteration,
+                status=STATUS_READY,
+            )
+        if iteration == MAX_PLAN_REVIEW_ITERATIONS:
+            return ReviewLoopResult(
+                prepared_plan_text=current_text,
+                lint_findings=tuple(all_lint_findings),
+                review_findings=tuple(all_review_findings),
+                review_iteration_count=iteration,
+                status=STATUS_NEEDS_INPUT,
+            )
+        current_text = normalizer_runner(current_text, lint_findings, safe_fixes)
+        if not isinstance(current_text, str) or not current_text:
+            raise ValueError("plan normalizer must return non-empty markdown")
+
+    raise AssertionError("unreachable review loop state")
 
 
 # ---------------------------------------------------------------------------
@@ -750,7 +866,10 @@ def check_stale(
 
 __all__ = [
     "InvalidPreparedTransition",
+    "MAX_PLAN_REVIEW_ITERATIONS",
     "PREPARE_POLICY_VERSION",
+    "PLAN_REVIEW_SEVERITIES",
+    "ReviewLoopResult",
     "SCHEMA_VERSION",
     "STATUS_ACCEPTED",
     "STATUS_DRAFT",
@@ -763,8 +882,12 @@ __all__ = [
     "accept_prepared",
     "canonicalize",
     "check_stale",
+    "finding_blocks_prepare",
     "load_prepared_artifact",
     "mark_ready_for_acceptance",
     "reject_prepared",
+    "run_plan_review_loop",
+    "validate_plan_review_finding",
+    "validate_plan_review_findings",
     "write_prepared_artifact",
 ]

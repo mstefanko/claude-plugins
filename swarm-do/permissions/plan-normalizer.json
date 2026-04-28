@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "role": "plan-normalizer",
+  "merge_policy": "deny-wins",
+  "permissions": {
+    "allow": [
+      "Read",
+      "Edit",
+      "Write",
+      "Bash(bd:*)",
+      "Bash(python3:*)",
+      "Bash(rg:*)",
+      "Bash(sed:*)"
+    ],
+    "deny": [
+      "Bash(git:*)"
+    ]
+  }
+}

@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
 from swarm_do.roles.render import to_agents_md, to_shared_md
-from swarm_do.roles.spec import RoleSpec
+from swarm_do.roles.spec import RoleSpec, load
 
 _STAMP_PREFIX = "<!-- generated from role-specs/"
 
@@ -20,6 +21,15 @@ def _make_spec(
         consumers=consumers,
         body_text=body,
     )
+
+
+def _find_role_specs_dir() -> Path:
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        candidate = parent / "swarm-do" / "role-specs"
+        if candidate.is_dir():
+            return candidate
+    raise FileNotFoundError("Could not locate swarm-do/role-specs/")
 
 
 class TestToAgentsMd(unittest.TestCase):
@@ -77,6 +87,22 @@ class TestToSharedMd(unittest.TestCase):
         agents = to_agents_md(spec)
         shared = to_shared_md(spec)
         self.assertEqual(agents, shared, "to_agents_md and to_shared_md should produce identical output")
+
+    def test_plan_role_specs_render_to_agents_and_shared(self) -> None:
+        specs_dir = _find_role_specs_dir()
+        for name in ("agent-plan-review", "agent-plan-normalizer"):
+            with self.subTest(name=name):
+                spec = load(specs_dir / f"{name}.md")
+                self.assertEqual(spec.consumers, ("agents", "roles-shared"))
+                self.assertIn("generated from role-specs", to_agents_md(spec))
+                self.assertIn("generated from role-specs", to_shared_md(spec))
+
+    def test_analysis_spec_records_notes_only_default(self) -> None:
+        spec = load(_find_role_specs_dir() / "agent-analysis.md")
+        rendered = to_agents_md(spec)
+        self.assertIn("NEEDS_RESEARCH", rendered)
+        self.assertIn("context_policy: source_allowed", rendered)
+        self.assertIn("do not emit schema-strict `work_units.v2`", rendered)
 
 
 if __name__ == "__main__":

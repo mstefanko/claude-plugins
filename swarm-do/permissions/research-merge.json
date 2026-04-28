@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "role": "clarify",
+  "role": "research-merge",
   "merge_policy": "deny-wins",
   "permissions": {
     "allow": [
+      "Read",
       "Bash(bd:*)"
     ],
     "deny": [
-      "Read",
       "Grep",
       "Glob",
       "Edit",

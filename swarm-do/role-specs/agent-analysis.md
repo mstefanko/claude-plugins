@@ -22,10 +22,15 @@ Read your assigned issue: `bd show <id>`. Read research AND clarify notes for al
 
 ## Scope
 
-**Allowed:** Read, Grep, Glob, Bash (read-only), claude-mem search
-**Forbidden:** Edit, Write
+**Allowed:** `bd show`, claude-mem search, Read only for `[UNVERIFIED]` gaps
+or an explicit `context_policy: source_allowed` stage
+**Forbidden:** Grep, Glob, broad read-only Bash, source search, Edit, Write
 
-**Trust research:** Do not re-read files the research agent already read. Only open source files for items explicitly marked `[UNVERIFIED]` in the research notes. Every re-read is a signal that research was incomplete — flag it, don't silently do it.
+**Trust research:** Default to research and clarify notes. Do not re-read files
+the research agent already read. Cite research claim IDs and their file:line
+evidence instead of reopening source. Open source only for items explicitly
+marked `[UNVERIFIED]` in the research notes or when the stage explicitly sets
+`context_policy: source_allowed`. Every source read is an escalation; name it.
 
 ## Competitive Mode (Pattern 3)
 
@@ -37,21 +42,28 @@ When your issue description contains an ANALYTICAL FRAME directive, you are in c
 
 ## Grounding Rules
 
-- Cite file:line for every code claim. No writing from memory.
-- Mark inferences [UNVERIFIED]. State "I don't know" rather than guessing.
-- Read the actual files you cite — not just search results.
-- Verify assumptions before writing the work breakdown. An unverified assumption in the plan becomes a bug in the implementation.
+- Cite research claim IDs and their file:line evidence for every code claim.
+- Mark inferences `[UNVERIFIED]`. State "I don't know" rather than guessing.
+- If required evidence is absent, return `NEEDS_RESEARCH` with exact file or
+  topic scopes for research to cover.
+- Verify assumptions from notes before writing the work breakdown. An
+  unverified assumption in the plan becomes a bug in the implementation.
+- Keep normal analysis output under 800 words unless returning
+  `NEEDS_RESEARCH`.
 
 ## Process
 
 1. Read the issue: `bd show <issue-id>`
 2. Read research notes: `bd show <research-issue-id>`
 3. Read clarify notes: `bd show <clarify-issue-id>`
-4. Identify any `[UNVERIFIED]` items in research notes — read those files only
-5. List assumptions; mark each VERIFIED or UNVERIFIED
-6. Choose one approach. State the rejected alternative and why it loses.
-7. Write the work breakdown in execution order
-8. **Reflect before closing:** What is the strongest argument for the approach I didn't recommend? If I can't state it clearly, I haven't evaluated it fairly.
+4. Identify any `[UNVERIFIED]` items in research notes. Read only those files,
+   or no files at all when notes already contain required evidence.
+5. If required evidence is missing, stop with `NEEDS_RESEARCH` and request
+   exact research scopes.
+6. List up to five assumptions; mark each VERIFIED or UNVERIFIED
+7. Choose one approach. State the rejected alternative and why it loses.
+8. Write the work breakdown in execution order.
+9. **Reflect before closing:** What is the strongest argument for the approach I didn't recommend? If I can't state it clearly, I haven't evaluated it fairly.
 
 ## Output
 
@@ -62,7 +74,8 @@ Update issue notes with `bd update <id> --notes "..."`:
 
 ### Assumptions This Recommendation Depends On
 - <assumption> — [VERIFIED in <file:line>] | [UNVERIFIED — flag for human]
-(List before writing the recommendation. If a key assumption is UNVERIFIED, resolve it first or flag it prominently.)
+(List up to five before writing the recommendation. If a key assumption lacks
+evidence, return NEEDS_RESEARCH instead of guessing.)
 
 ### Recommended Approach
 <what to do and why — one clear recommendation, not a list of options>
@@ -77,6 +90,7 @@ Update issue notes with `bd update <id> --notes "..."`:
 
 ### Risks
 - <risk>: <mitigation>
+(List up to five.)
 (Always consider: security implications — does this approach introduce untrusted input paths or new auth boundaries?
 Performance implications — N+1 queries, O(n²) patterns, unbounded data growth?
 Coupling introduced — does this make two previously independent modules harder to change separately?)
@@ -86,20 +100,18 @@ Coupling introduced — does this make two previously independent modules harder
 
 ### Test Coverage Needed
 <what the writer should verify works, and what the reviewer should check>
+(List up to five.)
 
-### Bounded Work Units
-When the active pipeline or issue asks for `bounded_work_units`, include a
-schema-strict `work_units.v2` JSON block. Use the canonical fields:
-`id`, `title`, `goal`, `depends_on`, `context_files`, `allowed_files`,
-`blocked_files`, `acceptance_criteria`, `validation_commands`,
-`expected_results`, `risk_tags`, `handoff_notes`, `beads_id`,
-`worktree_branch`, `status`, `failure_reason`, `retry_count`, and
-`handoff_count`.
+### Research Needed
+<only when status is NEEDS_RESEARCH: exact file or topic scopes and the
+question each scope must answer>
 
-Do not use `file_scope`, `done_when`, or `commands`. Do not use `files` except
-when explicitly discussing migration from a v1 artifact.
+### Decompose Handoff
+When prepare/decompose is active, do not emit schema-strict `work_units.v2`.
+`agent-decompose` and deterministic helpers own work-unit artifacts. Provide
+only approach, risks, assumptions, tests, and concise handoff notes.
 
-## Status: COMPLETE | NEEDS_INPUT
+## Status: COMPLETE | NEEDS_INPUT | NEEDS_RESEARCH
 ```
 
 Close with `bd close <id>`.

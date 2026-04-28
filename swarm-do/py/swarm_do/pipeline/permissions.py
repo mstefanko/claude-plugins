@@ -14,16 +14,23 @@ from .paths import REPO_ROOT
 
 
 ROLE_NAMES = {
+    "analysis",
+    "analysis-judge",
     "writer",
     "spec-review",
     "review",
     "research",
+    "research-merge",
     "clarify",
+    "debug",
+    "docs",
     "codex-review",
     "clean-review",
     "provider-review",
     "brainstorm",
     "implementation-advisor",
+    "plan-review",
+    "plan-normalizer",
 }
 MERGE_POLICIES = {"deny-wins"}
 

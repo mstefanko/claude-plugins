@@ -1,18 +1,14 @@
 {
   "schema_version": 1,
-  "role": "clarify",
+  "role": "docs",
   "merge_policy": "deny-wins",
   "permissions": {
     "allow": [
-      "Bash(bd:*)"
-    ],
-    "deny": [
       "Read",
-      "Grep",
-      "Glob",
       "Edit",
       "Write",
-      "Bash(rg:*)"
-    ]
+      "Bash(bd:*)"
+    ],
+    "deny": []
   }
 }

@@ -9,7 +9,25 @@
     "schema_version": { "type": "integer", "enum": [1] },
     "role": {
       "type": "string",
-      "enum": ["writer", "spec-review", "review", "research", "clarify", "codex-review", "provider-review", "brainstorm"]
+      "enum": [
+        "analysis",
+        "analysis-judge",
+        "brainstorm",
+        "clarify",
+        "clean-review",
+        "codex-review",
+        "debug",
+        "docs",
+        "implementation-advisor",
+        "plan-normalizer",
+        "plan-review",
+        "provider-review",
+        "research",
+        "research-merge",
+        "review",
+        "spec-review",
+        "writer"
+      ]
     },
     "merge_policy": { "type": "string", "enum": ["deny-wins"] },
     "permissions": {

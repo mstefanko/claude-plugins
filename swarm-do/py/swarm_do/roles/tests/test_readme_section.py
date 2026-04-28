@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import argparse
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from .. import cli as roles_cli
-from ..cli import _render_roles_table, _cmd_readme_section_gen
-import argparse
+try:
+    from .. import cli as roles_cli
+    from ..cli import _cmd_readme_section_gen, _render_roles_table
+except ImportError:
+    from swarm_do.roles import cli as roles_cli
+    from swarm_do.roles.cli import _cmd_readme_section_gen, _render_roles_table
 
 
 class TestRenderRolesTable(unittest.TestCase):
