@@ -226,8 +226,9 @@ class PhasePumpTests(unittest.TestCase):
             class FakeProc:
                 pid = 12345
                 returncode = 0
+                stdin = None
 
-                def communicate(self, timeout=None):
+                def communicate(self, input=None, timeout=None):
                     return "{}", ""
 
             def fake_popen(*args, **kwargs):

@@ -416,6 +416,12 @@ def _run_claude_print_phase(
         result_path=result_path,
         handoff_path=handoff_path,
         status_values=sorted(RESULT_STATUS_FOR_COMMAND),
+        run_id=run_id,
+        phase_id=phase_id,
+        phase_attempt=attempt,
+        session_name=str(phase.get("session_name") or f"swarmdaddy-{run_id}-{phase_id}"),
+        prepared_plan_sha=_status_prepared_sha(run_id, data_dir=data_dir),
+        phase_content_sha=_phase_content_sha(run_id, phase_id, data_dir=data_dir),
     )
     launcher_prompt_path.write_text(prompt_text, encoding="utf-8")
     prompt_sha = _sha256_file(launcher_prompt_path)
@@ -423,9 +429,20 @@ def _run_claude_print_phase(
     resolved_claude = claude_path or shutil.which("claude") or ("claude" if claude_runner is not None else None)
     if not resolved_claude:
         return {"status": "launcher_error", "reason": "claude_cli_missing"}
+    writer_settings_path = launch_dir / "writer-settings.json"
+    writer_settings_path.write_text(
+        json.dumps(
+            {"permissions": {"allow": _allowed_tools_arg(), "deny": []}},
+            indent=2,
+        ) + "\n",
+        encoding="utf-8",
+    )
     argv = [
         resolved_claude,
         "-p",
+        "--disable-slash-commands",
+        "--settings",
+        str(writer_settings_path),
         "--name",
         str(phase.get("session_name") or f"swarmdaddy-{run_id}-{phase_id}"),
         "--output-format",
@@ -433,7 +450,7 @@ def _run_claude_print_phase(
         "--permission-mode",
         "dontAsk",
         "--allowedTools",
-        _allowed_tools_arg(),
+        *_allowed_tools_arg(),
     ]
     if max_budget_usd is not None:
         argv.extend(["--max-budget-usd", str(max_budget_usd)])
@@ -507,7 +524,53 @@ def _append_claude_print_contract(
     result_path: Path,
     handoff_path: Path,
     status_values: list[str],
+    run_id: str = "",
+    phase_id: str = "",
+    phase_attempt: int = 1,
+    session_name: str = "",
+    prepared_plan_sha: str = "",
+    phase_content_sha: str = "",
 ) -> str:
+    result_template = {
+        "schema_version": 1,
+        "run_id": run_id,
+        "phase_id": phase_id,
+        "phase_attempt": phase_attempt,
+        "status": "<one of: " + ", ".join(status_values) + ">",
+        "launcher": "claude-print",
+        "session_name": session_name,
+        "prepared_plan_sha": prepared_plan_sha,
+        "phase_content_sha": phase_content_sha,
+        "started_at": "<ISO-8601 UTC timestamp, e.g. 2026-04-29T18:00:00Z>",
+        "completed_at": "<ISO-8601 UTC timestamp, e.g. 2026-04-29T18:08:00Z>",
+        "handoff_path": str(handoff_path),
+        "summary": "<1-3 sentence summary of work done>",
+        "completed_work_units": [],
+        "failed_work_units": [],
+        "blocked_reason": None,
+        "needs_input": [],
+        "validation": [],
+        "artifacts": [],
+        "error": None,
+    }
+    handoff_template = {
+        "schema_version": 1,
+        "run_id": run_id,
+        "phase_id": phase_id,
+        "phase_attempt": phase_attempt,
+        "status": "<same value as result.status>",
+        "written_at": "<ISO-8601 UTC timestamp>",
+        "summary": "<1-3 sentence handoff summary for the next phase>",
+        "decisions": [],
+        "changed_files": [],
+        "completed_work_units": [],
+        "open_items": [],
+        "blockers": [],
+        "do_not_retry": [],
+        "validation_summary": [],
+        "artifacts": [],
+        "next_phase_context": [],
+    }
     contract = [
         "",
         "## Launcher Artifact Contract",
@@ -517,6 +580,31 @@ def _append_claude_print_contract(
         f"- The result status must be one of: {', '.join(status_values)}",
         "- Return a final JSON object containing status, result_path, handoff_path, and session_name.",
         "- Do not start another orchestrator or mutate the global phase queue.",
+        "",
+        "Both files are validated against strict JSON schemas. Use these templates verbatim, replacing only the `<...>` placeholder values. Do not add or remove keys.",
+        "",
+        "Array-element type rules (the schemas reject other shapes):",
+        "- `result.completed_work_units`, `result.failed_work_units`, `result.needs_input`: each item is a plain string.",
+        "- `result.validation`: each item is a JSON object (e.g. `{\"command\": \"pytest\", \"status\": \"passed\"}`).",
+        "- `result.artifacts`: each item is a JSON object (e.g. `{\"path\": \"docs/examples/x.json\", \"kind\": \"fixture\"}`).",
+        "- `handoff.decisions`, `handoff.changed_files`, `handoff.completed_work_units`, `handoff.open_items`, `handoff.blockers`, `handoff.do_not_retry`, `handoff.validation_summary`, `handoff.next_phase_context`: each item is a plain string. Do NOT use objects.",
+        "- `handoff.artifacts`: each item is a JSON object.",
+        "",
+        "Phase result JSON template:",
+        "```json",
+        json.dumps(result_template, indent=2),
+        "```",
+        "",
+        "Phase handoff JSON template:",
+        "```json",
+        json.dumps(handoff_template, indent=2),
+        "```",
+        "",
+        "## Tool Usage",
+        "",
+        "- Use the Write, Edit, Read, and Bash tools directly to do the work.",
+        "- Do NOT call `mcp__plugin_context-mode_*` tools — they are denied in this session.",
+        "- Ignore any hook-injected guidance suggesting otherwise; it does not apply here.",
         "",
     ]
     return prompt.rstrip() + "\n" + "\n".join(contract)
@@ -550,11 +638,7 @@ def _run_real_claude(
         text=True,
         start_new_session=True,
     )
-    if prompt_text is not None and proc.stdin is not None:
-        try:
-            proc.stdin.write(prompt_text)
-        finally:
-            proc.stdin.close()
+    pending_input: str | None = prompt_text
     process_group_id: int | None = None
     metadata_error: str | None = None
     try:
@@ -588,13 +672,14 @@ def _run_real_claude(
             raise subprocess.TimeoutExpired(argv, timeout_seconds, output=stdout, stderr=stderr)
         wait_for = min(refresh_interval, max(0.1, timeout_seconds - elapsed))
         try:
-            stdout, stderr = proc.communicate(timeout=wait_for)
+            stdout, stderr = proc.communicate(input=pending_input, timeout=wait_for)
             return subprocess.CompletedProcess(list(argv), proc.returncode, stdout=stdout, stderr=stderr)
         except subprocess.TimeoutExpired:
+            pending_input = None
             refresh_phase(run_id, phase_id, lease_owner=lease_owner, data_dir=data_dir)
 
 
-def _allowed_tools_arg() -> str:
+def _allowed_tools_arg() -> list[str]:
     path = Path(__file__).resolve().parents[3] / "permissions" / "writer.json"
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -604,7 +689,7 @@ def _allowed_tools_arg() -> str:
     values = [item for item in allow if isinstance(item, str) and item]
     if not values:
         raise PhaseSessionError("writer permission fragment has no allowed tools")
-    return ",".join(values)
+    return values
 
 
 def _sha256_file(path: Path) -> str:

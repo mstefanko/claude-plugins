@@ -61,7 +61,7 @@ def main(argv: list[str] | None = None) -> int:
                 "--permission-mode",
                 "dontAsk",
                 "--allowedTools",
-                _allowed_tools_arg(),
+                *_allowed_tools_arg(),
             ],
             check=False,
             capture_output=True,
