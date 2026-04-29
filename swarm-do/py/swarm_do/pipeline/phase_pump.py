@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import time
@@ -19,11 +20,12 @@ from .phase_sessions import (
     phase_handoff_path,
     phase_result_path,
     phase_status,
+    record_launch_metadata,
     record_phase_result,
-    reap_expired_phases,
     refresh_phase,
     start_phase,
 )
+from .phase_recovery import reconcile_phase_sessions
 from .run_state import (
     active_run_path,
     append_run_event,
@@ -33,7 +35,7 @@ from .run_state import (
     write_active_run,
     write_checkpoint_from_active,
 )
-from .session_capabilities import doctor_report, extract_claude_print_artifacts, parse_claude_print_json
+from .session_capabilities import doctor_report
 
 
 ENABLED_LAUNCHERS = {"manual", "fake-test", "claude-print"}
@@ -92,10 +94,18 @@ def pump_phases(
     max_count = 1_000_000 if max_phases is None else max(0, max_phases)
 
     for phase_number in range(max_count):
-        reaped = reap_expired_phases(run_id, data_dir=base)
-        if reaped["reaped"]:
-            _append_pump_event(base, run_id=run_id, event_type="phase_pump_stopped", details={"status": "stale", "reaped": reaped["reaped"]})
-            return {"status": "stale", "completed_phases": completed, "reaped": reaped["reaped"]}
+        recovery = reconcile_phase_sessions(run_id, data_dir=base, launcher=launcher)
+        recovery_result = _handle_recovery_decision(
+            recovery,
+            completed=completed,
+            data_dir=base,
+            run_id=run_id,
+            stop_on_checkpoint=stop_on_checkpoint,
+        )
+        if recovery_result is not None:
+            if recovery_result.get("continue"):
+                continue
+            return dict(recovery_result["result"])
 
         claim = claim_next_phase(run_id, data_dir=base, lease_command=f"phase-pump:{launcher}")
         if not claim.get("claimed"):
@@ -141,56 +151,43 @@ def pump_phases(
                 data_dir=base,
             )
             if launch["status"] != "launched":
-                _append_pump_event(base, run_id=run_id, event_type="phase_pump_stopped", details=launch)
-                return {"status": launch["status"], "completed_phases": completed, "launcher_result": launch}
-            reaped = reap_expired_phases(run_id, data_dir=base)
-            if reaped["reaped"]:
-                _append_pump_event(base, run_id=run_id, event_type="phase_pump_stopped", details={"status": "stale", "reaped": reaped["reaped"]})
-                return {"status": "stale", "completed_phases": completed, "reaped": reaped["reaped"]}
-            try:
-                outer = parse_claude_print_json(str(launch.get("stdout") or ""))
-                artifacts = extract_claude_print_artifacts(outer, run_dir=base / "runs" / run_id)
-                if int(launch.get("returncode") or 0) != 0 and artifacts.get("status") == "complete":
-                    details = {
-                        "status": "launcher_error",
-                        "reason": "claude_print_nonzero_complete",
-                        "phase_id": phase_id,
-                        "attempt": running_phase.get("attempt"),
-                        "returncode": launch.get("returncode"),
-                    }
-                    _append_pump_event(base, run_id=run_id, event_type="phase_pump_stopped", details=details)
-                    return {
-                        "status": "launcher_error",
-                        "completed_phases": completed,
-                        "launcher_result": launch,
-                        "error": "claude-print returned nonzero with complete artifacts",
-                    }
-                recorded = record_phase_result(
+                recovery = reconcile_phase_sessions(
                     run_id,
-                    phase_id,
-                    json_file=artifacts["result_path"],
-                    expected_status=artifacts["status"],
                     data_dir=base,
+                    launcher=launcher,
+                    launcher_result=launch,
                 )
-            except Exception as exc:
-                details = {
-                    "status": "launcher_error",
-                    "reason": str(exc),
-                    "phase_id": phase_id,
-                    "attempt": running_phase.get("attempt"),
-                    "returncode": launch.get("returncode"),
-                }
-                _append_pump_event(base, run_id=run_id, event_type="phase_pump_stopped", details=details)
-                return {"status": "launcher_error", "completed_phases": completed, "launcher_result": launch, "error": str(exc)}
-            completed.append(recorded["phase"])
-            _write_phase_checkpoint(base, run_id, recorded["phase"])
-            if stop_on_checkpoint:
-                _append_pump_event(base, run_id=run_id, event_type="phase_pump_stopped", details={"status": "checkpoint"})
-                return {"status": "checkpoint", "completed_phases": completed}
-            phase_status_value = str(recorded["phase"].get("status"))
-            if phase_status_value != "complete":
-                _append_pump_event(base, run_id=run_id, event_type="phase_pump_stopped", details={"status": phase_status_value})
-                return {"status": phase_status_value, "completed_phases": completed}
+                recovery_result = _handle_recovery_decision(
+                    recovery,
+                    completed=completed,
+                    data_dir=base,
+                    run_id=run_id,
+                    stop_on_checkpoint=stop_on_checkpoint,
+                    launcher_result=launch,
+                )
+                if recovery_result is not None:
+                    if recovery_result.get("continue"):
+                        continue
+                    return dict(recovery_result["result"])
+                continue
+            recovery = reconcile_phase_sessions(
+                run_id,
+                data_dir=base,
+                launcher=launcher,
+                launcher_result=launch,
+            )
+            recovery_result = _handle_recovery_decision(
+                recovery,
+                completed=completed,
+                data_dir=base,
+                run_id=run_id,
+                stop_on_checkpoint=stop_on_checkpoint,
+                launcher_result=launch,
+            )
+            if recovery_result is not None:
+                if recovery_result.get("continue"):
+                    continue
+                return dict(recovery_result["result"])
             continue
 
         fake_status = fake_sequence[phase_number] if phase_number < len(fake_sequence) else "complete"
@@ -234,6 +231,91 @@ def format_pump_result(result: Mapping[str, Any]) -> str:
     if recommended:
         lines.append(f"next: {recommended}")
     return "\n".join(lines)
+
+
+def _handle_recovery_decision(
+    recovery: Mapping[str, Any],
+    *,
+    completed: list[dict[str, Any]],
+    data_dir: Path,
+    run_id: str,
+    stop_on_checkpoint: bool,
+    launcher_result: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    status = str(recovery.get("status") or "ready")
+    adopted = _record_adopted_completions(recovery, completed=completed, data_dir=data_dir, run_id=run_id)
+    if adopted and stop_on_checkpoint:
+        _append_pump_event(data_dir, run_id=run_id, event_type="phase_pump_stopped", details={"status": "checkpoint", "recovery": recovery})
+        return {"result": {"status": "checkpoint", "completed_phases": completed, "recovery": recovery}}
+    if status == "ready":
+        return None
+    if status == "complete":
+        _append_pump_event(data_dir, run_id=run_id, event_type="phase_pump_stopped", details={"status": "complete", "recovery": recovery})
+        return {"result": {"status": "complete", "completed_phases": completed, "recovery": recovery}}
+    if status == "retry_waiting":
+        wait_seconds = _retry_wait_seconds(recovery)
+        if wait_seconds is not None and wait_seconds <= 60:
+            if wait_seconds > 0:
+                time.sleep(wait_seconds)
+            return {"continue": True}
+        _append_pump_event(data_dir, run_id=run_id, event_type="phase_pump_stopped", details={"status": status, "recovery": recovery})
+        return {
+            "result": {
+                "status": status,
+                "completed_phases": completed,
+                "recovery": recovery,
+                "launcher_result": launcher_result,
+            }
+        }
+    if status in {"active", "leased", "running"}:
+        _append_pump_event(data_dir, run_id=run_id, event_type="phase_pump_stopped", details={"status": "active", "recovery": recovery})
+        return {"result": {"status": "active", "completed_phases": completed, "recovery": recovery}}
+    if status in {"blocked", "needs_input", "failed", "failed_nonretryable", "retry_exhausted", "drift"}:
+        _append_pump_event(data_dir, run_id=run_id, event_type="phase_pump_stopped", details={"status": status, "recovery": recovery})
+        return {
+            "result": {
+                "status": status,
+                "completed_phases": completed,
+                "recovery": recovery,
+                "launcher_result": launcher_result,
+            }
+        }
+    return None
+
+
+def _record_adopted_completions(
+    recovery: Mapping[str, Any],
+    *,
+    completed: list[dict[str, Any]],
+    data_dir: Path,
+    run_id: str,
+) -> bool:
+    phase_status_payload = recovery.get("phase_status")
+    phases = phase_status_payload.get("phases") if isinstance(phase_status_payload, Mapping) else []
+    by_id = {str(phase.get("phase_id")): phase for phase in phases or [] if isinstance(phase, Mapping)}
+    appended = False
+    for action in recovery.get("actions") or []:
+        if not isinstance(action, Mapping) or action.get("action") != "adopted_completion":
+            continue
+        phase_id = str(action.get("phase_id"))
+        phase = by_id.get(phase_id)
+        if not isinstance(phase, Mapping):
+            continue
+        signature = (phase.get("phase_id"), phase.get("attempt"))
+        if any((item.get("phase_id"), item.get("attempt")) == signature for item in completed):
+            continue
+        completed.append(dict(phase))
+        _write_phase_checkpoint(data_dir, run_id, phase)
+        appended = True
+    return appended
+
+
+def _retry_wait_seconds(recovery: Mapping[str, Any]) -> int | None:
+    waits = []
+    for action in recovery.get("actions") or []:
+        if isinstance(action, Mapping) and isinstance(action.get("retry_sleep_seconds"), int):
+            waits.append(int(action["retry_sleep_seconds"]))
+    return min(waits) if waits else None
 
 
 def _write_fake_result(
@@ -353,6 +435,17 @@ def _run_claude_print_phase(
         "env_redacted": True,
     }
     (launch_dir / "command.json").write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    record_launch_metadata(
+        run_id,
+        phase_id,
+        data_dir=data_dir,
+        launch_dir=launch_dir,
+        command_path=launch_dir / "command.json",
+        parent_pid=os.getpid(),
+        prompt_sha=prompt_sha,
+        expected_result_path=result_path,
+        expected_handoff_path=handoff_path,
+    )
 
     try:
         if claude_runner is not None:
@@ -364,6 +457,12 @@ def _run_claude_print_phase(
                 phase_id=phase_id,
                 lease_owner=lease_owner,
                 data_dir=data_dir,
+                launch_dir=launch_dir,
+                command_path=launch_dir / "command.json",
+                metadata=metadata,
+                prompt_sha=prompt_sha,
+                result_path=result_path,
+                handoff_path=handoff_path,
             )
     except subprocess.TimeoutExpired as exc:
         (launch_dir / "stdout.txt").write_text(exc.stdout or "", encoding="utf-8")
@@ -415,6 +514,12 @@ def _run_real_claude(
     phase_id: str,
     lease_owner: str,
     data_dir: Path,
+    launch_dir: Path,
+    command_path: Path,
+    metadata: dict[str, Any],
+    prompt_sha: str,
+    result_path: Path,
+    handoff_path: Path,
 ) -> subprocess.CompletedProcess[str]:
     state = load_phase_sessions(run_id, data_dir=data_dir)
     policy = state.get("lease_policy") if isinstance(state.get("lease_policy"), Mapping) else {}
@@ -426,6 +531,32 @@ def _run_real_claude(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        start_new_session=True,
+    )
+    process_group_id: int | None = None
+    metadata_error: str | None = None
+    try:
+        process_group_id = os.getpgid(proc.pid)
+    except Exception as exc:
+        metadata_error = str(exc)
+    metadata["child_pid"] = proc.pid
+    metadata["process_group_id"] = process_group_id
+    if metadata_error:
+        metadata["process_group_lookup_error"] = metadata_error
+    command_path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    record_launch_metadata(
+        run_id,
+        phase_id,
+        data_dir=data_dir,
+        launch_dir=launch_dir,
+        command_path=command_path,
+        parent_pid=os.getpid(),
+        child_pid=proc.pid,
+        process_group_id=process_group_id,
+        prompt_sha=prompt_sha,
+        expected_result_path=result_path,
+        expected_handoff_path=handoff_path,
+        launch_metadata_error=metadata_error,
     )
     while True:
         elapsed = time.monotonic() - started

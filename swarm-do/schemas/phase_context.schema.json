@@ -24,6 +24,8 @@
     "prior_decisions_path",
     "previous_handoff_path",
     "shared_decisions_path",
+    "recovery_context_path",
+    "recovery_context_sha",
     "source_list",
     "warnings",
     "max_prompt_bytes",
@@ -78,6 +80,11 @@
     "prior_decisions_path": { "type": "string" },
     "previous_handoff_path": { "type": "string" },
     "shared_decisions_path": { "type": "string" },
+    "recovery_context_path": { "type": ["string", "null"] },
+    "recovery_context_sha": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{64}$"
+    },
     "source_list": {
       "type": "array",
       "items": { "type": "object" }

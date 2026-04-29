@@ -136,6 +136,56 @@ class PhaseSessionTests(unittest.TestCase):
             with self.assertRaises(PhaseSessionError):
                 load_phase_sessions(run_id, data_dir=data)
 
+    def test_old_state_without_retry_fields_loads_with_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            path = phase_session_path(run_id, data_dir=data)
+            state = json.loads(path.read_text(encoding="utf-8"))
+            state.pop("retry_policy")
+            for key in (
+                "attempt_history",
+                "next_retry_at",
+                "last_failure_kind",
+                "child_pid",
+                "process_group_id",
+            ):
+                state["phases"][0].pop(key, None)
+            path.write_text(json.dumps(state), encoding="utf-8")
+
+            loaded = load_phase_sessions(run_id, data_dir=data)
+
+            self.assertEqual(loaded["retry_policy"]["max_session_attempts"], 3)
+            self.assertEqual(loaded["phases"][0]["attempt_history"], [])
+
+    def test_record_result_rejects_prepared_plan_sha_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            claim_next_phase(run_id, data_dir=data, repo_root=repo, lease_owner="owner-1")
+            started = start_phase(run_id, "1", launcher="manual", lease_owner="owner-1", data_dir=data)
+            result_path = _write_result(data, run_id, started["phase"], status="complete")
+            result = json.loads(result_path.read_text(encoding="utf-8"))
+            result["prepared_plan_sha"] = "b" * 64
+            result_path.write_text(json.dumps(result), encoding="utf-8")
+
+            with self.assertRaisesRegex(PhaseSessionError, "prepared_plan_sha"):
+                record_phase_result(run_id, "1", json_file=result_path, expected_status="complete", data_dir=data)
+
+    def test_record_result_rejects_phase_content_sha_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            claim_next_phase(run_id, data_dir=data, repo_root=repo, lease_owner="owner-1")
+            started = start_phase(run_id, "1", launcher="manual", lease_owner="owner-1", data_dir=data)
+            result_path = _write_result(data, run_id, started["phase"], status="complete")
+            result = json.loads(result_path.read_text(encoding="utf-8"))
+            result["phase_content_sha"] = "c" * 64
+            result_path.write_text(json.dumps(result), encoding="utf-8")
+
+            with self.assertRaisesRegex(PhaseSessionError, "phase_content_sha"):
+                record_phase_result(run_id, "1", json_file=result_path, expected_status="complete", data_dir=data)
+
 
 def _write_result(data: Path, run_id: str, phase: dict, *, status: str) -> Path:
     phase_id = phase["phase_id"]

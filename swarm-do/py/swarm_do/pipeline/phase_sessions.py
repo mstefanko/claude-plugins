@@ -34,10 +34,12 @@ STATUS_FAILED = "failed"
 STATUS_BLOCKED = "blocked"
 STATUS_NEEDS_INPUT = "needs_input"
 STATUS_STALE = "stale"
+STATUS_RETRY_WAITING = "retry_waiting"
+STATUS_RETRY_EXHAUSTED = "retry_exhausted"
 
 CLAIMABLE_STATUSES = {STATUS_PENDING}
 ACTIVE_STATUSES = {STATUS_LEASED, STATUS_RUNNING}
-TERMINAL_STATUSES = {STATUS_COMPLETE, STATUS_FAILED, STATUS_BLOCKED, STATUS_NEEDS_INPUT}
+TERMINAL_STATUSES = {STATUS_COMPLETE, STATUS_FAILED, STATUS_BLOCKED, STATUS_NEEDS_INPUT, STATUS_RETRY_EXHAUSTED}
 RESULT_TO_PHASE_STATUS = {
     "complete": STATUS_COMPLETE,
     "failed": STATUS_FAILED,
@@ -54,6 +56,16 @@ DEFAULT_LEASE_POLICY = {
     "claim_ttl_seconds": 900,
     "running_ttl_seconds": 14400,
     "refresh_interval_seconds": 300,
+}
+DEFAULT_RETRY_POLICY = {
+    "max_session_attempts": 3,
+    "max_recovery_attempts": 1,
+    "recovery_timeout_threshold_seconds": 600,
+    "retry_sleep_threshold_seconds": 60,
+    "short_retry_backoff_seconds": 0,
+    "max_retry_after_seconds": 1800,
+    "worktree_baseline_path": None,
+    "worktree_baseline_warning": None,
 }
 
 
@@ -136,9 +148,39 @@ def init_phase_sessions(
                     "result_path": None,
                     "handoff_path": None,
                     "last_error": None,
+                    "max_session_attempts": None,
+                    "next_retry_at": None,
+                    "last_failure_kind": None,
+                    "last_launcher_error": None,
+                    "retry_exhausted_at": None,
+                    "launch_dir": None,
+                    "command_path": None,
+                    "parent_pid": None,
+                    "child_pid": None,
+                    "process_group_id": None,
+                    "prompt_sha": None,
+                    "expected_result_path": None,
+                    "expected_handoff_path": None,
+                    "launch_metadata_error": None,
+                    "recovery_context_path": None,
+                    "attempt_history": [],
                 }
             )
             previous_phase_id = phase_id
+        retry_policy = dict(DEFAULT_RETRY_POLICY)
+        try:
+            from .worktree_baseline import snapshot_worktree_baseline
+
+            baseline = snapshot_worktree_baseline(
+                run_id,
+                data_dir=base,
+                repo_root=_prepared_repo_root(prepared, repo_root=repo_root),
+            )
+            retry_policy["worktree_baseline_path"] = _display_path(Path(str(baseline["path"])))
+            if baseline.get("warning"):
+                retry_policy["worktree_baseline_warning"] = str(baseline["warning"])
+        except Exception as exc:
+            retry_policy["worktree_baseline_warning"] = str(exc)
         state = {
             "schema_version": SCHEMA_VERSION,
             "run_id": run_id,
@@ -148,6 +190,7 @@ def init_phase_sessions(
             "updated_at": now,
             "mode": mode,
             "lease_policy": dict(DEFAULT_LEASE_POLICY),
+            "retry_policy": retry_policy,
             "phases": phases,
         }
         _validate_state(state)
@@ -172,6 +215,7 @@ def load_phase_sessions(run_id: str, *, data_dir: Path | None = None) -> dict[st
         raise PhaseSessionError(f"phase-session state is invalid JSON: {path}") from exc
     if not isinstance(state, dict):
         raise PhaseSessionError("phase-session state root must be an object")
+    _normalize_state(state)
     _validate_state(state)
     return state
 
@@ -235,6 +279,8 @@ def phase_status(run_id: str, *, data_dir: Path | None = None, repo_root: Path |
     active = _active_phase(state)
     stale = next((phase for phase in state["phases"] if phase.get("status") == STATUS_STALE), None)
     failed = next((phase for phase in state["phases"] if phase.get("status") == STATUS_FAILED), None)
+    retry_waiting = next((phase for phase in state["phases"] if phase.get("status") == STATUS_RETRY_WAITING), None)
+    retry_exhausted = next((phase for phase in state["phases"] if phase.get("status") == STATUS_RETRY_EXHAUSTED), None)
     blocked = next(
         (phase for phase in state["phases"] if phase.get("status") in {STATUS_BLOCKED, STATUS_NEEDS_INPUT}),
         None,
@@ -245,9 +291,15 @@ def phase_status(run_id: str, *, data_dir: Path | None = None, repo_root: Path |
     elif active is not None:
         overall = str(active["status"])
         recommended = f"bin/swarm phases status {run_id}"
+    elif retry_waiting is not None:
+        overall = STATUS_RETRY_WAITING
+        recommended = f"bin/swarm phases recover {run_id}"
+    elif retry_exhausted is not None:
+        overall = STATUS_RETRY_EXHAUSTED
+        recommended = f"bin/swarm phases status {run_id}"
     elif stale is not None:
         overall = "stale"
-        recommended = f"bin/swarm phases reap {run_id}"
+        recommended = f"bin/swarm phases recover {run_id}"
     elif failed is not None:
         overall = "failed"
         recommended = f"bin/swarm phases status {run_id}"
@@ -256,7 +308,7 @@ def phase_status(run_id: str, *, data_dir: Path | None = None, repo_root: Path |
         recommended = f"bin/swarm phases status {run_id}"
     elif next_phase is not None:
         overall = "ready"
-        recommended = f"bin/swarm phases pump {run_id} --launcher manual --max-phases 1"
+        recommended = f"bin/swarm do --prepared {run_id} --phase-sessions auto"
     else:
         overall = "waiting"
         recommended = f"bin/swarm phases status {run_id}"
@@ -267,6 +319,7 @@ def phase_status(run_id: str, *, data_dir: Path | None = None, repo_root: Path |
         "prepared_artifact_path": state.get("prepared_artifact_path"),
         "prepared_plan_sha": state.get("prepared_plan_sha"),
         "updated_at": state.get("updated_at"),
+        "retry_policy": state.get("retry_policy"),
         "next_phase": _phase_summary(next_phase) if next_phase else None,
         "active_phase": _phase_summary(active) if active else None,
         "phases": [_phase_summary(phase) for phase in state["phases"]],
@@ -362,6 +415,19 @@ def start_phase(
         phase["result_path"] = None
         phase["handoff_path"] = None
         phase["last_error"] = None
+        phase["next_retry_at"] = None
+        phase["retry_exhausted_at"] = None
+        phase["last_launcher_error"] = None
+        phase["launch_dir"] = None
+        phase["command_path"] = None
+        phase["parent_pid"] = os.getpid()
+        phase["child_pid"] = None
+        phase["process_group_id"] = None
+        phase["prompt_sha"] = None
+        phase["expected_result_path"] = None
+        phase["expected_handoff_path"] = None
+        phase["launch_metadata_error"] = None
+        phase["recovery_context_path"] = None
         _touch_and_write(base, run_id, state)
         _append_phase_event(
             base,
@@ -433,21 +499,14 @@ def record_phase_result(
     data_dir: Path | None = None,
 ) -> dict[str, Any]:
     base = data_dir or resolve_data_dir()
-    result_path = _resolve_artifact_path(json_file, data_dir=base, run_id=run_id, label="phase result")
-    result = _load_and_validate_result(result_path)
+    result_path, result, handoff_path, handoff = _validate_phase_artifacts(
+        run_id,
+        phase_id,
+        json_file=json_file,
+        expected_status=expected_status,
+        data_dir=base,
+    )
     result_status = str(result["status"])
-    if expected_status is not None and result_status != expected_status:
-        raise PhaseSessionError(f"result status {result_status!r} does not match expected {expected_status!r}")
-    if result.get("run_id") != run_id or result.get("phase_id") != phase_id:
-        raise PhaseSessionError("result run_id/phase_id mismatch")
-    handoff_path = _resolve_artifact_path(result["handoff_path"], data_dir=base, run_id=run_id, label="phase handoff")
-    handoff = _load_and_validate_handoff(handoff_path)
-    if handoff.get("run_id") != run_id or handoff.get("phase_id") != phase_id:
-        raise PhaseSessionError("handoff run_id/phase_id mismatch")
-    if handoff.get("phase_attempt") != result.get("phase_attempt"):
-        raise PhaseSessionError("handoff attempt does not match result attempt")
-    if handoff.get("status") != result_status:
-        raise PhaseSessionError("handoff status does not match result status")
 
     with locked_phase_sessions(run_id, data_dir=base):
         state = load_phase_sessions(run_id, data_dir=base)
@@ -456,13 +515,7 @@ def record_phase_result(
             raise PhaseSessionError(f"phase {phase_id} must be running before recording result")
         if int(phase.get("attempt") or 0) != int(result["phase_attempt"]):
             raise PhaseSessionError("result attempt does not match running phase attempt")
-        phase_status = RESULT_TO_PHASE_STATUS[result_status]
-        phase["status"] = phase_status
-        phase["completed_at"] = result["completed_at"]
-        phase["result_path"] = _display_path(result_path)
-        phase["handoff_path"] = _display_path(handoff_path)
-        phase["lease_expires_at"] = None
-        phase["last_error"] = _result_error_message(result) if phase_status != STATUS_COMPLETE else None
+        phase_status = _apply_phase_result(phase, result=result, result_path=result_path, handoff_path=handoff_path)
         _touch_and_write(base, run_id, state)
         _append_phase_event(
             base,
@@ -488,6 +541,227 @@ def record_phase_result(
             result_path=_display_path(result_path),
             handoff_path=_display_path(handoff_path),
         )
+        return {"recorded": True, "phase": _phase_summary(phase), "state": state}
+
+
+def adopt_phase_result(
+    run_id: str,
+    phase_id: str,
+    *,
+    json_file: str | os.PathLike[str],
+    expected_status: str | None = None,
+    data_dir: Path | None = None,
+    attempt_record: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Adopt valid current-attempt artifacts during recovery.
+
+    Unlike ``record_phase_result()``, recovery can adopt artifacts from a stale
+    or otherwise abandoned attempt after the parent launcher has died.
+    """
+
+    base = data_dir or resolve_data_dir()
+    result_path, result, handoff_path, _handoff = _validate_phase_artifacts(
+        run_id,
+        phase_id,
+        json_file=json_file,
+        expected_status=expected_status,
+        data_dir=base,
+    )
+    result_status = str(result["status"])
+    with locked_phase_sessions(run_id, data_dir=base):
+        state = load_phase_sessions(run_id, data_dir=base)
+        phase = _find_phase(state, phase_id)
+        if phase.get("status") not in {
+            STATUS_RUNNING,
+            STATUS_STALE,
+            STATUS_FAILED,
+            STATUS_RETRY_WAITING,
+            STATUS_PENDING,
+        }:
+            raise PhaseSessionError(f"phase {phase_id} cannot adopt result while {phase.get('status')}")
+        if int(phase.get("attempt") or 0) != int(result["phase_attempt"]):
+            raise PhaseSessionError("result attempt does not match current phase attempt")
+        phase_status = _apply_phase_result(phase, result=result, result_path=result_path, handoff_path=handoff_path)
+        if attempt_record is not None:
+            _append_attempt_history(phase, attempt_record)
+        _touch_and_write(base, run_id, state)
+        _append_phase_event(
+            base,
+            run_id=run_id,
+            event_type="phase_attempt_adopted",
+            phase=phase,
+            result_path=_display_path(result_path),
+            handoff_path=_display_path(handoff_path),
+            details={
+                "status": result_status,
+                "failure_kind": (attempt_record or {}).get("failure_kind"),
+                "retry_decision": "adopted",
+            },
+        )
+        _append_phase_event(
+            base,
+            run_id=run_id,
+            event_type=PHASE_STATUS_TO_EVENT[phase_status],
+            phase=phase,
+            result_path=_display_path(result_path),
+            handoff_path=_display_path(handoff_path),
+        )
+        return {"adopted": True, "phase": _phase_summary(phase), "state": state}
+
+
+def abandon_attempt_and_retry(
+    run_id: str,
+    phase_id: str,
+    *,
+    failure_kind: str,
+    data_dir: Path | None = None,
+    launcher_error: str | None = None,
+    next_retry_at: str | None = None,
+    retry_after_seconds: int | None = None,
+    attempt_record: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    base = data_dir or resolve_data_dir()
+    with locked_phase_sessions(run_id, data_dir=base):
+        state = load_phase_sessions(run_id, data_dir=base)
+        phase = _find_phase(state, phase_id)
+        if phase.get("status") not in {STATUS_RUNNING, STATUS_STALE, STATUS_FAILED, STATUS_RETRY_WAITING}:
+            raise PhaseSessionError(f"phase {phase_id} cannot retry from {phase.get('status')}")
+        record = dict(attempt_record or _attempt_record_from_phase(phase))
+        record.setdefault("failure_kind", failure_kind)
+        record.setdefault("retry_decision", "retry")
+        record.setdefault("retry_after_seconds", retry_after_seconds)
+        record.setdefault("adopted", False)
+        _append_attempt_history(phase, record)
+        phase["status"] = STATUS_RETRY_WAITING if next_retry_at else STATUS_PENDING
+        phase["lease_owner"] = None
+        phase["lease_host"] = None
+        phase["lease_pid"] = None
+        phase["lease_command"] = None
+        phase["lease_expires_at"] = None
+        phase["last_error"] = launcher_error or failure_kind
+        phase["last_failure_kind"] = failure_kind
+        phase["last_launcher_error"] = launcher_error
+        phase["next_retry_at"] = next_retry_at
+        _touch_and_write(base, run_id, state)
+        event_type = "phase_attempt_retry_scheduled" if next_retry_at else "phase_attempt_abandoned"
+        _append_phase_event(
+            base,
+            run_id=run_id,
+            event_type=event_type,
+            phase=phase,
+            reason=failure_kind,
+            details={"failure_kind": failure_kind, "next_retry_at": next_retry_at, "retry_after_seconds": retry_after_seconds},
+        )
+        return {"retry": True, "phase": _phase_summary(phase), "state": state}
+
+
+def release_retry_waiting(
+    run_id: str,
+    phase_id: str,
+    *,
+    data_dir: Path | None = None,
+) -> dict[str, Any]:
+    base = data_dir or resolve_data_dir()
+    with locked_phase_sessions(run_id, data_dir=base):
+        state = load_phase_sessions(run_id, data_dir=base)
+        phase = _find_phase(state, phase_id)
+        if phase.get("status") != STATUS_RETRY_WAITING:
+            raise PhaseSessionError(f"phase {phase_id} is not retry_waiting")
+        phase["status"] = STATUS_PENDING
+        phase["next_retry_at"] = None
+        _touch_and_write(base, run_id, state)
+        _append_phase_event(
+            base,
+            run_id=run_id,
+            event_type="phase_attempt_retry_ready",
+            phase=phase,
+            details={"failure_kind": phase.get("last_failure_kind")},
+        )
+        return {"ready": True, "phase": _phase_summary(phase), "state": state}
+
+
+def mark_retry_exhausted(
+    run_id: str,
+    phase_id: str,
+    *,
+    failure_kind: str,
+    data_dir: Path | None = None,
+    launcher_error: str | None = None,
+    attempt_record: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    base = data_dir or resolve_data_dir()
+    with locked_phase_sessions(run_id, data_dir=base):
+        state = load_phase_sessions(run_id, data_dir=base)
+        phase = _find_phase(state, phase_id)
+        record = dict(attempt_record or _attempt_record_from_phase(phase))
+        record.setdefault("failure_kind", failure_kind)
+        record.setdefault("retry_decision", "retry_exhausted")
+        record.setdefault("adopted", False)
+        _append_attempt_history(phase, record)
+        now = utc_now()
+        phase["status"] = STATUS_RETRY_EXHAUSTED
+        phase["completed_at"] = phase.get("completed_at") or now
+        phase["retry_exhausted_at"] = now
+        phase["last_error"] = launcher_error or failure_kind
+        phase["last_failure_kind"] = failure_kind
+        phase["last_launcher_error"] = launcher_error
+        phase["lease_owner"] = None
+        phase["lease_host"] = None
+        phase["lease_pid"] = None
+        phase["lease_command"] = None
+        phase["lease_expires_at"] = None
+        _touch_and_write(base, run_id, state)
+        _append_phase_event(
+            base,
+            run_id=run_id,
+            event_type="phase_attempt_retry_exhausted",
+            phase=phase,
+            reason=failure_kind,
+            details={"failure_kind": failure_kind, "recommended_command": f"bin/swarm phases status {run_id}"},
+        )
+        return {"retry_exhausted": True, "phase": _phase_summary(phase), "state": state}
+
+
+def record_launch_metadata(
+    run_id: str,
+    phase_id: str,
+    *,
+    data_dir: Path | None = None,
+    launch_dir: str | os.PathLike[str] | None = None,
+    command_path: str | os.PathLike[str] | None = None,
+    parent_pid: int | None = None,
+    child_pid: int | None = None,
+    process_group_id: int | None = None,
+    prompt_sha: str | None = None,
+    expected_result_path: str | os.PathLike[str] | None = None,
+    expected_handoff_path: str | os.PathLike[str] | None = None,
+    launch_metadata_error: str | None = None,
+) -> dict[str, Any]:
+    base = data_dir or resolve_data_dir()
+    with locked_phase_sessions(run_id, data_dir=base):
+        state = load_phase_sessions(run_id, data_dir=base)
+        phase = _find_phase(state, phase_id)
+        if phase.get("status") not in ACTIVE_STATUSES:
+            raise PhaseSessionError(f"phase {phase_id} is not active")
+        if launch_dir is not None:
+            phase["launch_dir"] = _display_path(Path(launch_dir))
+        if command_path is not None:
+            phase["command_path"] = _display_path(Path(command_path))
+        if parent_pid is not None:
+            phase["parent_pid"] = int(parent_pid)
+        if child_pid is not None:
+            phase["child_pid"] = int(child_pid)
+        if process_group_id is not None:
+            phase["process_group_id"] = int(process_group_id)
+        if prompt_sha is not None:
+            phase["prompt_sha"] = prompt_sha
+        if expected_result_path is not None:
+            phase["expected_result_path"] = _display_path(Path(expected_result_path))
+        if expected_handoff_path is not None:
+            phase["expected_handoff_path"] = _display_path(Path(expected_handoff_path))
+        if launch_metadata_error is not None:
+            phase["launch_metadata_error"] = launch_metadata_error
+        _touch_and_write(base, run_id, state)
         return {"recorded": True, "phase": _phase_summary(phase), "state": state}
 
 
@@ -652,6 +926,37 @@ def _reset_phase_to_pending(phase: dict[str, Any]) -> None:
     phase["lease_command"] = None
     phase["lease_expires_at"] = None
     phase["last_error"] = None
+    phase["next_retry_at"] = None
+
+
+def _normalize_state(state: dict[str, Any]) -> None:
+    retry_policy = state.get("retry_policy")
+    if not isinstance(retry_policy, dict):
+        state["retry_policy"] = dict(DEFAULT_RETRY_POLICY)
+    else:
+        normalized_policy = dict(DEFAULT_RETRY_POLICY)
+        normalized_policy.update(retry_policy)
+        state["retry_policy"] = normalized_policy
+    for phase in state.get("phases") or []:
+        if not isinstance(phase, dict):
+            continue
+        phase.setdefault("max_session_attempts", None)
+        phase.setdefault("next_retry_at", None)
+        phase.setdefault("last_failure_kind", None)
+        phase.setdefault("last_launcher_error", None)
+        phase.setdefault("retry_exhausted_at", None)
+        phase.setdefault("launch_dir", None)
+        phase.setdefault("command_path", None)
+        phase.setdefault("parent_pid", None)
+        phase.setdefault("child_pid", None)
+        phase.setdefault("process_group_id", None)
+        phase.setdefault("prompt_sha", None)
+        phase.setdefault("expected_result_path", None)
+        phase.setdefault("expected_handoff_path", None)
+        phase.setdefault("launch_metadata_error", None)
+        phase.setdefault("recovery_context_path", None)
+        if not isinstance(phase.get("attempt_history"), list):
+            phase["attempt_history"] = []
 
 
 def _string_list(value: Any) -> list[str]:
@@ -662,6 +967,7 @@ def _string_list(value: Any) -> list[str]:
 
 def _touch_and_write(data_dir: Path, run_id: str, state: dict[str, Any]) -> None:
     state["updated_at"] = utc_now()
+    _normalize_state(state)
     _validate_state(state)
     _atomic_json_write(phase_session_path(run_id, data_dir=data_dir), state)
 
@@ -684,6 +990,22 @@ def _phase_summary(phase: Mapping[str, Any] | None) -> dict[str, Any] | None:
         "result_path",
         "handoff_path",
         "last_error",
+        "max_session_attempts",
+        "next_retry_at",
+        "last_failure_kind",
+        "last_launcher_error",
+        "retry_exhausted_at",
+        "launch_dir",
+        "command_path",
+        "parent_pid",
+        "child_pid",
+        "process_group_id",
+        "prompt_sha",
+        "expected_result_path",
+        "expected_handoff_path",
+        "launch_metadata_error",
+        "recovery_context_path",
+        "attempt_history",
     )
     return {key: phase.get(key) for key in keys}
 
@@ -741,6 +1063,153 @@ def _append_phase_event(
     }
     validate_run_event(row, error_cls=PhaseSessionError)
     return append_run_event(data_dir, row)
+
+
+def _validate_phase_artifacts(
+    run_id: str,
+    phase_id: str,
+    *,
+    json_file: str | os.PathLike[str],
+    expected_status: str | None,
+    data_dir: Path,
+) -> tuple[Path, dict[str, Any], Path, dict[str, Any]]:
+    result_path = _resolve_artifact_path(json_file, data_dir=data_dir, run_id=run_id, label="phase result")
+    result = _load_and_validate_result(result_path)
+    result_status = str(result["status"])
+    if expected_status is not None and result_status != expected_status:
+        raise PhaseSessionError(f"result status {result_status!r} does not match expected {expected_status!r}")
+    if result.get("run_id") != run_id or result.get("phase_id") != phase_id:
+        raise PhaseSessionError("result run_id/phase_id mismatch")
+    if result.get("prepared_plan_sha") != _phase_session_prepared_sha(run_id, data_dir=data_dir):
+        raise PhaseSessionError("result prepared_plan_sha does not match phase-session state")
+    expected_phase_sha = _prepared_phase_content_sha(run_id, phase_id, data_dir=data_dir)
+    if result.get("phase_content_sha") != expected_phase_sha:
+        raise PhaseSessionError("result phase_content_sha does not match prepared phase metadata")
+    handoff_path = _resolve_artifact_path(result["handoff_path"], data_dir=data_dir, run_id=run_id, label="phase handoff")
+    handoff = _load_and_validate_handoff(handoff_path)
+    if handoff.get("run_id") != run_id or handoff.get("phase_id") != phase_id:
+        raise PhaseSessionError("handoff run_id/phase_id mismatch")
+    if handoff.get("phase_attempt") != result.get("phase_attempt"):
+        raise PhaseSessionError("handoff attempt does not match result attempt")
+    if handoff.get("status") != result_status:
+        raise PhaseSessionError("handoff status does not match result status")
+    return result_path, result, handoff_path, handoff
+
+
+def _apply_phase_result(
+    phase: dict[str, Any],
+    *,
+    result: Mapping[str, Any],
+    result_path: Path,
+    handoff_path: Path,
+) -> str:
+    phase_status = RESULT_TO_PHASE_STATUS[str(result["status"])]
+    phase["status"] = phase_status
+    phase["completed_at"] = result["completed_at"]
+    phase["result_path"] = _display_path(result_path)
+    phase["handoff_path"] = _display_path(handoff_path)
+    phase["lease_owner"] = None
+    phase["lease_host"] = None
+    phase["lease_pid"] = None
+    phase["lease_command"] = None
+    phase["lease_expires_at"] = None
+    phase["next_retry_at"] = None
+    phase["last_error"] = _result_error_message(result) if phase_status != STATUS_COMPLETE else None
+    phase["last_failure_kind"] = result.get("failure_kind") if isinstance(result.get("failure_kind"), str) else phase.get("last_failure_kind")
+    return phase_status
+
+
+def _attempt_record_from_phase(phase: Mapping[str, Any]) -> dict[str, Any]:
+    started = _parse_dt(phase.get("started_at"))
+    completed = _parse_dt(phase.get("completed_at")) or _utc_now_dt()
+    elapsed = (completed - started).total_seconds() if started is not None else None
+    return {
+        "attempt": int(phase.get("attempt") or 0),
+        "session_name": phase.get("session_name"),
+        "launcher": _launcher_from_command(phase.get("lease_command")),
+        "lease_owner": phase.get("lease_owner"),
+        "lease_host": phase.get("lease_host"),
+        "lease_pid": phase.get("lease_pid"),
+        "child_pid": phase.get("child_pid"),
+        "process_group_id": phase.get("process_group_id"),
+        "started_at": phase.get("started_at"),
+        "completed_at": _format_dt(completed),
+        "elapsed_seconds": elapsed if elapsed is not None and elapsed >= 0 else None,
+        "launch_dir": phase.get("launch_dir"),
+        "result_path": phase.get("result_path") or phase.get("expected_result_path"),
+        "handoff_path": phase.get("handoff_path") or phase.get("expected_handoff_path"),
+        "returncode": None,
+        "failure_kind": phase.get("last_failure_kind"),
+        "retry_decision": None,
+        "retry_after_seconds": None,
+        "adopted": False,
+        "stdout_tail_path": None,
+        "stderr_tail_path": None,
+        "changed_files": [],
+        "diff_summary_path": None,
+        "recovery_context_path": phase.get("recovery_context_path"),
+    }
+
+
+def _append_attempt_history(phase: dict[str, Any], record: Mapping[str, Any]) -> None:
+    attempt = int(record.get("attempt") or phase.get("attempt") or 0)
+    if attempt <= 0:
+        return
+    item = dict(_attempt_record_from_phase(phase))
+    item.update({key: value for key, value in record.items() if value is not None})
+    item["attempt"] = attempt
+    item["adopted"] = bool(item.get("adopted"))
+    history = phase.setdefault("attempt_history", [])
+    if not isinstance(history, list):
+        history = []
+        phase["attempt_history"] = history
+    signature = (
+        item.get("attempt"),
+        item.get("failure_kind"),
+        item.get("retry_decision"),
+        item.get("returncode"),
+        item.get("adopted"),
+    )
+    for existing in history:
+        if not isinstance(existing, Mapping):
+            continue
+        if (
+            existing.get("attempt"),
+            existing.get("failure_kind"),
+            existing.get("retry_decision"),
+            existing.get("returncode"),
+            existing.get("adopted"),
+        ) == signature:
+            return
+    history.append(item)
+
+
+def _launcher_from_command(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    if ":" in value:
+        return value.rsplit(":", 1)[-1]
+    return value or None
+
+
+def _phase_session_prepared_sha(run_id: str, *, data_dir: Path) -> str:
+    state = load_phase_sessions(run_id, data_dir=data_dir)
+    value = state.get("prepared_plan_sha")
+    if isinstance(value, str):
+        return value
+    raise PhaseSessionError("phase-session prepared_plan_sha missing")
+
+
+def _prepared_phase_content_sha(run_id: str, phase_id: str, *, data_dir: Path) -> str:
+    path = _prepared_artifact_path(run_id, data_dir=data_dir)
+    try:
+        prepared = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise PhaseSessionError(f"prepared artifact unavailable for phase hash check: {path}") from exc
+    for phase in prepared.get("phase_map") or []:
+        if isinstance(phase, Mapping) and phase.get("phase_id") == phase_id and isinstance(phase.get("content_sha"), str):
+            return str(phase["content_sha"])
+    raise PhaseSessionError(f"prepared phase metadata missing for phase {phase_id}")
 
 
 def _load_and_validate_result(path: Path) -> dict[str, Any]:
@@ -874,11 +1343,14 @@ def _format_dt(value: datetime) -> str:
 __all__ = [
     "PhaseSessionError",
     "PhaseSessionLockTimeout",
+    "abandon_attempt_and_retry",
+    "adopt_phase_result",
     "claim_next_phase",
     "generate_lease_owner",
     "init_phase_sessions",
     "load_phase_sessions",
     "locked_phase_sessions",
+    "mark_retry_exhausted",
     "phase_handoff_path",
     "phase_result_path",
     "phase_session_path",
@@ -886,6 +1358,8 @@ __all__ = [
     "read_phase_session_summary",
     "reap_expired_phases",
     "record_phase_result",
+    "record_launch_metadata",
+    "release_retry_waiting",
     "refresh_phase",
     "start_phase",
 ]

@@ -73,6 +73,9 @@
       "type": "array",
       "items": { "type": "object" }
     },
-    "error": { "type": ["object", "null"] }
+    "error": { "type": ["object", "null"] },
+    "retryable": { "type": "boolean" },
+    "failure_kind": { "type": "string" },
+    "retry_after_seconds": { "type": ["integer", "null"], "minimum": 0 }
   }
 }

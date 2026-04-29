@@ -254,6 +254,84 @@ class ResumeTests(unittest.TestCase):
             self.assertEqual(report.resume_from, {"phase_id": "1", "work_unit_id": None})
             self.assertEqual(report.phase_session["status"], "ready")
 
+    def test_retry_waiting_phase_session_is_reported_read_only(self) -> None:
+        with isolated_data_dir() as root:
+            run_dir = root / "runs" / RUN_ID
+            run_dir.mkdir(parents=True)
+            artifact_path = run_dir / "prepared_plan.v1.json"
+            artifact_path.write_text(
+                json.dumps({"run_id": RUN_ID, "status": "accepted"}),
+                encoding="utf-8",
+            )
+            state = {
+                "schema_version": 1,
+                "run_id": RUN_ID,
+                "prepared_artifact_path": str(artifact_path),
+                "prepared_plan_sha": "a" * 64,
+                "created_at": "2026-04-29T00:00:00Z",
+                "updated_at": "2026-04-29T00:00:00Z",
+                "mode": "cli-pump",
+                "lease_policy": {
+                    "claim_ttl_seconds": 900,
+                    "running_ttl_seconds": 14400,
+                    "refresh_interval_seconds": 300,
+                },
+                "retry_policy": {
+                    "max_session_attempts": 3,
+                    "max_recovery_attempts": 1,
+                    "recovery_timeout_threshold_seconds": 600,
+                    "retry_sleep_threshold_seconds": 60,
+                    "short_retry_backoff_seconds": 0,
+                    "max_retry_after_seconds": 1800,
+                    "worktree_baseline_path": None,
+                    "worktree_baseline_warning": None,
+                },
+                "phases": [
+                    {
+                        "phase_id": "1",
+                        "phase_index": 0,
+                        "title": "One",
+                        "depends_on_phase_ids": [],
+                        "status": "retry_waiting",
+                        "lease_owner": None,
+                        "lease_host": None,
+                        "lease_pid": None,
+                        "lease_command": None,
+                        "lease_expires_at": None,
+                        "attempt": 1,
+                        "session_name": "s",
+                        "started_at": "2026-04-29T00:00:00Z",
+                        "completed_at": None,
+                        "result_path": None,
+                        "handoff_path": None,
+                        "last_error": "rate_limit",
+                        "next_retry_at": "2026-04-29T01:00:00Z",
+                        "last_failure_kind": "rate_limit",
+                        "last_launcher_error": "rate_limit",
+                        "attempt_history": [],
+                    }
+                ],
+            }
+            (run_dir / "phase_sessions.v1.json").write_text(json.dumps(state), encoding="utf-8")
+            with (root / "runs" / "index.jsonl").open("w", encoding="utf-8") as f:
+                f.write(
+                    json.dumps(
+                        {
+                            "run_id": RUN_ID,
+                            "bd_epic_id": "swarm-123",
+                            "status": "accepted",
+                            "prepared_artifact_path": str(artifact_path),
+                        }
+                    )
+                    + "\n"
+                )
+
+            report = build_resume_report("swarm-123")
+
+            self.assertEqual(report.status, "ready")
+            self.assertEqual(report.phase_session["status"], "retry_waiting")
+            self.assertEqual(report.resume_from, {"phase_id": "1", "work_unit_id": None})
+
 
 class RunStateTests(unittest.TestCase):
     def test_active_run_write_and_checkpoint_round_trip(self) -> None:

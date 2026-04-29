@@ -117,11 +117,18 @@ phase-session state:
 ```bash
 bin/swarm phases status <run-id>
 bin/swarm phases init <run-id>
+bin/swarm phases recover <run-id> --json --dry-run
 bin/swarm phases pump <run-id> --launcher manual --max-phases 1
 bin/swarm phases pump <run-id> --launcher claude-print --max-phases all --init
 bin/swarm do --prepared <run-id> --phase-sessions auto
 bin/swarm context render --run-id <run-id> --phase <phase-id> --role dispatcher --json
 ```
+
+`phases recover` reconciles existing phase-session state without launching a
+new child. The foreground pump and `do --prepared ... --phase-sessions auto`
+run the same reconciliation before claiming work, so rerunning them after an
+interruption adopts valid artifacts, preserves abandoned-attempt evidence, and
+does not retry blocked or input-gated phases.
 
 `manual` is the always-available launcher and prints the rendered dispatcher
 prompt plus the follow-up result command. `fake-test` is for deterministic unit

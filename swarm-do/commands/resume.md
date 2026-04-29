@@ -29,12 +29,17 @@ Parse the JSON manifest and handle `status` exactly:
 - `ready`: reload the original BEADS epic/thread context, then resume the
   dispatcher from `resume_from.phase_id` and `resume_from.work_unit_id`. If the
   manifest includes `phase_session`, use its `recommended_command` instead of
-  recomputing the next phase.
+  recomputing the next phase. For phase-session `ready`, run
+  `bin/swarm do --prepared <run-id> --phase-sessions auto` so reconciliation
+  happens before any new phase claim.
 
 Phase-session resume states are read-only in this command. `resume` reports
-`ready`, `stale`, `blocked`, `needs_input`, or `complete` from
-`phase_sessions.v1.json`, but only `bin/swarm phases ...` commands may mutate
-that file.
+`ready`, `stale`, `blocked`, `needs_input`, `retry_waiting`,
+`retry_exhausted`, `failed_nonretryable`, or `complete` from
+`phase_sessions.v1.json`, but only `bin/swarm phases ...` and
+`bin/swarm do --prepared ... --phase-sessions auto` may mutate that file.
+Use `bin/swarm phases recover <run-id> --json --dry-run` to inspect recovery
+actions without mutation.
 
 Do not add a second orchestration protocol. Reuse the `/swarmdaddy:do` dispatch
 loop from `skills/swarmdaddy/SKILL.md`, injecting the manifest as resume context

@@ -93,6 +93,10 @@ def build_resume_report(bd_epic_id: str) -> ResumeReport:
         "stale",
         "blocked",
         "needs_input",
+        "retry_waiting",
+        "retry_exhausted",
+        "failed_nonretryable",
+        "failed",
         "waiting",
     }:
         status = READY
@@ -140,6 +144,16 @@ def format_resume_report(report: ResumeReport, *, merge: bool = False) -> str:
         next_command = report.phase_session.get("recommended_command")
         if next_command:
             lines.append(f"  next_command: {next_command}")
+        for phase in report.phase_session.get("phases") or []:
+            if isinstance(phase, dict) and phase.get("last_failure_kind"):
+                lines.append(
+                    f"  phase_failure: phase={phase.get('phase_id')} kind={phase.get('last_failure_kind')}"
+                )
+                if phase.get("recovery_context_path"):
+                    lines.append(f"  recovery_context: {phase.get('recovery_context_path')}")
+                if phase.get("next_retry_at"):
+                    lines.append(f"  next_retry_at: {phase.get('next_retry_at')}")
+                break
     if report.completed_units:
         lines.append("  completed_units:")
         lines.extend(f"    - {unit}" for unit in report.completed_units)
@@ -267,7 +281,14 @@ def _phase_session_resume_from(phase_session: dict[str, Any]) -> dict[str, str |
         if isinstance(phase, dict) and isinstance(phase.get("phase_id"), str):
             return {"phase_id": phase["phase_id"], "work_unit_id": None}
     for phase in phase_session.get("phases") or []:
-        if isinstance(phase, dict) and phase.get("status") in {"stale", "blocked", "needs_input"}:
+        if isinstance(phase, dict) and phase.get("status") in {
+            "stale",
+            "blocked",
+            "needs_input",
+            "retry_waiting",
+            "retry_exhausted",
+            "failed",
+        }:
             phase_id = phase.get("phase_id")
             return {"phase_id": phase_id if isinstance(phase_id, str) else None, "work_unit_id": None}
     return {"phase_id": None, "work_unit_id": None}

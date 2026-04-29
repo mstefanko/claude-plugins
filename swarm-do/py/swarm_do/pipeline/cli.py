@@ -716,6 +716,14 @@ def _phase_session_status_label(status: str) -> str:
         return "BLOCKED"
     if status == "failed":
         return "FAILED"
+    if status == "failed_nonretryable":
+        return "FAILED_NONRETRYABLE"
+    if status == "retry_waiting":
+        return "RETRY_WAITING"
+    if status == "retry_exhausted":
+        return "RETRY_EXHAUSTED"
+    if status == "adopted_completion":
+        return "ADOPTED_COMPLETION"
     if status == "ineligible":
         return "PHASE_LAUNCHER_INELIGIBLE"
     if status == "launcher_error":
@@ -1203,6 +1211,7 @@ def cmd_context(args: argparse.Namespace) -> int:
 
 def cmd_phases(args: argparse.Namespace) -> int:
     from .phase_pump import format_pump_result, pump_phases
+    from .phase_recovery import reconcile_phase_sessions
     from .phase_sessions import (
         claim_next_phase,
         init_phase_sessions,
@@ -1244,6 +1253,9 @@ def cmd_phases(args: argparse.Namespace) -> int:
         elif command == "reap":
             payload = reap_expired_phases(args.run_id)
             exit_code = 0
+        elif command == "recover":
+            payload = reconcile_phase_sessions(args.run_id, dry_run=args.dry_run)
+            exit_code = 0 if payload.get("status") not in {"drift"} else 3
         elif command in {"complete", "fail", "block", "needs-input"}:
             expected = {
                 "complete": "complete",
@@ -1298,6 +1310,8 @@ def cmd_phases(args: argparse.Namespace) -> int:
         print(format_pump_result(payload))
     elif args.phases_command == "status":
         print(_format_phase_status(payload))
+    elif args.phases_command == "recover":
+        print(_format_phase_recovery(payload))
     else:
         print(json.dumps(payload, indent=2, sort_keys=True))
     return exit_code
@@ -1319,6 +1333,14 @@ def _format_phase_status(payload: Mapping[str, Any]) -> str:
                 f"  - {phase.get('phase_id')}: {phase.get('status')} "
                 f"attempt={phase.get('attempt')} depends={','.join(phase.get('depends_on_phase_ids') or []) or '-'}"
             )
+            if phase.get("last_failure_kind"):
+                lines.append(f"      failure: {phase.get('last_failure_kind')}")
+            if phase.get("next_retry_at"):
+                lines.append(f"      next_retry_at: {phase.get('next_retry_at')}")
+            if phase.get("launch_dir"):
+                lines.append(f"      launch_dir: {phase.get('launch_dir')}")
+            if phase.get("recovery_context_path"):
+                lines.append(f"      recovery: {phase.get('recovery_context_path')}")
     if payload.get("recommended_command"):
         lines.append(f"  next_command: {payload.get('recommended_command')}")
     dependencies = payload.get("dependency_status") or []
@@ -1328,6 +1350,29 @@ def _format_phase_status(payload: Mapping[str, Any]) -> str:
     drift = payload.get("drift") or []
     for item in drift:
         lines.append(f"  drift: {item}")
+    return "\n".join(lines)
+
+
+def _format_phase_recovery(payload: Mapping[str, Any]) -> str:
+    lines = [f"phase recovery: {payload.get('status')}"]
+    if payload.get("blocked_reason"):
+        lines.append(f"  reason: {payload.get('blocked_reason')}")
+    for action in payload.get("actions") or []:
+        if not isinstance(action, Mapping):
+            continue
+        bits = [
+            f"phase={action.get('phase_id')}",
+            f"attempt={action.get('attempt')}",
+            f"action={action.get('action')}",
+        ]
+        if action.get("failure_kind"):
+            bits.append(f"failure={action.get('failure_kind')}")
+        if action.get("next_retry_at"):
+            bits.append(f"next_retry_at={action.get('next_retry_at')}")
+        lines.append("  - " + " ".join(bits))
+    status = payload.get("phase_status")
+    if isinstance(status, Mapping) and status.get("recommended_command"):
+        lines.append(f"  next_command: {status.get('recommended_command')}")
     return "\n".join(lines)
 
 
@@ -1882,6 +1927,11 @@ def _build_parser() -> argparse.ArgumentParser:
         p.set_defaults(func=cmd_phases)
     p = phases_sub.add_parser("reap")
     p.add_argument("run_id")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_phases)
+    p = phases_sub.add_parser("recover")
+    p.add_argument("run_id")
+    p.add_argument("--dry-run", action="store_true")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_phases)
     p = phases_sub.add_parser("pump")

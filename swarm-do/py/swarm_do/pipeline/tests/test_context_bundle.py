@@ -125,6 +125,39 @@ class ContextBundleTests(unittest.TestCase):
             self.assertIn("attempt ten summary", previous)
             self.assertNotIn("attempt two summary", previous)
 
+    def test_retry_dispatcher_prompt_includes_recovery_context(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            recovery_path = data / "runs" / run_id / "phase_recovery" / "1" / "attempt-1.recovery.md"
+            recovery_path.parent.mkdir(parents=True, exist_ok=True)
+            recovery_path.write_text(
+                "# Recovery Context\n- launch_dir: data/runs/x/phase_launches/1/attempt-1\n- changed_files: docs/x.md\n",
+                encoding="utf-8",
+            )
+            state_path = phase_session_path(run_id, data_dir=data)
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            phase = state["phases"][0]
+            phase["attempt"] = 1
+            phase["status"] = "pending"
+            phase["attempt_history"] = [
+                {
+                    "attempt": 1,
+                    "failure_kind": "timeout",
+                    "retry_decision": "recovery_retry",
+                    "adopted": False,
+                    "recovery_context_path": str(recovery_path),
+                }
+            ]
+            state_path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+            result = render_context_bundle(run_id=run_id, phase_id="1", role="dispatcher", data_dir=data, repo_root=repo)
+
+            prompt = Path(result["prompt_path"]).read_text(encoding="utf-8")
+            self.assertIn("## Recovery Context", prompt)
+            self.assertIn("attempt-1.recovery.md", prompt)
+            self.assertEqual(result["context"]["recovery_context_path"], str(recovery_path))
+
 
 def _write_handoff(
     data: Path,

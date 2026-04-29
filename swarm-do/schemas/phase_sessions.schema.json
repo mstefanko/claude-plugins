@@ -43,6 +43,20 @@
         "refresh_interval_seconds": { "type": "integer", "minimum": 1 }
       }
     },
+    "retry_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_session_attempts": { "type": "integer", "minimum": 1 },
+        "max_recovery_attempts": { "type": "integer", "minimum": 0 },
+        "recovery_timeout_threshold_seconds": { "type": "integer", "minimum": 1 },
+        "retry_sleep_threshold_seconds": { "type": "integer", "minimum": 0 },
+        "short_retry_backoff_seconds": { "type": "integer", "minimum": 0 },
+        "max_retry_after_seconds": { "type": "integer", "minimum": 0 },
+        "worktree_baseline_path": { "type": ["string", "null"] },
+        "worktree_baseline_warning": { "type": ["string", "null"] }
+      }
+    },
     "phases": {
       "type": "array",
       "items": {
@@ -91,7 +105,9 @@
               "failed",
               "blocked",
               "needs_input",
-              "stale"
+              "stale",
+              "retry_waiting",
+              "retry_exhausted"
             ]
           },
           "lease_owner": { "type": ["string", "null"] },
@@ -105,7 +121,62 @@
           "completed_at": { "type": ["string", "null"], "format": "date-time" },
           "result_path": { "type": ["string", "null"] },
           "handoff_path": { "type": ["string", "null"] },
-          "last_error": { "type": ["string", "null"] }
+          "last_error": { "type": ["string", "null"] },
+          "max_session_attempts": { "type": ["integer", "null"], "minimum": 1 },
+          "next_retry_at": { "type": ["string", "null"], "format": "date-time" },
+          "last_failure_kind": { "type": ["string", "null"] },
+          "last_launcher_error": { "type": ["string", "null"] },
+          "retry_exhausted_at": { "type": ["string", "null"], "format": "date-time" },
+          "launch_dir": { "type": ["string", "null"] },
+          "command_path": { "type": ["string", "null"] },
+          "parent_pid": { "type": ["integer", "null"], "minimum": 0 },
+          "child_pid": { "type": ["integer", "null"], "minimum": 0 },
+          "process_group_id": { "type": ["integer", "null"], "minimum": 0 },
+          "prompt_sha": {
+            "type": ["string", "null"],
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "expected_result_path": { "type": ["string", "null"] },
+          "expected_handoff_path": { "type": ["string", "null"] },
+          "launch_metadata_error": { "type": ["string", "null"] },
+          "recovery_context_path": { "type": ["string", "null"] },
+          "attempt_history": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "attempt": { "type": "integer", "minimum": 1 },
+                "session_name": { "type": ["string", "null"] },
+                "launcher": { "type": ["string", "null"] },
+                "lease_owner": { "type": ["string", "null"] },
+                "lease_host": { "type": ["string", "null"] },
+                "lease_pid": { "type": ["integer", "null"], "minimum": 0 },
+                "child_pid": { "type": ["integer", "null"], "minimum": 0 },
+                "process_group_id": { "type": ["integer", "null"], "minimum": 0 },
+                "started_at": { "type": ["string", "null"], "format": "date-time" },
+                "completed_at": { "type": ["string", "null"], "format": "date-time" },
+                "elapsed_seconds": { "type": ["number", "null"], "minimum": 0 },
+                "launch_dir": { "type": ["string", "null"] },
+                "result_path": { "type": ["string", "null"] },
+                "handoff_path": { "type": ["string", "null"] },
+                "returncode": { "type": ["integer", "null"] },
+                "failure_kind": { "type": ["string", "null"] },
+                "retry_decision": { "type": ["string", "null"] },
+                "retry_after_seconds": { "type": ["integer", "null"], "minimum": 0 },
+                "adopted": { "type": "boolean" },
+                "partial_artifacts": { "type": "boolean" },
+                "stdout_tail_path": { "type": ["string", "null"] },
+                "stderr_tail_path": { "type": ["string", "null"] },
+                "changed_files": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                },
+                "diff_summary_path": { "type": ["string", "null"] },
+                "recovery_context_path": { "type": ["string", "null"] }
+              }
+            }
+          }
         }
       }
     }

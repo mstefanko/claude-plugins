@@ -9,8 +9,9 @@ from pathlib import Path
 from unittest import mock
 
 from swarm_do.pipeline.paths import REPO_ROOT
+from swarm_do.pipeline import phase_pump
 from swarm_do.pipeline.phase_pump import pump_phases
-from swarm_do.pipeline.phase_sessions import init_phase_sessions, phase_session_path, phase_status
+from swarm_do.pipeline.phase_sessions import claim_next_phase, init_phase_sessions, phase_session_path, phase_status, start_phase
 from swarm_do.pipeline.run_state import active_run_path, load_active_run, write_active_run
 from swarm_do.pipeline.tests.phase_session_fixtures import make_prepared_run
 
@@ -105,7 +106,7 @@ class PhasePumpTests(unittest.TestCase):
                     data_dir=data,
                 )
 
-            self.assertEqual(result["status"], "failed")
+            self.assertEqual(result["status"], "failed_nonretryable")
             status = phase_status(run_id, data_dir=data, repo_root=repo)
             self.assertEqual(status["phases"][0]["status"], "failed")
             self.assertEqual(status["phases"][1]["status"], "pending")
@@ -127,10 +128,14 @@ class PhasePumpTests(unittest.TestCase):
                     data_dir=data,
                 )
 
-            self.assertEqual(result["status"], "launcher_error")
+            self.assertEqual(result["status"], "max_phases")
+            state = json.loads(phase_session_path(run_id, data_dir=data).read_text(encoding="utf-8"))
+            self.assertEqual(state["phases"][0]["status"], "pending")
+            self.assertEqual(state["phases"][0]["last_failure_kind"], "launcher_nonzero_no_artifacts")
+            self.assertTrue(state["phases"][0]["attempt_history"])
             self.assertNotEqual(phase_status(run_id, data_dir=data, repo_root=repo)["status"], "complete")
 
-    def test_claude_print_nonzero_complete_artifacts_do_not_complete_phase(self) -> None:
+    def test_claude_print_nonzero_complete_artifacts_are_adopted(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
             runner = _claude_runner(data, run_id, ["complete"], returncodes=[1])
@@ -145,8 +150,12 @@ class PhasePumpTests(unittest.TestCase):
                     data_dir=data,
                 )
 
-            self.assertEqual(result["status"], "launcher_error")
-            self.assertNotEqual(phase_status(run_id, data_dir=data, repo_root=repo)["status"], "complete")
+            self.assertEqual(result["status"], "complete")
+            status = phase_status(run_id, data_dir=data, repo_root=repo)
+            self.assertEqual(status["status"], "complete")
+            history = status["phases"][0]["attempt_history"]
+            self.assertEqual(history[0]["failure_kind"], "launcher_nonzero_with_artifacts")
+            self.assertTrue(history[0]["adopted"])
 
     def test_claude_print_replayed_fixture_records_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -164,9 +173,89 @@ class PhasePumpTests(unittest.TestCase):
                     data_dir=data,
                 )
 
-            self.assertEqual(result["status"], "max_phases")
+            self.assertEqual(result["status"], "complete")
             status = phase_status(run_id, data_dir=data, repo_root=repo)
             self.assertEqual(status["phases"][0]["status"], "complete")
+
+    def test_parent_death_with_complete_artifacts_is_adopted_on_next_pump(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=2)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            claim_next_phase(run_id, data_dir=data, repo_root=repo, lease_owner="owner-1")
+            started = start_phase(run_id, "1", launcher="claude-print", lease_owner="owner-1", data_dir=data)
+            attempt = int(started["phase"]["attempt"])
+            result_path = data / "runs" / run_id / "phase_results" / "1" / f"attempt-{attempt}.result.json"
+            handoff_path = data / "runs" / run_id / "phase_handoffs" / "1" / f"attempt-{attempt}.handoff.json"
+            _write_claude_artifacts(data, run_id, "1", attempt, result_path, handoff_path, status="complete")
+
+            result = pump_phases(run_id, launcher="fake-test", max_phases=None, data_dir=data)
+
+            self.assertEqual(result["status"], "complete")
+            self.assertEqual(phase_status(run_id, data_dir=data, repo_root=repo)["status"], "complete")
+
+    def test_parent_death_with_blocked_artifacts_is_adopted_and_stops(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=2)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            claim_next_phase(run_id, data_dir=data, repo_root=repo, lease_owner="owner-1")
+            started = start_phase(run_id, "1", launcher="claude-print", lease_owner="owner-1", data_dir=data)
+            attempt = int(started["phase"]["attempt"])
+            result_path = data / "runs" / run_id / "phase_results" / "1" / f"attempt-{attempt}.result.json"
+            handoff_path = data / "runs" / run_id / "phase_handoffs" / "1" / f"attempt-{attempt}.handoff.json"
+            _write_claude_artifacts(data, run_id, "1", attempt, result_path, handoff_path, status="blocked")
+
+            result = pump_phases(run_id, launcher="fake-test", max_phases=None, data_dir=data)
+
+            self.assertEqual(result["status"], "blocked")
+            status = phase_status(run_id, data_dir=data, repo_root=repo)
+            self.assertEqual(status["phases"][0]["status"], "blocked")
+            self.assertEqual(status["phases"][1]["status"], "pending")
+
+    def test_real_claude_launcher_starts_new_session_and_records_child_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            claim_next_phase(run_id, data_dir=data, repo_root=repo, lease_owner="owner-1")
+            start_phase(run_id, "1", launcher="claude-print", lease_owner="owner-1", data_dir=data)
+            launch_dir = data / "runs" / run_id / "phase_launches" / "1" / "attempt-1"
+            launch_dir.mkdir(parents=True)
+            command_path = launch_dir / "command.json"
+            command_path.write_text("{}", encoding="utf-8")
+            popen_kwargs = {}
+
+            class FakeProc:
+                pid = 12345
+                returncode = 0
+
+                def communicate(self, timeout=None):
+                    return "{}", ""
+
+            def fake_popen(*args, **kwargs):
+                popen_kwargs.update(kwargs)
+                return FakeProc()
+
+            with mock.patch("swarm_do.pipeline.phase_pump.subprocess.Popen", side_effect=fake_popen), mock.patch(
+                "swarm_do.pipeline.phase_pump.os.getpgid",
+                return_value=12345,
+            ):
+                phase_pump._run_real_claude(
+                    ["claude"],
+                    run_id=run_id,
+                    phase_id="1",
+                    lease_owner="owner-1",
+                    data_dir=data,
+                    launch_dir=launch_dir,
+                    command_path=command_path,
+                    metadata={},
+                    prompt_sha="a" * 64,
+                    result_path=data / "result.json",
+                    handoff_path=data / "handoff.json",
+                )
+
+            self.assertTrue(popen_kwargs["start_new_session"])
+            state = json.loads(phase_session_path(run_id, data_dir=data).read_text(encoding="utf-8"))
+            self.assertEqual(state["phases"][0]["child_pid"], 12345)
+            self.assertEqual(state["phases"][0]["process_group_id"], 12345)
 
     def test_phase_checkpoint_does_not_reuse_unrelated_active_run(self) -> None:
         with tempfile.TemporaryDirectory() as td:

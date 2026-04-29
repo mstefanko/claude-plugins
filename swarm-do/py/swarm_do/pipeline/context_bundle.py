@@ -65,6 +65,7 @@ def render_context_bundle(
     shared_decisions_md_path = context_dir / "shared-decisions.md"
     previous_handoff_path = context_dir / "previous-handoff.md"
     phase_summary_path = context_dir / "phase-summary.md"
+    recovery_context_path, recovery_context_sha, recovery_context_text = _recovery_context(run_id, phase_id, data_dir=base)
 
     phase_text, phase_warning = _phase_text(prepared, phase_id, repo_root=root)
     warnings: list[str] = []
@@ -104,6 +105,8 @@ def render_context_bundle(
     shared_sidecar_path = shared_decisions_path(run_id, data_dir=base)
     if shared_sidecar_path.is_file():
         source_list.append({"path": _display_path(shared_sidecar_path), "sha": _sha256_file(shared_sidecar_path), "kind": "shared_decisions"})
+    if recovery_context_path is not None and recovery_context_sha is not None:
+        source_list.append({"path": _display_path(recovery_context_path), "sha": recovery_context_sha, "kind": "phase_recovery_context"})
 
     prompt = _build_prompt(
         run_id=run_id,
@@ -121,6 +124,8 @@ def render_context_bundle(
         previous_handoff_path=_display_path(previous_handoff_path),
         decisions_path=_display_path(decisions_path),
         shared_decisions_path=_display_path(shared_decisions_md_path),
+        recovery_context_path=_display_path(recovery_context_path) if recovery_context_path else None,
+        recovery_context_text=recovery_context_text,
     )
     prompt, truncated = _enforce_prompt_budget(
         prompt,
@@ -142,6 +147,8 @@ def render_context_bundle(
             previous_handoff_path=_display_path(previous_handoff_path),
             decisions_path=_display_path(decisions_path),
             shared_decisions_path=_display_path(shared_decisions_md_path),
+            recovery_context_path=_display_path(recovery_context_path) if recovery_context_path else None,
+            recovery_context_text=recovery_context_text,
         ),
     )
     if truncated:
@@ -168,6 +175,8 @@ def render_context_bundle(
         "prior_decisions_path": _display_path(decisions_path),
         "previous_handoff_path": _display_path(previous_handoff_path),
         "shared_decisions_path": _display_path(shared_decisions_md_path),
+        "recovery_context_path": _display_path(recovery_context_path) if recovery_context_path else None,
+        "recovery_context_sha": recovery_context_sha,
         "source_list": source_list,
         "warnings": sorted(set(warnings)),
         "max_prompt_bytes": max_prompt_bytes,
@@ -289,6 +298,39 @@ def _prior_handoffs(base: Path, run_id: str, phase_ids: list[str]) -> list[dict[
     return results
 
 
+def _recovery_context(base_run_id: str, phase_id: str, *, data_dir: Path) -> tuple[Path | None, str | None, str | None]:
+    state_path = phase_session_path(base_run_id, data_dir=data_dir)
+    if not state_path.is_file():
+        return None, None, None
+    try:
+        state = load_phase_sessions(base_run_id, data_dir=data_dir)
+    except Exception:
+        return None, None, None
+    for phase in state.get("phases") or []:
+        if not isinstance(phase, Mapping) or phase.get("phase_id") != phase_id:
+            continue
+        if phase.get("status") != "pending" or int(phase.get("attempt") or 0) <= 0:
+            return None, None, None
+        path_value = phase.get("recovery_context_path")
+        if not isinstance(path_value, str):
+            history = [item for item in phase.get("attempt_history") or [] if isinstance(item, Mapping)]
+            for item in reversed(history):
+                if isinstance(item.get("recovery_context_path"), str):
+                    path_value = str(item["recovery_context_path"])
+                    break
+        if not isinstance(path_value, str):
+            return None, None, None
+        path = Path(path_value)
+        if not path.is_absolute():
+            candidates = [REPO_ROOT / path, data_dir / path]
+            path = next((candidate for candidate in candidates if candidate.is_file()), candidates[0])
+        if not path.is_file():
+            return None, None, None
+        text = path.read_text(encoding="utf-8", errors="replace")
+        return path, _sha256_file(path), _truncate_utf8(text, 6000)
+    return None, None, None
+
+
 def _handoff_attempt(path: Path) -> int:
     match = re.match(r"attempt-(\d+)\.handoff\.json$", path.name)
     return int(match.group(1)) if match else -1
@@ -354,6 +396,8 @@ def _build_prompt(
     previous_handoff_path: str,
     decisions_path: str,
     shared_decisions_path: str,
+    recovery_context_path: str | None,
+    recovery_context_text: str | None,
 ) -> str:
     lines = [
         f"# SwarmDaddy Phase Context: {role}",
@@ -387,11 +431,21 @@ def _build_prompt(
             f"- previous_handoff_path: {previous_handoff_path}",
             f"- prior_decisions_path: {decisions_path}",
             f"- shared_decisions_path: {shared_decisions_path}",
-            "",
-            "## Source Artifacts",
+        "",
+        "## Source Artifacts",
         ]
     )
     lines.extend(f"- {item['kind']}: {item['path']} sha={item['sha']}" for item in source_list)
+    if recovery_context_path and recovery_context_text:
+        lines.extend(
+            [
+                "",
+                "## Recovery Context",
+                f"- recovery_context_path: {recovery_context_path}",
+                "",
+                recovery_context_text.rstrip(),
+            ]
+        )
     lines.extend(["", "## Phase Text", phase_text or "(phase text unavailable)", ""])
     if unit is not None and unit.get("handoff_notes"):
         lines.extend(["## Unit Handoff Notes", str(unit.get("handoff_notes")), ""])
