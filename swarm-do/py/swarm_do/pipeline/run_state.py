@@ -103,6 +103,12 @@ def write_checkpoint_from_active(
         "phase_map": _dict_list(active_state.get("phase_map")),
         "review_findings": _dict_list(active_state.get("review_findings")),
         "work_unit_artifacts": _dict_or_empty(active_state.get("work_unit_artifacts")),
+        "phase_session_status": active_state.get("phase_session_status"),
+        "phase_session_phase_id": active_state.get("phase_session_phase_id"),
+        "phase_session_phase_index": active_state.get("phase_session_phase_index"),
+        "phase_session_attempt": active_state.get("phase_session_attempt"),
+        "phase_session_state_path": active_state.get("phase_session_state_path"),
+        "phase_session_lease_owner": active_state.get("phase_session_lease_owner"),
     }
     path = checkpoint_path(base, run_id)
     _atomic_json_write(path, checkpoint)
@@ -147,6 +153,12 @@ def _active_run_payload(state: Mapping[str, Any]) -> dict[str, Any]:
         "phase_map": _dict_list(state.get("phase_map")),
         "review_findings": _dict_list(state.get("review_findings")),
         "work_unit_artifacts": _dict_or_empty(state.get("work_unit_artifacts")),
+        "phase_session_status": state.get("phase_session_status"),
+        "phase_session_phase_id": state.get("phase_session_phase_id"),
+        "phase_session_phase_index": state.get("phase_session_phase_index"),
+        "phase_session_attempt": state.get("phase_session_attempt"),
+        "phase_session_state_path": state.get("phase_session_state_path"),
+        "phase_session_lease_owner": state.get("phase_session_lease_owner"),
     }
     if not isinstance(payload["run_id"], str) or not payload["run_id"]:
         raise ValueError("active run state requires run_id")

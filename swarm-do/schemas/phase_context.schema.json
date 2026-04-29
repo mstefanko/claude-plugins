@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/07/schema#",
+  "$id": "https://mstefanko-plugins/swarm-do/phase_context.schema.json#v1",
+  "title": "swarm-do phase context bundle metadata",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "phase_id",
+    "phase_index",
+    "role",
+    "work_unit_id",
+    "source_artifact_path",
+    "prepared_plan_sha",
+    "phase_content_sha",
+    "work_unit_artifact_path",
+    "work_unit_artifact_sha",
+    "allowed_files",
+    "blocked_files",
+    "context_files",
+    "acceptance_criteria",
+    "validation_commands",
+    "prior_decisions_path",
+    "previous_handoff_path",
+    "source_list",
+    "warnings",
+    "max_prompt_bytes",
+    "prompt_bytes",
+    "estimated_tokens",
+    "rendered_prompt_path"
+  ],
+  "properties": {
+    "schema_version": { "type": "integer", "enum": [1] },
+    "run_id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "phase_id": { "type": "string" },
+    "phase_index": { "type": "integer", "minimum": 0 },
+    "role": { "type": "string" },
+    "work_unit_id": { "type": ["string", "null"] },
+    "source_artifact_path": { "type": "string" },
+    "prepared_plan_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "phase_content_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "work_unit_artifact_path": { "type": "string" },
+    "work_unit_artifact_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "allowed_files": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "blocked_files": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "context_files": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "acceptance_criteria": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "validation_commands": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "prior_decisions_path": { "type": "string" },
+    "previous_handoff_path": { "type": "string" },
+    "source_list": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "max_prompt_bytes": { "type": "integer", "minimum": 1 },
+    "prompt_bytes": { "type": "integer", "minimum": 0 },
+    "estimated_tokens": { "type": "integer", "minimum": 0 },
+    "rendered_prompt_path": { "type": "string" }
+  }
+}

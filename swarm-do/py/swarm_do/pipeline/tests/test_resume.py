@@ -194,6 +194,66 @@ class ResumeTests(unittest.TestCase):
             self.assertEqual(report.status, "ready")
             self.assertEqual(report.resume_from, {"phase_id": "plan-prepare", "work_unit_id": None})
 
+    def test_initialized_phase_session_is_reported_read_only(self) -> None:
+        with isolated_data_dir() as root:
+            run_dir = root / "runs" / RUN_ID
+            run_dir.mkdir(parents=True)
+            artifact_path = run_dir / "prepared_plan.v1.json"
+            artifact_path.write_text(
+                json.dumps({"run_id": RUN_ID, "status": "accepted"}),
+                encoding="utf-8",
+            )
+            state = {
+                "schema_version": 1,
+                "run_id": RUN_ID,
+                "prepared_artifact_path": str(artifact_path),
+                "prepared_plan_sha": "a" * 64,
+                "created_at": "2026-04-29T00:00:00Z",
+                "updated_at": "2026-04-29T00:00:00Z",
+                "mode": "cli-pump",
+                "lease_policy": {
+                    "claim_ttl_seconds": 900,
+                    "running_ttl_seconds": 14400,
+                    "refresh_interval_seconds": 300,
+                },
+                "phases": [
+                    {
+                        "phase_id": "1",
+                        "phase_index": 0,
+                        "title": "One",
+                        "depends_on_phase_ids": [],
+                        "status": "pending",
+                        "lease_owner": None,
+                        "lease_host": None,
+                        "lease_pid": None,
+                        "lease_command": None,
+                        "lease_expires_at": None,
+                        "attempt": 0,
+                        "session_name": None,
+                        "started_at": None,
+                        "completed_at": None,
+                        "result_path": None,
+                        "handoff_path": None,
+                        "last_error": None,
+                    }
+                ],
+            }
+            (run_dir / "phase_sessions.v1.json").write_text(json.dumps(state), encoding="utf-8")
+            index_row = {
+                "run_id": RUN_ID,
+                "bd_epic_id": "swarm-123",
+                "status": "accepted",
+                "prepared_artifact_path": str(artifact_path),
+            }
+            with (root / "runs" / "index.jsonl").open("w", encoding="utf-8") as f:
+                f.write(json.dumps(index_row) + "\n")
+
+            report = build_resume_report("swarm-123")
+
+            self.assertEqual(report.status, "ready")
+            self.assertEqual(report.resume_from, {"phase_id": "1", "work_unit_id": None})
+            self.assertEqual(report.phase_session["status"], "ready")
+
 
 class RunStateTests(unittest.TestCase):
     def test_active_run_write_and_checkpoint_round_trip(self) -> None:

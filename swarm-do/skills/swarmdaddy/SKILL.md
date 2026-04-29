@@ -162,6 +162,24 @@ exit as a hard refusal before child issue creation. In prepared mode, do not run
 active preset's `[decompose].mode` because work units were produced during
 prepare.
 
+When the operator enables phase sessions for an accepted prepared run, use the
+durable queue instead of manually restarting every phase:
+
+```bash
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" phases status <run-id> --json
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" phases init <run-id> --json
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" phases pump <run-id> --launcher manual --max-phases 1 --json
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" context render --run-id <run-id> --phase <phase-id> --role dispatcher --json
+```
+
+The phase pump is a launch surface only. It verifies the prepared artifact,
+claims/starts one phase, renders a phase-scoped dispatcher prompt, and records a
+structured result plus handoff JSON. It must not import or reimplement this
+dispatcher skill as Python, rewrite the global phase queue, or tell workers to
+read the whole prepared plan. Worker prompts should receive the rendered context
+bundle and exact artifact pointers; writer/spec-review bundles must include the
+specific work-unit id.
+
 If `$ARGUMENTS` includes `--prepare --continue`, run the opt-in convenience
 gate before creating any Beads child issues:
 

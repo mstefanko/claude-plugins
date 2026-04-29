@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bd:*)",
+      "Read"
+    ],
+    "deny": [
+      "Bash(rg:*)",
+      "Edit",
+      "Glob",
+      "Grep",
+      "Write"
+    ]
+  }
+}

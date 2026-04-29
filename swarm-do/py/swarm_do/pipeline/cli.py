@@ -1092,6 +1092,158 @@ def cmd_run_state(args: argparse.Namespace) -> int:
     return 1
 
 
+def cmd_sessions(args: argparse.Namespace) -> int:
+    from .session_capabilities import doctor_report, format_doctor_report
+
+    if args.sessions_command != "doctor":
+        print("swarm: sessions: missing command", file=sys.stderr)
+        return 1
+    report = doctor_report(live=args.live)
+    if args.json:
+        print(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        print(format_doctor_report(report))
+    return 0 if all(item.get("eligible") for item in report.get("launchers", []) if item.get("name") in {"manual", "fake-test"}) else 1
+
+
+def cmd_context(args: argparse.Namespace) -> int:
+    from .context_bundle import render_context_bundle
+
+    if args.context_command != "render":
+        print("swarm: context: missing command", file=sys.stderr)
+        return 1
+    try:
+        result = render_context_bundle(
+            run_id=args.run_id,
+            phase_id=args.phase,
+            role=args.role,
+            unit_id=args.unit,
+            max_prompt_bytes=args.max_prompt_bytes,
+        )
+    except Exception as exc:
+        print(f"swarm: context render: {exc}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(f"context: {result['context_path']}")
+        print(f"prompt: {result['prompt_path']}")
+        warnings = result["context"].get("warnings") or []
+        if warnings:
+            print(f"warnings: {', '.join(warnings)}")
+    return 0
+
+
+def cmd_phases(args: argparse.Namespace) -> int:
+    from .phase_pump import format_pump_result, pump_phases
+    from .phase_sessions import (
+        claim_next_phase,
+        init_phase_sessions,
+        phase_status,
+        reap_expired_phases,
+        record_phase_result,
+        refresh_phase,
+        start_phase,
+    )
+
+    try:
+        command = args.phases_command
+        if command == "init":
+            payload = init_phase_sessions(args.run_id)
+            exit_code = 0
+        elif command == "status":
+            payload = phase_status(args.run_id)
+            exit_code = 0 if payload.get("status") != "drift" else 3
+        elif command == "claim":
+            payload = claim_next_phase(
+                args.run_id,
+                reclaim_stale=args.reclaim_stale,
+                lease_command="bin/swarm phases claim",
+            )
+            exit_code = 0 if payload.get("claimed") else 2
+        elif command == "start":
+            payload = start_phase(
+                args.run_id,
+                args.phase,
+                launcher=args.launcher,
+                lease_owner=args.lease_owner,
+                session_name=args.session_name,
+                lease_command=f"bin/swarm phases start --launcher {args.launcher}",
+            )
+            exit_code = 0
+        elif command == "refresh":
+            payload = refresh_phase(args.run_id, args.phase, lease_owner=args.lease_owner)
+            exit_code = 0
+        elif command == "reap":
+            payload = reap_expired_phases(args.run_id)
+            exit_code = 0
+        elif command in {"complete", "fail", "block", "needs-input"}:
+            expected = {
+                "complete": "complete",
+                "fail": "failed",
+                "block": "blocked",
+                "needs-input": "needs_input",
+            }[command]
+            payload = record_phase_result(
+                args.run_id,
+                args.phase,
+                json_file=args.json_file,
+                expected_status=expected,
+            )
+            exit_code = 0
+        elif command == "pump":
+            max_phases = None if args.max_phases == "all" else int(args.max_phases)
+            payload = pump_phases(
+                args.run_id,
+                launcher=args.launcher,
+                max_phases=max_phases,
+                init_if_missing=args.init,
+                stop_on_checkpoint=args.stop_on_checkpoint,
+                fake_statuses=args.fake_status or (),
+            )
+            exit_code = 0 if payload.get("status") in {"complete", "max_phases", "manual_waiting", "checkpoint"} else 2
+        else:
+            print("swarm: phases: missing command", file=sys.stderr)
+            return 1
+    except Exception as exc:
+        print(f"swarm: phases {args.phases_command}: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    elif args.phases_command == "pump":
+        print(format_pump_result(payload))
+    elif args.phases_command == "status":
+        print(_format_phase_status(payload))
+    else:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    return exit_code
+
+
+def _format_phase_status(payload: Mapping[str, Any]) -> str:
+    lines = [f"phase sessions: {payload.get('run_id')} status={payload.get('status')}"]
+    if payload.get("state_path"):
+        lines.append(f"  state: {payload.get('state_path')}")
+    next_phase = payload.get("next_phase")
+    if isinstance(next_phase, Mapping):
+        lines.append(f"  next: {next_phase.get('phase_id')} ({next_phase.get('status')})")
+    active = payload.get("active_phase")
+    if isinstance(active, Mapping):
+        lines.append(f"  active: {active.get('phase_id')} ({active.get('status')})")
+    for phase in payload.get("phases") or []:
+        if isinstance(phase, Mapping):
+            lines.append(
+                f"  - {phase.get('phase_id')}: {phase.get('status')} "
+                f"attempt={phase.get('attempt')} depends={','.join(phase.get('depends_on_phase_ids') or []) or '-'}"
+            )
+    if payload.get("recommended_command"):
+        lines.append(f"  next_command: {payload.get('recommended_command')}")
+    drift = payload.get("drift") or []
+    for item in drift:
+        lines.append(f"  drift: {item}")
+    return "\n".join(lines)
+
+
 def cmd_plan(args: argparse.Namespace) -> int:
     from .decompose import decompose_plan_phase
     from .plan import inspect_plan, write_inspect_run
@@ -1584,6 +1736,74 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--source", default="dispatcher-fallback")
     p.add_argument("--reason", default="end-of-unit")
     p.set_defaults(func=cmd_run_state)
+
+    sessions = sub.add_parser("sessions")
+    sessions_sub = sessions.add_subparsers(dest="sessions_command")
+    p = sessions_sub.add_parser("doctor")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--live", action="store_true")
+    p.set_defaults(func=cmd_sessions)
+
+    context = sub.add_parser("context")
+    context_sub = context.add_subparsers(dest="context_command")
+    p = context_sub.add_parser("render")
+    p.add_argument("--run-id", required=True)
+    p.add_argument("--phase", required=True)
+    p.add_argument("--role", required=True, choices=["dispatcher", "agent-writer", "agent-spec-review", "agent-review", "agent-docs"])
+    p.add_argument("--unit")
+    p.add_argument("--max-prompt-bytes", type=int, default=24000)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_context)
+
+    phases = sub.add_parser("phases")
+    phases_sub = phases.add_subparsers(dest="phases_command")
+    p = phases_sub.add_parser("init")
+    p.add_argument("run_id")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_phases)
+    p = phases_sub.add_parser("status")
+    p.add_argument("run_id")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_phases)
+    p = phases_sub.add_parser("claim")
+    p.add_argument("run_id")
+    p.add_argument("--reclaim-stale", action="store_true")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_phases)
+    p = phases_sub.add_parser("start")
+    p.add_argument("run_id")
+    p.add_argument("--phase", required=True)
+    p.add_argument("--launcher", required=True)
+    p.add_argument("--lease-owner")
+    p.add_argument("--session-name")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_phases)
+    p = phases_sub.add_parser("refresh")
+    p.add_argument("run_id")
+    p.add_argument("--phase", required=True)
+    p.add_argument("--lease-owner", required=True)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_phases)
+    for name in ("complete", "fail", "block", "needs-input"):
+        p = phases_sub.add_parser(name)
+        p.add_argument("run_id")
+        p.add_argument("--phase", required=True)
+        p.add_argument("--json-file", required=True)
+        p.add_argument("--json", action="store_true")
+        p.set_defaults(func=cmd_phases)
+    p = phases_sub.add_parser("reap")
+    p.add_argument("run_id")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_phases)
+    p = phases_sub.add_parser("pump")
+    p.add_argument("run_id")
+    p.add_argument("--launcher", required=True, choices=["manual", "fake-test", "claude-print"])
+    p.add_argument("--max-phases", default="1")
+    p.add_argument("--init", action="store_true", help="initialize phase-session state when missing")
+    p.add_argument("--stop-on-checkpoint", action="store_true")
+    p.add_argument("--fake-status", action="append", choices=["complete", "failed", "blocked", "needs_input"], help=argparse.SUPPRESS)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_phases)
 
     plan = sub.add_parser("plan")
     plan_sub = plan.add_subparsers(dest="plan_command")

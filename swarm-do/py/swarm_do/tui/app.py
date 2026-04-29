@@ -75,6 +75,7 @@ from swarm_do.tui.state import (
     load_runs,
     load_run_events,
     load_observations,
+    latest_phase_session,
     module_palette_rows,
     new_preset_preview,
     outcome_dashboard_summary,
@@ -4013,6 +4014,27 @@ if TEXTUAL_IMPORT_ERROR is None:
                 )
             self.push_screen(MessageModal("Help", body))
 
+        def action_phase_session_status(self) -> None:
+            summary = latest_phase_session()
+            if not summary:
+                self.push_screen(MessageModal("Phase Sessions", "No phase-session state found in recent run events."))
+                return
+            lines = [
+                f"run_id: {summary.get('run_id')}",
+                f"status: {summary.get('status')}",
+            ]
+            for phase in summary.get("phases") or []:
+                if isinstance(phase, Mapping):
+                    lines.append(f"- {phase.get('phase_id')}: {phase.get('status')}")
+            command = summary.get("recommended_command")
+            if command:
+                lines.append("")
+                lines.append(f"next: {command}")
+                copier = getattr(self, "copy_to_clipboard", None)
+                if callable(copier):
+                    copier(str(command))
+            self.push_screen(MessageModal("Phase Sessions", "\n".join(lines)))
+
         def get_system_commands(self, screen: Screen) -> Any:
             yield from super().get_system_commands(screen)
             yield SystemCommand("Go to Dashboard", "Open the operator dashboard", self.action_dashboard)
@@ -4020,6 +4042,7 @@ if TEXTUAL_IMPORT_ERROR is None:
             yield SystemCommand("Go to Presets", "Open preset workbench", self.action_presets)
             yield SystemCommand("Go to Settings", "Open effective role routes", self.action_settings)
             yield SystemCommand("Show Help", "Show contextual help for the current screen", self.action_help_current)
+            yield SystemCommand("Show Phase Session Status", "Show and copy the next phase-session command", self.action_phase_session_status)
             if isinstance(screen, _LegacyPipelineEditor) and not isinstance(screen, PresetWorkbenchScreen):
                 yield SystemCommand("Focus Graph Board", "Move keyboard focus to the board", screen.action_focus_graph)
                 yield SystemCommand("Focus Stage Details", "Move keyboard focus to the selected stage details", screen.action_focus_stage_details)

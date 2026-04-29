@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/07/schema#",
+  "$id": "https://mstefanko-plugins/swarm-do/phase_sessions.schema.json#v1",
+  "title": "swarm-do phase-session queue state",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "prepared_artifact_path",
+    "prepared_plan_sha",
+    "created_at",
+    "updated_at",
+    "mode",
+    "lease_policy",
+    "phases"
+  ],
+  "properties": {
+    "schema_version": { "type": "integer", "enum": [1] },
+    "run_id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "prepared_artifact_path": { "type": "string" },
+    "prepared_plan_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" },
+    "mode": { "type": "string", "enum": ["cli-pump"] },
+    "lease_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "claim_ttl_seconds",
+        "running_ttl_seconds",
+        "refresh_interval_seconds"
+      ],
+      "properties": {
+        "claim_ttl_seconds": { "type": "integer", "minimum": 1 },
+        "running_ttl_seconds": { "type": "integer", "minimum": 1 },
+        "refresh_interval_seconds": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "phases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "phase_id",
+          "phase_index",
+          "title",
+          "depends_on_phase_ids",
+          "status",
+          "lease_owner",
+          "lease_host",
+          "lease_pid",
+          "lease_command",
+          "lease_expires_at",
+          "attempt",
+          "session_name",
+          "started_at",
+          "completed_at",
+          "result_path",
+          "handoff_path",
+          "last_error"
+        ],
+        "properties": {
+          "phase_id": { "type": "string" },
+          "phase_index": { "type": "integer", "minimum": 0 },
+          "title": { "type": "string" },
+          "depends_on_phase_ids": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "leased",
+              "running",
+              "complete",
+              "failed",
+              "blocked",
+              "needs_input",
+              "stale"
+            ]
+          },
+          "lease_owner": { "type": ["string", "null"] },
+          "lease_host": { "type": ["string", "null"] },
+          "lease_pid": { "type": ["integer", "null"], "minimum": 0 },
+          "lease_command": { "type": ["string", "null"] },
+          "lease_expires_at": { "type": ["string", "null"], "format": "date-time" },
+          "attempt": { "type": "integer", "minimum": 0 },
+          "session_name": { "type": ["string", "null"] },
+          "started_at": { "type": ["string", "null"], "format": "date-time" },
+          "completed_at": { "type": ["string", "null"], "format": "date-time" },
+          "result_path": { "type": ["string", "null"] },
+          "handoff_path": { "type": ["string", "null"] },
+          "last_error": { "type": ["string", "null"] }
+        }
+      }
+    }
+  }
+}

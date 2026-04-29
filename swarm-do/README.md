@@ -71,6 +71,7 @@ Run `/swarmdaddy:quickstart` for guided first-run setup, or
    "${CLAUDE_PLUGIN_ROOT}/bin/swarm" preset list
    "${CLAUDE_PLUGIN_ROOT}/bin/swarm" providers doctor
    "${CLAUDE_PLUGIN_ROOT}/bin/swarm" providers doctor --review
+   "${CLAUDE_PLUGIN_ROOT}/bin/swarm" sessions doctor
    "${CLAUDE_PLUGIN_ROOT}/bin/swarm" permissions check
    ```
 
@@ -107,6 +108,23 @@ Run `/swarmdaddy:quickstart` for guided first-run setup, or
    /swarmdaddy:resume bd-123
    /swarmdaddy:resume bd-123 --merge
    ```
+
+## Phase Sessions
+
+Accepted prepared artifacts can be advanced one phase at a time through durable
+phase-session state:
+
+```bash
+bin/swarm phases status <run-id>
+bin/swarm phases init <run-id>
+bin/swarm phases pump <run-id> --launcher manual --max-phases 1
+bin/swarm context render --run-id <run-id> --phase <phase-id> --role dispatcher --json
+```
+
+`manual` is the always-available launcher and prints the rendered dispatcher
+prompt plus the follow-up result command. `fake-test` is for deterministic unit
+tests. `claude-print` remains ineligible until real output fixtures and probes
+prove its JSON contract.
 
 ## Choosing A Profile
 

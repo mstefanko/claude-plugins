@@ -22,10 +22,19 @@ Parse the JSON manifest and handle `status` exactly:
 - `not-found`: stop and tell the operator no run-events mapping exists for the
   BEADS id.
 - `prepared`: reload the prepared run record and resume at the plan-prepare
-  gate before creating Beads child issues.
+  gate before creating Beads child issues. If `phase_session.status` is
+  `not_initialized`, run the manifest's `phase_session.recommended_command`
+  before launching a phase.
 - `complete`: no-op; summarize the completed run and checkpoint path.
 - `ready`: reload the original BEADS epic/thread context, then resume the
-  dispatcher from `resume_from.phase_id` and `resume_from.work_unit_id`.
+  dispatcher from `resume_from.phase_id` and `resume_from.work_unit_id`. If the
+  manifest includes `phase_session`, use its `recommended_command` instead of
+  recomputing the next phase.
+
+Phase-session resume states are read-only in this command. `resume` reports
+`ready`, `stale`, `blocked`, `needs_input`, or `complete` from
+`phase_sessions.v1.json`, but only `bin/swarm phases ...` commands may mutate
+that file.
 
 Do not add a second orchestration protocol. Reuse the `/swarmdaddy:do` dispatch
 loop from `skills/swarmdaddy/SKILL.md`, injecting the manifest as resume context

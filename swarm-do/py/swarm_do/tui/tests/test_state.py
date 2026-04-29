@@ -55,6 +55,7 @@ from swarm_do.tui.state import (
     format_route_chip_summary,
     format_route_chips,
     latest_checkpoint_event,
+    latest_phase_session,
     latest_observation,
     load_observations,
     load_run_events,
@@ -147,6 +148,25 @@ class TuiStateTests(EnvTestCase):
         self.assertIn("runs_today=1", rendered)
         self.assertIn("cost_today=n/a", rendered)
         self.assertIn("last_429_claude=n/a", rendered)
+
+    def test_latest_phase_session_reports_drift_when_state_is_unreadable(self) -> None:
+        write_event = {
+            "run_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            "timestamp": "2026-04-29T00:00:00Z",
+            "event_type": "phase_session_initialized",
+            "schema_ok": True,
+        }
+        tel = self.root / "telemetry"
+        tel.mkdir()
+        (tel / "run_events.jsonl").write_text(json.dumps(write_event) + "\n", encoding="utf-8")
+        state_dir = self.root / "runs" / "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+        state_dir.mkdir(parents=True)
+        (state_dir / "phase_sessions.v1.json").write_text("{not-json", encoding="utf-8")
+
+        summary = latest_phase_session(self.root)
+
+        self.assertIsNotNone(summary)
+        self.assertEqual(summary["status"], "drift")
 
     def test_token_burn_keeps_backend_na_when_tokens_are_null(self) -> None:
         rows = [

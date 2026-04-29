@@ -79,6 +79,7 @@ class StatusSummary:
     last_429_codex: str | None
     latest_checkpoint: dict[str, Any] | None = None
     latest_observation: dict[str, Any] | None = None
+    phase_session: dict[str, Any] | None = None
     getting_started_visible: bool = False
 
     def render(self) -> str:
@@ -100,6 +101,12 @@ class StatusSummary:
                 " latest_observation="
                 f"{self.latest_observation.get('event_type', 'unknown')}:"
                 f"{self.latest_observation.get('source') or 'n/a'}"
+            )
+        if self.phase_session:
+            rendered += (
+                " phase_session="
+                f"{self.phase_session.get('run_id', 'n/a')}:"
+                f"{self.phase_session.get('status') or 'n/a'}"
             )
         return rendered
 
@@ -2833,6 +2840,26 @@ def latest_observation(data_dir: Path | None = None) -> dict[str, Any] | None:
     return rows[-1] if rows else None
 
 
+def latest_phase_session(data_dir: Path | None = None) -> dict[str, Any] | None:
+    data_dir = data_dir or resolve_data_dir()
+    run_id = None
+    for row in reversed(load_run_events(data_dir)):
+        event_type = row.get("event_type")
+        if isinstance(event_type, str) and event_type.startswith("phase_session_"):
+            value = row.get("run_id")
+            if isinstance(value, str):
+                run_id = value
+                break
+    if run_id is None:
+        return None
+    try:
+        from swarm_do.pipeline.phase_sessions import read_phase_session_summary
+
+        return read_phase_session_summary(run_id, data_dir=data_dir)
+    except Exception as exc:
+        return {"run_id": run_id, "status": "drift", "drift": [str(exc)]}
+
+
 def token_burn_last_24h(rows: list[dict[str, Any]], now: datetime | None = None) -> dict[str, int | None]:
     now = now or datetime.now(UTC)
     cutoff = now - timedelta(hours=24)
@@ -2945,6 +2972,7 @@ def status_summary(data_dir: Path | None = None, now: datetime | None = None) ->
         last_429_codex=last_429.get("codex").isoformat().replace("+00:00", "Z") if "codex" in last_429 else None,
         latest_checkpoint=latest_checkpoint_event(data_dir),
         latest_observation=latest_observation(data_dir),
+        phase_session=latest_phase_session(data_dir),
         getting_started_visible=getting_started_visible,
     )
 

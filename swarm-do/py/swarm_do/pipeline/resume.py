@@ -36,6 +36,7 @@ class ResumeReport:
     resume_from: dict[str, str | None] | None
     drift_keys: list[str]
     completed_units: list[str]
+    phase_session: dict[str, Any] | None = None
 
     @property
     def complete(self) -> bool:
@@ -49,6 +50,7 @@ class ResumeReport:
             "resume_from": self.resume_from,
             "drift_keys": self.drift_keys,
             "completed_units": self.completed_units,
+            "phase_session": self.phase_session,
             "checkpoint_path": str(self.checkpoint_path) if self.checkpoint_path else None,
             "run_event_path": str(self.run_event_path),
         }
@@ -65,8 +67,11 @@ def build_resume_report(bd_epic_id: str) -> ResumeReport:
         checkpoint = _run_json_for_run(run_id)
     prepared_artifact = _prepared_artifact_for_run(run_id, index_row=index_row) if isinstance(run_id, str) else None
     prepared_data = _load_json(prepared_artifact) if prepared_artifact else {}
+    phase_session = _phase_session_for_run(run_id, prepared_data=prepared_data) if isinstance(run_id, str) else None
     checkpoint_data = _load_json(checkpoint) if checkpoint else {}
     drift = _checkpoint_drift(bd_epic_id, checkpoint_data, latest_event)
+    if isinstance(phase_session, dict) and phase_session.get("status") == "drift":
+        drift.append("phase_sessions")
     completed = _completed_units(checkpoint_data, rows, run_id)
     resume_from = _resume_from(checkpoint_data, latest_event)
     prepared_waiting = _accepted_prepared_without_dispatch(prepared_data, latest_event)
@@ -76,6 +81,23 @@ def build_resume_report(bd_epic_id: str) -> ResumeReport:
         resume_from = None
     elif drift:
         status = DRIFT
+        resume_from = None
+    elif isinstance(phase_session, dict) and phase_session.get("status") == "complete":
+        status = STATUS_COMPLETE
+        resume_from = None
+        checkpoint = checkpoint or Path(str(phase_session.get("state_path")))
+    elif isinstance(phase_session, dict) and phase_session.get("status") in {
+        "ready",
+        "leased",
+        "running",
+        "stale",
+        "blocked",
+        "needs_input",
+        "waiting",
+    }:
+        status = READY
+        resume_from = _phase_session_resume_from(phase_session)
+        checkpoint = checkpoint or Path(str(phase_session.get("state_path")))
     elif _is_complete(checkpoint_data, latest_event):
         status = STATUS_COMPLETE
         resume_from = None
@@ -98,6 +120,7 @@ def build_resume_report(bd_epic_id: str) -> ResumeReport:
         resume_from=resume_from,
         drift_keys=drift,
         completed_units=completed,
+        phase_session=phase_session,
     )
 
 
@@ -112,6 +135,11 @@ def format_resume_report(report: ResumeReport, *, merge: bool = False) -> str:
         phase = report.resume_from.get("phase_id") or "unknown"
         work_unit = report.resume_from.get("work_unit_id") or "phase-boundary"
         lines.append(f"  resume_from: phase={phase} work_unit={work_unit}")
+    if report.phase_session:
+        lines.append(f"  phase_session: {report.phase_session.get('status')}")
+        next_command = report.phase_session.get("recommended_command")
+        if next_command:
+            lines.append(f"  next_command: {next_command}")
     if report.completed_units:
         lines.append("  completed_units:")
         lines.extend(f"    - {unit}" for unit in report.completed_units)
@@ -121,7 +149,10 @@ def format_resume_report(report: ResumeReport, *, merge: bool = False) -> str:
     elif report.status == READY:
         lines.append("  action: restart orchestration from resume_from")
     elif report.status == STATUS_PREPARED:
-        lines.append("  action: resume at plan-prepare gate before child issue creation")
+        if report.phase_session and report.phase_session.get("status") == "not_initialized":
+            lines.append("  action: initialize phase sessions before phase execution")
+        else:
+            lines.append("  action: resume at plan-prepare gate before child issue creation")
     elif report.status == STATUS_COMPLETE:
         lines.append("  action: no-op; run is already complete")
     else:
@@ -196,6 +227,50 @@ def _prepared_artifact_for_run(
         if path.is_file():
             return path
     return None
+
+
+def _phase_session_for_run(
+    run_id: str | None,
+    *,
+    prepared_data: dict[str, Any],
+) -> dict[str, Any] | None:
+    if not run_id:
+        return None
+    data_dir = resolve_data_dir()
+    state_path = data_dir / "runs" / run_id / "phase_sessions.v1.json"
+    if not state_path.exists():
+        if prepared_data.get("status") == "accepted":
+            return {
+                "run_id": run_id,
+                "status": "not_initialized",
+                "state_path": str(state_path),
+                "recommended_command": f"bin/swarm phases init {run_id}",
+            }
+        return None
+    try:
+        from .phase_sessions import read_phase_session_summary
+
+        return read_phase_session_summary(run_id, data_dir=data_dir)
+    except Exception as exc:
+        return {
+            "run_id": run_id,
+            "status": "drift",
+            "state_path": str(state_path),
+            "drift": [str(exc)],
+            "recommended_command": None,
+        }
+
+
+def _phase_session_resume_from(phase_session: dict[str, Any]) -> dict[str, str | None]:
+    for key in ("next_phase", "active_phase"):
+        phase = phase_session.get(key)
+        if isinstance(phase, dict) and isinstance(phase.get("phase_id"), str):
+            return {"phase_id": phase["phase_id"], "work_unit_id": None}
+    for phase in phase_session.get("phases") or []:
+        if isinstance(phase, dict) and phase.get("status") in {"stale", "blocked", "needs_input"}:
+            phase_id = phase.get("phase_id")
+            return {"phase_id": phase_id if isinstance(phase_id, str) else None, "work_unit_id": None}
+    return {"phase_id": None, "work_unit_id": None}
 
 
 def _accepted_prepared_without_dispatch(
