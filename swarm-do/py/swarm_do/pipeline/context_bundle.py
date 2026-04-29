@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from pathlib import Path
 from typing import Any, Mapping
 
 from .paths import REPO_ROOT, resolve_data_dir
-from .phase_sessions import PhaseSessionError
 from .plan import parse_plan_from_text
 from .prepare import STATUS_ACCEPTED, check_stale, load_prepared_artifact
-from .run_state import append_run_event, utc_now
+from .run_state import _atomic_json_write, append_run_event, utc_now, validate_run_event
 
 
 SCHEMA_VERSION = 1
@@ -411,7 +408,7 @@ def _validate_context(context: Mapping[str, Any]) -> None:
     schema = json.loads((REPO_ROOT / "schemas" / "phase_context.schema.json").read_text(encoding="utf-8"))
     errors = validate_value(dict(context), schema)
     if errors:
-        raise PhaseSessionError("phase context schema invalid: " + "; ".join(errors))
+        raise ValueError("phase context schema invalid: " + "; ".join(errors))
 
 
 def _append_context_event(base: Path, *, context: Mapping[str, Any], prompt_path: Path, bd_epic_id: str | None) -> None:
@@ -437,41 +434,8 @@ def _append_context_event(base: Path, *, context: Mapping[str, Any], prompt_path
         },
         "schema_ok": True,
     }
-    _validate_run_event(row)
+    validate_run_event(row)
     append_run_event(base, row)
-
-
-def _validate_run_event(row: Mapping[str, Any]) -> None:
-    from swarm_do.telemetry.schemas import load_schema, validate_value
-
-    errors = validate_value(dict(row), load_schema("run_events"))
-    if errors:
-        raise PhaseSessionError("run_event schema invalid: " + "; ".join(errors))
-
-
-def _atomic_json_write(path: Path, payload: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = tempfile.NamedTemporaryFile(
-        mode="w",
-        encoding="utf-8",
-        dir=str(path.parent),
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-        delete=False,
-    )
-    try:
-        tmp.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
-        tmp.flush()
-        os.fsync(tmp.fileno())
-        tmp.close()
-        os.replace(tmp.name, path)
-    except Exception:
-        tmp.close()
-        try:
-            os.unlink(tmp.name)
-        except FileNotFoundError:
-            pass
-        raise
 
 
 def _write_text_if_changed(path: Path, text: str) -> None:

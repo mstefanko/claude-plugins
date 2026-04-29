@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import socket
-import tempfile
 import time
 import uuid
 from contextlib import contextmanager
@@ -20,7 +19,7 @@ except ImportError:  # pragma: no cover - v1 is POSIX-only by design.
 
 from .paths import REPO_ROOT, resolve_data_dir
 from .prepare import STATUS_ACCEPTED, StalePreparedArtifactError, check_stale, load_prepared_artifact
-from .run_state import append_run_event, utc_now
+from .run_state import _atomic_json_write, append_run_event, utc_now, validate_run_event
 
 
 SCHEMA_VERSION = 1
@@ -496,6 +495,12 @@ def locked_phase_sessions(
     data_dir: Path | None = None,
     timeout_seconds: float = 10.0,
 ) -> Iterator[None]:
+    """Hold the sibling advisory lock without deleting the lock file.
+
+    POSIX locks attach to open file descriptions. Leaving the file in place
+    avoids inode churn that can split contenders on shared/NFS-like filesystems.
+    """
+
     if fcntl is None:
         raise PhaseSessionError("phase-session locks require POSIX fcntl.flock")
     lock_path = phase_session_lock_path(run_id, data_dir=data_dir)
@@ -691,7 +696,7 @@ def _append_phase_event(
         "details": event_details,
         "schema_ok": True,
     }
-    _validate_run_event(row)
+    validate_run_event(row, error_cls=PhaseSessionError)
     return append_run_event(data_dir, row)
 
 
@@ -730,39 +735,6 @@ def _validate_payload(payload: Mapping[str, Any], schema_path: Path, *, label: s
     errors = validate_value(dict(payload), schema)
     if errors:
         raise PhaseSessionError(f"{label} schema invalid: " + "; ".join(errors))
-
-
-def _validate_run_event(row: Mapping[str, Any]) -> None:
-    from swarm_do.telemetry.schemas import load_schema, validate_value
-
-    errors = validate_value(dict(row), load_schema("run_events"))
-    if errors:
-        raise PhaseSessionError("run_event schema invalid: " + "; ".join(errors))
-
-
-def _atomic_json_write(path: Path, payload: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = tempfile.NamedTemporaryFile(
-        mode="w",
-        encoding="utf-8",
-        dir=str(path.parent),
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-        delete=False,
-    )
-    try:
-        tmp.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
-        tmp.flush()
-        os.fsync(tmp.fileno())
-        tmp.close()
-        os.replace(tmp.name, path)
-    except Exception:
-        tmp.close()
-        try:
-            os.unlink(tmp.name)
-        except FileNotFoundError:
-            pass
-        raise
 
 
 def _sha256_file(path: Path) -> str:

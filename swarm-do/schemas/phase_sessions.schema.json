@@ -68,12 +68,18 @@
           "last_error"
         ],
         "properties": {
-          "phase_id": { "type": "string" },
+          "phase_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.-]+$"
+          },
           "phase_index": { "type": "integer", "minimum": 0 },
           "title": { "type": "string" },
           "depends_on_phase_ids": {
             "type": "array",
-            "items": { "type": "string" }
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_.-]+$"
+            }
           },
           "status": {
             "type": "string",

@@ -19,9 +19,19 @@ from .phase_sessions import (
     reap_expired_phases,
     start_phase,
 )
-from .run_state import active_run_path, append_run_event, load_active_run, utc_now, write_active_run, write_checkpoint_from_active
+from .run_state import (
+    active_run_path,
+    append_run_event,
+    load_active_run,
+    utc_now,
+    validate_run_event,
+    write_active_run,
+    write_checkpoint_from_active,
+)
 from .session_capabilities import doctor_report
 
+
+ENABLED_LAUNCHERS = {"manual", "fake-test"}
 
 RESULT_STATUS_FOR_COMMAND = {
     "complete": "complete",
@@ -44,10 +54,6 @@ def pump_phases(
     """Run the foreground pump over manual or fake-test launchers."""
 
     base = data_dir or resolve_data_dir()
-    if launcher not in {"manual", "fake-test", "claude-print"}:
-        raise ValueError(f"unsupported launcher: {launcher}")
-    _append_pump_event(base, run_id=run_id, event_type="phase_pump_started", details={"launcher": launcher})
-
     if launcher == "claude-print":
         capability = next(item for item in doctor_report().get("launchers", []) if item.get("name") == "claude-print")
         _append_pump_event(
@@ -58,6 +64,10 @@ def pump_phases(
         )
         _append_pump_event(base, run_id=run_id, event_type="phase_pump_stopped", details={"status": "ineligible"})
         return {"status": "ineligible", "launcher": launcher, "capability": capability, "completed_phases": []}
+
+    if launcher not in ENABLED_LAUNCHERS:
+        raise ValueError(f"unsupported launcher: {launcher}")
+    _append_pump_event(base, run_id=run_id, event_type="phase_pump_started", details={"launcher": launcher})
 
     status = phase_status(run_id, data_dir=base)
     if status["status"] == "not_initialized":
@@ -273,16 +283,8 @@ def _append_pump_event(
         "details": dict(details or {}),
         "schema_ok": True,
     }
-    _validate_run_event(row)
+    validate_run_event(row, error_cls=PhaseSessionError)
     append_run_event(data_dir, row)
-
-
-def _validate_run_event(row: Mapping[str, Any]) -> None:
-    from swarm_do.telemetry.schemas import load_schema, validate_value
-
-    errors = validate_value(dict(row), load_schema("run_events"))
-    if errors:
-        raise PhaseSessionError("run_event schema invalid: " + "; ".join(errors))
 
 
 __all__ = ["format_pump_result", "pump_phases"]

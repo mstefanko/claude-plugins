@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from swarm_do.pipeline import context_bundle
 from swarm_do.pipeline.context_bundle import render_context_bundle
 from swarm_do.pipeline.tests.phase_session_fixtures import make_prepared_run
 
@@ -54,6 +55,12 @@ class ContextBundleTests(unittest.TestCase):
             self.assertIn("context_truncated", context["warnings"])
             self.assertLessEqual(context["prompt_bytes"], context["max_prompt_bytes"])
             self.assertTrue(context["source_list"])
+
+    def test_context_schema_errors_raise_value_error(self) -> None:
+        with self.assertRaises(ValueError) as caught:
+            context_bundle._validate_context({"schema_version": 1})
+
+        self.assertIs(type(caught.exception), ValueError)
 
 
 if __name__ == "__main__":

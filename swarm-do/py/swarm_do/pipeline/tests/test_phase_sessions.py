@@ -80,6 +80,18 @@ class PhaseSessionTests(unittest.TestCase):
             self.assertEqual(result["reaped"][0]["status"], "stale")
             self.assertEqual(load_phase_sessions(run_id, data_dir=data)["phases"][0]["status"], "stale")
 
+    def test_load_validates_hand_edited_state(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            path = phase_session_path(run_id, data_dir=data)
+            state = json.loads(path.read_text(encoding="utf-8"))
+            state["phases"][0]["phase_id"] = "../bad"
+            path.write_text(json.dumps(state), encoding="utf-8")
+
+            with self.assertRaises(PhaseSessionError):
+                load_phase_sessions(run_id, data_dir=data)
+
 
 def _write_result(data: Path, run_id: str, phase: dict, *, status: str) -> Path:
     phase_id = phase["phase_id"]

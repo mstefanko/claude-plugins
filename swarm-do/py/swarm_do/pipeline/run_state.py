@@ -69,6 +69,14 @@ def append_run_event(data_dir: str | os.PathLike[str], row: Mapping[str, Any]) -
     return path
 
 
+def validate_run_event(row: Mapping[str, Any], *, error_cls: type[Exception] = ValueError) -> None:
+    from swarm_do.telemetry.schemas import load_schema, validate_value
+
+    errors = validate_value(dict(row), load_schema("run_events"))
+    if errors:
+        raise error_cls("run_event schema invalid: " + "; ".join(errors))
+
+
 def write_checkpoint_from_active(
     data_dir: str | os.PathLike[str],
     active_state: Mapping[str, Any],

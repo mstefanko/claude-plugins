@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
 from .paths import REPO_ROOT, resolve_data_dir
-from .run_state import append_run_event, utc_now
+from .run_state import append_run_event, utc_now, validate_run_event
 
 # ---------------------------------------------------------------------------
 # Module constants
@@ -340,16 +340,8 @@ def _append_prepare_event(
         "details": dict(details or {}),
         "schema_ok": True,
     }
-    _validate_run_event(row)
+    validate_run_event(row)
     return append_run_event(Path(data_dir) if data_dir is not None else resolve_data_dir(), row)
-
-
-def _validate_run_event(row: Mapping[str, Any]) -> None:
-    from swarm_do.telemetry.schemas import load_schema, validate_value
-
-    errors = validate_value(dict(row), load_schema("run_events"))
-    if errors:
-        raise ValueError("run_event schema invalid: " + "; ".join(errors))
 
 
 def record_prepare_continue_failed(

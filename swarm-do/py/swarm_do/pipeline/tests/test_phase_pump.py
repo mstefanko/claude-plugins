@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from swarm_do.pipeline.phase_pump import pump_phases
 from swarm_do.pipeline.phase_sessions import init_phase_sessions, phase_status
@@ -44,6 +45,26 @@ class PhasePumpTests(unittest.TestCase):
             self.assertEqual(result["status"], "manual_waiting")
             self.assertTrue(Path(result["manual"]["prompt_path"]).is_file())
             self.assertIn("phases complete", result["manual"]["follow_up_command"])
+
+    def test_claude_print_reports_ineligible_without_claiming_phase(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            report = {
+                "launchers": [
+                    {
+                        "name": "claude-print",
+                        "eligible": False,
+                        "hard_blockers": ["claude_print_fixtures_missing"],
+                    }
+                ]
+            }
+
+            with mock.patch("swarm_do.pipeline.phase_pump.doctor_report", return_value=report):
+                result = pump_phases(run_id, launcher="claude-print", max_phases=1, data_dir=data)
+
+            self.assertEqual(result["status"], "ineligible")
+            self.assertEqual(phase_status(run_id, data_dir=data, repo_root=repo)["phases"][0]["status"], "pending")
 
 
 if __name__ == "__main__":
