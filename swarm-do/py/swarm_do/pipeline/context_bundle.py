@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -265,7 +266,7 @@ def _prior_handoffs(base: Path, run_id: str, phase_ids: list[str]) -> list[dict[
     results: list[dict[str, Any]] = []
     for prior_phase_id in phase_ids:
         handoff_dir = base / "runs" / run_id / "phase_handoffs" / prior_phase_id
-        candidates = sorted(handoff_dir.glob("attempt-*.handoff.json"))
+        candidates = sorted(handoff_dir.glob("attempt-*.handoff.json"), key=_handoff_attempt)
         if not candidates:
             continue
         path = candidates[-1]
@@ -286,6 +287,11 @@ def _prior_handoffs(base: Path, run_id: str, phase_ids: list[str]) -> list[dict[
             }
         )
     return results
+
+
+def _handoff_attempt(path: Path) -> int:
+    match = re.match(r"attempt-(\d+)\.handoff\.json$", path.name)
+    return int(match.group(1)) if match else -1
 
 
 def _previous_handoff_markdown(prior: list[dict[str, Any]]) -> str:

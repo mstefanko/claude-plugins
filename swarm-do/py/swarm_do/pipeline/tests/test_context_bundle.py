@@ -113,22 +113,35 @@ class ContextBundleTests(unittest.TestCase):
             previous = (data / "runs" / run_id / "context" / "3" / "previous-handoff.md").read_text(encoding="utf-8")
             self.assertEqual(previous, "No previous phase handoff.\n")
 
+    def test_dependency_handoff_uses_highest_numeric_attempt(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=2)
+            _write_handoff(data, run_id, "1", attempt=2, summary="attempt two summary")
+            _write_handoff(data, run_id, "1", attempt=10, summary="attempt ten summary")
+
+            render_context_bundle(run_id=run_id, phase_id="2", role="dispatcher", data_dir=data, repo_root=repo)
+
+            previous = (data / "runs" / run_id / "context" / "2" / "previous-handoff.md").read_text(encoding="utf-8")
+            self.assertIn("attempt ten summary", previous)
+            self.assertNotIn("attempt two summary", previous)
+
 
 def _write_handoff(
     data: Path,
     run_id: str,
     phase_id: str,
     *,
+    attempt: int = 1,
     summary: str,
     decisions: list[str] | None = None,
 ) -> None:
-    path = data / "runs" / run_id / "phase_handoffs" / phase_id / "attempt-1.handoff.json"
+    path = data / "runs" / run_id / "phase_handoffs" / phase_id / f"attempt-{attempt}.handoff.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "schema_version": 1,
         "run_id": run_id,
         "phase_id": phase_id,
-        "phase_attempt": 1,
+        "phase_attempt": attempt,
         "status": "complete",
         "written_at": "2026-04-29T00:00:00Z",
         "summary": summary,

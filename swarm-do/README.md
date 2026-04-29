@@ -119,6 +119,7 @@ bin/swarm phases status <run-id>
 bin/swarm phases init <run-id>
 bin/swarm phases pump <run-id> --launcher manual --max-phases 1
 bin/swarm phases pump <run-id> --launcher claude-print --max-phases all --init
+bin/swarm do --prepared <run-id> --phase-sessions auto
 bin/swarm context render --run-id <run-id> --phase <phase-id> --role dispatcher --json
 ```
 
@@ -128,7 +129,8 @@ tests. `claude-print` is the foreground no-babysitting sequential launcher: it
 starts a fresh Claude print session for each accepted phase, validates the
 result and handoff artifacts, then advances to the next phase only after a
 complete result. It is not a daemon, a parallel scheduler, or a recursive
-orchestrator.
+orchestrator. `bin/swarm do --prepared <run-id> --phase-sessions auto` is the
+prepared-run shortcut for the same foreground all-phases pump.
 
 Before using `claude-print`, check local readiness:
 
@@ -353,14 +355,16 @@ allowed-file scopes, or material rewrites. For routine low-risk plans, the
 opt-in convenience path is:
 
 ```bash
-bin/swarm do docs/plan.md --prepare --continue
+bin/swarm do docs/plan.md --prepare --continue --phase-sessions auto
 ```
 
 It records the same prepared artifact, auto-accepts only when the deterministic
-safety checks pass, and then dispatches through the same `--prepared` verifier.
-If it returns `NEEDS_INPUT`, review the artifact and continue manually with
-`bin/swarm prepare --accept <run-id>` followed by
-`bin/swarm do --prepared <run-id>`.
+safety checks pass, dispatches through the same `--prepared` verifier, and then
+runs the accepted phases sequentially in fresh `claude-print` sessions. Omit
+`--phase-sessions auto` when you want the command to stop at
+`READY_FOR_DISPATCH`. If it returns `NEEDS_INPUT`, review the artifact and
+continue manually with `bin/swarm prepare --accept <run-id>` followed by
+`bin/swarm do --prepared <run-id> --phase-sessions auto`.
 
 ## Output-Only Profiles
 
@@ -395,8 +399,8 @@ bin/swarm preset dry-run <name> <plan-path>
 bin/swarm preset migrate
 bin/swarm prepare <plan-path> [--dry-run]
 bin/swarm prepare --accept <run-id>
-bin/swarm do <plan-path> --prepare --continue
-bin/swarm do --prepared <run-id-or-artifact-path>
+bin/swarm do <plan-path> --prepare --continue [--phase-sessions auto]
+bin/swarm do --prepared <run-id-or-artifact-path> [--phase-sessions auto]
 bin/swarm plan prepare <plan-path> [--dry-run] [--write] [--json]
 bin/swarm preset adopt <archived-yaml> --template <stock-preset> [--name <name>]
 

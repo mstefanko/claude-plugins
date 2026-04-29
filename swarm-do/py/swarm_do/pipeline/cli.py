@@ -626,26 +626,13 @@ def _dispatch_prepared(
         StalePreparedArtifactError,
         verify_prepared_for_dispatch,
     )
-    from .run_state import active_run_path, write_active_run
 
     try:
         result = verify_prepared_for_dispatch(prepared_ref)
-        payload = result.to_dict()
-        if not args.no_write_state:
-            state_path = write_active_run(
-                active_run_path(resolve_data_dir()),
-                result.to_run_state(bd_epic_id=args.bd_epic_id),
-            )
-            payload["active_run_path"] = str(state_path)
-        if args.json:
-            print(json.dumps(payload, indent=2, sort_keys=True))
-        else:
-            print(f"prepared dispatch: {result.run_id}")
-            print(f"prepared plan: {result.prepared_plan_path}")
-            print(f"work-unit artifacts: {len(result.work_unit_artifacts)}")
-            if "active_run_path" in payload:
-                print(f"active run: {payload['active_run_path']}")
-            print("Status: READY_FOR_DISPATCH")
+        payload = _prepared_dispatch_payload(args, result)
+        if _phase_sessions_mode(args) == "auto":
+            return _dispatch_with_phase_sessions(args, payload)
+        _print_prepared_dispatch(args, payload)
         return 0
     except StalePreparedArtifactError as exc:
         print(f"{error_prefix}: {exc}", file=sys.stderr)
@@ -656,6 +643,86 @@ def _dispatch_prepared(
     except Exception as exc:
         print(f"{error_prefix}: {exc}", file=sys.stderr)
         return 1
+
+
+def _prepared_dispatch_payload(args: argparse.Namespace, result: Any) -> dict[str, Any]:
+    from .run_state import active_run_path, write_active_run
+
+    payload = result.to_dict()
+    if not getattr(args, "no_write_state", False):
+        state_path = write_active_run(
+            active_run_path(resolve_data_dir()),
+            result.to_run_state(bd_epic_id=getattr(args, "bd_epic_id", None)),
+        )
+        payload["active_run_path"] = str(state_path)
+    return payload
+
+
+def _phase_sessions_mode(args: argparse.Namespace) -> str:
+    value = getattr(args, "phase_sessions", "off") or "off"
+    if value not in {"auto", "off"}:
+        raise ValueError(f"unsupported phase-sessions mode: {value}")
+    return value
+
+
+def _print_prepared_dispatch(args: argparse.Namespace, payload: Mapping[str, Any]) -> None:
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    print(f"prepared dispatch: {payload.get('run_id')}")
+    print(f"prepared plan: {payload.get('prepared_plan_path')}")
+    print(f"work-unit artifacts: {payload.get('work_unit_artifact_count')}")
+    if "active_run_path" in payload:
+        print(f"active run: {payload['active_run_path']}")
+    print("Status: READY_FOR_DISPATCH")
+
+
+def _dispatch_with_phase_sessions(args: argparse.Namespace, dispatch_payload: Mapping[str, Any]) -> int:
+    from .phase_pump import format_pump_result, pump_phases
+
+    launcher = "claude-print"
+    run_id = str(dispatch_payload["run_id"])
+    pump_payload = pump_phases(
+        run_id,
+        launcher=launcher,
+        max_phases=None,
+        init_if_missing=True,
+        max_budget_usd=getattr(args, "max_budget_usd", None),
+    )
+    payload = dict(dispatch_payload)
+    payload["phase_sessions"] = {
+        "mode": "auto",
+        "launcher": launcher,
+        "status": pump_payload.get("status"),
+        "completed_phase_count": len(pump_payload.get("completed_phases") or []),
+        "pump": pump_payload,
+    }
+    payload["status_label"] = _phase_session_status_label(str(pump_payload.get("status") or "unknown"))
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        _print_prepared_dispatch(argparse.Namespace(json=False), dispatch_payload)
+        print(format_pump_result(pump_payload))
+        print(f"Status: {payload['status_label']}")
+    return 0 if pump_payload.get("status") == "complete" else 2
+
+
+def _phase_session_status_label(status: str) -> str:
+    if status == "complete":
+        return "PHASES_COMPLETE"
+    if status == "needs_input":
+        return "NEEDS_INPUT"
+    if status == "blocked":
+        return "BLOCKED"
+    if status == "failed":
+        return "FAILED"
+    if status == "ineligible":
+        return "PHASE_LAUNCHER_INELIGIBLE"
+    if status == "launcher_error":
+        return "PHASE_LAUNCHER_ERROR"
+    if status == "stale":
+        return "STALE"
+    return status.upper()
 
 
 def cmd_pipeline_list(args: argparse.Namespace) -> int:
@@ -1710,6 +1777,8 @@ def _build_parser() -> argparse.ArgumentParser:
     do.add_argument("--prepared", nargs="?", const=True, metavar="RUN_ID_OR_PATH")
     do.add_argument("--prepare", action="store_true", help="run the prepare gate before dispatch")
     do.add_argument("--continue", dest="prepare_continue", action="store_true", help="auto-accept safe prepared output and continue dispatch")
+    do.add_argument("--phase-sessions", choices=["auto", "off"], default="off", help="run accepted prepared phases through the fresh-session pump")
+    do.add_argument("--max-budget-usd", type=float, help="forwarded to the claude-print phase-session launcher")
     do.add_argument("--bd-epic-id")
     do.add_argument("--no-write-state", action="store_true")
     do.add_argument("--json", action="store_true")

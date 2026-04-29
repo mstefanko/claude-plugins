@@ -112,7 +112,6 @@ def pump_phases(
             launcher=launcher,
             data_dir=base,
             lease_owner=str(claim["lease_owner"]),
-            session_name=f"swarmdaddy-{run_id}-{phase_id}" if launcher == "claude-print" else None,
             lease_command=f"phase-pump:{launcher}",
         )
         running_phase = started["phase"]
@@ -151,6 +150,21 @@ def pump_phases(
             try:
                 outer = parse_claude_print_json(str(launch.get("stdout") or ""))
                 artifacts = extract_claude_print_artifacts(outer, run_dir=base / "runs" / run_id)
+                if int(launch.get("returncode") or 0) != 0 and artifacts.get("status") == "complete":
+                    details = {
+                        "status": "launcher_error",
+                        "reason": "claude_print_nonzero_complete",
+                        "phase_id": phase_id,
+                        "attempt": running_phase.get("attempt"),
+                        "returncode": launch.get("returncode"),
+                    }
+                    _append_pump_event(base, run_id=run_id, event_type="phase_pump_stopped", details=details)
+                    return {
+                        "status": "launcher_error",
+                        "completed_phases": completed,
+                        "launcher_result": launch,
+                        "error": "claude-print returned nonzero with complete artifacts",
+                    }
                 recorded = record_phase_result(
                     run_id,
                     phase_id,
@@ -473,6 +487,8 @@ def _phase_content_sha(run_id: str, phase_id: str, *, data_dir: Path) -> str:
 
 def _write_phase_checkpoint(base: Path, run_id: str, phase: Mapping[str, Any]) -> None:
     current = load_active_run(active_run_path(base)) or {"run_id": run_id}
+    if current.get("run_id") != run_id:
+        current = {"run_id": run_id}
     state = dict(current)
     state.update(
         {

@@ -356,7 +356,7 @@ def start_phase(
         phase["lease_command"] = lease_command
         phase["lease_expires_at"] = _format_dt(expires)
         phase["attempt"] = int(phase.get("attempt") or 0) + 1
-        phase["session_name"] = session_name or f"swarmdaddy-{run_id}-{phase_id}"
+        phase["session_name"] = session_name or _default_session_name(run_id, phase_id, int(phase["attempt"]))
         phase["started_at"] = _format_dt(now)
         phase["completed_at"] = None
         phase["result_path"] = None
@@ -433,14 +433,14 @@ def record_phase_result(
     data_dir: Path | None = None,
 ) -> dict[str, Any]:
     base = data_dir or resolve_data_dir()
-    result_path = Path(json_file)
+    result_path = _resolve_artifact_path(json_file, data_dir=base, run_id=run_id, label="phase result")
     result = _load_and_validate_result(result_path)
     result_status = str(result["status"])
     if expected_status is not None and result_status != expected_status:
         raise PhaseSessionError(f"result status {result_status!r} does not match expected {expected_status!r}")
     if result.get("run_id") != run_id or result.get("phase_id") != phase_id:
         raise PhaseSessionError("result run_id/phase_id mismatch")
-    handoff_path = _resolve_artifact_path(result["handoff_path"], data_dir=base)
+    handoff_path = _resolve_artifact_path(result["handoff_path"], data_dir=base, run_id=run_id, label="phase handoff")
     handoff = _load_and_validate_handoff(handoff_path)
     if handoff.get("run_id") != run_id or handoff.get("phase_id") != phase_id:
         raise PhaseSessionError("handoff run_id/phase_id mismatch")
@@ -493,6 +493,10 @@ def record_phase_result(
 
 def generate_lease_owner() -> str:
     return f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex}"
+
+
+def _default_session_name(run_id: str, phase_id: str, attempt: int) -> str:
+    return f"swarmdaddy-{run_id}-{phase_id}-attempt-{attempt}"
 
 
 @contextmanager
@@ -790,15 +794,35 @@ def _prepared_artifact_path(run_id: str, *, data_dir: Path) -> Path:
     return data_dir / "runs" / run_id / "prepared_plan.v1.json"
 
 
-def _resolve_artifact_path(value: Any, *, data_dir: Path) -> Path:
+def _resolve_artifact_path(
+    value: Any,
+    *,
+    data_dir: Path,
+    run_id: str,
+    label: str,
+) -> Path:
     path = Path(str(value))
     if path.is_absolute():
-        return path
+        resolved = path.resolve(strict=False)
+        _assert_path_under_run(resolved, data_dir=data_dir, run_id=run_id, label=label)
+        return resolved
     candidates = [REPO_ROOT / path, data_dir / path, Path.cwd() / path]
     for candidate in candidates:
         if candidate.is_file():
-            return candidate
-    return candidates[0]
+            resolved = candidate.resolve(strict=False)
+            _assert_path_under_run(resolved, data_dir=data_dir, run_id=run_id, label=label)
+            return resolved
+    resolved = candidates[0].resolve(strict=False)
+    _assert_path_under_run(resolved, data_dir=data_dir, run_id=run_id, label=label)
+    return resolved
+
+
+def _assert_path_under_run(path: Path, *, data_dir: Path, run_id: str, label: str) -> None:
+    run_root = (data_dir / "runs" / run_id).resolve(strict=False)
+    try:
+        path.relative_to(run_root)
+    except ValueError as exc:
+        raise PhaseSessionError(f"{label} path escapes run directory: {path}") from exc
 
 
 def _display_path(path: Path) -> str:

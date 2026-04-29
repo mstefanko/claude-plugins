@@ -242,6 +242,77 @@ class CommandProfileTests(unittest.TestCase):
         self.assertEqual(artifact["status"], "accepted")
         self.assertEqual(artifact["acceptance"]["accepted_by"], "auto-continue")
 
+    def test_do_prepare_continue_phase_sessions_auto_runs_foreground_pump(self) -> None:
+        data = Path(self.td.name)
+        repo = data / "repo-autopilot"
+        repo.mkdir()
+        self._write_ready_plan_repo(repo)
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        args = argparse.Namespace(
+            target="plan.md",
+            prepared=None,
+            prepare=True,
+            prepare_continue=True,
+            phase_sessions="auto",
+            max_budget_usd=3.50,
+            bd_epic_id=None,
+            no_write_state=False,
+            json=True,
+        )
+        pump_result = {"status": "complete", "completed_phases": [{"phase_id": "1"}]}
+
+        with mock.patch("swarm_do.pipeline.prepare.REPO_ROOT", repo), mock.patch(
+            "swarm_do.pipeline.phase_pump.pump_phases",
+            return_value=pump_result,
+        ) as pump, redirect_stdout(stdout), redirect_stderr(stderr):
+            code = cmd_do(args)
+
+        self.assertEqual(code, 0, stderr.getvalue())
+        payload = json.loads(stdout.getvalue())
+        self.assertTrue(payload["ready_for_dispatch"])
+        self.assertEqual(payload["phase_sessions"]["mode"], "auto")
+        self.assertEqual(payload["phase_sessions"]["launcher"], "claude-print")
+        self.assertEqual(payload["phase_sessions"]["status"], "complete")
+        self.assertEqual(payload["status_label"], "PHASES_COMPLETE")
+        pump.assert_called_once()
+        self.assertEqual(pump.call_args.args, (payload["run_id"],))
+        self.assertEqual(pump.call_args.kwargs["launcher"], "claude-print")
+        self.assertIsNone(pump.call_args.kwargs["max_phases"])
+        self.assertTrue(pump.call_args.kwargs["init_if_missing"])
+        self.assertEqual(pump.call_args.kwargs["max_budget_usd"], 3.50)
+
+    def test_do_prepared_phase_sessions_auto_returns_nonzero_when_launcher_blocked(self) -> None:
+        repo, _data, _artifact_path = self._accepted_prepared_run()
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        args = argparse.Namespace(
+            target=None,
+            prepared=RUN_ID,
+            phase_sessions="auto",
+            max_budget_usd=None,
+            bd_epic_id=None,
+            no_write_state=False,
+            json=True,
+        )
+        pump_result = {
+            "status": "ineligible",
+            "completed_phases": [],
+            "capability": {"hard_blockers": ["claude_cli_missing"]},
+        }
+
+        with mock.patch("swarm_do.pipeline.prepare.REPO_ROOT", repo), mock.patch(
+            "swarm_do.pipeline.phase_pump.pump_phases",
+            return_value=pump_result,
+        ), redirect_stdout(stdout), redirect_stderr(stderr):
+            code = cmd_do(args)
+
+        self.assertEqual(code, 2)
+        self.assertEqual(stderr.getvalue(), "")
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["phase_sessions"]["status"], "ineligible")
+        self.assertEqual(payload["status_label"], "PHASE_LAUNCHER_INELIGIBLE")
+
     def test_do_prepare_continue_distinguishes_accept_failures(self) -> None:
         cases = (
             (

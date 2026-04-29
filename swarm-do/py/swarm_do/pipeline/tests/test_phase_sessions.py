@@ -79,6 +79,23 @@ class PhaseSessionTests(unittest.TestCase):
             with self.assertRaises(PhaseSessionError):
                 record_phase_result(run_id, "1", json_file=result_path, expected_status="complete", data_dir=data)
 
+    def test_result_handoff_path_must_stay_inside_run_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            claim_next_phase(run_id, data_dir=data, repo_root=repo, lease_owner="owner-1")
+            started = start_phase(run_id, "1", launcher="manual", lease_owner="owner-1", data_dir=data)
+            result_path = _write_result(data, run_id, started["phase"], status="complete")
+            original_handoff = phase_handoff_path(run_id, "1", int(started["phase"]["attempt"]), data_dir=data)
+            outside_handoff = Path(td) / "outside.handoff.json"
+            outside_handoff.write_text(original_handoff.read_text(encoding="utf-8"), encoding="utf-8")
+            result = json.loads(result_path.read_text(encoding="utf-8"))
+            result["handoff_path"] = str(outside_handoff)
+            result_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(PhaseSessionError, "escapes run directory"):
+                record_phase_result(run_id, "1", json_file=result_path, expected_status="complete", data_dir=data)
+
     def test_reap_marks_expired_lease_stale(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             repo, data, run_id = make_prepared_run(Path(td), phase_count=1)

@@ -11,6 +11,7 @@ from unittest import mock
 from swarm_do.pipeline.paths import REPO_ROOT
 from swarm_do.pipeline.phase_pump import pump_phases
 from swarm_do.pipeline.phase_sessions import init_phase_sessions, phase_session_path, phase_status
+from swarm_do.pipeline.run_state import active_run_path, load_active_run, write_active_run
 from swarm_do.pipeline.tests.phase_session_fixtures import make_prepared_run
 
 
@@ -129,6 +130,24 @@ class PhasePumpTests(unittest.TestCase):
             self.assertEqual(result["status"], "launcher_error")
             self.assertNotEqual(phase_status(run_id, data_dir=data, repo_root=repo)["status"], "complete")
 
+    def test_claude_print_nonzero_complete_artifacts_do_not_complete_phase(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            runner = _claude_runner(data, run_id, ["complete"], returncodes=[1])
+
+            with mock.patch("swarm_do.pipeline.phase_pump.doctor_report", return_value=_eligible_claude_report()):
+                result = pump_phases(
+                    run_id,
+                    launcher="claude-print",
+                    max_phases=1,
+                    init_if_missing=True,
+                    claude_runner=runner,
+                    data_dir=data,
+                )
+
+            self.assertEqual(result["status"], "launcher_error")
+            self.assertNotEqual(phase_status(run_id, data_dir=data, repo_root=repo)["status"], "complete")
+
     def test_claude_print_replayed_fixture_records_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
@@ -149,11 +168,42 @@ class PhasePumpTests(unittest.TestCase):
             status = phase_status(run_id, data_dir=data, repo_root=repo)
             self.assertEqual(status["phases"][0]["status"], "complete")
 
+    def test_phase_checkpoint_does_not_reuse_unrelated_active_run(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            write_active_run(
+                active_run_path(data),
+                {
+                    "run_id": "01BRZ3NDEKTSV4RRFFQ69G5FAV",
+                    "bd_epic_id": "bd-stale",
+                    "phase_id": "stale",
+                    "work_units": [{"id": "stale-unit", "status": "pending"}],
+                    "status": "prepared",
+                },
+            )
+
+            result = pump_phases(run_id, launcher="fake-test", max_phases=1, data_dir=data)
+
+            self.assertEqual(result["status"], "max_phases")
+            active = load_active_run(active_run_path(data))
+            self.assertIsNotNone(active)
+            self.assertEqual(active["run_id"], run_id)
+            self.assertIsNone(active["bd_epic_id"])
+            self.assertEqual(active["work_units"], [])
+
+
 def _eligible_claude_report() -> dict:
     return {"launchers": [{"name": "claude-print", "eligible": True, "hard_blockers": []}]}
 
 
-def _claude_runner(data: Path, run_id: str, statuses: list[str], stdout_template: str | None = None):
+def _claude_runner(
+    data: Path,
+    run_id: str,
+    statuses: list[str],
+    stdout_template: str | None = None,
+    returncodes: list[int] | None = None,
+):
     calls = {"count": 0}
 
     def runner(argv):
@@ -181,7 +231,11 @@ def _claude_runner(data: Path, run_id: str, statuses: list[str], stdout_template
             )
         else:
             stdout = stdout_template.replace("<RUN_DIR>", str(data / "runs" / run_id))
-        return subprocess.CompletedProcess(argv, 0 if status == "complete" else 1, stdout=stdout, stderr="")
+        if returncodes is None:
+            returncode = 0 if status == "complete" else 1
+        else:
+            returncode = returncodes[min(calls["count"] - 1, len(returncodes) - 1)]
+        return subprocess.CompletedProcess(argv, returncode, stdout=stdout, stderr="")
 
     return runner
 

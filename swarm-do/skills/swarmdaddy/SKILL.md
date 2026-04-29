@@ -163,7 +163,17 @@ active preset's `[decompose].mode` because work units were produced during
 prepare.
 
 When the operator enables phase sessions for an accepted prepared run, use the
-durable queue instead of manually restarting every phase:
+durable queue instead of manually restarting every phase. The no-babysitting
+foreground path is:
+
+```bash
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" do --prepared <run-id-or-artifact-path> --phase-sessions auto --json
+```
+
+It verifies the accepted artifact, writes dispatcher active-run state, initializes
+or resumes `phase_sessions.v1.json`, and runs `claude-print` with all-phases
+sequential pumping. Use the lower-level commands for inspection, manual recovery,
+or debugging:
 
 ```bash
 "$CLAUDE_PLUGIN_ROOT/bin/swarm" phases status <run-id> --json
@@ -184,15 +194,18 @@ If `$ARGUMENTS` includes `--prepare --continue`, run the opt-in convenience
 gate before creating any Beads child issues:
 
 ```bash
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" do <plan-path> --prepare --continue --json
+"$CLAUDE_PLUGIN_ROOT/bin/swarm" do <plan-path> --prepare --continue [--phase-sessions auto] --json
 ```
 
 This helper runs the same deterministic prepare pipeline, auto-accepts only
 clean artifacts or explicitly whitelisted mechanical-only fixes, then runs the
-same accepted-artifact dispatch gate as `--prepared`. Treat any non-zero exit
-as a hard pause. If the helper reports `Status: NEEDS_INPUT`, surface the
-reasons and have the operator review the prepared artifact, then run
-`/swarmdaddy:prepare --accept <run-id>` before resuming through `--prepared`.
+same accepted-artifact dispatch gate as `--prepared`. With `--phase-sessions
+auto`, it immediately continues through fresh sequential `claude-print` phase
+sessions until completion or a terminal pause state. Treat any non-zero exit as
+a hard pause. If the helper reports `Status: NEEDS_INPUT`, surface the reasons
+and have the operator review the prepared artifact, then run
+`/swarmdaddy:prepare --accept <run-id>` before resuming through
+`--prepared --phase-sessions auto`.
 Never auto-continue model-labeled `safe_fix` findings, advisory or blocking
 findings, inferred hard phases, material rewrites, changed validation commands,
 changed allowed-file scopes, stale artifacts, or trust-boundary failures.
