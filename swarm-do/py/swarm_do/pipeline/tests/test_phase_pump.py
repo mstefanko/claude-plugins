@@ -115,7 +115,7 @@ class PhasePumpTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
 
-            def runner(argv):
+            def runner(argv, prompt_text):
                 return subprocess.CompletedProcess(argv, 1, stdout="", stderr="failed before artifacts")
 
             with mock.patch("swarm_do.pipeline.phase_pump.doctor_report", return_value=_eligible_claude_report()):
@@ -318,10 +318,10 @@ def _claude_runner(
 ):
     calls = {"count": 0}
 
-    def runner(argv):
+    def runner(argv, prompt_text):
         status = statuses[min(calls["count"], len(statuses) - 1)]
         calls["count"] += 1
-        prompt = argv[-1]
+        prompt = prompt_text
         result_path = Path(re.search(r"result JSON exactly to: (.+)", prompt).group(1))
         handoff_path = Path(re.search(r"handoff JSON exactly to: (.+)", prompt).group(1))
         phase_id = result_path.parent.name

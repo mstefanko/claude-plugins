@@ -437,11 +437,11 @@ def _run_claude_print_phase(
     ]
     if max_budget_usd is not None:
         argv.extend(["--max-budget-usd", str(max_budget_usd)])
-    argv.append(prompt_text)
     metadata = {
-        "argv": [*argv[:-1], "<prompt_text omitted>"],
+        "argv": list(argv),
         "prompt_path": str(launcher_prompt_path),
         "prompt_sha": prompt_sha,
+        "prompt_delivery": "stdin",
         "source_prompt_path": str(prompt_path),
         "source_prompt_sha": _sha256_file(prompt_path),
         "result_path": str(result_path),
@@ -463,7 +463,7 @@ def _run_claude_print_phase(
 
     try:
         if claude_runner is not None:
-            proc = claude_runner(argv)
+            proc = claude_runner(argv, prompt_text)
         else:
             proc = _run_real_claude(
                 argv,
@@ -475,6 +475,7 @@ def _run_claude_print_phase(
                 command_path=launch_dir / "command.json",
                 metadata=metadata,
                 prompt_sha=prompt_sha,
+                prompt_text=prompt_text,
                 result_path=result_path,
                 handoff_path=handoff_path,
             )
@@ -534,6 +535,7 @@ def _run_real_claude(
     prompt_sha: str,
     result_path: Path,
     handoff_path: Path,
+    prompt_text: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     state = load_phase_sessions(run_id, data_dir=data_dir)
     policy = state.get("lease_policy") if isinstance(state.get("lease_policy"), Mapping) else {}
@@ -542,11 +544,17 @@ def _run_real_claude(
     started = time.monotonic()
     proc = subprocess.Popen(
         list(argv),
+        stdin=subprocess.PIPE if prompt_text is not None else None,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         start_new_session=True,
     )
+    if prompt_text is not None and proc.stdin is not None:
+        try:
+            proc.stdin.write(prompt_text)
+        finally:
+            proc.stdin.close()
     process_group_id: int | None = None
     metadata_error: str | None = None
     try:

@@ -62,11 +62,11 @@ def main(argv: list[str] | None = None) -> int:
                 "dontAsk",
                 "--allowedTools",
                 _allowed_tools_arg(),
-                prompt,
             ],
             check=False,
             capture_output=True,
             text=True,
+            input=prompt,
         )
         redacted = _redact(proc.stdout, data / "runs" / run_id)
         args.output.parent.mkdir(parents=True, exist_ok=True)
