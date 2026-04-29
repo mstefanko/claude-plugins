@@ -253,10 +253,12 @@ def _handle_recovery_decision(
         _append_pump_event(data_dir, run_id=run_id, event_type="phase_pump_stopped", details={"status": "complete", "recovery": recovery})
         return {"result": {"status": "complete", "completed_phases": completed, "recovery": recovery}}
     if status == "retry_waiting":
-        wait_seconds = _retry_wait_seconds(recovery)
-        if wait_seconds is not None and wait_seconds <= 60:
+        retry_wait = _retry_wait_info(recovery)
+        wait_seconds = retry_wait.get("seconds")
+        threshold_seconds = retry_wait.get("threshold")
+        if wait_seconds is not None and threshold_seconds is not None and wait_seconds <= threshold_seconds:
             if wait_seconds > 0:
-                time.sleep(wait_seconds)
+                _sleep_interruptibly(wait_seconds)
             return {"continue": True}
         _append_pump_event(data_dir, run_id=run_id, event_type="phase_pump_stopped", details={"status": status, "recovery": recovery})
         return {
@@ -310,12 +312,24 @@ def _record_adopted_completions(
     return appended
 
 
-def _retry_wait_seconds(recovery: Mapping[str, Any]) -> int | None:
-    waits = []
+def _retry_wait_info(recovery: Mapping[str, Any]) -> dict[str, int | None]:
+    waits: list[int] = []
+    thresholds: list[int] = []
     for action in recovery.get("actions") or []:
         if isinstance(action, Mapping) and isinstance(action.get("retry_sleep_seconds"), int):
             waits.append(int(action["retry_sleep_seconds"]))
-    return min(waits) if waits else None
+            threshold = action.get("retry_sleep_threshold_seconds")
+            thresholds.append(int(threshold) if isinstance(threshold, int) else 0)
+    return {"seconds": min(waits) if waits else None, "threshold": min(thresholds) if thresholds else None}
+
+
+def _sleep_interruptibly(seconds: int) -> None:
+    deadline = time.monotonic() + max(0, seconds)
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        time.sleep(min(1.0, remaining))
 
 
 def _write_fake_result(

@@ -58,6 +58,7 @@
         "phase_attempt_retry_ready",
         "phase_attempt_retry_exhausted",
         "phase_attempt_adopted",
+        "phase_beads_note_failed",
         "phase_result_recorded",
         "phase_handoff_recorded",
         "phase_context_rendered",

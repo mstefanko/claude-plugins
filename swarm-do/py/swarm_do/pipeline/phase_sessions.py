@@ -73,6 +73,14 @@ class PhaseSessionError(ValueError):
     """Raised when a phase-session transition is invalid."""
 
 
+class PhaseArtifactContractError(PhaseSessionError):
+    """Raised when phase result/handoff artifacts violate durable identity rules."""
+
+    def __init__(self, kind: str, message: str):
+        super().__init__(message)
+        self.kind = kind
+
+
 class PhaseSessionLockTimeout(TimeoutError):
     """Raised when the phase-session state lock cannot be acquired."""
 
@@ -122,6 +130,7 @@ def init_phase_sessions(
             return {"initialized": False, "state": state, "state_path": str(state_path)}
 
         prepared = _load_accepted_prepared(run_id, data_dir=base, repo_root=repo_root)
+        _assert_no_orphaned_phase_artifacts(run_id, data_dir=base)
         now = utc_now()
         phases: list[dict[str, Any]] = []
         previous_phase_id: str | None = None
@@ -849,6 +858,30 @@ def _verify_sidecar_hashes(prepared: Mapping[str, Any], *, repo_root: Path) -> N
             raise PhaseSessionError(f"work-unit sidecar sha mismatch for phase {phase_id}")
 
 
+def _assert_no_orphaned_phase_artifacts(run_id: str, *, data_dir: Path) -> None:
+    run_dir = data_dir / "runs" / run_id
+    artifact_roots = ("phase_launches", "phase_results", "phase_handoffs")
+    found: list[str] = []
+    for name in artifact_roots:
+        root = run_dir / name
+        if root.exists() and any(root.rglob("*")):
+            found.append(str(root))
+    recovery_root = run_dir / "phase_recovery"
+    if recovery_root.exists():
+        phase_recovery_children = [
+            child
+            for child in recovery_root.iterdir()
+            if child.name != "worktree-baseline.json" and child.name != "worktree-baseline-files"
+        ]
+        if phase_recovery_children:
+            found.append(str(recovery_root))
+    if found:
+        raise PhaseSessionError(
+            "phase-session state is missing but phase execution artifacts already exist; "
+            "refusing to create a new baseline over partial work: " + ", ".join(found)
+        )
+
+
 def _assert_prepared_sha_matches(state: Mapping[str, Any], prepared: Mapping[str, Any]) -> None:
     if state.get("prepared_plan_sha") != prepared.get("prepared_plan_sha"):
         raise PhaseSessionError("phase-session prepared_plan_sha does not match accepted prepared artifact")
@@ -1077,23 +1110,44 @@ def _validate_phase_artifacts(
     result = _load_and_validate_result(result_path)
     result_status = str(result["status"])
     if expected_status is not None and result_status != expected_status:
-        raise PhaseSessionError(f"result status {result_status!r} does not match expected {expected_status!r}")
+        raise PhaseArtifactContractError("status_mismatch", f"result status {result_status!r} does not match expected {expected_status!r}")
     if result.get("run_id") != run_id or result.get("phase_id") != phase_id:
-        raise PhaseSessionError("result run_id/phase_id mismatch")
+        raise PhaseArtifactContractError("result_identity_mismatch", "result run_id/phase_id mismatch")
     if result.get("prepared_plan_sha") != _phase_session_prepared_sha(run_id, data_dir=data_dir):
-        raise PhaseSessionError("result prepared_plan_sha does not match phase-session state")
+        raise PhaseArtifactContractError("prepared_plan_sha_mismatch", "result prepared_plan_sha does not match phase-session state")
     expected_phase_sha = _prepared_phase_content_sha(run_id, phase_id, data_dir=data_dir)
     if result.get("phase_content_sha") != expected_phase_sha:
-        raise PhaseSessionError("result phase_content_sha does not match prepared phase metadata")
+        raise PhaseArtifactContractError("phase_content_sha_mismatch", "result phase_content_sha does not match prepared phase metadata")
     handoff_path = _resolve_artifact_path(result["handoff_path"], data_dir=data_dir, run_id=run_id, label="phase handoff")
     handoff = _load_and_validate_handoff(handoff_path)
     if handoff.get("run_id") != run_id or handoff.get("phase_id") != phase_id:
-        raise PhaseSessionError("handoff run_id/phase_id mismatch")
+        raise PhaseArtifactContractError("handoff_identity_mismatch", "handoff run_id/phase_id mismatch")
     if handoff.get("phase_attempt") != result.get("phase_attempt"):
-        raise PhaseSessionError("handoff attempt does not match result attempt")
+        raise PhaseArtifactContractError("attempt_mismatch", "handoff attempt does not match result attempt")
     if handoff.get("status") != result_status:
-        raise PhaseSessionError("handoff status does not match result status")
+        raise PhaseArtifactContractError("handoff_status_mismatch", "handoff status does not match result status")
     return result_path, result, handoff_path, handoff
+
+
+def validate_phase_artifacts(
+    run_id: str,
+    phase_id: str,
+    *,
+    json_file: str | os.PathLike[str],
+    expected_status: str | None,
+    data_dir: Path,
+) -> tuple[Path, dict[str, Any], Path, dict[str, Any]]:
+    return _validate_phase_artifacts(
+        run_id,
+        phase_id,
+        json_file=json_file,
+        expected_status=expected_status,
+        data_dir=data_dir,
+    )
+
+
+def parse_phase_datetime(value: Any) -> datetime | None:
+    return _parse_dt(value)
 
 
 def _apply_phase_result(
@@ -1291,7 +1345,7 @@ def _assert_path_under_run(path: Path, *, data_dir: Path, run_id: str, label: st
     try:
         path.relative_to(run_root)
     except ValueError as exc:
-        raise PhaseSessionError(f"{label} path escapes run directory: {path}") from exc
+        raise PhaseArtifactContractError("path_escape", f"{label} path escapes run directory: {path}") from exc
 
 
 def _display_path(path: Path) -> str:
@@ -1342,6 +1396,7 @@ def _format_dt(value: datetime) -> str:
 
 __all__ = [
     "PhaseSessionError",
+    "PhaseArtifactContractError",
     "PhaseSessionLockTimeout",
     "abandon_attempt_and_retry",
     "adopt_phase_result",
@@ -1355,6 +1410,7 @@ __all__ = [
     "phase_result_path",
     "phase_session_path",
     "phase_status",
+    "parse_phase_datetime",
     "read_phase_session_summary",
     "reap_expired_phases",
     "record_phase_result",
@@ -1362,4 +1418,5 @@ __all__ = [
     "release_retry_waiting",
     "refresh_phase",
     "start_phase",
+    "validate_phase_artifacts",
 ]

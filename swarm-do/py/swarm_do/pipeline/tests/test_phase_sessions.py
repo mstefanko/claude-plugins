@@ -158,6 +158,18 @@ class PhaseSessionTests(unittest.TestCase):
             self.assertEqual(loaded["retry_policy"]["max_session_attempts"], 3)
             self.assertEqual(loaded["phases"][0]["attempt_history"], [])
 
+    def test_init_refuses_to_resnapshot_when_phase_artifacts_exist_without_state(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            phase_session_path(run_id, data_dir=data).unlink()
+            orphan = data / "runs" / run_id / "phase_results" / "1"
+            orphan.mkdir(parents=True, exist_ok=True)
+            (orphan / "attempt-1.result.json").write_text("{}", encoding="utf-8")
+
+            with self.assertRaisesRegex(PhaseSessionError, "phase execution artifacts already exist"):
+                init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+
     def test_record_result_rejects_prepared_plan_sha_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             repo, data, run_id = make_prepared_run(Path(td), phase_count=1)

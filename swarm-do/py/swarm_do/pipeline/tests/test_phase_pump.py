@@ -257,6 +257,29 @@ class PhasePumpTests(unittest.TestCase):
             self.assertEqual(state["phases"][0]["child_pid"], 12345)
             self.assertEqual(state["phases"][0]["process_group_id"], 12345)
 
+    def test_retry_sleep_threshold_comes_from_recovery_policy(self) -> None:
+        recovery = {
+            "status": "retry_waiting",
+            "actions": [
+                {
+                    "action": "retry_waiting",
+                    "retry_sleep_seconds": 90,
+                    "retry_sleep_threshold_seconds": 120,
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as td, mock.patch("swarm_do.pipeline.phase_pump._sleep_interruptibly") as sleep:
+            result = phase_pump._handle_recovery_decision(
+                recovery,
+                completed=[],
+                data_dir=Path(td),
+                run_id="01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                stop_on_checkpoint=False,
+            )
+
+        self.assertEqual(result, {"continue": True})
+        sleep.assert_called_once_with(90)
+
     def test_phase_checkpoint_does_not_reuse_unrelated_active_run(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             repo, data, run_id = make_prepared_run(Path(td), phase_count=1)

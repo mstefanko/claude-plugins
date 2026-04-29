@@ -48,7 +48,10 @@ def write_phase_beads_note(
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            timeout=10,
         )
+    except subprocess.TimeoutExpired:
+        return {"written": False, "reason": "bd update timed out"}
     except Exception as exc:
         return {"written": False, "reason": str(exc)}
     if proc.returncode != 0:

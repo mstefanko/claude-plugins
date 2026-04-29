@@ -41,6 +41,11 @@ Phase-session resume states are read-only in this command. `resume` reports
 Use `bin/swarm phases recover <run-id> --json --dry-run` to inspect recovery
 actions without mutation.
 
+Active unexpired leases from another host are treated conservatively as still
+alive until their lease expires. Same-host recovery can use recorded child PID
+and process-group evidence; cross-host recovery waits for the persisted TTL
+rather than guessing from unavailable process state.
+
 Do not add a second orchestration protocol. Reuse the `/swarmdaddy:do` dispatch
 loop from `skills/swarmdaddy/SKILL.md`, injecting the manifest as resume context
 and skipping work units listed in `completed_units`.

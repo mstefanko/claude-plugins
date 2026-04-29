@@ -20,17 +20,19 @@ from .phase_sessions import (
     STATUS_RETRY_EXHAUSTED,
     STATUS_RETRY_WAITING,
     STATUS_RUNNING,
+    PhaseArtifactContractError,
     PhaseSessionError,
     abandon_attempt_and_retry,
     adopt_phase_result,
     load_phase_sessions,
     mark_retry_exhausted,
+    parse_phase_datetime,
     phase_handoff_path,
     phase_result_path,
     phase_status,
     release_retry_waiting,
+    validate_phase_artifacts,
 )
-from .phase_sessions import _parse_dt, _validate_phase_artifacts  # recovery-only internal validation reuse
 from .run_state import append_run_event, utc_now, validate_run_event
 from .session_capabilities import extract_claude_print_artifacts, parse_claude_print_json
 from .worktree_baseline import changed_files_since_baseline
@@ -39,6 +41,7 @@ from .phase_beads import write_phase_beads_note
 
 ACTIVE_STATUSES = {STATUS_LEASED, STATUS_RUNNING}
 STOP_STATUSES = {STATUS_RETRY_EXHAUSTED, STATUS_BLOCKED, STATUS_NEEDS_INPUT}
+MAX_RECONCILIATION_PASSES = 20
 
 
 def reconcile_phase_sessions(
@@ -66,14 +69,18 @@ def reconcile_phase_sessions(
             blocked_reason=str(exc),
         )
 
-    for _ in range(20):
+    # A single pass may adopt/release one phase and then need to re-read state.
+    # This cap prevents malformed state from spinning the foreground pump forever.
+    for _ in range(MAX_RECONCILIATION_PASSES):
         status = _stable_terminal_status(state)
         if status is not None:
             return _decision(run_id, base, status, actions)
 
         retry_waiting = _first_phase(state, STATUS_RETRY_WAITING)
         if retry_waiting is not None:
-            retry_at = _parse_dt(retry_waiting.get("next_retry_at"))
+            retry_at = parse_phase_datetime(retry_waiting.get("next_retry_at"))
+            retry_policy = state.get("retry_policy") if isinstance(state.get("retry_policy"), Mapping) else {}
+            retry_sleep_threshold = int(retry_policy.get("retry_sleep_threshold_seconds") or 0)
             if retry_at is not None and retry_at > current_time:
                 wait_seconds = max(0, int((retry_at - current_time).total_seconds()))
                 actions.append(
@@ -83,6 +90,7 @@ def reconcile_phase_sessions(
                         "action": "retry_waiting",
                         "next_retry_at": retry_waiting.get("next_retry_at"),
                         "retry_sleep_seconds": wait_seconds,
+                        "retry_sleep_threshold_seconds": retry_sleep_threshold,
                     }
                 )
                 return _decision(run_id, base, STATUS_RETRY_WAITING, actions)
@@ -237,13 +245,14 @@ def reconcile_phase_sessions(
                     "retry_decision": "hard_stop",
                 }
             )
-            _write_recovery_note(
-                run_id,
-                base,
-                kind="phase_hard_stop",
-                phase_id=phase_id,
-                details=actions[-1],
-            )
+            if not dry_run:
+                _write_recovery_note(
+                    run_id,
+                    base,
+                    kind="phase_hard_stop",
+                    phase_id=phase_id,
+                    details=actions[-1],
+                )
             return _decision(run_id, base, "failed_nonretryable", actions, blocked_reason=failure_kind)
         action = _retry_or_exhaust(
             run_id,
@@ -284,13 +293,22 @@ def _current_attempt_artifacts(run_id: str, phase: Mapping[str, Any], *, data_di
     )
     partial = result_path.exists() or handoff_path.exists()
     try:
-        resolved_result, result, resolved_handoff, handoff = _validate_phase_artifacts(
+        resolved_result, result, resolved_handoff, handoff = validate_phase_artifacts(
             run_id,
             str(phase["phase_id"]),
             json_file=str(result_path),
             expected_status=None,
             data_dir=data_dir,
         )
+    except PhaseArtifactContractError as exc:
+        return {
+            "valid": False,
+            "partial": partial,
+            "result_path": result_path,
+            "handoff_path": handoff_path,
+            "errors": [str(exc)],
+            "error_kinds": [exc.kind],
+        }
     except Exception as exc:
         return {
             "valid": False,
@@ -298,6 +316,7 @@ def _current_attempt_artifacts(run_id: str, phase: Mapping[str, Any], *, data_di
             "result_path": result_path,
             "handoff_path": handoff_path,
             "errors": [str(exc)],
+            "error_kinds": [],
         }
     return {
         "valid": True,
@@ -498,7 +517,7 @@ def _needs_recovery_retry(evidence: Mapping[str, Any], state: Mapping[str, Any])
 
 
 def _active_phase_decision(phase: Mapping[str, Any], *, now: datetime) -> dict[str, Any]:
-    expires = _parse_dt(phase.get("lease_expires_at"))
+    expires = parse_phase_datetime(phase.get("lease_expires_at"))
     if expires is not None and expires <= now:
         return {
             "phase_id": phase.get("phase_id"),
@@ -526,9 +545,15 @@ def _child_death_proven(phase: Mapping[str, Any]) -> bool:
     if not isinstance(pid, int) or pid <= 0:
         return False
     alive = _pid_alive(pid)
-    if alive is not False:
-        return False
-    return True
+    if alive is False:
+        return True
+    if alive is True:
+        expected_pgid = phase.get("process_group_id")
+        if isinstance(expected_pgid, int) and expected_pgid > 0:
+            group_matches = _process_group_matches(pid, expected_pgid)
+            if group_matches is False:
+                return True
+    return False
 
 
 def _pid_alive(pid: int) -> bool | None:
@@ -539,7 +564,18 @@ def _pid_alive(pid: int) -> bool | None:
         return False
     except PermissionError:
         return None
-    except Exception:
+    except OSError:
+        return None
+
+
+def _process_group_matches(pid: int, expected_pgid: int) -> bool | None:
+    try:
+        return os.getpgid(pid) == expected_pgid
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return None
+    except OSError:
         return None
 
 
@@ -635,15 +671,16 @@ def _launcher_error(launcher_result: Mapping[str, Any] | None, artifact: Mapping
 def _hard_stop_failure(failure_kind: str, artifact: Mapping[str, Any]) -> bool:
     if failure_kind in {"claude_cli_missing", "launcher_ineligible", "permission_contract_failure"}:
         return True
-    text = " ".join(str(item) for item in artifact.get("errors") or [])
-    hard_terms = (
-        "escapes run directory",
-        "prepared_plan_sha",
-        "phase_content_sha",
-        "run_id/phase_id mismatch",
-        "attempt does not match",
-    )
-    return any(term in text for term in hard_terms)
+    hard_kinds = {
+        "path_escape",
+        "result_identity_mismatch",
+        "prepared_plan_sha_mismatch",
+        "phase_content_sha_mismatch",
+        "handoff_identity_mismatch",
+        "attempt_mismatch",
+        "handoff_status_mismatch",
+    }
+    return any(kind in hard_kinds for kind in artifact.get("error_kinds") or [])
 
 
 def _result_error(result: Mapping[str, Any]) -> str | None:
@@ -750,8 +787,8 @@ def _launcher_from_phase(phase: Mapping[str, Any]) -> str | None:
 
 
 def _elapsed_seconds(phase: Mapping[str, Any], completed_at: str) -> float | None:
-    started = _parse_dt(phase.get("started_at"))
-    completed = _parse_dt(completed_at)
+    started = parse_phase_datetime(phase.get("started_at"))
+    completed = parse_phase_datetime(completed_at)
     if started is None or completed is None:
         return None
     elapsed = (completed - started).total_seconds()
@@ -833,7 +870,7 @@ def _write_recovery_note(
     bd_epic_id = _bd_epic_id_for_run(run_id, data_dir=data_dir)
     if not bd_epic_id:
         return
-    write_phase_beads_note(
+    result = write_phase_beads_note(
         run_id,
         kind=kind,
         bd_epic_id=bd_epic_id,
@@ -841,6 +878,18 @@ def _write_recovery_note(
         details=details,
         data_dir=data_dir,
     )
+    if not result.get("written"):
+        _append_recovery_event(
+            data_dir,
+            run_id=run_id,
+            event_type="phase_beads_note_failed",
+            details={
+                "phase_id": phase_id,
+                "kind": kind,
+                "reason": result.get("reason"),
+                "failure_kind": details.get("failure_kind"),
+            },
+        )
 
 
 def _bd_epic_id_for_run(run_id: str, *, data_dir: Path) -> str | None:

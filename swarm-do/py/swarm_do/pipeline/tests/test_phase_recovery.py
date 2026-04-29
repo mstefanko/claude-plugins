@@ -79,6 +79,31 @@ class PhaseRecoveryTests(unittest.TestCase):
             state = json.loads(phase_session_path(run_id, data_dir=data).read_text(encoding="utf-8"))
             self.assertEqual(state["phases"][0]["last_failure_kind"], "child_process_dead_no_artifacts")
 
+    def test_same_host_process_group_mismatch_allows_recovery(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            claim_next_phase(run_id, data_dir=data, repo_root=repo, lease_owner="owner-1")
+            start_phase(run_id, "1", launcher="claude-print", lease_owner="owner-1", data_dir=data)
+            _patch_phase(data, run_id, {"lease_host": socket.gethostname(), "child_pid": 12345, "process_group_id": 111})
+
+            from unittest import mock
+
+            with mock.patch("swarm_do.pipeline.phase_recovery.os.kill", return_value=None), mock.patch(
+                "swarm_do.pipeline.phase_recovery.os.getpgid",
+                return_value=222,
+            ):
+                result = reconcile_phase_sessions(
+                    run_id,
+                    data_dir=data,
+                    repo_root=repo,
+                    now=datetime(2026, 4, 29, tzinfo=UTC),
+                )
+
+            self.assertEqual(result["status"], "ready")
+            state = json.loads(phase_session_path(run_id, data_dir=data).read_text(encoding="utf-8"))
+            self.assertEqual(state["phases"][0]["last_failure_kind"], "child_process_dead_no_artifacts")
+
     def test_retry_after_is_clamped_and_sets_retry_waiting(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
@@ -142,6 +167,29 @@ class PhaseRecoveryTests(unittest.TestCase):
             changed = state["phases"][0]["attempt_history"][0]["changed_files"]
             self.assertIn("new.tmp", changed)
             self.assertNotIn("preexisting.tmp", changed)
+
+    def test_worktree_diff_summary_is_baseline_relative(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            (repo / "seed.txt").write_text("preexisting dirty\n", encoding="utf-8")
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            claim_next_phase(run_id, data_dir=data, repo_root=repo, lease_owner="owner-1")
+            start_phase(run_id, "1", launcher="claude-print", lease_owner="owner-1", data_dir=data)
+            (repo / "attempt.tmp").write_text("attempt dirt\n", encoding="utf-8")
+            _patch_phase(data, run_id, {"lease_expires_at": "2026-01-01T00:00:00Z"})
+
+            reconcile_phase_sessions(
+                run_id,
+                data_dir=data,
+                repo_root=repo,
+                now=datetime(2026, 4, 29, tzinfo=UTC),
+            )
+
+            state = json.loads(phase_session_path(run_id, data_dir=data).read_text(encoding="utf-8"))
+            summary_path = Path(state["phases"][0]["attempt_history"][0]["diff_summary_path"])
+            summary = summary_path.read_text(encoding="utf-8")
+            self.assertIn("attempt.tmp", summary)
+            self.assertNotIn("seed.txt", summary)
 
 
 def _patch_phase(data: Path, run_id: str, updates: dict) -> None:
