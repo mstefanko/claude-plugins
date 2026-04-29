@@ -19,15 +19,25 @@ from pathlib import Path
 from .render import to_agents_md, to_permissions_json, to_shared_md
 from .spec import load
 
-# The role-specs directory is relative to the repo root.  We locate it by
-# walking up from this file's location until we find swarm-do/role-specs/.
-def _find_role_specs_dir() -> Path:
-    here = Path(__file__).resolve()
-    # Walk up: .../swarm-do/py/swarm_do/roles/cli.py → walk to repo root
-    for parent in here.parents:
-        candidate = parent / "swarm-do" / "role-specs"
+# The role-specs directory is relative to the repo root. Try CWD walk-up first
+# so a cached plugin snapshot resolves to the live repo when invoked from inside
+# it (dogfood); fall back to __file__ walk-up for consumer installs where CWD
+# is unrelated.
+def _walk_for_role_specs(start: Path) -> Path | None:
+    for candidate_root in (start, *start.parents):
+        candidate = candidate_root / "swarm-do" / "role-specs"
         if candidate.is_dir():
             return candidate
+    return None
+
+
+def _find_role_specs_dir() -> Path:
+    cwd_match = _walk_for_role_specs(Path.cwd().resolve())
+    if cwd_match is not None:
+        return cwd_match
+    file_match = _walk_for_role_specs(Path(__file__).resolve())
+    if file_match is not None:
+        return file_match
     raise FileNotFoundError(
         "Could not locate swarm-do/role-specs/ directory. "
         "Run from within the mstefanko-plugins repo."
@@ -35,11 +45,8 @@ def _find_role_specs_dir() -> Path:
 
 
 def _find_repo_root() -> Path:
-    here = Path(__file__).resolve()
-    for parent in here.parents:
-        if (parent / "swarm-do" / "role-specs").is_dir():
-            return parent
-    raise FileNotFoundError("Could not locate repo root.")
+    role_specs = _find_role_specs_dir()
+    return role_specs.parent.parent
 
 
 _STAMP_PREFIX = "<!-- generated from role-specs/"

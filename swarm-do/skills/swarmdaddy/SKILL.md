@@ -17,10 +17,30 @@ creation.
 
 ## Preflight
 
+0. Resolve the dispatcher CLI binaries. When the dispatcher is running inside the
+   `mstefanko-plugins` repo (the dogfood case), prefer the in-repo
+   `swarm-do/bin/` so source edits take effect immediately and a stale plugin
+   cache snapshot cannot pin you to pre-pivot code. Otherwise fall back to the
+   plugin cache:
+
+```bash
+_BD_PATH="$(bd where 2>/dev/null | head -1 | tr -d '[:space:]')"
+if [[ -n "$_BD_PATH" && -x "$(dirname "$_BD_PATH")/swarm-do/bin/swarm" ]]; then
+  SWARM_BIN_DIR="$(dirname "$_BD_PATH")/swarm-do/bin"
+else
+  SWARM_BIN_DIR="$CLAUDE_PLUGIN_ROOT/bin"
+fi
+SWARM="$SWARM_BIN_DIR/swarm"
+```
+
+Use `"$SWARM"` for every CLI invocation below, and `"$SWARM_BIN_DIR/<helper>"`
+for sibling helpers (`swarm-validate`, `swarm-provider-review`, `swarm-stage-mco`,
+`_lib/beads-preflight.sh`, etc.).
+
 1. Run the beads preflight exactly once before creating issues:
 
 ```bash
-bash "$CLAUDE_PLUGIN_ROOT/bin/_lib/beads-preflight.sh" swarmdaddy
+bash "$SWARM_BIN_DIR/_lib/beads-preflight.sh" swarmdaddy
 ```
 
 On failure, halt and surface the helper's stderr. Do not auto-init beads.
@@ -30,9 +50,9 @@ On failure, halt and surface the helper's stderr. Do not auto-init beads.
 ```bash
 ACTIVE_PRESET="$(cat "${CLAUDE_PLUGIN_DATA}/current-preset.txt" 2>/dev/null || true)"
 if [[ -n "$ACTIVE_PRESET" ]]; then
-  "$CLAUDE_PLUGIN_ROOT/bin/swarm" preset dry-run "$ACTIVE_PRESET" <plan-path>
+  "$SWARM" preset dry-run "$ACTIVE_PRESET" <plan-path>
 else
-  "$CLAUDE_PLUGIN_ROOT/bin/swarm" pipeline lint default
+  "$SWARM" pipeline lint default
 fi
 ```
 
@@ -41,7 +61,7 @@ If there is no active preset, the runtime uses the `default` pipeline and routin
 3. Check rollout status when deciding whether Codex lanes are allowed:
 
 ```bash
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" status
+"$SWARM" status
 ```
 
 `DOGFOOD` means opt-in plugin wiring is allowed through the active preset, not default-on Codex review.
@@ -49,7 +69,7 @@ If there is no active preset, the runtime uses the `default` pipeline and routin
 4. Check the permission contract before dispatching mutable work:
 
 ```bash
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" permissions check
+"$SWARM" permissions check
 ```
 
 This validates four orthogonal things: every `role-specs/agent-<name>.md` parses;
@@ -62,8 +82,8 @@ hard preflight failure for automated runs. To install or refresh the dispatcher'
 allowlist, run:
 
 ```bash
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" permissions install            # idempotent
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" permissions install --dry-run  # preview
+"$SWARM" permissions install            # idempotent
+"$SWARM" permissions install --dry-run  # preview
 ```
 
 To refresh derived role artifacts after editing a role-spec, run
@@ -76,10 +96,10 @@ Deterministic helpers own parsing YAML, validating schemas, resolving backend ro
 Use the helpers:
 
 ```bash
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" pipeline show default
-"$CLAUDE_PLUGIN_ROOT/bin/swarm-validate" <preset-name> --plan <plan-path>
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" work-units batches <work-units.json> --parallelism <n> --state-json-file <unit-state.json> --json
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" worktrees names --run-id <run-id> --unit-id <unit-id> --json
+"$SWARM" pipeline show default
+"$SWARM_BIN_DIR/swarm-validate" <preset-name> --plan <plan-path>
+"$SWARM" work-units batches <work-units.json> --parallelism <n> --state-json-file <unit-state.json> --json
+"$SWARM" worktrees names --run-id <run-id> --unit-id <unit-id> --json
 ```
 
 Work-unit DAG math, artifact validation, ready-queue batching, resume-point
@@ -94,15 +114,15 @@ When invoked from `/swarmdaddy:brainstorm`, `/swarmdaddy:research`,
 but stay within the selected output-only profile:
 
 ```bash
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" brainstorm --dry-run <optional-existing-path>
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" research --dry-run <optional-existing-path>
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" design --dry-run <optional-existing-path>
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" review --dry-run <optional-existing-path>
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" permissions check
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" brainstorm <optional-existing-path>
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" research <optional-existing-path>
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" design <optional-existing-path>
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" review <optional-existing-path>
+"$SWARM" brainstorm --dry-run <optional-existing-path>
+"$SWARM" research --dry-run <optional-existing-path>
+"$SWARM" design --dry-run <optional-existing-path>
+"$SWARM" review --dry-run <optional-existing-path>
+"$SWARM" permissions check
+"$SWARM" brainstorm <optional-existing-path>
+"$SWARM" research <optional-existing-path>
+"$SWARM" design <optional-existing-path>
+"$SWARM" review <optional-existing-path>
 ```
 
 Then load `bin/swarm pipeline show <profile>` and dispatch only that graph.
@@ -125,7 +145,7 @@ Before starting a fresh run, create a run id and write the dispatcher-owned
 active state. Refresh it at every phase and work-unit boundary:
 
 ```bash
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" run-state write --json-file <active-run-payload.json>
+"$SWARM" run-state write --json-file <active-run-payload.json>
 ```
 
 The payload must include `run_id`, `bd_epic_id`, `phase_id`,
@@ -134,14 +154,14 @@ The payload must include `run_id`, `bd_epic_id`, `phase_id`,
 completion:
 
 ```bash
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" run-state clear
+"$SWARM" run-state clear
 ```
 
 At the end of every completed work unit, write a fallback checkpoint so resume
 does not depend solely on PreCompact firing:
 
 ```bash
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" run-state checkpoint --source dispatcher-fallback --reason end-of-unit
+"$SWARM" run-state checkpoint --source dispatcher-fallback --reason end-of-unit
 ```
 
 ## Plan-Prepare Stage
@@ -150,7 +170,7 @@ If `$ARGUMENTS` includes `--prepared`, skip the legacy plan-prepare stage and
 run the prepared dispatch gate before creating any Beads child issues:
 
 ```bash
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" do --prepared <run-id-or-artifact-path> --json
+"$SWARM" do --prepared <run-id-or-artifact-path> --json
 ```
 
 This helper loads the prepared artifact, requires `status="accepted"`,
@@ -167,7 +187,7 @@ durable queue instead of manually restarting every phase. The no-babysitting
 foreground path is:
 
 ```bash
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" do --prepared <run-id-or-artifact-path> --phase-sessions auto --json
+"$SWARM" do --prepared <run-id-or-artifact-path> --phase-sessions auto --json
 ```
 
 It verifies the accepted artifact, writes dispatcher active-run state, initializes
@@ -176,10 +196,10 @@ sequential pumping. Use the lower-level commands for inspection, manual recovery
 or debugging:
 
 ```bash
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" phases status <run-id> --json
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" phases init <run-id> --json
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" phases pump <run-id> --launcher manual --max-phases 1 --json
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" context render --run-id <run-id> --phase <phase-id> --role dispatcher --json
+"$SWARM" phases status <run-id> --json
+"$SWARM" phases init <run-id> --json
+"$SWARM" phases pump <run-id> --launcher manual --max-phases 1 --json
+"$SWARM" context render --run-id <run-id> --phase <phase-id> --role dispatcher --json
 ```
 
 The phase pump is a launch surface only. It verifies the prepared artifact,
@@ -194,7 +214,7 @@ If `$ARGUMENTS` includes `--prepare --continue`, run the opt-in convenience
 gate before creating any Beads child issues:
 
 ```bash
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" do <plan-path> --prepare --continue [--phase-sessions auto] --json
+"$SWARM" do <plan-path> --prepare --continue [--phase-sessions auto] --json
 ```
 
 This helper runs the same deterministic prepare pipeline, auto-accepts only
@@ -213,7 +233,7 @@ changed allowed-file scopes, stale artifacts, or trust-boundary failures.
 Between preflight and research, run the deterministic prepare layer:
 
 ```bash
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" prepare <plan-path>
+"$SWARM" prepare <plan-path>
 ```
 
 This writes `prepared.md`, `prepared_plan.v1.json`, `inspect.v1.json`, and one
@@ -221,7 +241,7 @@ This writes `prepared.md`, `prepared_plan.v1.json`, `inspect.v1.json`, and one
 no Beads child issues until the operator accepts the artifact with:
 
 ```bash
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" prepare --accept <run-id>
+"$SWARM" prepare --accept <run-id>
 ```
 
 The legacy `/swarmdaddy:do <plan-path>` path still honors the active preset's
@@ -251,7 +271,7 @@ context pointers.
 5. For experimental `provider` stages, create one coordinator-owned beads issue for the stage, assemble a read-only review prompt from the phase text, upstream writer/spec evidence, changed files, and verification checklist, write that prompt under the run artifact directory, and invoke the provider helper. For internal provider review stages (`provider.type: swarm-review`) use:
 
 ```bash
-"$CLAUDE_PLUGIN_ROOT/bin/swarm-provider-review" \
+"$SWARM_BIN_DIR/swarm-provider-review" \
   --command review \
   --prompt-file <prompt-file> \
   --selection <auto|explicit|off> \
@@ -269,7 +289,7 @@ context pointers.
 For MCO review stages use:
 
 ```bash
-"$CLAUDE_PLUGIN_ROOT/bin/swarm-stage-mco" \
+"$SWARM_BIN_DIR/swarm-stage-mco" \
   --command review \
   --prompt-file <prompt-file> \
   --providers <comma-separated-provider-list> \
@@ -318,22 +338,22 @@ work-unit executor contract for that lane:
 1. Load and fail-closed validate the artifact:
 
 ```bash
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" work-units lint <work-units.json>
+"$SWARM" work-units lint <work-units.json>
 ```
 
 2. Create or reuse the integration branch named by the deterministic helper
 contract:
 
 ```bash
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" worktrees names --repo <repo> --run-id <run-id> --unit-id <unit-id> --json
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" worktrees ensure-integration --repo <repo> --run-id <run-id> --json
+"$SWARM" worktrees names --repo <repo> --run-id <run-id> --unit-id <unit-id> --json
+"$SWARM" worktrees ensure-integration --repo <repo> --run-id <run-id> --json
 ```
 
 3. Ask the helper for the next ready batch. Use the active pipeline's
 `parallelism` value, with `1` as the serial fallback:
 
 ```bash
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" work-units batches <work-units.json> --parallelism <n> --state-json-file <unit-state.json> --json
+"$SWARM" work-units batches <work-units.json> --parallelism <n> --state-json-file <unit-state.json> --json
 ```
 
 4. For each ready unit in the returned batch, the coordinator creates exactly
@@ -341,7 +361,7 @@ one child beads issue, creates the unit worktree/branch, and runs
 `agent-writer` in that worktree:
 
 ```bash
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" worktrees add-unit --repo <repo> --run-id <run-id> --unit-id <unit-id> --json
+"$SWARM" worktrees add-unit --repo <repo> --run-id <run-id> --unit-id <unit-id> --json
 ```
 
 5. After writer completion, the coordinator runs the deterministic post-writer
@@ -349,7 +369,7 @@ report in the same worktree and attaches that objective output before launching
 `agent-spec-review`:
 
 ```bash
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" work-units post-writer <work-units.json> \
+"$SWARM" work-units post-writer <work-units.json> \
   --unit-id <unit-id> \
   --repo <unit-worktree> \
   --base-ref <integration-branch-or-sha> \
@@ -369,7 +389,7 @@ uses the helper to check out the integration branch and merge with
 state:
 
 ```bash
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" worktrees merge --repo <repo> --integration-branch <branch> --unit-branch <branch> --json
+"$SWARM" worktrees merge --repo <repo> --integration-branch <branch> --unit-branch <branch> --json
 ```
 
 7. Continue asking for batches until the helper returns no ready units or
@@ -417,7 +437,7 @@ claude-mem itself.
 `/swarmdaddy:resume <bd-id>` first runs:
 
 ```bash
-"$CLAUDE_PLUGIN_ROOT/bin/swarm" resume <bd-id> --json
+"$SWARM" resume <bd-id> --json
 ```
 
 If the manifest is `ready`, reload the BEADS epic/thread context, inject the
@@ -436,7 +456,7 @@ operator opt-in and still requires clean drift status.
 Claude-backed stages use Claude Code `Agent()` with the loaded role persona. Codex-backed stages use the runner so telemetry, prompt bundles, and fail-open review behavior stay consistent:
 
 ```bash
-"$CLAUDE_PLUGIN_ROOT/bin/swarm-run" --backend codex --issue <bd-id> --role <role-name>
+"$SWARM_BIN_DIR/swarm-run" --backend codex --issue <bd-id> --role <role-name>
 ```
 
 When dispatching a Codex-backed normal agent with `lens`, pass
@@ -451,7 +471,7 @@ The stock `hybrid-review` preset is the Phase 1 dogfood lane: it adds `agent-cod
 Before every Claude `Agent()` call, load the persona through:
 
 ```bash
-bash "$CLAUDE_PLUGIN_ROOT/bin/load-role.sh" <role-name>
+bash "$SWARM_BIN_DIR/load-role.sh" <role-name>
 ```
 
 If the stage agent declares `lens`, append the catalog-resolved variant overlay after the loaded role text with a clear `Lens Overlay` separator. Spawn swarm agents with `subagent_type="general-purpose"` and paste the role file plus any lens overlay into the prompt. Writers use worktree isolation and run in the background.
