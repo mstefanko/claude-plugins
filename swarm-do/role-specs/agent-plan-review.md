@@ -61,7 +61,13 @@ move it.
 3. Read deterministic lint findings and any accepted safe-fix list.
 4. Review for missing execution boundaries, ambiguous ownership, unsafe
    requirements, acceptance gaps, validation gaps, and safe canonical rewrites.
-5. Return structured findings only. Do not edit files.
+5. Review build order. Look for a phase consuming a schema, API, config, CLI
+   command, migration, fixture, or helper before an earlier phase creates or
+   modifies it; docs, cleanup, review, telemetry, or migration-follow-up before
+   the implementation they describe; callers before callee contracts; migrations
+   after code that expects the migrated shape; and broad "wire up everything"
+   wording that hides dependency order.
+6. Return structured findings only. Do not edit files.
 
 ## Output
 

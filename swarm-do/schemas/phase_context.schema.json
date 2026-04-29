@@ -23,6 +23,7 @@
     "validation_commands",
     "prior_decisions_path",
     "previous_handoff_path",
+    "shared_decisions_path",
     "source_list",
     "warnings",
     "max_prompt_bytes",
@@ -76,6 +77,7 @@
     },
     "prior_decisions_path": { "type": "string" },
     "previous_handoff_path": { "type": "string" },
+    "shared_decisions_path": { "type": "string" },
     "source_list": {
       "type": "array",
       "items": { "type": "object" }

@@ -7,6 +7,7 @@ from pathlib import Path
 
 from swarm_do.pipeline import context_bundle
 from swarm_do.pipeline.context_bundle import render_context_bundle
+from swarm_do.pipeline.phase_sessions import init_phase_sessions, phase_session_path
 from swarm_do.pipeline.tests.phase_session_fixtures import make_prepared_run
 
 
@@ -61,6 +62,87 @@ class ContextBundleTests(unittest.TestCase):
             context_bundle._validate_context({"schema_version": 1})
 
         self.assertIs(type(caught.exception), ValueError)
+
+    def test_phase_three_uses_direct_dependency_handoff_only(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=3)
+            _write_handoff(data, run_id, "1", summary="phase one summary", decisions=["phase one decision"])
+            _write_handoff(data, run_id, "2", summary="phase two summary", decisions=["phase two decision"])
+
+            result = render_context_bundle(run_id=run_id, phase_id="3", role="dispatcher", data_dir=data, repo_root=repo)
+
+            context_dir = data / "runs" / run_id / "context" / "3"
+            previous = (context_dir / "previous-handoff.md").read_text(encoding="utf-8")
+            decisions = (context_dir / "decisions.md").read_text(encoding="utf-8")
+            shared = (context_dir / "shared-decisions.md").read_text(encoding="utf-8")
+            self.assertNotIn("phase one summary", previous)
+            self.assertIn("phase two summary", previous)
+            self.assertNotIn("phase one decision", decisions)
+            self.assertIn("phase two decision", decisions)
+            self.assertEqual(shared, "No shared decisions.\n")
+            self.assertIn("shared_decisions_path", result["context"])
+
+    def test_phase_session_dependencies_override_prepared_fallback_for_handoffs(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=3)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            state_path = phase_session_path(run_id, data_dir=data)
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            state["phases"][2]["depends_on_phase_ids"] = ["1"]
+            state_path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            _write_handoff(data, run_id, "1", summary="phase one summary")
+            _write_handoff(data, run_id, "2", summary="phase two summary")
+
+            render_context_bundle(run_id=run_id, phase_id="3", role="dispatcher", data_dir=data, repo_root=repo)
+
+            previous = (data / "runs" / run_id / "context" / "3" / "previous-handoff.md").read_text(encoding="utf-8")
+            self.assertIn("phase one summary", previous)
+            self.assertNotIn("phase two summary", previous)
+
+    def test_explicit_empty_prepared_dependencies_do_not_fall_back(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=3)
+            prepared_path = data / "runs" / run_id / "prepared_plan.v1.json"
+            prepared = json.loads(prepared_path.read_text(encoding="utf-8"))
+            prepared["phase_map"][2]["depends_on_phase_ids"] = []
+            prepared_path.write_text(json.dumps(prepared, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            _write_handoff(data, run_id, "2", summary="phase two summary")
+
+            render_context_bundle(run_id=run_id, phase_id="3", role="dispatcher", data_dir=data, repo_root=repo)
+
+            previous = (data / "runs" / run_id / "context" / "3" / "previous-handoff.md").read_text(encoding="utf-8")
+            self.assertEqual(previous, "No previous phase handoff.\n")
+
+
+def _write_handoff(
+    data: Path,
+    run_id: str,
+    phase_id: str,
+    *,
+    summary: str,
+    decisions: list[str] | None = None,
+) -> None:
+    path = data / "runs" / run_id / "phase_handoffs" / phase_id / "attempt-1.handoff.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": 1,
+        "run_id": run_id,
+        "phase_id": phase_id,
+        "phase_attempt": 1,
+        "status": "complete",
+        "written_at": "2026-04-29T00:00:00Z",
+        "summary": summary,
+        "decisions": decisions or [],
+        "changed_files": [],
+        "completed_work_units": [],
+        "open_items": [],
+        "blockers": [],
+        "do_not_retry": [],
+        "validation_summary": [],
+        "artifacts": [],
+        "next_phase_context": [f"{phase_id} next context"],
+    }
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":

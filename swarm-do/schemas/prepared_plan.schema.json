@@ -87,7 +87,13 @@
           "content_sha": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
           "plan_context_sha": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
           "cache_key": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-          "requires_decomposition": { "type": "boolean" }
+          "requires_decomposition": { "type": "boolean" },
+          "depends_on_phase_ids": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 },
+            "uniqueItems": true
+          },
+          "dependency_reason": { "type": ["string", "null"] }
         }
       }
     },

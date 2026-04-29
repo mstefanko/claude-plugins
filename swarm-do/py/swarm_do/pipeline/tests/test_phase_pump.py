@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import json
+import re
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
+from swarm_do.pipeline.paths import REPO_ROOT
 from swarm_do.pipeline.phase_pump import pump_phases
-from swarm_do.pipeline.phase_sessions import init_phase_sessions, phase_status
+from swarm_do.pipeline.phase_sessions import init_phase_sessions, phase_session_path, phase_status
 from swarm_do.pipeline.tests.phase_session_fixtures import make_prepared_run
 
 
@@ -65,6 +69,182 @@ class PhasePumpTests(unittest.TestCase):
 
             self.assertEqual(result["status"], "ineligible")
             self.assertEqual(phase_status(run_id, data_dir=data, repo_root=repo)["phases"][0]["status"], "pending")
+
+    def test_claude_print_injected_runner_completes_two_phases(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=2)
+            runner = _claude_runner(data, run_id, ["complete", "complete"])
+
+            with mock.patch("swarm_do.pipeline.phase_pump.doctor_report", return_value=_eligible_claude_report()):
+                result = pump_phases(
+                    run_id,
+                    launcher="claude-print",
+                    max_phases=None,
+                    init_if_missing=True,
+                    claude_runner=runner,
+                    data_dir=data,
+                )
+
+            self.assertEqual(result["status"], "complete")
+            self.assertEqual(len(result["completed_phases"]), 2)
+            self.assertEqual(phase_status(run_id, data_dir=data, repo_root=repo)["status"], "complete")
+
+    def test_claude_print_failed_phase_stops_downstream(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=2)
+            runner = _claude_runner(data, run_id, ["failed"])
+
+            with mock.patch("swarm_do.pipeline.phase_pump.doctor_report", return_value=_eligible_claude_report()):
+                result = pump_phases(
+                    run_id,
+                    launcher="claude-print",
+                    max_phases=None,
+                    init_if_missing=True,
+                    claude_runner=runner,
+                    data_dir=data,
+                )
+
+            self.assertEqual(result["status"], "failed")
+            status = phase_status(run_id, data_dir=data, repo_root=repo)
+            self.assertEqual(status["phases"][0]["status"], "failed")
+            self.assertEqual(status["phases"][1]["status"], "pending")
+
+    def test_claude_print_nonzero_without_valid_result_does_not_complete(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+
+            def runner(argv):
+                return subprocess.CompletedProcess(argv, 1, stdout="", stderr="failed before artifacts")
+
+            with mock.patch("swarm_do.pipeline.phase_pump.doctor_report", return_value=_eligible_claude_report()):
+                result = pump_phases(
+                    run_id,
+                    launcher="claude-print",
+                    max_phases=1,
+                    init_if_missing=True,
+                    claude_runner=runner,
+                    data_dir=data,
+                )
+
+            self.assertEqual(result["status"], "launcher_error")
+            self.assertNotEqual(phase_status(run_id, data_dir=data, repo_root=repo)["status"], "complete")
+
+    def test_claude_print_replayed_fixture_records_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            fixture = REPO_ROOT / "py" / "swarm_do" / "pipeline" / "tests" / "fixtures" / "claude_print" / "success.json"
+            runner = _claude_runner(data, run_id, ["complete"], stdout_template=fixture.read_text(encoding="utf-8"))
+
+            with mock.patch("swarm_do.pipeline.phase_pump.doctor_report", return_value=_eligible_claude_report()):
+                result = pump_phases(
+                    run_id,
+                    launcher="claude-print",
+                    max_phases=1,
+                    init_if_missing=True,
+                    claude_runner=runner,
+                    data_dir=data,
+                )
+
+            self.assertEqual(result["status"], "max_phases")
+            status = phase_status(run_id, data_dir=data, repo_root=repo)
+            self.assertEqual(status["phases"][0]["status"], "complete")
+
+def _eligible_claude_report() -> dict:
+    return {"launchers": [{"name": "claude-print", "eligible": True, "hard_blockers": []}]}
+
+
+def _claude_runner(data: Path, run_id: str, statuses: list[str], stdout_template: str | None = None):
+    calls = {"count": 0}
+
+    def runner(argv):
+        status = statuses[min(calls["count"], len(statuses) - 1)]
+        calls["count"] += 1
+        prompt = argv[-1]
+        result_path = Path(re.search(r"result JSON exactly to: (.+)", prompt).group(1))
+        handoff_path = Path(re.search(r"handoff JSON exactly to: (.+)", prompt).group(1))
+        phase_id = result_path.parent.name
+        attempt = int(result_path.stem.split("-")[1].split(".")[0])
+        _write_claude_artifacts(data, run_id, phase_id, attempt, result_path, handoff_path, status=status)
+        if stdout_template is None:
+            stdout = json.dumps(
+                {
+                    "type": "result",
+                    "result": json.dumps(
+                        {
+                            "status": status,
+                            "result_path": str(result_path),
+                            "handoff_path": str(handoff_path),
+                            "session_name": f"swarmdaddy-{run_id}-{phase_id}",
+                        }
+                    ),
+                }
+            )
+        else:
+            stdout = stdout_template.replace("<RUN_DIR>", str(data / "runs" / run_id))
+        return subprocess.CompletedProcess(argv, 0 if status == "complete" else 1, stdout=stdout, stderr="")
+
+    return runner
+
+
+def _write_claude_artifacts(
+    data: Path,
+    run_id: str,
+    phase_id: str,
+    attempt: int,
+    result_path: Path,
+    handoff_path: Path,
+    *,
+    status: str,
+) -> None:
+    state = json.loads(phase_session_path(run_id, data_dir=data).read_text(encoding="utf-8"))
+    phase = next(item for item in state["phases"] if item["phase_id"] == phase_id)
+    prepared = json.loads((data / "runs" / run_id / "prepared_plan.v1.json").read_text(encoding="utf-8"))
+    phase_sha = next(item["content_sha"] for item in prepared["phase_map"] if item["phase_id"] == phase_id)
+    now = "2026-04-29T00:00:00Z"
+    handoff = {
+        "schema_version": 1,
+        "run_id": run_id,
+        "phase_id": phase_id,
+        "phase_attempt": attempt,
+        "status": status,
+        "written_at": now,
+        "summary": f"claude fixture {status}",
+        "decisions": [],
+        "changed_files": [],
+        "completed_work_units": [],
+        "open_items": [],
+        "blockers": ["blocked"] if status == "blocked" else [],
+        "do_not_retry": [],
+        "validation_summary": [],
+        "artifacts": [],
+        "next_phase_context": [],
+    }
+    result = {
+        "schema_version": 1,
+        "run_id": run_id,
+        "phase_id": phase_id,
+        "phase_attempt": attempt,
+        "status": status,
+        "launcher": "claude-print",
+        "session_name": phase["session_name"],
+        "prepared_plan_sha": state["prepared_plan_sha"],
+        "phase_content_sha": phase_sha,
+        "started_at": phase["started_at"],
+        "completed_at": now,
+        "handoff_path": str(handoff_path),
+        "summary": f"claude fixture {status}",
+        "completed_work_units": [],
+        "failed_work_units": [],
+        "blocked_reason": "blocked" if status == "blocked" else None,
+        "needs_input": ["input needed"] if status == "needs_input" else [],
+        "validation": [],
+        "artifacts": [],
+        "error": {"message": "failed"} if status == "failed" else None,
+    }
+    handoff_path.parent.mkdir(parents=True, exist_ok=True)
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    handoff_path.write_text(json.dumps(handoff, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    result_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":

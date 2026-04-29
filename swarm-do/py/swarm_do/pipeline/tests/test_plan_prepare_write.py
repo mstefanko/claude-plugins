@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from swarm_do.pipeline.prepare import STATUS_READY, load_prepared_artifact, prepare_plan_run
+from swarm_do.pipeline.prepare import STATUS_READY, load_prepared_artifact, prepare_plan_run, validate_phase_dependencies
 
 
 class PlanPrepareWriteTests(unittest.TestCase):
@@ -35,6 +35,8 @@ class PlanPrepareWriteTests(unittest.TestCase):
             loaded = load_prepared_artifact(result.run_id, data_dir=data, repo_root=root)
             self.assertEqual(loaded["status"], STATUS_READY)
             self.assertEqual(set(loaded["work_unit_artifacts"]), {"1"})
+            self.assertEqual(loaded["phase_map"][0]["depends_on_phase_ids"], [])
+            self.assertEqual(loaded["phase_map"][0]["dependency_reason"], "v1 sequential fallback")
             descriptor = loaded["work_unit_artifacts"]["1"]
             self.assertIn("artifact", descriptor)
             self.assertGreaterEqual(len(descriptor["artifact"]["work_units"]), 2)
@@ -61,6 +63,19 @@ class PlanPrepareWriteTests(unittest.TestCase):
             self.assertIsNone(result.artifact_path)
             self.assertFalse((data / "runs").exists())
             self.assertEqual(json.loads(json.dumps(result.to_dict()))["status_label"], "READY_FOR_ACCEPTANCE")
+
+    def test_validate_phase_dependencies_reports_semantic_blockers(self) -> None:
+        phase_map = [
+            {"phase_id": "1", "depends_on_phase_ids": ["2"]},
+            {"phase_id": "2", "depends_on_phase_ids": ["2", "missing", "missing"]},
+        ]
+
+        codes = {item["code"] for item in validate_phase_dependencies(phase_map)}
+
+        self.assertIn("phase_dependency_forward", codes)
+        self.assertIn("phase_dependency_self", codes)
+        self.assertIn("phase_dependency_unknown", codes)
+        self.assertIn("phase_dependency_duplicate", codes)
 
 
 if __name__ == "__main__":

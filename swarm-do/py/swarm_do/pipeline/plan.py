@@ -73,6 +73,14 @@ PLAN_LEVEL_TEST_SECTION_RE = re.compile(
     re.IGNORECASE,
 )
 AMBIGUOUS_VERB_RE = re.compile(r"\b(?:maybe|consider|etc\.?|and so on|tbd)\b", re.IGNORECASE)
+ORDER_NOTE_RE = re.compile(
+    r"\b(?:after|before|sequence|sequencing|follow[- ]?up|handoff|dependency|depends\s+on|builds\s+on|previous\s+phase|next\s+phase)\b",
+    re.IGNORECASE,
+)
+VALIDATION_INFRA_RE = re.compile(
+    r"(?:^|/)(?:tests?|fixtures?|conftest)(?:/|$)|(?:^|/)(?:validation|schemas?)(?:/|$)|(?:test|fixture|validation).*?\.(?:py|json|yaml|yml|md|sh)$",
+    re.IGNORECASE,
+)
 # Anchor set for ``_looks_like_path``. A token is treated as a path only when
 # its first segment is in this set (e.g. ``py/...``, ``schemas/...``) or when
 # the whole token ends in a recognized extension (``PATH_EXTENSION_RE``).
@@ -286,7 +294,8 @@ def lint_plan_text(
         else:
             seen[phase_id] = line_no
 
-    for phase in parse_plan_from_text(text):
+    phases = parse_plan_from_text(text)
+    for phase in phases:
         report = inspect_phase(phase, thresholds=values)
         if not _has_section(phase.text, AC_SECTION_RE):
             findings.append(
@@ -365,6 +374,7 @@ def lint_plan_text(
                     "Phase inferred as hard but has no explicit complexity tag.",
                 )
             )
+    findings.extend(_build_order_findings(phases, source_name=source_name, plan_level_test_section_present=plan_level_test_section_present))
     return findings
 
 
@@ -505,6 +515,95 @@ def _finding(code: str, severity: str, phase_id: str | None, location: str, mess
 
 def _has_section(text: str, pattern: re.Pattern[str]) -> bool:
     return any(pattern.match(line.strip()) for line in text.splitlines())
+
+
+def _build_order_findings(
+    phases: list[ParsedPhase],
+    *,
+    source_name: str,
+    plan_level_test_section_present: bool,
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    explicit_by_phase = [set(phase.explicit_files) for phase in phases]
+
+    introduced_at: dict[str, int] = {}
+    for idx, paths in enumerate(explicit_by_phase):
+        for path in paths:
+            introduced_at.setdefault(path, idx)
+
+    for idx, phase in enumerate(phases):
+        already_available = set().union(*explicit_by_phase[: idx + 1]) if explicit_by_phase[: idx + 1] else set()
+        later_paths = {
+            path
+            for path, later_idx in introduced_at.items()
+            if later_idx > idx and path not in already_available
+        }
+        validation_paths = set(_paths_from_text(_section_text(phase.text, VALIDATION_SECTION_RE)))
+        for path in sorted(validation_paths & later_paths):
+            later_phase = phases[introduced_at[path]]
+            findings.append(
+                _finding(
+                    "validation_uses_later_phase_file",
+                    "blocking",
+                    phase.phase_id,
+                    f"{source_name}:{phase.start_line}",
+                    f"Phase validation references {path}, but that file is first introduced by later phase {later_phase.phase_id}.",
+                )
+            )
+
+    for idx in range(1, len(phases)):
+        overlap = explicit_by_phase[idx - 1] & explicit_by_phase[idx]
+        if not overlap:
+            continue
+        later = phases[idx]
+        if ORDER_NOTE_RE.search(later.text):
+            continue
+        findings.append(
+            _finding(
+                "overlapping_file_scope_without_order_note",
+                "advisory",
+                later.phase_id,
+                f"{source_name}:{later.start_line}",
+                "Adjacent phases touch overlapping file targets without sequencing, handoff, or dependency language: "
+                + ", ".join(sorted(overlap)),
+            )
+        )
+
+    later_validation_infra = [any(_looks_like_validation_infra(path) for path in paths) for paths in explicit_by_phase]
+    for idx, phase in enumerate(phases[:-1]):
+        if _has_section(phase.text, VALIDATION_SECTION_RE) or not plan_level_test_section_present:
+            continue
+        if any(later_validation_infra[idx + 1 :]):
+            findings.append(
+                _finding(
+                    "phase_order_ambiguous_validation",
+                    "advisory",
+                    phase.phase_id,
+                    f"{source_name}:{phase.start_line}",
+                    "Phase relies on plan-level validation while a later phase introduces validation infrastructure.",
+                )
+            )
+    return findings
+
+
+def _section_text(text: str, pattern: re.Pattern[str]) -> str:
+    lines = text.splitlines()
+    chunks: list[str] = []
+    cursor = 0
+    while cursor < len(lines):
+        line = lines[cursor]
+        if not pattern.match(line.strip()):
+            cursor += 1
+            continue
+        cursor += 1
+        while cursor < len(lines) and not HEADING_RE.match(lines[cursor]):
+            chunks.append(lines[cursor])
+            cursor += 1
+    return "\n".join(chunks)
+
+
+def _looks_like_validation_infra(path: str) -> bool:
+    return bool(VALIDATION_INFRA_RE.search(path))
 
 
 def _phase_body_without_heading(phase: ParsedPhase) -> str:

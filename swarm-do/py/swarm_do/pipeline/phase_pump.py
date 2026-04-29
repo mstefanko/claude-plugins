@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
+import time
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from .context_bundle import render_context_bundle
 from .paths import resolve_data_dir
@@ -12,11 +15,13 @@ from .phase_sessions import (
     PhaseSessionError,
     claim_next_phase,
     init_phase_sessions,
+    load_phase_sessions,
     phase_handoff_path,
     phase_result_path,
     phase_status,
     record_phase_result,
     reap_expired_phases,
+    refresh_phase,
     start_phase,
 )
 from .run_state import (
@@ -28,10 +33,11 @@ from .run_state import (
     write_active_run,
     write_checkpoint_from_active,
 )
-from .session_capabilities import doctor_report
+from .session_capabilities import doctor_report, extract_claude_print_artifacts, parse_claude_print_json
 
 
-ENABLED_LAUNCHERS = {"manual", "fake-test"}
+ENABLED_LAUNCHERS = {"manual", "fake-test", "claude-print"}
+ClaudeRunner = Callable[[Sequence[str]], subprocess.CompletedProcess[str]]
 
 RESULT_STATUS_FOR_COMMAND = {
     "complete": "complete",
@@ -49,6 +55,9 @@ def pump_phases(
     init_if_missing: bool = False,
     stop_on_checkpoint: bool = False,
     fake_statuses: Iterable[str] = (),
+    claude_runner: ClaudeRunner | None = None,
+    claude_path: str | None = None,
+    max_budget_usd: float | None = None,
     data_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Run the foreground pump over manual or fake-test launchers."""
@@ -56,14 +65,15 @@ def pump_phases(
     base = data_dir or resolve_data_dir()
     if launcher == "claude-print":
         capability = next(item for item in doctor_report().get("launchers", []) if item.get("name") == "claude-print")
-        _append_pump_event(
-            base,
-            run_id=run_id,
-            event_type="phase_pump_launcher_ineligible",
-            details={"launcher": launcher, "capability": capability},
-        )
-        _append_pump_event(base, run_id=run_id, event_type="phase_pump_stopped", details={"status": "ineligible"})
-        return {"status": "ineligible", "launcher": launcher, "capability": capability, "completed_phases": []}
+        if not capability.get("eligible"):
+            _append_pump_event(
+                base,
+                run_id=run_id,
+                event_type="phase_pump_launcher_ineligible",
+                details={"launcher": launcher, "capability": capability},
+            )
+            _append_pump_event(base, run_id=run_id, event_type="phase_pump_stopped", details={"status": "ineligible"})
+            return {"status": "ineligible", "launcher": launcher, "capability": capability, "completed_phases": []}
 
     if launcher not in ENABLED_LAUNCHERS:
         raise ValueError(f"unsupported launcher: {launcher}")
@@ -102,6 +112,7 @@ def pump_phases(
             launcher=launcher,
             data_dir=base,
             lease_owner=str(claim["lease_owner"]),
+            session_name=f"swarmdaddy-{run_id}-{phase_id}" if launcher == "claude-print" else None,
             lease_command=f"phase-pump:{launcher}",
         )
         running_phase = started["phase"]
@@ -117,6 +128,56 @@ def pump_phases(
             }
             _append_pump_event(base, run_id=run_id, event_type="phase_pump_stopped", details={"status": "manual_waiting", **manual})
             return {"status": "manual_waiting", "completed_phases": completed, "manual": manual}
+
+        if launcher == "claude-print":
+            launch = _run_claude_print_phase(
+                run_id,
+                phase_id,
+                running_phase,
+                prompt_path=Path(context["prompt_path"]),
+                lease_owner=str(claim["lease_owner"]),
+                claude_runner=claude_runner,
+                claude_path=claude_path,
+                max_budget_usd=max_budget_usd,
+                data_dir=base,
+            )
+            if launch["status"] != "launched":
+                _append_pump_event(base, run_id=run_id, event_type="phase_pump_stopped", details=launch)
+                return {"status": launch["status"], "completed_phases": completed, "launcher_result": launch}
+            reaped = reap_expired_phases(run_id, data_dir=base)
+            if reaped["reaped"]:
+                _append_pump_event(base, run_id=run_id, event_type="phase_pump_stopped", details={"status": "stale", "reaped": reaped["reaped"]})
+                return {"status": "stale", "completed_phases": completed, "reaped": reaped["reaped"]}
+            try:
+                outer = parse_claude_print_json(str(launch.get("stdout") or ""))
+                artifacts = extract_claude_print_artifacts(outer, run_dir=base / "runs" / run_id)
+                recorded = record_phase_result(
+                    run_id,
+                    phase_id,
+                    json_file=artifacts["result_path"],
+                    expected_status=artifacts["status"],
+                    data_dir=base,
+                )
+            except Exception as exc:
+                details = {
+                    "status": "launcher_error",
+                    "reason": str(exc),
+                    "phase_id": phase_id,
+                    "attempt": running_phase.get("attempt"),
+                    "returncode": launch.get("returncode"),
+                }
+                _append_pump_event(base, run_id=run_id, event_type="phase_pump_stopped", details=details)
+                return {"status": "launcher_error", "completed_phases": completed, "launcher_result": launch, "error": str(exc)}
+            completed.append(recorded["phase"])
+            _write_phase_checkpoint(base, run_id, recorded["phase"])
+            if stop_on_checkpoint:
+                _append_pump_event(base, run_id=run_id, event_type="phase_pump_stopped", details={"status": "checkpoint"})
+                return {"status": "checkpoint", "completed_phases": completed}
+            phase_status_value = str(recorded["phase"].get("status"))
+            if phase_status_value != "complete":
+                _append_pump_event(base, run_id=run_id, event_type="phase_pump_stopped", details={"status": phase_status_value})
+                return {"status": phase_status_value, "completed_phases": completed}
+            continue
 
         fake_status = fake_sequence[phase_number] if phase_number < len(fake_sequence) else "complete"
         if fake_status not in RESULT_STATUS_FOR_COMMAND:
@@ -218,6 +279,175 @@ def _write_fake_result(
     handoff_path.write_text(json.dumps(handoff, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     result_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return result_path
+
+
+def _run_claude_print_phase(
+    run_id: str,
+    phase_id: str,
+    phase: Mapping[str, Any],
+    *,
+    prompt_path: Path,
+    lease_owner: str,
+    claude_runner: ClaudeRunner | None,
+    claude_path: str | None,
+    max_budget_usd: float | None,
+    data_dir: Path,
+) -> dict[str, Any]:
+    attempt = int(phase["attempt"])
+    run_dir = data_dir / "runs" / run_id
+    launch_dir = run_dir / "phase_launches" / phase_id / f"attempt-{attempt}"
+    launch_dir.mkdir(parents=True, exist_ok=True)
+    result_path = phase_result_path(run_id, phase_id, attempt, data_dir=data_dir)
+    handoff_path = phase_handoff_path(run_id, phase_id, attempt, data_dir=data_dir)
+    launcher_prompt_path = launch_dir / "dispatcher.launcher.prompt.md"
+    prompt_text = prompt_path.read_text(encoding="utf-8")
+    prompt_text = _append_claude_print_contract(
+        prompt_text,
+        result_path=result_path,
+        handoff_path=handoff_path,
+        status_values=sorted(RESULT_STATUS_FOR_COMMAND),
+    )
+    launcher_prompt_path.write_text(prompt_text, encoding="utf-8")
+    prompt_sha = _sha256_file(launcher_prompt_path)
+
+    resolved_claude = claude_path or shutil.which("claude") or ("claude" if claude_runner is not None else None)
+    if not resolved_claude:
+        return {"status": "launcher_error", "reason": "claude_cli_missing"}
+    argv = [
+        resolved_claude,
+        "-p",
+        "--name",
+        str(phase.get("session_name") or f"swarmdaddy-{run_id}-{phase_id}"),
+        "--output-format",
+        "json",
+        "--permission-mode",
+        "dontAsk",
+        "--allowedTools",
+        _allowed_tools_arg(),
+    ]
+    if max_budget_usd is not None:
+        argv.extend(["--max-budget-usd", str(max_budget_usd)])
+    argv.append(prompt_text)
+    metadata = {
+        "argv": [*argv[:-1], "<prompt_text omitted>"],
+        "prompt_path": str(launcher_prompt_path),
+        "prompt_sha": prompt_sha,
+        "source_prompt_path": str(prompt_path),
+        "source_prompt_sha": _sha256_file(prompt_path),
+        "result_path": str(result_path),
+        "handoff_path": str(handoff_path),
+        "env_redacted": True,
+    }
+    (launch_dir / "command.json").write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    try:
+        if claude_runner is not None:
+            proc = claude_runner(argv)
+        else:
+            proc = _run_real_claude(
+                argv,
+                run_id=run_id,
+                phase_id=phase_id,
+                lease_owner=lease_owner,
+                data_dir=data_dir,
+            )
+    except subprocess.TimeoutExpired as exc:
+        (launch_dir / "stdout.txt").write_text(exc.stdout or "", encoding="utf-8")
+        (launch_dir / "stderr.txt").write_text(exc.stderr or "", encoding="utf-8")
+        return {"status": "launcher_error", "reason": "claude_print_timeout", "launch_dir": str(launch_dir)}
+    except Exception as exc:
+        return {"status": "launcher_error", "reason": str(exc), "launch_dir": str(launch_dir)}
+
+    stdout = proc.stdout or ""
+    stderr = proc.stderr or ""
+    (launch_dir / "stdout.txt").write_text(stdout, encoding="utf-8")
+    (launch_dir / "stderr.txt").write_text(stderr, encoding="utf-8")
+    metadata["returncode"] = proc.returncode
+    (launch_dir / "command.json").write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return {
+        "status": "launched",
+        "returncode": proc.returncode,
+        "stdout": stdout,
+        "stderr": stderr,
+        "launch_dir": str(launch_dir),
+    }
+
+
+def _append_claude_print_contract(
+    prompt: str,
+    *,
+    result_path: Path,
+    handoff_path: Path,
+    status_values: list[str],
+) -> str:
+    contract = [
+        "",
+        "## Launcher Artifact Contract",
+        "",
+        f"- Write the phase result JSON exactly to: {result_path}",
+        f"- Write the phase handoff JSON exactly to: {handoff_path}",
+        f"- The result status must be one of: {', '.join(status_values)}",
+        "- Return a final JSON object containing status, result_path, handoff_path, and session_name.",
+        "- Do not start another orchestrator or mutate the global phase queue.",
+        "",
+    ]
+    return prompt.rstrip() + "\n" + "\n".join(contract)
+
+
+def _run_real_claude(
+    argv: Sequence[str],
+    *,
+    run_id: str,
+    phase_id: str,
+    lease_owner: str,
+    data_dir: Path,
+) -> subprocess.CompletedProcess[str]:
+    state = load_phase_sessions(run_id, data_dir=data_dir)
+    policy = state.get("lease_policy") if isinstance(state.get("lease_policy"), Mapping) else {}
+    refresh_interval = max(1, int(policy.get("refresh_interval_seconds") or 300))
+    timeout_seconds = max(1, int(policy.get("running_ttl_seconds") or 14400) - (2 * refresh_interval))
+    started = time.monotonic()
+    proc = subprocess.Popen(
+        list(argv),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    while True:
+        elapsed = time.monotonic() - started
+        if elapsed > timeout_seconds:
+            proc.kill()
+            stdout, stderr = proc.communicate()
+            raise subprocess.TimeoutExpired(argv, timeout_seconds, output=stdout, stderr=stderr)
+        wait_for = min(refresh_interval, max(0.1, timeout_seconds - elapsed))
+        try:
+            stdout, stderr = proc.communicate(timeout=wait_for)
+            return subprocess.CompletedProcess(list(argv), proc.returncode, stdout=stdout, stderr=stderr)
+        except subprocess.TimeoutExpired:
+            refresh_phase(run_id, phase_id, lease_owner=lease_owner, data_dir=data_dir)
+
+
+def _allowed_tools_arg() -> str:
+    path = Path(__file__).resolve().parents[3] / "permissions" / "writer.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        allow = (payload.get("permissions") or {}).get("allow") or []
+    except Exception as exc:
+        raise PhaseSessionError(f"writer permission fragment unavailable: {path}") from exc
+    values = [item for item in allow if isinstance(item, str) and item]
+    if not values:
+        raise PhaseSessionError("writer permission fragment has no allowed tools")
+    return ",".join(values)
+
+
+def _sha256_file(path: Path) -> str:
+    import hashlib
+
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def _status_prepared_sha(run_id: str, *, data_dir: Path) -> str:

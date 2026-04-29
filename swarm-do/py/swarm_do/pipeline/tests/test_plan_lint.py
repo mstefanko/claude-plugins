@@ -16,6 +16,7 @@ Both must lint without a ``no_phase_headings`` /
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
 from swarm_do.pipeline.plan import lint_plan_text
 
@@ -115,6 +116,41 @@ class PlanLevelTestStrategyFallbackTests(unittest.TestCase):
         codes = _codes(lint_plan_text(text, source_name="<test>"))
         self.assertNotIn("missing_validation_commands", codes)
         self.assertNotIn("validation_commands_from_plan_level", codes)
+
+
+class BuildOrderLintTests(unittest.TestCase):
+    def test_validation_referencing_later_phase_file_is_blocking(self) -> None:
+        fixture = Path(__file__).parent / "fixtures" / "build_order" / "reversed_dependency_plan.md"
+        findings = lint_plan_text(fixture.read_text(encoding="utf-8"), source_name=str(fixture))
+        by_code = {str(item["code"]): item for item in findings}
+
+        self.assertIn("validation_uses_later_phase_file", by_code)
+        self.assertEqual(by_code["validation_uses_later_phase_file"]["severity"], "blocking")
+
+    def test_valid_sequential_build_order_is_clean(self) -> None:
+        fixture = Path(__file__).parent / "fixtures" / "build_order" / "valid_sequential_plan.md"
+        codes = _codes(lint_plan_text(fixture.read_text(encoding="utf-8"), source_name=str(fixture)))
+
+        self.assertNotIn("validation_uses_later_phase_file", codes)
+        self.assertNotIn("overlapping_file_scope_without_order_note", codes)
+        self.assertNotIn("phase_order_ambiguous_validation", codes)
+
+    def test_adjacent_overlap_without_order_note_is_advisory(self) -> None:
+        text = (
+            "### Phase 1: First\n\n"
+            "### File Targets\n- `py/shared.py`\n\n"
+            "### Acceptance Criteria\n- ok\n\n"
+            "### Validation Commands\n```\ntrue\n```\n\n"
+            "### Phase 2: Second\n\n"
+            "### File Targets\n- `py/shared.py`\n\n"
+            "### Acceptance Criteria\n- ok\n\n"
+            "### Validation Commands\n```\ntrue\n```\n"
+        )
+        findings = lint_plan_text(text, source_name="<test>")
+        overlap = [item for item in findings if item["code"] == "overlapping_file_scope_without_order_note"]
+
+        self.assertEqual(len(overlap), 1)
+        self.assertEqual(overlap[0]["severity"], "advisory")
 
 
 if __name__ == "__main__":

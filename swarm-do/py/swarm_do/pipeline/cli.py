@@ -1200,8 +1200,24 @@ def cmd_phases(args: argparse.Namespace) -> int:
                 init_if_missing=args.init,
                 stop_on_checkpoint=args.stop_on_checkpoint,
                 fake_statuses=args.fake_status or (),
+                max_budget_usd=args.max_budget_usd,
             )
             exit_code = 0 if payload.get("status") in {"complete", "max_phases", "manual_waiting", "checkpoint"} else 2
+        elif command == "decisions":
+            from .phase_decisions import add_shared_decision
+
+            if args.phases_decisions_command != "add":
+                print("swarm: phases decisions: missing command", file=sys.stderr)
+                return 1
+            applies = ["*"] if args.global_decision else list(args.applies_to or [])
+            payload = add_shared_decision(
+                args.run_id,
+                source_phase_id=args.source_phase,
+                text=args.text,
+                applies_to_phase_ids=applies,
+                reason=args.reason,
+            )
+            exit_code = 0
         else:
             print("swarm: phases: missing command", file=sys.stderr)
             return 1
@@ -1238,6 +1254,10 @@ def _format_phase_status(payload: Mapping[str, Any]) -> str:
             )
     if payload.get("recommended_command"):
         lines.append(f"  next_command: {payload.get('recommended_command')}")
+    dependencies = payload.get("dependency_status") or []
+    for item in dependencies:
+        if isinstance(item, Mapping):
+            lines.append(f"  dependency: {item.get('phase_id')} ({item.get('status')})")
     drift = payload.get("drift") or []
     for item in drift:
         lines.append(f"  drift: {item}")
@@ -1802,8 +1822,20 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--init", action="store_true", help="initialize phase-session state when missing")
     p.add_argument("--stop-on-checkpoint", action="store_true")
     p.add_argument("--fake-status", action="append", choices=["complete", "failed", "blocked", "needs_input"], help=argparse.SUPPRESS)
+    p.add_argument("--max-budget-usd", type=float)
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_phases)
+    p = phases_sub.add_parser("decisions")
+    p.add_argument("run_id")
+    decisions_sub = p.add_subparsers(dest="phases_decisions_command")
+    d = decisions_sub.add_parser("add")
+    d.add_argument("--source-phase", required=True)
+    d.add_argument("--text", required=True)
+    d.add_argument("--applies-to", action="append")
+    d.add_argument("--global", dest="global_decision", action="store_true")
+    d.add_argument("--reason")
+    d.add_argument("--json", action="store_true")
+    d.set_defaults(func=cmd_phases)
 
     plan = sub.add_parser("plan")
     plan_sub = plan.add_subparsers(dest="plan_command")

@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .paths import REPO_ROOT, resolve_data_dir
+from .phase_decisions import render_shared_decisions_markdown, shared_decisions_path
+from .phase_sessions import load_phase_sessions, phase_session_path
 from .plan import parse_plan_from_text
 from .prepare import STATUS_ACCEPTED, check_stale, load_prepared_artifact
 from .run_state import _atomic_json_write, append_run_event, utc_now, validate_run_event
@@ -59,6 +61,7 @@ def render_context_bundle(
     prompt_path = target_dir / f"{role}.prompt.md"
     context_path = target_dir / f"{role}.context.json"
     decisions_path = context_dir / "decisions.md"
+    shared_decisions_md_path = context_dir / "shared-decisions.md"
     previous_handoff_path = context_dir / "previous-handoff.md"
     phase_summary_path = context_dir / "phase-summary.md"
 
@@ -67,9 +70,20 @@ def render_context_bundle(
     if phase_warning:
         warnings.append(phase_warning)
 
-    prior = _prior_handoffs(base, run_id, prepared, phase_index)
+    dependency_phase_ids = _dependency_phase_ids(
+        prepared=prepared,
+        phase_id=phase_id,
+        phase_index=phase_index,
+        data_dir=base,
+        run_id=run_id,
+    )
+    prior = _prior_handoffs(base, run_id, dependency_phase_ids)
     _write_text_if_changed(previous_handoff_path, _previous_handoff_markdown(prior))
     _write_text_if_changed(decisions_path, _decisions_markdown(prior))
+    _write_text_if_changed(
+        shared_decisions_md_path,
+        render_shared_decisions_markdown(run_id, phase_id=phase_id, data_dir=base),
+    )
     _write_text_if_changed(phase_summary_path, _phase_summary_markdown(phase_meta, sidecar, unit))
 
     allowed_files = _strings((unit or {}).get("allowed_files") or (unit or {}).get("files")) or _unit_union(sidecar, "allowed_files", "files")
@@ -86,6 +100,9 @@ def render_context_bundle(
     ]
     for handoff in prior:
         source_list.append({"path": handoff["path"], "sha": handoff["sha"], "kind": "phase_handoff"})
+    shared_sidecar_path = shared_decisions_path(run_id, data_dir=base)
+    if shared_sidecar_path.is_file():
+        source_list.append({"path": _display_path(shared_sidecar_path), "sha": _sha256_file(shared_sidecar_path), "kind": "shared_decisions"})
 
     prompt = _build_prompt(
         run_id=run_id,
@@ -102,6 +119,7 @@ def render_context_bundle(
         source_list=source_list,
         previous_handoff_path=_display_path(previous_handoff_path),
         decisions_path=_display_path(decisions_path),
+        shared_decisions_path=_display_path(shared_decisions_md_path),
     )
     prompt, truncated = _enforce_prompt_budget(
         prompt,
@@ -122,6 +140,7 @@ def render_context_bundle(
             source_list=source_list,
             previous_handoff_path=_display_path(previous_handoff_path),
             decisions_path=_display_path(decisions_path),
+            shared_decisions_path=_display_path(shared_decisions_md_path),
         ),
     )
     if truncated:
@@ -147,6 +166,7 @@ def render_context_bundle(
         "validation_commands": validation_commands,
         "prior_decisions_path": _display_path(decisions_path),
         "previous_handoff_path": _display_path(previous_handoff_path),
+        "shared_decisions_path": _display_path(shared_decisions_md_path),
         "source_list": source_list,
         "warnings": sorted(set(warnings)),
         "max_prompt_bytes": max_prompt_bytes,
@@ -210,12 +230,38 @@ def _phase_text(prepared: Mapping[str, Any], phase_id: str, *, repo_root: Path) 
     return "", "phase_text_missing"
 
 
-def _prior_handoffs(base: Path, run_id: str, prepared: Mapping[str, Any], phase_index: int) -> list[dict[str, Any]]:
-    phase_ids = [
-        str(phase.get("phase_id"))
-        for idx, phase in enumerate(prepared.get("phase_map") or [])
-        if idx < phase_index and isinstance(phase, Mapping)
-    ]
+def _dependency_phase_ids(
+    *,
+    prepared: Mapping[str, Any],
+    phase_id: str,
+    phase_index: int,
+    data_dir: Path,
+    run_id: str,
+) -> list[str]:
+    state_path = phase_session_path(run_id, data_dir=data_dir)
+    if state_path.is_file():
+        try:
+            state = load_phase_sessions(run_id, data_dir=data_dir)
+        except Exception:
+            state = {}
+        for phase in state.get("phases") or []:
+            if isinstance(phase, Mapping) and phase.get("phase_id") == phase_id:
+                return _strings(phase.get("depends_on_phase_ids"))
+    for phase in prepared.get("phase_map") or []:
+        if not isinstance(phase, Mapping) or phase.get("phase_id") != phase_id:
+            continue
+        if isinstance(phase.get("depends_on_phase_ids"), list):
+            return _strings(phase.get("depends_on_phase_ids"))
+        break
+    if phase_index <= 0:
+        return []
+    phase_map = prepared.get("phase_map") or []
+    if phase_index - 1 < len(phase_map) and isinstance(phase_map[phase_index - 1], Mapping):
+        return [str(phase_map[phase_index - 1].get("phase_id"))]
+    return []
+
+
+def _prior_handoffs(base: Path, run_id: str, phase_ids: list[str]) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     for prior_phase_id in phase_ids:
         handoff_dir = base / "runs" / run_id / "phase_handoffs" / prior_phase_id
@@ -257,12 +303,16 @@ def _previous_handoff_markdown(prior: list[dict[str, Any]]) -> str:
 
 
 def _decisions_markdown(prior: list[dict[str, Any]]) -> str:
-    decisions: list[str] = []
-    for item in prior:
-        decisions.extend(str(line) for line in item.get("decisions") or [])
-    if not decisions:
+    items_with_decisions = [
+        item for item in prior if item.get("decisions")
+    ]
+    if not items_with_decisions:
         return "No prior decisions.\n"
-    return "# Prior Decisions\n\n" + "\n".join(f"- {line}" for line in decisions) + "\n"
+    chunks = ["# Prior Decisions"]
+    for item in items_with_decisions:
+        chunks.append(f"\n## Phase {item['phase_id']}")
+        chunks.extend(f"- {line}" for line in item.get("decisions") or [])
+    return "\n".join(chunks).rstrip() + "\n"
 
 
 def _phase_summary_markdown(
@@ -297,6 +347,7 @@ def _build_prompt(
     source_list: list[dict[str, Any]],
     previous_handoff_path: str,
     decisions_path: str,
+    shared_decisions_path: str,
 ) -> str:
     lines = [
         f"# SwarmDaddy Phase Context: {role}",
@@ -329,6 +380,7 @@ def _build_prompt(
             "## Prior Phase Artifacts",
             f"- previous_handoff_path: {previous_handoff_path}",
             f"- prior_decisions_path: {decisions_path}",
+            f"- shared_decisions_path: {shared_decisions_path}",
             "",
             "## Source Artifacts",
         ]

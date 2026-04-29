@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export PYTHONPATH="${ROOT}/py${PYTHONPATH:+:${PYTHONPATH}}"
+
+python3 -m swarm_do.pipeline.capture_claude_print_fixture "$@"

@@ -118,13 +118,23 @@ phase-session state:
 bin/swarm phases status <run-id>
 bin/swarm phases init <run-id>
 bin/swarm phases pump <run-id> --launcher manual --max-phases 1
+bin/swarm phases pump <run-id> --launcher claude-print --max-phases all --init
 bin/swarm context render --run-id <run-id> --phase <phase-id> --role dispatcher --json
 ```
 
 `manual` is the always-available launcher and prints the rendered dispatcher
 prompt plus the follow-up result command. `fake-test` is for deterministic unit
-tests. `claude-print` remains ineligible until real output fixtures and probes
-prove its JSON contract.
+tests. `claude-print` is the foreground no-babysitting sequential launcher: it
+starts a fresh Claude print session for each accepted phase, validates the
+result and handoff artifacts, then advances to the next phase only after a
+complete result. It is not a daemon, a parallel scheduler, or a recursive
+orchestrator.
+
+Before using `claude-print`, check local readiness:
+
+```bash
+bin/swarm sessions doctor --live
+```
 
 ## Choosing A Profile
 

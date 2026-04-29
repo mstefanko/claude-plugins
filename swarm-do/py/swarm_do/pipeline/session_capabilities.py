@@ -83,6 +83,34 @@ def parse_claude_print_json(text: str) -> dict[str, Any]:
     return value
 
 
+SUPPORTED_CLAUDE_PRINT_STATUSES = {"complete", "failed", "blocked", "needs_input"}
+
+
+def extract_claude_print_artifacts(payload: Mapping[str, Any], *, run_dir: Path) -> dict[str, Any]:
+    """Normalize artifact pointers from a Claude print outer JSON payload."""
+
+    if not isinstance(payload, Mapping):
+        raise ValueError("claude-print payload must be an object")
+    inner = _find_artifact_object(payload)
+    if inner is None:
+        raise ValueError("claude-print payload is missing artifact object")
+    status = inner.get("status")
+    if not isinstance(status, str) or not status:
+        raise ValueError("claude-print artifact status is required")
+    if status not in SUPPORTED_CLAUDE_PRINT_STATUSES:
+        raise ValueError(f"unsupported claude-print status: {status}")
+    result_path = _artifact_path_within_run(inner.get("result_path"), run_dir=run_dir, label="result_path")
+    handoff_path = _artifact_path_within_run(inner.get("handoff_path"), run_dir=run_dir, label="handoff_path")
+    session_name = inner.get("session_name") or payload.get("session_name") or payload.get("session_id")
+    return {
+        "status": status,
+        "result_path": str(result_path),
+        "handoff_path": str(handoff_path),
+        "session_name": session_name if isinstance(session_name, str) else None,
+        "raw": dict(payload),
+    }
+
+
 def _manual_capability() -> LauncherCapability:
     return LauncherCapability(
         name="manual",
@@ -110,11 +138,22 @@ def _claude_print_capability(
     details: dict[str, Any] = {"spend_required": bool(live)}
 
     fixture_dir = repo_root / "py" / "swarm_do" / "pipeline" / "tests" / "fixtures" / "claude_print"
-    fixtures = sorted(path for path in fixture_dir.glob("*.json") if path.is_file())
+    required_fixture_names = ("success.json", "failed.json", "blocked.json", "needs_input.json")
+    fixtures = [fixture_dir / name for name in required_fixture_names]
+    present_fixtures = [path for path in fixtures if path.is_file()]
     details["fixture_dir"] = str(fixture_dir)
-    details["fixture_count"] = len(fixtures)
-    if not fixtures:
+    details["fixture_count"] = len(present_fixtures)
+    missing = [path.name for path in fixtures if not path.is_file()]
+    if missing:
         blockers.append("claude_print_fixtures_missing")
+        details["missing_fixtures"] = missing
+    for fixture in present_fixtures:
+        try:
+            payload = parse_claude_print_json(fixture.read_text(encoding="utf-8"))
+            extract_claude_print_artifacts(payload, run_dir=fixture_dir)
+        except Exception as exc:
+            blockers.append("claude_print_fixture_parse_failed")
+            details.setdefault("fixture_errors", {})[fixture.name] = str(exc)
 
     claude_path = shutil.which("claude")
     details["claude_path"] = claude_path
@@ -179,9 +218,60 @@ def _run(runner: Runner | None, argv: Sequence[str]) -> subprocess.CompletedProc
     )
 
 
+def _find_artifact_object(value: Any) -> Mapping[str, Any] | None:
+    if isinstance(value, Mapping):
+        if "status" in value and ("result_path" in value or "handoff_path" in value):
+            return value
+        for key in ("result", "message", "content", "text", "output"):
+            candidate = value.get(key)
+            parsed = _parse_embedded_json(candidate)
+            found = _find_artifact_object(parsed)
+            if found is not None:
+                return found
+        for candidate in value.values():
+            found = _find_artifact_object(candidate)
+            if found is not None:
+                return found
+    if isinstance(value, list):
+        for item in value:
+            found = _find_artifact_object(item)
+            if found is not None:
+                return found
+    return None
+
+
+def _parse_embedded_json(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    stripped = value.strip()
+    if not stripped.startswith("{"):
+        return value
+    try:
+        return json.loads(stripped)
+    except json.JSONDecodeError:
+        return value
+
+
+def _artifact_path_within_run(value: Any, *, run_dir: Path, label: str) -> Path:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"claude-print artifact {label} is required")
+    text = value.replace("<RUN_DIR>", str(run_dir.resolve(strict=False)))
+    path = Path(text)
+    if not path.is_absolute():
+        path = run_dir / path
+    resolved = path.resolve(strict=False)
+    root = run_dir.resolve(strict=False)
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(f"claude-print artifact {label} is outside the run directory") from exc
+    return resolved
+
+
 __all__ = [
     "LauncherCapability",
     "doctor_report",
+    "extract_claude_print_artifacts",
     "format_doctor_report",
     "parse_claude_print_json",
 ]

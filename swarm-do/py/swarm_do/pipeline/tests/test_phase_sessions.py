@@ -39,6 +39,19 @@ class PhaseSessionTests(unittest.TestCase):
             self.assertEqual(phases[1]["depends_on_phase_ids"], ["1"])
             self.assertEqual(phases[2]["depends_on_phase_ids"], ["2"])
 
+    def test_init_uses_explicit_prepared_dependencies(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=3)
+            prepared_path = data / "runs" / run_id / "prepared_plan.v1.json"
+            prepared = json.loads(prepared_path.read_text(encoding="utf-8"))
+            prepared["phase_map"][2]["depends_on_phase_ids"] = ["1"]
+            prepared["phase_map"][2]["dependency_reason"] = "manual test dependency"
+            prepared_path.write_text(json.dumps(prepared, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+            result = init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+
+            self.assertEqual(result["state"]["phases"][2]["depends_on_phase_ids"], ["1"])
+
     def test_claim_start_complete_then_claims_next_phase(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             repo, data, run_id = make_prepared_run(Path(td), phase_count=2)
@@ -79,6 +92,20 @@ class PhaseSessionTests(unittest.TestCase):
             result = reap_expired_phases(run_id, data_dir=data)
             self.assertEqual(result["reaped"][0]["status"], "stale")
             self.assertEqual(load_phase_sessions(run_id, data_dir=data)["phases"][0]["status"], "stale")
+
+    def test_failed_phase_status_is_explicit(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=2)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            claim_next_phase(run_id, data_dir=data, repo_root=repo, lease_owner="owner-1")
+            started = start_phase(run_id, "1", launcher="manual", lease_owner="owner-1", data_dir=data)
+            result_path = _write_result(data, run_id, started["phase"], status="failed")
+            record_phase_result(run_id, "1", json_file=result_path, expected_status="failed", data_dir=data)
+
+            status = phase_status(run_id, data_dir=data, repo_root=repo)
+
+            self.assertEqual(status["status"], "failed")
+            self.assertIn("phases status", status["recommended_command"])
 
     def test_load_validates_hand_edited_state(self) -> None:
         with tempfile.TemporaryDirectory() as td:

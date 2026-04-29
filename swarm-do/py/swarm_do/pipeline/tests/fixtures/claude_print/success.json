@@ -1,0 +1,7 @@
+{
+  "type": "result",
+  "subtype": "success",
+  "is_error": false,
+  "session_id": "fixture-success-session",
+  "result": "{\"status\":\"complete\",\"result_path\":\"<RUN_DIR>/phase_results/1/attempt-1.result.json\",\"handoff_path\":\"<RUN_DIR>/phase_handoffs/1/attempt-1.handoff.json\",\"session_name\":\"swarmdaddy-01ARZ3NDEKTSV4RRFFQ69G5FAV-1\"}"
+}

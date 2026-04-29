@@ -432,6 +432,128 @@ def finding_blocks_prepare(finding: Mapping[str, Any]) -> bool:
     return finding.get("severity") in {"blocking", "error"}
 
 
+def validate_phase_dependencies(phase_map: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Return deterministic lint findings for optional phase dependencies."""
+
+    phases = [dict(item) for item in phase_map if isinstance(item, Mapping)]
+    phase_ids = [str(item.get("phase_id") or "") for item in phases]
+    index_by_id = {phase_id: idx for idx, phase_id in enumerate(phase_ids)}
+    findings: list[dict[str, Any]] = []
+
+    for idx, item in enumerate(phases):
+        phase_id = phase_ids[idx]
+        deps = item.get("depends_on_phase_ids")
+        if deps is None:
+            continue
+        if not isinstance(deps, list):
+            findings.append(
+                _dependency_finding(
+                    "phase_dependency_invalid_type",
+                    phase_id,
+                    f"phase_map[{idx}].depends_on_phase_ids",
+                    "Phase dependencies must be an array of phase ids.",
+                )
+            )
+            continue
+        seen: set[str] = set()
+        for dep in deps:
+            dep_id = dep if isinstance(dep, str) else str(dep)
+            if not isinstance(dep, str) or not dep:
+                findings.append(
+                    _dependency_finding(
+                        "phase_dependency_invalid_type",
+                        phase_id,
+                        f"phase_map[{idx}].depends_on_phase_ids",
+                        "Phase dependencies must be non-empty strings.",
+                    )
+                )
+                continue
+            if dep_id in seen:
+                findings.append(
+                    _dependency_finding(
+                        "phase_dependency_duplicate",
+                        phase_id,
+                        f"phase_map[{idx}].depends_on_phase_ids",
+                        f"Phase {phase_id!r} lists dependency {dep_id!r} more than once.",
+                    )
+                )
+            seen.add(dep_id)
+            dep_idx = index_by_id.get(dep_id)
+            if dep_idx is None:
+                findings.append(
+                    _dependency_finding(
+                        "phase_dependency_unknown",
+                        phase_id,
+                        f"phase_map[{idx}].depends_on_phase_ids",
+                        f"Phase {phase_id!r} depends on unknown phase {dep_id!r}.",
+                    )
+                )
+            elif dep_idx == idx:
+                findings.append(
+                    _dependency_finding(
+                        "phase_dependency_self",
+                        phase_id,
+                        f"phase_map[{idx}].depends_on_phase_ids",
+                        f"Phase {phase_id!r} cannot depend on itself.",
+                    )
+                )
+            elif dep_idx > idx:
+                findings.append(
+                    _dependency_finding(
+                        "phase_dependency_forward",
+                        phase_id,
+                        f"phase_map[{idx}].depends_on_phase_ids",
+                        f"Phase {phase_id!r} depends on later phase {dep_id!r}.",
+                    )
+                )
+
+    graph = {
+        phase_ids[idx]: [
+            dep
+            for dep in item.get("depends_on_phase_ids") or []
+            if isinstance(dep, str) and dep in index_by_id
+        ]
+        for idx, item in enumerate(phases)
+    }
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(phase_id: str, path: list[str]) -> None:
+        if phase_id in visited:
+            return
+        if phase_id in visiting:
+            cycle = path[path.index(phase_id) :] + [phase_id] if phase_id in path else [phase_id]
+            findings.append(
+                _dependency_finding(
+                    "phase_dependency_cycle",
+                    phase_id,
+                    "phase_map.depends_on_phase_ids",
+                    "Phase dependencies contain a cycle: " + " -> ".join(cycle),
+                )
+            )
+            return
+        visiting.add(phase_id)
+        for dep_id in graph.get(phase_id, []):
+            visit(dep_id, [*path, dep_id])
+        visiting.remove(phase_id)
+        visited.add(phase_id)
+
+    for phase_id in phase_ids:
+        if phase_id:
+            visit(phase_id, [phase_id])
+    return findings
+
+
+def _dependency_finding(code: str, phase_id: str | None, location: str, message: str) -> dict[str, Any]:
+    return {
+        "code": code,
+        "severity": "blocking",
+        "phase_id": phase_id,
+        "location": location,
+        "message": message,
+    }
+
+
 def run_plan_review_loop(
     plan_text: str,
     *,
@@ -548,19 +670,7 @@ def prepare_plan_run(
     work_units_dir = artifact_dir / "work_units"
 
     phases = parse_plan(source_abs)
-    lint_findings = tuple(lint_plan_text(source_abs.read_text(encoding="utf-8"), source_name=str(source_rel)))
-    if emit_events:
-        _append_prepare_event(
-            base_data,
-            run_id=actual_run_id,
-            event_type="prepare_lint_findings",
-            bd_epic_id=bd_epic_id,
-            details={
-                "finding_count": len(lint_findings),
-                "severity_counts": _severity_counts(lint_findings),
-                "blocking_count": sum(1 for finding in lint_findings if finding_blocks_prepare(finding)),
-            },
-        )
+    base_lint_findings = tuple(lint_plan_text(source_abs.read_text(encoding="utf-8"), source_name=str(source_rel)))
     prepared_text = canonical_plan_text(phases)
     source_sha = _sha256_file(source_abs)
     prepared_sha = _sha256_bytes(prepared_text.encode("utf-8"))
@@ -569,6 +679,7 @@ def prepare_plan_run(
 
     phase_entries: list[dict[str, Any]] = []
     phase_by_id = {phase.phase_id: phase for phase in phases}
+    previous_phase_id: str | None = None
     for phase in phases:
         from .plan import inspect_phase
 
@@ -599,7 +710,24 @@ def prepare_plan_run(
                     plan_context_sha=plan_context_sha,
                 ),
                 "requires_decomposition": bool(report.requires_decomposition),
+                "depends_on_phase_ids": [previous_phase_id] if previous_phase_id else [],
+                "dependency_reason": "v1 sequential fallback",
             }
+        )
+        previous_phase_id = phase.phase_id
+
+    lint_findings = (*base_lint_findings, *validate_phase_dependencies(phase_entries))
+    if emit_events:
+        _append_prepare_event(
+            base_data,
+            run_id=actual_run_id,
+            event_type="prepare_lint_findings",
+            bd_epic_id=bd_epic_id,
+            details={
+                "finding_count": len(lint_findings),
+                "severity_counts": _severity_counts(lint_findings),
+                "blocking_count": sum(1 for finding in lint_findings if finding_blocks_prepare(finding)),
+            },
         )
 
     work_unit_errors: list[str] = []
@@ -1494,9 +1622,11 @@ def _validate_against_schema(payload: Mapping[str, Any]) -> None:
             "cache_key",
             "requires_decomposition",
         }
+        optional_phase_keys = {"depends_on_phase_ids", "dependency_reason"}
         _require(
-            set(item.keys()) == required_phase_keys,
-            f"prepared_plan: phase_map[{idx}] keys must be exactly {sorted(required_phase_keys)}",
+            required_phase_keys <= set(item.keys())
+            and set(item.keys()) <= required_phase_keys | optional_phase_keys,
+            f"prepared_plan: phase_map[{idx}] keys must include {sorted(required_phase_keys)} and only optional {sorted(optional_phase_keys)}",
         )
         _require(
             isinstance(item["phase_id"], str) and len(item["phase_id"]) > 0,
@@ -1529,6 +1659,20 @@ def _validate_against_schema(payload: Mapping[str, Any]) -> None:
             isinstance(item["requires_decomposition"], bool),
             f"prepared_plan: phase_map[{idx}].requires_decomposition must be bool",
         )
+        if "depends_on_phase_ids" in item:
+            deps = item["depends_on_phase_ids"]
+            _require(
+                isinstance(deps, list)
+                and all(isinstance(dep, str) and dep for dep in deps)
+                and len(deps) == len(set(deps)),
+                f"prepared_plan: phase_map[{idx}].depends_on_phase_ids must be unique non-empty strings",
+            )
+        if "dependency_reason" in item:
+            reason = item["dependency_reason"]
+            _require(
+                reason is None or isinstance(reason, str),
+                f"prepared_plan: phase_map[{idx}].dependency_reason must be string or null",
+            )
 
     # review_findings & accepted_fixes
     for list_key in ("review_findings", "accepted_fixes"):

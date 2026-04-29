@@ -115,12 +115,14 @@ def init_phase_sessions(
         previous_phase_id: str | None = None
         for phase_index, phase in enumerate(prepared.get("phase_map") or []):
             phase_id = str(phase["phase_id"])
+            explicit_deps = phase.get("depends_on_phase_ids")
+            depends_on = _string_list(explicit_deps) if isinstance(explicit_deps, list) else ([previous_phase_id] if previous_phase_id else [])
             phases.append(
                 {
                     "phase_id": phase_id,
                     "phase_index": phase_index,
                     "title": str(phase.get("title") or phase_id),
-                    "depends_on_phase_ids": [previous_phase_id] if previous_phase_id else [],
+                    "depends_on_phase_ids": depends_on,
                     "status": STATUS_PENDING,
                     "lease_owner": None,
                     "lease_host": None,
@@ -232,6 +234,7 @@ def phase_status(run_id: str, *, data_dir: Path | None = None, repo_root: Path |
     next_phase = _next_claimable_phase(state)
     active = _active_phase(state)
     stale = next((phase for phase in state["phases"] if phase.get("status") == STATUS_STALE), None)
+    failed = next((phase for phase in state["phases"] if phase.get("status") == STATUS_FAILED), None)
     blocked = next(
         (phase for phase in state["phases"] if phase.get("status") in {STATUS_BLOCKED, STATUS_NEEDS_INPUT}),
         None,
@@ -245,6 +248,9 @@ def phase_status(run_id: str, *, data_dir: Path | None = None, repo_root: Path |
     elif stale is not None:
         overall = "stale"
         recommended = f"bin/swarm phases reap {run_id}"
+    elif failed is not None:
+        overall = "failed"
+        recommended = f"bin/swarm phases status {run_id}"
     elif blocked is not None:
         overall = str(blocked["status"])
         recommended = f"bin/swarm phases status {run_id}"
@@ -264,6 +270,7 @@ def phase_status(run_id: str, *, data_dir: Path | None = None, repo_root: Path |
         "next_phase": _phase_summary(next_phase) if next_phase else None,
         "active_phase": _phase_summary(active) if active else None,
         "phases": [_phase_summary(phase) for phase in state["phases"]],
+        "dependency_status": _dependency_status(state, next_phase) if overall == "waiting" else [],
         "recommended_command": recommended,
     }
 
@@ -593,6 +600,32 @@ def _dependencies_complete(state: Mapping[str, Any], phase: Mapping[str, Any]) -
     return True
 
 
+def _dependency_status(state: Mapping[str, Any], phase: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    if phase is None:
+        pending = next(
+            (item for item in state.get("phases") or [] if isinstance(item, Mapping) and item.get("status") == STATUS_PENDING),
+            None,
+        )
+        phase = pending
+    if not isinstance(phase, Mapping):
+        return []
+    by_id = {
+        item.get("phase_id"): item
+        for item in state.get("phases") or []
+        if isinstance(item, Mapping)
+    }
+    results: list[dict[str, Any]] = []
+    for dep_id in phase.get("depends_on_phase_ids") or []:
+        dep = by_id.get(dep_id)
+        results.append(
+            {
+                "phase_id": dep_id,
+                "status": dep.get("status") if isinstance(dep, Mapping) else "missing",
+            }
+        )
+    return results
+
+
 def _active_phase(state: Mapping[str, Any]) -> dict[str, Any] | None:
     for phase in state.get("phases") or []:
         if isinstance(phase, dict) and phase.get("status") in ACTIVE_STATUSES:
@@ -615,6 +648,12 @@ def _reset_phase_to_pending(phase: dict[str, Any]) -> None:
     phase["lease_command"] = None
     phase["lease_expires_at"] = None
     phase["last_error"] = None
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
 
 
 def _touch_and_write(data_dir: Path, run_id: str, state: dict[str, Any]) -> None:
