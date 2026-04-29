@@ -66,11 +66,14 @@ def render_context_bundle(
     previous_handoff_path = context_dir / "previous-handoff.md"
     phase_summary_path = context_dir / "phase-summary.md"
     recovery_context_path, recovery_context_sha, recovery_context_text = _recovery_context(run_id, phase_id, data_dir=base)
+    phase_session_mode = phase_session_path(run_id, data_dir=base).is_file() and unit is None
 
     phase_text, phase_warning = _phase_text(prepared, phase_id, repo_root=root)
     warnings: list[str] = []
     if phase_warning:
         warnings.append(phase_warning)
+    if phase_session_mode:
+        warnings.append("work_units_informational_phase_session")
 
     dependency_phase_ids = _dependency_phase_ids(
         prepared=prepared,
@@ -88,11 +91,19 @@ def render_context_bundle(
     )
     _write_text_if_changed(phase_summary_path, _phase_summary_markdown(phase_meta, sidecar, unit))
 
-    allowed_files = _strings((unit or {}).get("allowed_files") or (unit or {}).get("files")) or _unit_union(sidecar, "allowed_files", "files")
-    blocked_files = _strings((unit or {}).get("blocked_files")) or _unit_union(sidecar, "blocked_files")
-    context_files = _strings((unit or {}).get("context_files")) or _unit_union(sidecar, "context_files")
-    acceptance_criteria = _strings((unit or {}).get("acceptance_criteria")) or _unit_union(sidecar, "acceptance_criteria")
-    validation_commands = _strings((unit or {}).get("validation_commands")) or _unit_union(sidecar, "validation_commands")
+    if phase_session_mode:
+        allowed_files: list[str] = []
+        blocked_files: list[str] = []
+        context_files: list[str] = []
+        acceptance_criteria: list[str] = []
+        validation_commands: list[str] = []
+    else:
+        allowed_files = _strings((unit or {}).get("allowed_files") or (unit or {}).get("files")) or _unit_union(sidecar, "allowed_files", "files")
+        blocked_files = _strings((unit or {}).get("blocked_files")) or _unit_union(sidecar, "blocked_files")
+        context_files = _strings((unit or {}).get("context_files")) or _unit_union(sidecar, "context_files")
+        acceptance_criteria = _strings((unit or {}).get("acceptance_criteria")) or _unit_union(sidecar, "acceptance_criteria")
+        validation_commands = _strings((unit or {}).get("validation_commands")) or _unit_union(sidecar, "validation_commands")
+    informational_work_units = _informational_work_units(sidecar) if phase_session_mode else []
 
     source_artifact_path = base / "runs" / run_id / "prepared_plan.v1.json"
     source_list = [
@@ -126,6 +137,7 @@ def render_context_bundle(
         shared_decisions_path=_display_path(shared_decisions_md_path),
         recovery_context_path=_display_path(recovery_context_path) if recovery_context_path else None,
         recovery_context_text=recovery_context_text,
+        informational_work_units=informational_work_units,
     )
     prompt, truncated = _enforce_prompt_budget(
         prompt,
@@ -149,6 +161,7 @@ def render_context_bundle(
             shared_decisions_path=_display_path(shared_decisions_md_path),
             recovery_context_path=_display_path(recovery_context_path) if recovery_context_path else None,
             recovery_context_text=recovery_context_text,
+            informational_work_units=informational_work_units,
         ),
     )
     if truncated:
@@ -398,6 +411,7 @@ def _build_prompt(
     shared_decisions_path: str,
     recovery_context_path: str | None,
     recovery_context_text: str | None,
+    informational_work_units: list[str],
 ) -> str:
     lines = [
         f"# SwarmDaddy Phase Context: {role}",
@@ -446,6 +460,10 @@ def _build_prompt(
                 recovery_context_text.rstrip(),
             ]
         )
+    if informational_work_units:
+        lines.extend(["", "## Informational Decomposition"])
+        lines.append("Phase sessions execute this whole phase. These prepared work units are context only:")
+        lines.extend(f"- {line}" for line in informational_work_units)
     lines.extend(["", "## Phase Text", phase_text or "(phase text unavailable)", ""])
     if unit is not None and unit.get("handoff_notes"):
         lines.extend(["## Unit Handoff Notes", str(unit.get("handoff_notes")), ""])
@@ -497,6 +515,18 @@ def _unit_union(sidecar: Mapping[str, Any], *keys: str) -> list[str]:
             for value in _strings(unit.get(key)):
                 if value not in values:
                     values.append(value)
+    return values
+
+
+def _informational_work_units(sidecar: Mapping[str, Any]) -> list[str]:
+    values: list[str] = []
+    for unit in sidecar.get("work_units") or []:
+        if not isinstance(unit, Mapping):
+            continue
+        unit_id = unit.get("id")
+        title = unit.get("title") or unit.get("goal") or ""
+        if isinstance(unit_id, str) and unit_id:
+            values.append(f"{unit_id}: {title}".rstrip(": "))
     return values
 
 

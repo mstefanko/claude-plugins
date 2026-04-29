@@ -55,6 +55,16 @@ class TuiAppTests(unittest.TestCase):
         self.assertNotIn("p", bindings)
         self.assertNotIn("i", bindings)
 
+    def test_runs_navigation_opens_runs_screen(self) -> None:
+        async def run_app() -> None:
+            app = tui_app.SwarmTui()
+            async with app.run_test(size=(120, 40)) as pilot:
+                app.action_runs()
+                await pilot.pause()
+                self.assertIsInstance(app.screen, tui_app.RunsScreen)
+
+        asyncio.run(run_app())
+
     def test_command_palette_includes_global_and_preset_commands(self) -> None:
         app = tui_app.SwarmTui()
 

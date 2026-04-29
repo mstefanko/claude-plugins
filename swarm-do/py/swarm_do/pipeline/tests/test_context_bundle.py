@@ -99,6 +99,21 @@ class ContextBundleTests(unittest.TestCase):
             self.assertIn("phase one summary", previous)
             self.assertNotIn("phase two summary", previous)
 
+    def test_phase_session_dispatcher_treats_work_units_as_informational(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+
+            result = render_context_bundle(run_id=run_id, phase_id="1", role="dispatcher", data_dir=data, repo_root=repo)
+
+            context = result["context"]
+            prompt = Path(result["prompt_path"]).read_text(encoding="utf-8")
+            self.assertEqual(context["allowed_files"], [])
+            self.assertEqual(context["validation_commands"], [])
+            self.assertIn("work_units_informational_phase_session", context["warnings"])
+            self.assertIn("## Informational Decomposition", prompt)
+            self.assertIn("Phase sessions execute this whole phase", prompt)
+
     def test_explicit_empty_prepared_dependencies_do_not_fall_back(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             repo, data, run_id = make_prepared_run(Path(td), phase_count=3)

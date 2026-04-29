@@ -11,6 +11,9 @@ from typing import Any, Mapping
 
 from .paths import REPO_ROOT, resolve_data_dir
 from .phase_sessions import (
+    BLOCKED_DETERMINISTIC_CONTRACT_FAILURE,
+    BLOCKED_PERMISSION_CONTRACT_FAILURE,
+    BLOCKED_RETRY_POLICY_HUMAN_GATE,
     STATUS_BLOCKED,
     STATUS_COMPLETE,
     STATUS_FAILED,
@@ -25,6 +28,7 @@ from .phase_sessions import (
     abandon_attempt_and_retry,
     adopt_phase_result,
     load_phase_sessions,
+    mark_phase_blocked,
     mark_retry_exhausted,
     parse_phase_datetime,
     phase_handoff_path,
@@ -40,8 +44,9 @@ from .phase_beads import write_phase_beads_note
 
 
 ACTIVE_STATUSES = {STATUS_LEASED, STATUS_RUNNING}
-STOP_STATUSES = {STATUS_RETRY_EXHAUSTED, STATUS_BLOCKED, STATUS_NEEDS_INPUT}
+STOP_STATUSES = (STATUS_BLOCKED, STATUS_NEEDS_INPUT, STATUS_RETRY_EXHAUSTED)
 MAX_RECONCILIATION_PASSES = 20
+DEFAULT_BACKOFF_SCHEDULE_SECONDS = (60, 180, 600)
 
 
 def reconcile_phase_sessions(
@@ -224,36 +229,48 @@ def reconcile_phase_sessions(
             retry_decision="retry",
             adopted=False,
             partial_artifacts=artifact.get("partial", False),
+            artifact_error_kinds=artifact.get("error_kinds") or [],
         )
         if _hard_stop_failure(failure_kind, artifact):
+            blocked_reason = _blocked_reason_for_hard_stop(failure_kind, artifact)
+            retry_policy_decision = (
+                "permission_contract_failure"
+                if blocked_reason == BLOCKED_PERMISSION_CONTRACT_FAILURE
+                else "deterministic_contract_failure"
+            )
+            record = {**evidence, "retry_decision": retry_policy_decision, "artifact_error_kinds": artifact.get("error_kinds") or []}
             if not dry_run:
-                mark_retry_exhausted(
+                mark_phase_blocked(
                     run_id,
                     phase_id,
                     failure_kind=failure_kind,
+                    blocked_reason=blocked_reason,
+                    retry_policy_decision=retry_policy_decision,
                     data_dir=base,
                     launcher_error=_launcher_error(launcher_result, artifact),
-                    attempt_record={**evidence, "retry_decision": "hard_stop"},
+                    attempt_record=record,
+                    details={"artifact_error_kinds": artifact.get("error_kinds") or []},
                 )
             actions.append(
                 {
                     "phase_id": phase_id,
                     "attempt": attempt,
-                    "action": "hard_stop",
-                    "status": "failed_nonretryable",
+                    "action": "blocked",
+                    "status": STATUS_BLOCKED,
                     "failure_kind": failure_kind,
-                    "retry_decision": "hard_stop",
+                    "blocked_reason": blocked_reason,
+                    "retry_decision": retry_policy_decision,
                 }
             )
             if not dry_run:
                 _write_recovery_note(
                     run_id,
                     base,
-                    kind="phase_hard_stop",
+                    kind="phase_human_gated",
                     phase_id=phase_id,
                     details=actions[-1],
                 )
-            return _decision(run_id, base, "failed_nonretryable", actions, blocked_reason=failure_kind)
+            return _decision(run_id, base, STATUS_BLOCKED, actions, blocked_reason=blocked_reason)
         action = _retry_or_exhaust(
             run_id,
             phase,
@@ -345,6 +362,84 @@ def _retry_or_exhaust(
     attempt = int(phase.get("attempt") or 0)
     retry_policy = state.get("retry_policy") if isinstance(state.get("retry_policy"), Mapping) else {}
     max_attempts = int(phase.get("max_session_attempts") or retry_policy.get("max_session_attempts") or 3)
+    phase_id = str(phase["phase_id"])
+
+    deterministic_decision = _deterministic_retry_stop(failure_kind, evidence)
+    same_failure_count = _same_failure_count(phase, failure_kind, include_current=True)
+    same_failure_limit = int(retry_policy.get("max_consecutive_same_failure_kind") or 2)
+    if deterministic_decision is not None:
+        blocked_reason, retry_policy_decision = deterministic_decision
+        if not dry_run:
+            mark_phase_blocked(
+                run_id,
+                phase_id,
+                failure_kind=failure_kind,
+                blocked_reason=blocked_reason,
+                retry_policy_decision=retry_policy_decision,
+                data_dir=data_dir,
+                launcher_error=launcher_error,
+                attempt_record={**evidence, "retry_decision": retry_policy_decision},
+                details={
+                    "same_failure_count": same_failure_count,
+                    "max_consecutive_same_failure_kind": same_failure_limit,
+                },
+            )
+            _write_recovery_note(
+                run_id,
+                data_dir,
+                kind="phase_human_gated",
+                phase_id=phase_id,
+                details={"failure_kind": failure_kind, "retry_policy_decision": retry_policy_decision},
+            )
+        return {
+            "phase_id": phase.get("phase_id"),
+            "attempt": attempt,
+            "action": "blocked",
+            "status": STATUS_BLOCKED,
+            "failure_kind": failure_kind,
+            "blocked_reason": blocked_reason,
+            "retry_decision": retry_policy_decision,
+        }
+
+    if same_failure_count >= same_failure_limit:
+        retry_policy_decision = "same_failure_limit"
+        if not dry_run:
+            mark_phase_blocked(
+                run_id,
+                phase_id,
+                failure_kind=failure_kind,
+                blocked_reason=BLOCKED_RETRY_POLICY_HUMAN_GATE,
+                retry_policy_decision=retry_policy_decision,
+                data_dir=data_dir,
+                launcher_error=launcher_error,
+                attempt_record={**evidence, "retry_decision": retry_policy_decision},
+                details={
+                    "same_failure_count": same_failure_count,
+                    "max_consecutive_same_failure_kind": same_failure_limit,
+                },
+            )
+            _write_recovery_note(
+                run_id,
+                data_dir,
+                kind="phase_human_gated",
+                phase_id=phase_id,
+                details={
+                    "failure_kind": failure_kind,
+                    "retry_policy_decision": retry_policy_decision,
+                    "same_failure_count": same_failure_count,
+                },
+            )
+        return {
+            "phase_id": phase.get("phase_id"),
+            "attempt": attempt,
+            "action": "blocked",
+            "status": STATUS_BLOCKED,
+            "failure_kind": failure_kind,
+            "blocked_reason": BLOCKED_RETRY_POLICY_HUMAN_GATE,
+            "retry_decision": retry_policy_decision,
+            "same_failure_count": same_failure_count,
+        }
+
     needs_recovery_retry = _needs_recovery_retry(evidence, state)
     max_recovery_attempts = int(retry_policy.get("max_recovery_attempts") or 0)
     recovery_attempts_used = sum(
@@ -356,7 +451,7 @@ def _retry_or_exhaust(
         if not dry_run:
             mark_retry_exhausted(
                 run_id,
-                str(phase["phase_id"]),
+                phase_id,
                 failure_kind=failure_kind,
                 data_dir=data_dir,
                 launcher_error=launcher_error,
@@ -366,7 +461,7 @@ def _retry_or_exhaust(
                 run_id,
                 data_dir,
                 kind="phase_attempt_retry_exhausted",
-                phase_id=str(phase["phase_id"]),
+                phase_id=phase_id,
                 details={"failure_kind": failure_kind, "recovery_context_path": evidence.get("recovery_context_path")},
             )
         return {
@@ -378,7 +473,7 @@ def _retry_or_exhaust(
             "retry_decision": "retry_exhausted",
         }
 
-    retry_after_seconds = retry_after_seconds if retry_after_seconds is not None else 0
+    retry_after_seconds = retry_after_seconds if retry_after_seconds is not None else _fallback_retry_after_seconds(attempt, retry_policy)
     next_retry_at = _format_dt(now + timedelta(seconds=retry_after_seconds)) if retry_after_seconds > 0 else None
     retry_decision = "recovery_retry" if needs_recovery_retry else "retry"
     record = dict(evidence)
@@ -387,7 +482,7 @@ def _retry_or_exhaust(
     if not dry_run:
         abandon_attempt_and_retry(
             run_id,
-            str(phase["phase_id"]),
+            phase_id,
             failure_kind=failure_kind,
             data_dir=data_dir,
             launcher_error=launcher_error,
@@ -400,7 +495,7 @@ def _retry_or_exhaust(
                 run_id,
                 data_dir,
                 kind="phase_attempt_retry_scheduled",
-                phase_id=str(phase["phase_id"]),
+                phase_id=phase_id,
                 details={
                     "failure_kind": failure_kind,
                     "next_retry_at": next_retry_at,
@@ -434,6 +529,7 @@ def _build_attempt_evidence(
     result_path: str | None = None,
     handoff_path: str | None = None,
     partial_artifacts: bool = False,
+    artifact_error_kinds: list[str] | tuple[str, ...] = (),
 ) -> dict[str, Any]:
     attempt = int(phase.get("attempt") or 0)
     recovery_dir = data_dir / "runs" / run_id / "phase_recovery" / str(phase["phase_id"])
@@ -495,6 +591,7 @@ def _build_attempt_evidence(
         "retry_after_seconds": None,
         "adopted": adopted,
         "partial_artifacts": partial_artifacts,
+        "artifact_error_kinds": [str(item) for item in artifact_error_kinds if isinstance(item, str)],
         "stdout_tail_path": str(stdout_tail_path),
         "stderr_tail_path": str(stderr_tail_path),
         "changed_files": changed_files,
@@ -514,6 +611,53 @@ def _needs_recovery_retry(evidence: Mapping[str, Any], state: Mapping[str, Any])
     if evidence.get("partial_artifacts"):
         return True
     return False
+
+
+def _same_failure_count(phase: Mapping[str, Any], failure_kind: str, *, include_current: bool) -> int:
+    count = 1 if include_current else 0
+    for item in phase.get("attempt_history") or []:
+        if isinstance(item, Mapping) and item.get("failure_kind") == failure_kind:
+            count += 1
+    return count
+
+
+def _fallback_retry_after_seconds(attempt: int, retry_policy: Mapping[str, Any]) -> int:
+    maximum = int(retry_policy.get("max_retry_after_seconds") or 1800)
+    configured = retry_policy.get("short_retry_backoff_seconds")
+    if isinstance(configured, int) and configured > 0 and attempt <= 1:
+        return min(configured, maximum)
+    index = min(max(attempt - 1, 0), len(DEFAULT_BACKOFF_SCHEDULE_SECONDS) - 1)
+    return min(DEFAULT_BACKOFF_SCHEDULE_SECONDS[index], maximum)
+
+
+def _deterministic_retry_stop(failure_kind: str, evidence: Mapping[str, Any]) -> tuple[str, str] | None:
+    returncode = evidence.get("returncode")
+    if failure_kind == "permission_contract_failure":
+        return (BLOCKED_PERMISSION_CONTRACT_FAILURE, "permission_contract_failure")
+    if failure_kind in {"outer_json_invalid_no_artifacts", "outer_artifacts_missing"} and returncode == 0:
+        return (BLOCKED_RETRY_POLICY_HUMAN_GATE, "deterministic_contract_failure")
+    artifact_error_kinds = {str(item) for item in evidence.get("artifact_error_kinds") or [] if isinstance(item, str)}
+    if artifact_error_kinds & _DETERMINISTIC_ARTIFACT_ERROR_KINDS:
+        return (BLOCKED_DETERMINISTIC_CONTRACT_FAILURE, "deterministic_contract_failure")
+    return None
+
+
+_DETERMINISTIC_ARTIFACT_ERROR_KINDS = {
+    "path_escape",
+    "result_identity_mismatch",
+    "prepared_plan_sha_mismatch",
+    "phase_content_sha_mismatch",
+    "handoff_identity_mismatch",
+    "attempt_mismatch",
+    "handoff_status_mismatch",
+    "completed_work_units_not_prepared",
+}
+
+
+def _blocked_reason_for_hard_stop(failure_kind: str, artifact: Mapping[str, Any]) -> str:
+    if failure_kind == "permission_contract_failure":
+        return BLOCKED_PERMISSION_CONTRACT_FAILURE
+    return BLOCKED_DETERMINISTIC_CONTRACT_FAILURE
 
 
 def _active_phase_decision(phase: Mapping[str, Any], *, now: datetime) -> dict[str, Any]:
@@ -650,6 +794,12 @@ def _launcher_failure_kind(launcher_result: Mapping[str, Any] | None, artifact: 
     try:
         outer = parse_claude_print_json(stdout)
         extract_claude_print_artifacts(outer, run_dir=Path("/definitely-not-used"))
+    except ValueError as exc:
+        if not stdout:
+            return "outer_json_missing_no_artifacts"
+        if "missing artifact object" in str(exc):
+            return "outer_artifacts_missing"
+        return "outer_json_invalid_no_artifacts"
     except Exception:
         return "outer_json_invalid_no_artifacts" if stdout else "outer_json_missing_no_artifacts"
     return "outer_artifacts_missing"
@@ -671,16 +821,7 @@ def _launcher_error(launcher_result: Mapping[str, Any] | None, artifact: Mapping
 def _hard_stop_failure(failure_kind: str, artifact: Mapping[str, Any]) -> bool:
     if failure_kind in {"claude_cli_missing", "launcher_ineligible", "permission_contract_failure"}:
         return True
-    hard_kinds = {
-        "path_escape",
-        "result_identity_mismatch",
-        "prepared_plan_sha_mismatch",
-        "phase_content_sha_mismatch",
-        "handoff_identity_mismatch",
-        "attempt_mismatch",
-        "handoff_status_mismatch",
-    }
-    return any(kind in hard_kinds for kind in artifact.get("error_kinds") or [])
+    return any(kind in _DETERMINISTIC_ARTIFACT_ERROR_KINDS for kind in artifact.get("error_kinds") or [])
 
 
 def _result_error(result: Mapping[str, Any]) -> str | None:

@@ -36,10 +36,11 @@ class PhaseRecoveryTests(unittest.TestCase):
                 now=datetime(2026, 4, 29, tzinfo=UTC),
             )
 
-            self.assertEqual(result["status"], "ready")
+            self.assertEqual(result["status"], "retry_waiting")
             state = json.loads(phase_session_path(run_id, data_dir=data).read_text(encoding="utf-8"))
             phase = state["phases"][0]
-            self.assertEqual(phase["status"], "pending")
+            self.assertEqual(phase["status"], "retry_waiting")
+            self.assertEqual(phase["attempt_history"][0]["retry_after_seconds"], 60)
             self.assertEqual(phase["last_failure_kind"], "lease_expired_no_artifacts")
             self.assertEqual(phase["attempt_history"][0]["retry_decision"], "retry")
 
@@ -75,7 +76,7 @@ class PhaseRecoveryTests(unittest.TestCase):
                 now=datetime(2026, 4, 29, tzinfo=UTC),
             )
 
-            self.assertEqual(result["status"], "ready")
+            self.assertEqual(result["status"], "retry_waiting")
             state = json.loads(phase_session_path(run_id, data_dir=data).read_text(encoding="utf-8"))
             self.assertEqual(state["phases"][0]["last_failure_kind"], "child_process_dead_no_artifacts")
 
@@ -100,7 +101,7 @@ class PhaseRecoveryTests(unittest.TestCase):
                     now=datetime(2026, 4, 29, tzinfo=UTC),
                 )
 
-            self.assertEqual(result["status"], "ready")
+            self.assertEqual(result["status"], "retry_waiting")
             state = json.loads(phase_session_path(run_id, data_dir=data).read_text(encoding="utf-8"))
             self.assertEqual(state["phases"][0]["last_failure_kind"], "child_process_dead_no_artifacts")
 
@@ -126,6 +127,69 @@ class PhaseRecoveryTests(unittest.TestCase):
             self.assertEqual(phase["attempt_history"][0]["retry_after_seconds"], 1800)
             self.assertEqual(Path(phase["attempt_history"][0]["result_path"]).resolve(strict=False), result_path.resolve(strict=False))
 
+    def test_same_failure_kind_twice_blocks_instead_of_retry_exhausting(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            claim_next_phase(run_id, data_dir=data, repo_root=repo, lease_owner="owner-1")
+            start_phase(run_id, "1", launcher="claude-print", lease_owner="owner-1", data_dir=data)
+
+            reconcile_phase_sessions(
+                run_id,
+                data_dir=data,
+                repo_root=repo,
+                launcher_result={"status": "launched", "returncode": 1, "stdout": "", "stderr": "boom"},
+                now=datetime(2026, 4, 29, tzinfo=UTC),
+            )
+            _patch_phase(data, run_id, {"status": "pending", "next_retry_at": None})
+            claim_next_phase(run_id, data_dir=data, repo_root=repo, lease_owner="owner-2")
+            start_phase(run_id, "1", launcher="claude-print", lease_owner="owner-2", data_dir=data)
+
+            result = reconcile_phase_sessions(
+                run_id,
+                data_dir=data,
+                repo_root=repo,
+                launcher_result={"status": "launched", "returncode": 1, "stdout": "", "stderr": "boom again"},
+                now=datetime(2026, 4, 29, tzinfo=UTC),
+            )
+
+            self.assertEqual(result["status"], "blocked")
+            state = json.loads(phase_session_path(run_id, data_dir=data).read_text(encoding="utf-8"))
+            phase = state["phases"][0]
+            self.assertEqual(phase["status"], "blocked")
+            self.assertEqual(phase["blocked_reason"], "retry_policy_human_gate")
+            self.assertEqual(phase["retry_policy_decision"], "same_failure_limit")
+            self.assertEqual(phase["last_failure_kind"], "launcher_nonzero_no_artifacts")
+            events = _run_events(data)
+            self.assertIn("phase_session_blocked", [row["event_type"] for row in events])
+            blocked = [row for row in events if row["event_type"] == "phase_session_blocked"][-1]
+            self.assertEqual(blocked["reason"], "retry_policy_human_gate")
+            self.assertEqual(blocked["details"]["retry_policy_decision"], "same_failure_limit")
+
+    def test_zero_returncode_contract_failure_blocks_without_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            claim_next_phase(run_id, data_dir=data, repo_root=repo, lease_owner="owner-1")
+            start_phase(run_id, "1", launcher="claude-print", lease_owner="owner-1", data_dir=data)
+            stdout = json.dumps({"type": "result", "result": "{}"})
+
+            result = reconcile_phase_sessions(
+                run_id,
+                data_dir=data,
+                repo_root=repo,
+                launcher_result={"status": "launched", "returncode": 0, "stdout": stdout, "stderr": ""},
+                now=datetime(2026, 4, 29, tzinfo=UTC),
+            )
+
+            self.assertEqual(result["status"], "blocked")
+            state = json.loads(phase_session_path(run_id, data_dir=data).read_text(encoding="utf-8"))
+            phase = state["phases"][0]
+            self.assertEqual(phase["status"], "blocked")
+            self.assertEqual(phase["blocked_reason"], "retry_policy_human_gate")
+            self.assertEqual(phase["retry_policy_decision"], "deterministic_contract_failure")
+            self.assertEqual(phase["last_failure_kind"], "outer_artifacts_missing")
+
     def test_dry_run_reports_without_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
@@ -142,7 +206,7 @@ class PhaseRecoveryTests(unittest.TestCase):
                 dry_run=True,
             )
 
-            self.assertEqual(result["actions"][0]["action"], "retry_ready")
+            self.assertEqual(result["actions"][0]["action"], "retry_scheduled")
             state = json.loads(phase_session_path(run_id, data_dir=data).read_text(encoding="utf-8"))
             self.assertEqual(state["phases"][0]["status"], "running")
 
@@ -197,6 +261,11 @@ def _patch_phase(data: Path, run_id: str, updates: dict) -> None:
     state = json.loads(path.read_text(encoding="utf-8"))
     state["phases"][0].update(updates)
     path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _run_events(data: Path) -> list[dict]:
+    path = data / "telemetry" / "run_events.jsonl"
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def _write_result(

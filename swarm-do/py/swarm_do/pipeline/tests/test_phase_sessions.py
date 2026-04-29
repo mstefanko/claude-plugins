@@ -155,7 +155,8 @@ class PhaseSessionTests(unittest.TestCase):
 
             loaded = load_phase_sessions(run_id, data_dir=data)
 
-            self.assertEqual(loaded["retry_policy"]["max_session_attempts"], 3)
+            self.assertEqual(loaded["retry_policy"]["max_session_attempts"], 2)
+            self.assertEqual(loaded["retry_policy"]["short_retry_backoff_seconds"], 60)
             self.assertEqual(loaded["phases"][0]["attempt_history"], [])
 
     def test_init_refuses_to_resnapshot_when_phase_artifacts_exist_without_state(self) -> None:
@@ -196,6 +197,20 @@ class PhaseSessionTests(unittest.TestCase):
             result_path.write_text(json.dumps(result), encoding="utf-8")
 
             with self.assertRaisesRegex(PhaseSessionError, "phase_content_sha"):
+                record_phase_result(run_id, "1", json_file=result_path, expected_status="complete", data_dir=data)
+
+    def test_phase_session_result_completed_work_units_must_be_prepared_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            claim_next_phase(run_id, data_dir=data, repo_root=repo, lease_owner="owner-1")
+            started = start_phase(run_id, "1", launcher="manual", lease_owner="owner-1", data_dir=data)
+            result_path = _write_result(data, run_id, started["phase"], status="complete")
+            result = json.loads(result_path.read_text(encoding="utf-8"))
+            result["completed_work_units"] = ["fixture:selftest.ok.json"]
+            result_path.write_text(json.dumps(result), encoding="utf-8")
+
+            with self.assertRaisesRegex(PhaseSessionError, "completed_work_units"):
                 record_phase_result(run_id, "1", json_file=result_path, expected_status="complete", data_dir=data)
 
 

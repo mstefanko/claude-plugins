@@ -128,9 +128,10 @@ class PhasePumpTests(unittest.TestCase):
                     data_dir=data,
                 )
 
-            self.assertEqual(result["status"], "max_phases")
+            self.assertEqual(result["status"], "retry_waiting")
             state = json.loads(phase_session_path(run_id, data_dir=data).read_text(encoding="utf-8"))
-            self.assertEqual(state["phases"][0]["status"], "pending")
+            self.assertEqual(state["phases"][0]["status"], "retry_waiting")
+            self.assertEqual(state["phases"][0]["attempt_history"][0]["retry_after_seconds"], 60)
             self.assertEqual(state["phases"][0]["last_failure_kind"], "launcher_nonzero_no_artifacts")
             self.assertTrue(state["phases"][0]["attempt_history"])
             self.assertNotEqual(phase_status(run_id, data_dir=data, repo_root=repo)["status"], "complete")
@@ -176,6 +177,9 @@ class PhasePumpTests(unittest.TestCase):
             self.assertEqual(result["status"], "complete")
             status = phase_status(run_id, data_dir=data, repo_root=repo)
             self.assertEqual(status["phases"][0]["status"], "complete")
+            command = json.loads((data / "runs" / run_id / "phase_launches" / "1" / "attempt-1" / "command.json").read_text(encoding="utf-8"))
+            self.assertEqual(command["settings_path"], str(data / "runs" / run_id / "writer-settings.json"))
+            self.assertTrue((data / "runs" / run_id / "writer-settings.json").is_file())
 
     def test_parent_death_with_complete_artifacts_is_adopted_on_next_pump(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -257,6 +261,75 @@ class PhasePumpTests(unittest.TestCase):
             state = json.loads(phase_session_path(run_id, data_dir=data).read_text(encoding="utf-8"))
             self.assertEqual(state["phases"][0]["child_pid"], 12345)
             self.assertEqual(state["phases"][0]["process_group_id"], 12345)
+
+    def test_real_claude_launcher_writes_stdin_once_and_refreshes_lease(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            claim_next_phase(run_id, data_dir=data, repo_root=repo, lease_owner="owner-1")
+            start_phase(run_id, "1", launcher="claude-print", lease_owner="owner-1", data_dir=data)
+            launch_dir = data / "runs" / run_id / "phase_launches" / "1" / "attempt-1"
+            launch_dir.mkdir(parents=True)
+            command_path = launch_dir / "command.json"
+            command_path.write_text("{}", encoding="utf-8")
+
+            class FakeStdin:
+                def __init__(self) -> None:
+                    self.writes = []
+                    self.closed = False
+
+                def write(self, value):
+                    self.writes.append(value)
+
+                def flush(self):
+                    pass
+
+                def close(self):
+                    self.closed = True
+
+            class FakeProc:
+                pid = 12345
+
+                def __init__(self) -> None:
+                    self.returncode = None
+                    self.stdin = FakeStdin()
+                    self.wait_calls = 0
+
+                def wait(self, timeout=None):
+                    self.wait_calls += 1
+                    if self.wait_calls == 1:
+                        raise subprocess.TimeoutExpired(["claude"], timeout)
+                    self.returncode = 0
+                    return 0
+
+                def communicate(self):
+                    return "{}", ""
+
+            proc = FakeProc()
+
+            with mock.patch("swarm_do.pipeline.phase_pump.subprocess.Popen", return_value=proc), mock.patch(
+                "swarm_do.pipeline.phase_pump.os.getpgid",
+                return_value=12345,
+            ):
+                phase_pump._run_real_claude(
+                    ["claude"],
+                    run_id=run_id,
+                    phase_id="1",
+                    lease_owner="owner-1",
+                    data_dir=data,
+                    launch_dir=launch_dir,
+                    command_path=command_path,
+                    metadata={},
+                    prompt_sha="a" * 64,
+                    result_path=data / "result.json",
+                    handoff_path=data / "handoff.json",
+                    prompt_text="hello",
+                )
+
+            self.assertEqual(proc.stdin.writes, ["hello"])
+            self.assertTrue(proc.stdin.closed)
+            events = (data / "telemetry" / "run_events.jsonl").read_text(encoding="utf-8")
+            self.assertIn("phase_session_refreshed", events)
 
     def test_retry_sleep_threshold_comes_from_recovery_policy(self) -> None:
         recovery = {

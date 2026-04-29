@@ -1,0 +1,254 @@
+{
+  "_contract": {
+    "purpose": "Schema-level example for `bin/swarm selftest --json` healthy output. Phase 0 baseline contract; runtime emitter lands in Phase 1.",
+    "stability": "shape is the merge target for Phase 1; field names are stable, additional optional fields may be added in minor revisions",
+    "exit_status_rules": {
+      "0": "all hard checks pass; advisory may be 'warn' (without --strict) or 'pass'",
+      "1_default": "any hard check has status='fail'",
+      "1_strict": "with --strict, exit 1 also when any advisory check has status='warn'"
+    },
+    "check_taxonomy": {
+      "hard": [
+        "plugin-root-resolvable",
+        "data-dir-resolvable",
+        "beads-rig-present",
+        "active-preset-loads",
+        "pipeline-lint",
+        "preset-dry-run",
+        "role-permissions-load",
+        "telemetry-schemas",
+        "telemetry-docs-generated",
+        "active-run-valid"
+      ],
+      "advisory": [
+        "provider-doctor",
+        "review-provider-eligible",
+        "tui-deps",
+        "tui-lock-hash",
+        "checkpoint-age",
+        "active-run-fresh",
+        "plugin-clean-checkout",
+        "dogfood-summary"
+      ]
+    },
+    "sensitive_field_policy": {
+      "details": "Free-form per-check object. May contain absolute paths, command snippets, and sanitized environment fragments. Implementations MUST redact secret-shaped values (GitHub tokens, OpenAI/Anthropic keys, AWS keys, generic password=/token=/api_key=/Authorization values) before serialization.",
+      "remediation": "Operator-facing prose only. Never echoes raw command output or unredacted secrets.",
+      "absolute_paths": "Plugin root and data dir paths are intentionally absolute and not redacted; downstream consumers that publish this JSON should treat the document as host-sensitive."
+    },
+    "command_inventory_unchanged": [
+      "bin/swarm preset dry-run",
+      "bin/swarm pipeline lint",
+      "bin/swarm providers doctor",
+      "bin/swarm permissions check",
+      "bin/swarm-telemetry validate",
+      "bin/swarm-telemetry dogfood-check",
+      "bin/swarm-telemetry experiment-report"
+    ]
+  },
+  "schema_version": 1,
+  "generated_at": "2026-04-29T18:40:00Z",
+  "swarm_do_version": "0.0.0+phase0",
+  "exit_status": 0,
+  "strict": false,
+  "selected_preset": "default",
+  "plan_path": null,
+  "summary": {
+    "total": 18,
+    "pass": 18,
+    "warn": 0,
+    "fail": 0,
+    "hard_failures": 0,
+    "advisory_warnings": 0
+  },
+  "checks": [
+    {
+      "id": "plugin-root-resolvable",
+      "severity": "hard",
+      "status": "pass",
+      "summary": "plugin root resolved",
+      "details": {
+        "plugin_root": "/Users/operator/.claude/plugins/marketplaces/mstefanko-plugins/swarm-do"
+      },
+      "remediation": null
+    },
+    {
+      "id": "data-dir-resolvable",
+      "severity": "hard",
+      "status": "pass",
+      "summary": "data directory resolved",
+      "details": {
+        "data_dir": "/Users/operator/.claude/plugins/marketplaces/mstefanko-plugins/swarm-do/data"
+      },
+      "remediation": null
+    },
+    {
+      "id": "beads-rig-present",
+      "severity": "hard",
+      "status": "pass",
+      "summary": "beads rig detected in target repo",
+      "details": {
+        "beads_dir": ".beads",
+        "config_present": true
+      },
+      "remediation": null
+    },
+    {
+      "id": "active-preset-loads",
+      "severity": "hard",
+      "status": "pass",
+      "summary": "active preset 'default' loaded",
+      "details": {
+        "preset": "default",
+        "source": "presets/default.yaml"
+      },
+      "remediation": null
+    },
+    {
+      "id": "pipeline-lint",
+      "severity": "hard",
+      "status": "pass",
+      "summary": "default pipeline linted",
+      "details": {
+        "graph_nodes": 7,
+        "graph_edges": 9
+      },
+      "remediation": null
+    },
+    {
+      "id": "preset-dry-run",
+      "severity": "hard",
+      "status": "pass",
+      "summary": "no plan provided; dry-run skipped without failure",
+      "details": {
+        "skipped": true,
+        "reason": "no --plan flag"
+      },
+      "remediation": null
+    },
+    {
+      "id": "role-permissions-load",
+      "severity": "hard",
+      "status": "pass",
+      "summary": "all 11 role permission fragments loaded",
+      "details": {
+        "role_count": 11
+      },
+      "remediation": null
+    },
+    {
+      "id": "telemetry-schemas",
+      "severity": "hard",
+      "status": "pass",
+      "summary": "telemetry JSON schemas validated",
+      "details": {
+        "schema_count": 6
+      },
+      "remediation": null
+    },
+    {
+      "id": "telemetry-docs-generated",
+      "severity": "hard",
+      "status": "pass",
+      "summary": "generated telemetry docs are up to date",
+      "details": {},
+      "remediation": null
+    },
+    {
+      "id": "active-run-valid",
+      "severity": "hard",
+      "status": "pass",
+      "summary": "no active run on disk",
+      "details": {
+        "active_run_path": null
+      },
+      "remediation": null
+    },
+    {
+      "id": "provider-doctor",
+      "severity": "advisory",
+      "status": "pass",
+      "summary": "configured providers reachable",
+      "details": {
+        "providers_checked": [
+          "claude",
+          "codex"
+        ]
+      },
+      "remediation": null
+    },
+    {
+      "id": "review-provider-eligible",
+      "severity": "advisory",
+      "status": "pass",
+      "summary": "review provider has read-only role mapping",
+      "details": {
+        "provider": "claude",
+        "read_only_roles": [
+          "explorer",
+          "reviewer",
+          "provider-review"
+        ]
+      },
+      "remediation": null
+    },
+    {
+      "id": "tui-deps",
+      "severity": "advisory",
+      "status": "pass",
+      "summary": "TUI dependencies resolved",
+      "details": {
+        "rich_version": "13.7.1"
+      },
+      "remediation": null
+    },
+    {
+      "id": "tui-lock-hash",
+      "severity": "advisory",
+      "status": "pass",
+      "summary": "TUI lock hash matches",
+      "details": {},
+      "remediation": null
+    },
+    {
+      "id": "checkpoint-age",
+      "severity": "advisory",
+      "status": "pass",
+      "summary": "no checkpoints older than 14 days",
+      "details": {
+        "newest_age_seconds": 3600,
+        "oldest_age_seconds": 86400
+      },
+      "remediation": null
+    },
+    {
+      "id": "active-run-fresh",
+      "severity": "advisory",
+      "status": "pass",
+      "summary": "no active run; freshness not applicable",
+      "details": {},
+      "remediation": null
+    },
+    {
+      "id": "plugin-clean-checkout",
+      "severity": "advisory",
+      "status": "pass",
+      "summary": "plugin checkout clean",
+      "details": {
+        "dirty_files": 0
+      },
+      "remediation": null
+    },
+    {
+      "id": "dogfood-summary",
+      "severity": "advisory",
+      "status": "pass",
+      "summary": "dogfood telemetry promotion: hold (insufficient samples)",
+      "details": {
+        "samples": 4,
+        "promote_threshold": 10
+      },
+      "remediation": null
+    }
+  ]
+}

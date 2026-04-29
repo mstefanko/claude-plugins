@@ -409,6 +409,8 @@ def _run_claude_print_phase(
     launch_dir.mkdir(parents=True, exist_ok=True)
     result_path = phase_result_path(run_id, phase_id, attempt, data_dir=data_dir)
     handoff_path = phase_handoff_path(run_id, phase_id, attempt, data_dir=data_dir)
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    handoff_path.parent.mkdir(parents=True, exist_ok=True)
     launcher_prompt_path = launch_dir / "dispatcher.launcher.prompt.md"
     prompt_text = prompt_path.read_text(encoding="utf-8")
     prompt_text = _append_claude_print_contract(
@@ -429,14 +431,10 @@ def _run_claude_print_phase(
     resolved_claude = claude_path or shutil.which("claude") or ("claude" if claude_runner is not None else None)
     if not resolved_claude:
         return {"status": "launcher_error", "reason": "claude_cli_missing"}
-    writer_settings_path = launch_dir / "writer-settings.json"
-    writer_settings_path.write_text(
-        json.dumps(
-            {"permissions": {"allow": _allowed_tools_arg(), "deny": []}},
-            indent=2,
-        ) + "\n",
-        encoding="utf-8",
-    )
+    writer_settings_path = run_dir / "writer-settings.json"
+    writer_settings = {"permissions": {"allow": _allowed_tools_arg(), "deny": []}}
+    _write_json_if_changed(writer_settings_path, writer_settings)
+    writer_settings_sha = _sha256_file(writer_settings_path)
     argv = [
         resolved_claude,
         "-p",
@@ -463,6 +461,8 @@ def _run_claude_print_phase(
         "source_prompt_sha": _sha256_file(prompt_path),
         "result_path": str(result_path),
         "handoff_path": str(handoff_path),
+        "settings_path": str(writer_settings_path),
+        "settings_sha": writer_settings_sha,
         "env_redacted": True,
     }
     (launch_dir / "command.json").write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -501,7 +501,15 @@ def _run_claude_print_phase(
         (launch_dir / "stderr.txt").write_text(exc.stderr or "", encoding="utf-8")
         return {"status": "launcher_error", "reason": "claude_print_timeout", "launch_dir": str(launch_dir)}
     except Exception as exc:
-        return {"status": "launcher_error", "reason": str(exc), "launch_dir": str(launch_dir)}
+        stdout, stderr = _exception_streams(exc)
+        if stdout is not None:
+            (launch_dir / "stdout.txt").write_text(stdout, encoding="utf-8")
+        if stderr is not None:
+            (launch_dir / "stderr.txt").write_text(stderr, encoding="utf-8")
+        reason = "launcher_io_closed_file" if "I/O operation on closed file" in str(exc) else str(exc)
+        metadata["launcher_exception"] = reason
+        (launch_dir / "command.json").write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        return {"status": "launcher_error", "reason": reason, "launch_dir": str(launch_dir)}
 
     stdout = proc.stdout or ""
     stderr = proc.stderr or ""
@@ -585,6 +593,7 @@ def _append_claude_print_contract(
         "",
         "Array-element type rules (the schemas reject other shapes):",
         "- `result.completed_work_units`, `result.failed_work_units`, `result.needs_input`: each item is a plain string.",
+        "- In phase-session mode, `result.completed_work_units` and `handoff.completed_work_units` must stay empty unless you are using a prepared unit id shown in the informational decomposition. Put semantic accomplishments in `summary`, `artifacts`, or `validation`.",
         "- `result.validation`: each item is a JSON object (e.g. `{\"command\": \"pytest\", \"status\": \"passed\"}`).",
         "- `result.artifacts`: each item is a JSON object (e.g. `{\"path\": \"docs/examples/x.json\", \"kind\": \"fixture\"}`).",
         "- `handoff.decisions`, `handoff.changed_files`, `handoff.completed_work_units`, `handoff.open_items`, `handoff.blockers`, `handoff.do_not_retry`, `handoff.validation_summary`, `handoff.next_phase_context`: each item is a plain string. Do NOT use objects.",
@@ -638,7 +647,6 @@ def _run_real_claude(
         text=True,
         start_new_session=True,
     )
-    pending_input: str | None = prompt_text
     process_group_id: int | None = None
     metadata_error: str | None = None
     try:
@@ -664,6 +672,10 @@ def _run_real_claude(
         expected_handoff_path=handoff_path,
         launch_metadata_error=metadata_error,
     )
+    if prompt_text is not None and proc.stdin is not None:
+        proc.stdin.write(prompt_text)
+        proc.stdin.flush()
+        proc.stdin.close()
     while True:
         elapsed = time.monotonic() - started
         if elapsed > timeout_seconds:
@@ -672,10 +684,13 @@ def _run_real_claude(
             raise subprocess.TimeoutExpired(argv, timeout_seconds, output=stdout, stderr=stderr)
         wait_for = min(refresh_interval, max(0.1, timeout_seconds - elapsed))
         try:
-            stdout, stderr = proc.communicate(input=pending_input, timeout=wait_for)
+            if hasattr(proc, "wait"):
+                proc.wait(timeout=wait_for)
+                stdout, stderr = proc.communicate()
+            else:
+                stdout, stderr = proc.communicate(timeout=wait_for)
             return subprocess.CompletedProcess(list(argv), proc.returncode, stdout=stdout, stderr=stderr)
         except subprocess.TimeoutExpired:
-            pending_input = None
             refresh_phase(run_id, phase_id, lease_owner=lease_owner, data_dir=data_dir)
 
 
@@ -690,6 +705,25 @@ def _allowed_tools_arg() -> list[str]:
     if not values:
         raise PhaseSessionError("writer permission fragment has no allowed tools")
     return values
+
+
+def _write_json_if_changed(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    if path.is_file() and path.read_text(encoding="utf-8") == text:
+        return
+    path.write_text(text, encoding="utf-8")
+
+
+def _exception_streams(exc: Exception) -> tuple[str | None, str | None]:
+    stdout = getattr(exc, "stdout", None)
+    if stdout is None:
+        stdout = getattr(exc, "output", None)
+    stderr = getattr(exc, "stderr", None)
+    return (
+        stdout if isinstance(stdout, str) else None,
+        stderr if isinstance(stderr, str) else None,
+    )
 
 
 def _sha256_file(path: Path) -> str:

@@ -79,6 +79,7 @@ from swarm_do.tui.state import (
     module_palette_rows,
     new_preset_preview,
     outcome_dashboard_summary,
+    phase_session_run_rows,
     pipeline_board_model,
     pipeline_board_plain_text,
     pipeline_gallery_rows,
@@ -1656,6 +1657,8 @@ if TEXTUAL_IMPORT_ERROR is None:
                     yield Static("", id="outcome-summary")
                 yield Static("", id="dashboard-graph-title")
                 yield PipelineLayerBoard(id="dashboard-graph")
+                yield Static("Phase Sessions", id="phase-session-title")
+                yield DataTable(id="phase-sessions")
                 yield Static("Issue Queue", id="queue-title")
                 yield DataTable(id="inflight")
             yield StatusBar(id="status")
@@ -1663,6 +1666,7 @@ if TEXTUAL_IMPORT_ERROR is None:
 
         def on_mount(self) -> None:
             self.query_one("#inflight", DataTable).cursor_type = "row"
+            self.query_one("#phase-sessions", DataTable).cursor_type = "row"
             self.refresh_dashboard()
             self.set_interval(2.0, self.refresh_dashboard)
 
@@ -1709,6 +1713,24 @@ if TEXTUAL_IMPORT_ERROR is None:
             self.query_one("#event-strip", Static).update(_dashboard_event_text())
             self.query_one("#outcome-summary", Static).update(_dashboard_outcome_text(outcome_dashboard_summary()))
             self._refresh_dashboard_graph()
+            phase_table = self.query_one("#phase-sessions", DataTable)
+            phase_table.clear(columns=True)
+            phase_table.add_columns("run", "status", "active", "phases", "attempts", "failed", "cost", "last failure")
+            phase_rows = phase_session_run_rows()
+            for row in phase_rows[:8]:
+                phase_table.add_row(
+                    row.run_id,
+                    row.status,
+                    row.active_phase or "-",
+                    f"{row.completed_phases}/{len(row.phases)}",
+                    str(row.attempts),
+                    "unknown" if row.failed_cost_usd is None else f"${row.failed_cost_usd:.2f}",
+                    "unknown" if row.total_cost_usd is None else f"${row.total_cost_usd:.2f}",
+                    row.last_failure or "-",
+                )
+            if not phase_rows:
+                phase_table.add_row("none", "no phase-session runs", "", "", "", "", "", "")
+            self.query_one("#phase-session-title", Static).update("Phase Sessions")
             table = self.query_one("#inflight", DataTable)
             table.clear(columns=True)
             table.add_columns("issue", "role", "backend", "model", "effort", "pid", "status")
@@ -1862,6 +1884,92 @@ if TEXTUAL_IMPORT_ERROR is None:
             self.action_provider_doctor()
 
 
+    class RunsScreen(Screen):
+        BINDINGS = [("r", "refresh_runs", "Refresh")]
+        HELP = (
+            "Runs\n\n"
+            "Global: 1 Dashboard, 2 Runs, 3 Presets, 4 Settings, Ctrl+P Commands, q Quit.\n"
+            "Local: r refresh phase-session runs."
+        )
+
+        def compose(self) -> ComposeResult:
+            yield Header()
+            yield AppChrome("Runs", id="app-chrome")
+            with Vertical():
+                yield Static("Phase Sessions", id="runs-title")
+                yield DataTable(id="runs-table")
+                yield Static("", id="runs-detail")
+            yield StatusBar(id="status")
+            yield Footer()
+
+        def on_mount(self) -> None:
+            self.query_one("#runs-table", DataTable).cursor_type = "row"
+            self.refresh_runs()
+            self.set_interval(2.0, self.refresh_runs)
+
+        def action_refresh_runs(self) -> None:
+            self.refresh_runs()
+
+        def refresh_runs(self) -> None:
+            rows = phase_session_run_rows()
+            table = self.query_one("#runs-table", DataTable)
+            selected = getattr(table, "cursor_row", 0)
+            table.clear(columns=True)
+            table.add_columns("run", "status", "active", "phases", "attempts", "failed attempts", "failed cost", "total cost", "last failure", "updated")
+            for row in rows:
+                table.add_row(
+                    row.run_id,
+                    row.status,
+                    row.active_phase or "-",
+                    f"{row.completed_phases}/{len(row.phases)}",
+                    str(row.attempts),
+                    str(row.failed_attempts),
+                    "unknown" if row.failed_cost_usd is None else f"${row.failed_cost_usd:.2f}",
+                    "unknown" if row.total_cost_usd is None else f"${row.total_cost_usd:.2f}",
+                    row.last_failure or "-",
+                    row.updated_at or "-",
+                )
+            if not rows:
+                table.add_row("none", "no phase-session runs", "", "", "", "", "", "", "", "")
+                self.query_one("#runs-detail", Static).update("No phase-session runs.")
+            else:
+                index = min(max(int(selected or 0), 0), len(rows) - 1)
+                table.move_cursor(row=index)
+                self._show_row(rows[index])
+            self.query_one("#status", StatusBar).refresh_status()
+            _refresh_chrome(self)
+
+        def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+            rows = phase_session_run_rows()
+            if not rows:
+                return
+            self._show_row(rows[min(max(event.cursor_row, 0), len(rows) - 1)])
+
+        def _show_row(self, row: Any) -> None:
+            phase_lines = [
+                f"- {phase.get('phase_id')}: {phase.get('status')} attempt={phase.get('attempt')} "
+                f"failure={phase.get('last_failure_kind') or '-'} retry={phase.get('retry_policy_decision') or '-'}"
+                for phase in row.phases
+            ]
+            attempt_lines = [
+                f"- phase={attempt.get('phase_id')} attempt={attempt.get('attempt')} "
+                f"status={attempt.get('status')} failure={attempt.get('failure_kind') or '-'} "
+                f"cost={_attempt_cost_label(attempt)}"
+                for attempt in row.attempt_rows[-8:]
+            ]
+            body = [
+                f"run {row.run_id} status={row.status}",
+                f"recommended: {row.recommended_action or '-'}",
+                "",
+                "Phases",
+                *(phase_lines or ["- none"]),
+                "",
+                "Recent Attempts",
+                *(attempt_lines or ["- none"]),
+            ]
+            self.query_one("#runs-detail", Static).update("\n".join(body))
+
+
     def _state_style(state: str) -> str:
         return {
             "ok": _color("success"),
@@ -1895,6 +2003,15 @@ if TEXTUAL_IMPORT_ERROR is None:
         text.append("  providers ", style=_muted_style())
         _append_badge(text, provider_state, _state_style(provider_state))
         return text
+
+
+    def _attempt_cost_label(row: Mapping[str, Any]) -> str:
+        value = row.get("total_cost_usd")
+        if row.get("cost_confidence") == "provider_reported" and isinstance(value, (int, float)):
+            return f"${float(value):.2f}"
+        if row.get("cost_confidence") == "conflict":
+            return "conflict"
+        return "unknown"
 
 
     def _dashboard_event_text() -> Text:
@@ -3976,6 +4093,7 @@ if TEXTUAL_IMPORT_ERROR is None:
             self.theme = POSTING_GALAXY_THEME_NAME
             self.provider_state = "unchecked"
             self.install_screen(DashboardScreen(), name="dashboard")
+            self.install_screen(RunsScreen(), name="runs")
             self.install_screen(SettingsScreen(), name="settings")
             self.install_screen(PresetWorkbenchScreen(), name="presets")
             self.push_screen("dashboard")
@@ -3992,7 +4110,7 @@ if TEXTUAL_IMPORT_ERROR is None:
             self.switch_screen("dashboard")
 
         def action_runs(self) -> None:
-            self.switch_screen("dashboard")
+            self.switch_screen("runs")
 
         def action_settings(self) -> None:
             self.switch_screen("settings")

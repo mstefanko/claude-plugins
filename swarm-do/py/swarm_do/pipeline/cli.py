@@ -1229,6 +1229,25 @@ def cmd_phases(args: argparse.Namespace) -> int:
             exit_code = 0
         elif command == "status":
             payload = phase_status(args.run_id)
+            if args.cost or args.attempts or args.events or args.include_archived:
+                from .phase_attempts import summarize_phase_attempts
+
+                evidence = summarize_phase_attempts(
+                    args.run_id,
+                    include_archived=args.include_archived,
+                    include_events=args.events,
+                )
+                if args.cost:
+                    payload["cost"] = evidence["cost"]
+                    payload["tokens"] = evidence["tokens"]
+                    payload["permission_denial_count"] = evidence["permission_denial_count"]
+                if args.attempts:
+                    payload["attempts"] = evidence["attempts"]
+                    payload["last_failure"] = evidence["last_failure"]
+                    payload["last_error"] = evidence["last_error"]
+                    payload["recommended_action"] = evidence["recommended_action"]
+                if args.events:
+                    payload["events"] = evidence.get("events", [])
             exit_code = 0 if payload.get("status") != "drift" else 3
         elif command == "claim":
             payload = claim_next_phase(
@@ -1319,6 +1338,14 @@ def cmd_phases(args: argparse.Namespace) -> int:
 
 def _format_phase_status(payload: Mapping[str, Any]) -> str:
     lines = [f"phase sessions: {payload.get('run_id')} status={payload.get('status')}"]
+    cost = payload.get("cost")
+    if isinstance(cost, Mapping):
+        total = _format_optional_usd(cost.get("total_usd"))
+        failed = _format_optional_usd(cost.get("failed_usd"))
+        lines[0] += f" cost={total} failed={failed}"
+        unknown = cost.get("unknown_attempt_count")
+        if unknown:
+            lines[0] += f" unknown_cost_attempts={unknown}"
     if payload.get("state_path"):
         lines.append(f"  state: {payload.get('state_path')}")
     next_phase = payload.get("next_phase")
@@ -1335,12 +1362,55 @@ def _format_phase_status(payload: Mapping[str, Any]) -> str:
             )
             if phase.get("last_failure_kind"):
                 lines.append(f"      failure: {phase.get('last_failure_kind')}")
+            if phase.get("retry_policy_decision"):
+                lines.append(f"      retry_decision: {phase.get('retry_policy_decision')}")
+            if phase.get("blocked_reason"):
+                lines.append(f"      blocked_reason: {phase.get('blocked_reason')}")
             if phase.get("next_retry_at"):
                 lines.append(f"      next_retry_at: {phase.get('next_retry_at')}")
             if phase.get("launch_dir"):
                 lines.append(f"      launch_dir: {phase.get('launch_dir')}")
             if phase.get("recovery_context_path"):
                 lines.append(f"      recovery: {phase.get('recovery_context_path')}")
+    attempts = payload.get("attempts")
+    if isinstance(attempts, Mapping):
+        rows = [row for row in attempts.get("rows") or [] if isinstance(row, Mapping)]
+        if rows:
+            lines.append("  attempts:")
+        for row in rows:
+            cost_value = _format_attempt_cost(row)
+            bits = [
+                f"phase={row.get('phase_id')}",
+                f"attempt={row.get('attempt')}",
+                f"status={row.get('status')}",
+            ]
+            if row.get("failure_kind"):
+                bits.append(f"failure={row.get('failure_kind')}")
+            if row.get("retry_decision"):
+                bits.append(f"retry={row.get('retry_decision')}")
+            bits.append(f"cost={cost_value}")
+            if row.get("archived"):
+                bits.append(f"archive={row.get('archive')}")
+            lines.append("    - " + " ".join(bits))
+    last_failure = payload.get("last_failure")
+    if isinstance(last_failure, Mapping):
+        lines.append(
+            "  last_failure: "
+            f"phase={last_failure.get('phase_id')} "
+            f"attempt={last_failure.get('attempt')} "
+            f"failure={last_failure.get('failure_kind')} "
+            f"retry={last_failure.get('retry_decision') or 'n/a'}"
+        )
+    if payload.get("last_error"):
+        lines.append(f"  last_error: {payload.get('last_error')}")
+    if payload.get("recommended_action"):
+        lines.append(f"  recommended_action: {payload.get('recommended_action')}")
+    events = payload.get("events")
+    if isinstance(events, list):
+        lines.append("  events:")
+        for row in events[-12:]:
+            if isinstance(row, Mapping):
+                lines.append(f"    - {row.get('timestamp')} {row.get('event_type')} {row.get('phase_id') or '-'}")
     if payload.get("recommended_command"):
         lines.append(f"  next_command: {payload.get('recommended_command')}")
     dependencies = payload.get("dependency_status") or []
@@ -1351,6 +1421,21 @@ def _format_phase_status(payload: Mapping[str, Any]) -> str:
     for item in drift:
         lines.append(f"  drift: {item}")
     return "\n".join(lines)
+
+
+def _format_optional_usd(value: Any) -> str:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return f"${float(value):.2f}"
+    return "unknown"
+
+
+def _format_attempt_cost(row: Mapping[str, Any]) -> str:
+    value = row.get("total_cost_usd")
+    if row.get("cost_confidence") == "provider_reported" and isinstance(value, (int, float)) and not isinstance(value, bool):
+        return f"${float(value):.2f}"
+    if row.get("cost_confidence") == "conflict":
+        return "conflict"
+    return "unknown"
 
 
 def _format_phase_recovery(payload: Mapping[str, Any]) -> str:
@@ -1897,6 +1982,10 @@ def _build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_phases)
     p = phases_sub.add_parser("status")
     p.add_argument("run_id")
+    p.add_argument("--cost", action="store_true")
+    p.add_argument("--attempts", action="store_true")
+    p.add_argument("--events", action="store_true")
+    p.add_argument("--include-archived", action="store_true")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_phases)
     p = phases_sub.add_parser("claim")

@@ -53,6 +53,7 @@
         "retry_sleep_threshold_seconds": { "type": "integer", "minimum": 0 },
         "short_retry_backoff_seconds": { "type": "integer", "minimum": 0 },
         "max_retry_after_seconds": { "type": "integer", "minimum": 0 },
+        "max_consecutive_same_failure_kind": { "type": "integer", "minimum": 1 },
         "worktree_baseline_path": { "type": ["string", "null"] },
         "worktree_baseline_warning": { "type": ["string", "null"] }
       }
@@ -127,6 +128,19 @@
           "last_failure_kind": { "type": ["string", "null"] },
           "last_launcher_error": { "type": ["string", "null"] },
           "retry_exhausted_at": { "type": ["string", "null"], "format": "date-time" },
+          "blocked_reason": {
+            "type": ["string", "null"],
+            "enum": [
+              "retry_policy_human_gate",
+              "deterministic_contract_failure",
+              "permission_contract_failure",
+              "operator_cancelled",
+              "child_reported_blocked",
+              null
+            ]
+          },
+          "retry_policy_decision": { "type": ["string", "null"] },
+          "blocked_at": { "type": ["string", "null"], "format": "date-time" },
           "launch_dir": { "type": ["string", "null"] },
           "command_path": { "type": ["string", "null"] },
           "parent_pid": { "type": ["integer", "null"], "minimum": 0 },
@@ -166,6 +180,10 @@
                 "retry_after_seconds": { "type": ["integer", "null"], "minimum": 0 },
                 "adopted": { "type": "boolean" },
                 "partial_artifacts": { "type": "boolean" },
+                "artifact_error_kinds": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                },
                 "stdout_tail_path": { "type": ["string", "null"] },
                 "stderr_tail_path": { "type": ["string", "null"] },
                 "changed_files": {

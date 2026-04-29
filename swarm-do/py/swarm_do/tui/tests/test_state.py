@@ -63,6 +63,8 @@ from swarm_do.tui.state import (
     mco_provider_result_preview,
     new_preset_preview,
     outcome_dashboard_summary,
+    phase_session_run_rows,
+    phase_session_runs_text,
     provider_result_preview,
     pipeline_activation_blocker,
     pipeline_board_model,
@@ -167,6 +169,21 @@ class TuiStateTests(EnvTestCase):
 
         self.assertIsNotNone(summary)
         self.assertEqual(summary["status"], "drift")
+
+    def test_phase_session_run_rows_render_cost_and_status(self) -> None:
+        from swarm_do.pipeline.phase_sessions import init_phase_sessions
+        from swarm_do.pipeline.tests.phase_session_fixtures import make_prepared_run
+
+        repo, data, run_id = make_prepared_run(self.root, phase_count=1)
+        init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+
+        rows = phase_session_run_rows(data)
+        rendered = phase_session_runs_text(rows)
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].run_id, run_id)
+        self.assertIn("status=ready", rendered)
+        self.assertIn("attempts=0", rendered)
 
     def test_token_burn_keeps_backend_na_when_tokens_are_null(self) -> None:
         rows = [

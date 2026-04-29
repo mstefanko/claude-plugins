@@ -111,6 +111,24 @@ class StatusSummary:
         return rendered
 
 
+@dataclasses.dataclass(frozen=True)
+class PhaseSessionRunRow:
+    run_id: str
+    status: str
+    active_phase: str | None
+    completed_phases: int
+    attempts: int
+    failed_attempts: int
+    failed_cost_usd: float | None
+    total_cost_usd: float | None
+    unknown_cost_attempt_count: int
+    last_failure: str | None
+    updated_at: str | None
+    recommended_action: str | None
+    phases: tuple[Mapping[str, Any], ...]
+    attempt_rows: tuple[Mapping[str, Any], ...]
+
+
 ACCEPTED_MAINTAINER_ACTIONS = frozenset(
     {"fixed_in_same_pr", "followup_issue", "followup_pr", "hotfix_within_14d"}
 )
@@ -2858,6 +2876,130 @@ def latest_phase_session(data_dir: Path | None = None) -> dict[str, Any] | None:
         return read_phase_session_summary(run_id, data_dir=data_dir)
     except Exception as exc:
         return {"run_id": run_id, "status": "drift", "drift": [str(exc)]}
+
+
+def phase_session_run_rows(data_dir: Path | None = None, limit: int = 20) -> list[PhaseSessionRunRow]:
+    data_dir = data_dir or resolve_data_dir()
+    run_ids: list[str] = []
+    seen: set[str] = set()
+    for row in reversed(load_run_events(data_dir)):
+        event_type = row.get("event_type")
+        run_id = row.get("run_id")
+        if not isinstance(event_type, str) or not event_type.startswith("phase_"):
+            continue
+        if not isinstance(run_id, str) or run_id in seen:
+            continue
+        seen.add(run_id)
+        run_ids.append(run_id)
+        if len(run_ids) >= limit:
+            break
+    rows: list[PhaseSessionRunRow] = []
+    for run_id in run_ids:
+        try:
+            from swarm_do.pipeline.phase_attempts import summarize_phase_attempts
+            from swarm_do.pipeline.phase_sessions import phase_status
+
+            status = phase_status(run_id, data_dir=data_dir)
+            evidence = summarize_phase_attempts(run_id, data_dir=data_dir)
+            attempts = evidence.get("attempts") if isinstance(evidence.get("attempts"), Mapping) else {}
+            attempt_rows = tuple(row for row in attempts.get("rows") or [] if isinstance(row, Mapping))
+            cost = evidence.get("cost") if isinstance(evidence.get("cost"), Mapping) else {}
+            phases = tuple(phase for phase in status.get("phases") or [] if isinstance(phase, Mapping))
+            rows.append(
+                PhaseSessionRunRow(
+                    run_id=run_id,
+                    status=str(status.get("status") or "unknown"),
+                    active_phase=_active_phase_label(status),
+                    completed_phases=sum(1 for phase in phases if phase.get("status") == "complete"),
+                    attempts=int(attempts.get("total") or 0),
+                    failed_attempts=sum(1 for row in attempt_rows if _phase_attempt_failed(row)),
+                    failed_cost_usd=_float_or_none(cost.get("failed_usd")),
+                    total_cost_usd=_float_or_none(cost.get("total_usd")),
+                    unknown_cost_attempt_count=int(cost.get("unknown_attempt_count") or 0),
+                    last_failure=_phase_last_failure_label(evidence.get("last_failure")),
+                    updated_at=status.get("updated_at") if isinstance(status.get("updated_at"), str) else None,
+                    recommended_action=evidence.get("recommended_action") if isinstance(evidence.get("recommended_action"), str) else None,
+                    phases=phases,
+                    attempt_rows=attempt_rows,
+                )
+            )
+        except Exception as exc:
+            rows.append(
+                PhaseSessionRunRow(
+                    run_id=run_id,
+                    status="drift",
+                    active_phase=None,
+                    completed_phases=0,
+                    attempts=0,
+                    failed_attempts=0,
+                    failed_cost_usd=None,
+                    total_cost_usd=None,
+                    unknown_cost_attempt_count=0,
+                    last_failure=str(exc),
+                    updated_at=None,
+                    recommended_action=None,
+                    phases=(),
+                    attempt_rows=(),
+                )
+            )
+    return rows
+
+
+def phase_session_runs_text(rows: list[PhaseSessionRunRow]) -> str:
+    if not rows:
+        return "No phase-session runs."
+    lines: list[str] = []
+    for row in rows:
+        cost = _format_usd(row.total_cost_usd)
+        failed = _format_usd(row.failed_cost_usd)
+        active = row.active_phase or "-"
+        failure = row.last_failure or "-"
+        unknown = f" unknown={row.unknown_cost_attempt_count}" if row.unknown_cost_attempt_count else ""
+        lines.append(
+            f"{row.run_id} status={row.status} active={active} "
+            f"phases={row.completed_phases}/{len(row.phases)} attempts={row.attempts} "
+            f"failed_attempts={row.failed_attempts} cost={cost} failed={failed}{unknown} last={failure}"
+        )
+    return "\n".join(lines)
+
+
+def _active_phase_label(status: Mapping[str, Any]) -> str | None:
+    active = status.get("active_phase")
+    if isinstance(active, Mapping):
+        return str(active.get("phase_id"))
+    for phase in status.get("phases") or []:
+        if isinstance(phase, Mapping) and phase.get("status") in {"retry_waiting", "blocked", "needs_input", "retry_exhausted"}:
+            return str(phase.get("phase_id"))
+    next_phase = status.get("next_phase")
+    if isinstance(next_phase, Mapping):
+        return str(next_phase.get("phase_id"))
+    return None
+
+
+def _phase_last_failure_label(value: Any) -> str | None:
+    if not isinstance(value, Mapping):
+        return None
+    failure = value.get("failure_kind")
+    phase_id = value.get("phase_id")
+    if failure:
+        return f"{phase_id}:{failure}"
+    return None
+
+
+def _phase_attempt_failed(row: Mapping[str, Any]) -> bool:
+    if row.get("adopted") is True or row.get("retry_decision") == "adopted":
+        return False
+    if row.get("failure_kind"):
+        return True
+    return row.get("status") in {"failed", "blocked", "needs_input", "retry_waiting", "retry_exhausted"}
+
+
+def _float_or_none(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
 
 
 def token_burn_last_24h(rows: list[dict[str, Any]], now: datetime | None = None) -> dict[str, int | None]:
