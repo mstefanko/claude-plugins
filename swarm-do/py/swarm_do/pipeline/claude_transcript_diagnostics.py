@@ -157,53 +157,53 @@ def parse_transcript(path: Path, *, session_id: str | None = None) -> Transcript
     tool_errors: list[ToolErrorDiagnostic] = []
     parse_errors = 0
     try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        with path.open("r", encoding="utf-8", errors="replace") as lines:
+            for line in lines:
+                if not line.strip():
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    parse_errors += 1
+                    continue
+                if not isinstance(row, Mapping):
+                    parse_errors += 1
+                    continue
+                role = _message_role(row)
+                blocks = _content_blocks(row)
+                if role == "assistant":
+                    for block in blocks:
+                        if block.get("type") != "tool_use":
+                            continue
+                        tool_id = block.get("id")
+                        if not isinstance(tool_id, str) or not tool_id:
+                            continue
+                        tool_uses[tool_id] = {
+                            "tool_name": block.get("name") if isinstance(block.get("name"), str) else None,
+                            "file_path": _tool_file_path(block.get("input")),
+                        }
+                elif role == "user":
+                    for block in blocks:
+                        if block.get("type") != "tool_result":
+                            continue
+                        content = _flatten_content(block.get("content"))
+                        is_error = bool(block.get("is_error")) or "<tool_use_error" in content.lower()
+                        if not is_error:
+                            continue
+                        tool_id_value = block.get("tool_use_id")
+                        tool_id = tool_id_value if isinstance(tool_id_value, str) else None
+                        tool_use = tool_uses.get(tool_id or "", {})
+                        diagnostic = ToolErrorDiagnostic(
+                            tool_name=_string_or_none(tool_use.get("tool_name")),
+                            tool_use_id=tool_id,
+                            file_path=_string_or_none(tool_use.get("file_path")),
+                            is_error=is_error,
+                            error_kind=classify_tool_error(content),
+                            message_excerpt=_excerpt(content),
+                        )
+                        tool_errors.append(diagnostic)
     except OSError:
         return _empty(session_id=session_id)
-    for line in lines:
-        if not line.strip():
-            continue
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError:
-            parse_errors += 1
-            continue
-        if not isinstance(row, Mapping):
-            parse_errors += 1
-            continue
-        role = _message_role(row)
-        blocks = _content_blocks(row)
-        if role == "assistant":
-            for block in blocks:
-                if block.get("type") != "tool_use":
-                    continue
-                tool_id = block.get("id")
-                if not isinstance(tool_id, str) or not tool_id:
-                    continue
-                tool_uses[tool_id] = {
-                    "tool_name": block.get("name") if isinstance(block.get("name"), str) else None,
-                    "file_path": _tool_file_path(block.get("input")),
-                }
-        elif role == "user":
-            for block in blocks:
-                if block.get("type") != "tool_result":
-                    continue
-                content = _flatten_content(block.get("content"))
-                is_error = bool(block.get("is_error")) or "<tool_use_error" in content.lower()
-                if not is_error:
-                    continue
-                tool_id_value = block.get("tool_use_id")
-                tool_id = tool_id_value if isinstance(tool_id_value, str) else None
-                tool_use = tool_uses.get(tool_id or "", {})
-                diagnostic = ToolErrorDiagnostic(
-                    tool_name=_string_or_none(tool_use.get("tool_name")),
-                    tool_use_id=tool_id,
-                    file_path=_string_or_none(tool_use.get("file_path")),
-                    is_error=is_error,
-                    error_kind=classify_tool_error(content),
-                    message_excerpt=_excerpt(content),
-                )
-                tool_errors.append(diagnostic)
     sensitive = tuple(item for item in tool_errors if item.error_kind == "sensitive_path_blocked")
     disabled = tuple(item for item in tool_errors if item.error_kind == "tool_disabled")
     return TranscriptDiagnostics(

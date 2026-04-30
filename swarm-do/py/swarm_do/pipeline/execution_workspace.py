@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -30,8 +31,7 @@ class ExecutionWorkspace:
             return text, 0
         rewritten = text
         count = 0
-        replacement = str(self.launcher_repo_root)
-        for spelling in self._real_repo_spellings():
+        for spelling, replacement in self._rewrite_pairs():
             if not spelling or spelling == replacement:
                 continue
             occurrences = rewritten.count(spelling)
@@ -45,7 +45,7 @@ class ExecutionWorkspace:
 
         if self.mode != "safe-symlink":
             return
-        leaks = [spelling for spelling in self._real_repo_spellings() if spelling and spelling in text]
+        leaks = [spelling for spelling in self._sensitive_repo_spelling_variants() if spelling and spelling in text]
         if leaks:
             sample = leaks[0]
             raise ExecutionWorkspaceError(f"launcher prompt still contains sensitive source path: {sample}")
@@ -67,6 +67,23 @@ class ExecutionWorkspace:
         values = list(self.real_repo_spellings) or [str(self.real_repo_root)]
         values.append(str(self.real_repo_root.resolve(strict=False)))
         return tuple(dict.fromkeys(values))
+
+    def _sensitive_repo_spelling_variants(self) -> tuple[str, ...]:
+        values: list[str] = []
+        for spelling in self._real_repo_spellings():
+            values.append(spelling)
+            values.append(_json_slash_escape(spelling))
+        return tuple(dict.fromkeys(value for value in values if value))
+
+    def _rewrite_pairs(self) -> tuple[tuple[str, str], ...]:
+        launcher = str(self.launcher_repo_root)
+        pairs: list[tuple[str, str]] = []
+        for spelling in self._real_repo_spellings():
+            pairs.append((spelling, launcher))
+            escaped_spelling = _json_slash_escape(spelling)
+            if escaped_spelling != spelling:
+                pairs.append((escaped_spelling, _json_slash_escape(launcher)))
+        return tuple(dict.fromkeys(pairs))
 
 
 def create_execution_workspace(
@@ -149,7 +166,7 @@ def _sensitive_prefixes(
 
 def _ensure_launcher_symlink(real_repo_root: Path, *, data_dir: Path, sensitive_prefixes: tuple[str, ...]) -> Path:
     repo_id = repo_id_for_path(real_repo_root)
-    launcher_dir = data_dir.expanduser() / "launcher-workspaces" / repo_id
+    launcher_dir = _safe_launcher_workspace_base(data_dir, sensitive_prefixes=sensitive_prefixes) / repo_id
     launcher_repo_root = launcher_dir / "repo"
     _assert_safe_launcher_parent(launcher_dir, sensitive_prefixes=sensitive_prefixes)
     launcher_dir.mkdir(parents=True, exist_ok=True)
@@ -189,6 +206,43 @@ def _is_relative_to(path: Path, prefix: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _safe_launcher_workspace_base(data_dir: Path, *, sensitive_prefixes: tuple[str, ...]) -> Path:
+    candidates = [
+        Path(data_dir).expanduser() / "launcher-workspaces",
+        _default_data_dir() / "launcher-workspaces",
+        Path("/tmp") / "swarmdaddy-launcher-workspaces",
+        Path(tempfile.gettempdir()) / "swarmdaddy-launcher-workspaces",
+    ]
+    for candidate in _unique_paths(candidates):
+        try:
+            _assert_safe_launcher_parent(candidate, sensitive_prefixes=sensitive_prefixes)
+        except ExecutionWorkspaceError:
+            continue
+        return candidate
+    raise ExecutionWorkspaceError("no non-sensitive launcher workspace directory is available")
+
+
+def _default_data_dir() -> Path:
+    xdg = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+    return Path(xdg).expanduser() / "swarmdaddy"
+
+
+def _unique_paths(paths: Iterable[Path]) -> tuple[Path, ...]:
+    result: list[Path] = []
+    seen: set[str] = set()
+    for path in paths:
+        key = str(path.expanduser().resolve(strict=False))
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(path)
+    return tuple(result)
+
+
+def _json_slash_escape(value: str) -> str:
+    return value.replace("/", r"\/")
 
 
 __all__ = [

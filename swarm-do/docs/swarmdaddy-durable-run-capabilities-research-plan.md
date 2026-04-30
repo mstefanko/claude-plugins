@@ -652,3 +652,536 @@ The research pass is complete when it produces:
 - one implementation-ready P1 plan for durability/worktree/replay
 - explicit deferrals for compliance, Agent CI packaging, and provider shootouts
 - links to the specific code modules and tests each plan would touch
+
+## Implementation Analysis Output - 2026-04-30
+
+This pass walked the current code paths instead of treating the candidates as
+greenfield. Important context: the local tree already contains in-flight
+sensitive-path launcher hardening work. In particular,
+`phase_failure_classifier.py`, `claude_transcript_diagnostics.py`, and
+`execution_workspace.py` already implement pieces that this plan previously
+listed as future work. The recommendation shifts from "build basic
+classification soon" to "productize the taxonomy, evidence, and policy contract
+around the classifier."
+
+### Updated Priority Order
+
+| Priority | Capability | Updated Recommendation |
+| ---: | --- | --- |
+| P0 | Failure Taxonomy As A Feature | Build now as a central registry and policy contract around the existing classifier. |
+| P0 | Forensic Agent Execution | Build now as an attempt evidence manifest that indexes existing launch/recovery files without duplicating raw prompts or transcripts. |
+| P0 | Policy-Gated Autopilot | Build now as a behavior-preserving table-driven policy layer; defer aggressive spend fuses until evidence manifests are stable. |
+| P0 | Schema-Validated Handoffs | Build now as examples, documentation, and targeted validation fixtures; avoid schema churn unless real failures justify it. |
+| P1 | Crash-Resumable Engineering Runs | Build the fixture matrix and fix the expired-lease/live-child duplicate-work risk now; defer broad platform/process promises. |
+| P1 | Replayable Local Harnesses | Build as fixture-backed orchestration tests now. Do not market or expose it as deterministic model replay. |
+| P1 | Agent CI For Humans | Build only as a thin run-summary packaging layer after evidence manifests exist. |
+| Defer | Auditable Worktree Choreography | Design next, implement later. The current helper is useful but too sharp to automate broadly. |
+| Defer | Local Compliance Mode | Defer until attempt manifests and redaction posture exist. Package as audit packets, not compliance claims. |
+| Defer | Provider Shootouts With Real Evidence | Defer. First stabilize one launcher result/evidence contract. |
+
+### Feature Implementation Analysis
+
+#### Candidate 1 - Failure Taxonomy As A Feature
+
+Current fit:
+
+- Runtime classification now lives mostly in
+  `py/swarm_do/pipeline/phase_failure_classifier.py`.
+- Recovery still has legacy fallback classification in
+  `phase_recovery._launcher_failure_kind()` and policy decisions in
+  `_retry_stop_decision()`.
+- State stores `last_failure_kind`, `last_launcher_error`,
+  `retry_policy_decision`, and `attempt_history` in
+  `phase_sessions.v1.json`.
+- The schema deliberately leaves `failure_kind` as a string, so adding a
+  registry can be backward-compatible if strings remain stable.
+
+Architecture:
+
+- Add `py/swarm_do/pipeline/failure_taxonomy.py` with definitions for known
+  failure kinds: category, default policy action, operator message, required
+  evidence keys, and examples.
+- Keep `phase_failure_classifier.py` responsible only for deriving the most
+  specific kind from launcher/artifact evidence.
+- Make `phase_recovery.py` consume the registry for retry/human-gate decisions
+  instead of growing more ad hoc conditionals.
+- Preserve old strings such as `outer_artifacts_missing`; document
+  `writer_tool_denied_no_artifacts` and `writer_silent_with_turns` as more
+  specific successors for one historical class.
+
+Updated recommendation: build now. The classifier boundary already exists; the
+remaining work is consolidation, documentation, and tests.
+
+#### Candidate 2 - Forensic Agent Execution
+
+Current fit:
+
+- `phase_pump.py` writes `phase_launches/<phase_id>/attempt-<n>/command.json`,
+  `dispatcher.launcher.prompt.md`, `stdout.txt`, and `stderr.txt`.
+- `phase_recovery.py` writes stdout/stderr tails, diff summaries, recovery
+  markdown, transcript diagnostics, and attempt history.
+- `phase_attempts.py` summarizes attempt rows and cost from existing state and
+  launch files.
+- There is no single manifest that says "this is the evidence packet for
+  attempt N."
+
+Architecture:
+
+- Add an attempt evidence writer that creates
+  `phase_recovery/<phase_id>/attempt-<n>.evidence.json`.
+- The manifest should index existing files by path, kind, sha256, byte size,
+  and redaction class.
+- It should summarize launcher, cwd/workspace metadata, return code, metrics,
+  failure kind, retry decision, changed files, artifact validation results, and
+  transcript diagnostic summary.
+- Store `attempt_evidence_path` in `attempt_history` and surface it in
+  `phases status --attempts`.
+- Do not copy raw transcript content, full prompts, or stdout/stderr bodies into
+  state or run events.
+
+Updated recommendation: build now. The evidence is already captured, but the
+operator has to know where to look.
+
+#### Candidate 3 - Policy-Gated Autopilot
+
+Current fit:
+
+- Retry behavior is spread across `_retry_stop_decision()`,
+  `_needs_recovery_retry()`, `_fallback_retry_after_seconds()`, same-failure
+  counting, and the `retry_policy` object in `phase_sessions.v1.json`.
+- `pump_phases()` can pass `--max-budget-usd` to Claude, but there is no
+  run-level spend fuse that stops future attempts based on accumulated evidence.
+- Recovery already records blocked states, blocked reasons, retry decisions,
+  and Beads notes.
+
+Architecture:
+
+- Introduce a small policy evaluator, either inside `failure_taxonomy.py` or as
+  `phase_autopilot_policy.py`.
+- First slice should preserve current behavior while making every decision
+  explainable as data: `retry`, `retry_after_backoff`, `human_gate`, or
+  `terminal`.
+- The evaluator should take failure kind, attempt evidence, attempt number,
+  same-failure count, retry policy config, and known cost metrics.
+- Record the resulting policy explanation in attempt history and run events.
+- Defer default spend fuses until attempt evidence manifests provide a stable
+  cost source.
+
+Updated recommendation: build now, behavior-preserving first. Explainability
+matters more than adding new stop conditions immediately.
+
+#### Candidate 4 - Schema-Validated Handoffs
+
+Current fit:
+
+- `schemas/phase_result.schema.json` and
+  `schemas/phase_handoff.schema.json` are strict and use
+  `additionalProperties: false`.
+- `phase_sessions.validate_phase_artifacts()` checks identity, prepared-plan
+  sha, phase content sha, handoff/result status agreement, attempt agreement,
+  and prepared work-unit subset rules.
+- `_append_claude_print_contract()` embeds templates and type rules directly in
+  the launcher prompt.
+- Common validation failures are represented as
+  `PhaseArtifactContractError.kind`, but those kinds are not documented as a
+  contract.
+
+Architecture:
+
+- Add a schema contract guide and complete examples for `complete`, `failed`,
+  `blocked`, and `needs_input`.
+- Add fixture tests that validate examples and assert representative failure
+  kinds for common malformed artifacts.
+- Keep schemas stable. Prefer clearer examples and prompt wording before
+  changing required fields.
+- Link artifact validation failure kinds into the failure taxonomy registry.
+
+Updated recommendation: build now as documentation and fixtures. Runtime schema
+churn remains out of scope.
+
+#### Candidate 5 - Crash-Resumable Engineering Runs
+
+Current fit:
+
+- `phase_sessions.py` has locked state, leases, lease expiry, child pid/process
+  group metadata, retry state, cancellation, cleanup, and archive helpers.
+- `phase_recovery.py` can adopt valid artifacts before deciding whether an
+  active phase is stale, retryable, blocked, or still active.
+- `phase_pump.py` records child process metadata and refreshes leases while the
+  child runs.
+
+Architecture:
+
+- Treat this as a recovery-invariant test matrix first, not as a new daemon.
+- Fixture tests should cover parent death after valid artifacts, child death
+  with no artifacts, child death with partial artifacts, nonzero launcher with
+  valid artifacts, zero-returncode/no-artifact attempts, and expired lease while
+  the child is still alive.
+- The current `_active_phase_decision()` checks lease expiry before same-host
+  child liveness. That can mark an expired lease retryable even when the child
+  is still alive, risking duplicate active work.
+
+Updated recommendation: build the test matrix and live-child guard now. Defer
+broad claims about terminal close, machine sleep, and cross-host process
+liveness until the matrix is green.
+
+#### Candidate 6 - Auditable Worktree Choreography
+
+Current fit:
+
+- `worktrees.py` can create integration/unit branch names, add unit worktrees,
+  merge unit branches, and emit a merge-conflict event shape.
+- `worktree_baseline.py` snapshots dirty state and computes baseline-relative
+  changed files.
+- The current worktree path is inside the repo at `.swarm-do/worktrees`, and
+  `merge_unit_branch()` checks out the integration branch in the main repo.
+
+Architecture:
+
+- Later implementation should use data-dir-owned or sibling worktree roots, not
+  a path that easily appears as source-tree dirt.
+- Merge automation should avoid checking out the user's main working tree; use a
+  dedicated integration worktree.
+- Scope checks should compare changed files against phase/work-unit allowed
+  files before any merge.
+- Merge conflicts should become evidence manifests, not ad hoc terminal output.
+
+Updated recommendation: defer implementation. The value is high, but the
+current helper is too sharp for unattended use.
+
+#### Candidate 7 - Replayable Local Harnesses
+
+Current fit:
+
+- Tests already use synthetic prepared runs, fake launchers, captured Claude
+  stdout shapes, transcript fixtures, and phase-session fixtures.
+- `phase_failure_classifier.py`, `phase_recovery.py`, and
+  `phase_attempts.py` are good replay surfaces because they operate on stored
+  files/state rather than live model calls.
+
+Architecture:
+
+- Define replay as fixture replay of harness state and failure classes.
+- Add sanitized fixture directories that look like minimal run directories and
+  load them through the same recovery/status/evidence readers.
+- Do not replay live model outputs or promise deterministic model behavior.
+- Use replay fixtures to protect failure taxonomy, evidence manifests,
+  crash-resume cases, and schema validation.
+
+Updated recommendation: build now as internal test infrastructure. A user-facing
+replay command can wait.
+
+#### Candidate 8 - Local Compliance Mode
+
+Current fit:
+
+- Run evidence is local, archiveable, and already avoids mutating frozen
+  telemetry rows.
+- The telemetry retention ADR and permission contracts provide useful posture.
+- There is no curated redacted audit packet yet.
+
+Architecture:
+
+- Start from the attempt evidence manifest once it exists.
+- Generate an audit packet containing metadata, hashes, phase statuses, failure
+  taxonomy, validation commands, and changed-file lists.
+- Exclude or redact prompt bodies, raw transcripts, full stdout/stderr, and
+  sensitive path content by default.
+- Present this as "local audit packet" rather than "compliance mode."
+
+Updated recommendation: defer until evidence manifests and redaction classes
+exist.
+
+#### Candidate 9 - Agent CI For Humans
+
+Current fit:
+
+- `phases status --cost --attempts --events` already provides most raw pieces.
+- The TUI has a phase-session runs table with status, attempts, cost, and last
+  failure.
+- Resume surfaces already produce `next_command` and phase failure summaries.
+
+Architecture:
+
+- Package existing status/evidence into a concise run summary: current status,
+  phase table, last failure, failed/total cost, changed files, evidence path,
+  and next safe action.
+- Keep it as a CLI/TUI presentation layer over phase status and attempt
+  evidence.
+- Do not create a separate CI runtime or state model.
+
+Updated recommendation: build soon after attempt evidence manifests.
+
+#### Candidate 10 - Provider Shootouts With Real Evidence
+
+Current fit:
+
+- The result/handoff artifact contract is provider-neutral in principle.
+- Provider review concepts and telemetry exist, but phase execution is still
+  centered on `claude-print`.
+- Cost/usage fields are provider-specific and only partially normalized.
+
+Architecture:
+
+- First define one comparison row over an existing attempt: artifact validity,
+  tests/validation status, changed files, failure kind, duration, and
+  provider-reported cost when available.
+- Do not add new launcher backends or fairness rules until the single-lane
+  evidence contract is stable.
+
+Updated recommendation: defer. Premature provider abstraction would distract
+from the durable-run substrate and multiply the test matrix too soon.
+
+## Build-Now Implementation Plans
+
+### Plan A - Failure Taxonomy Registry
+
+Assumptions:
+
+- Failure-kind strings remain backward-compatible; old run history is not
+  migrated.
+- The registry documents current behavior first and should not silently change
+  retry policy.
+- Artifact validation error kinds belong in the same operator-facing taxonomy
+  even though they are not launcher failures.
+
+Implementation:
+
+1. Add `py/swarm_do/pipeline/failure_taxonomy.py` with a frozen definition type
+   containing `name`, `category`, `default_action`, `blocked_reason`,
+   `retry_policy_decision`, `operator_message`, `evidence_keys`, and examples.
+2. Register current known launcher, artifact, process, workspace, and
+   child-reported failure kinds.
+3. Replace `_DETERMINISTIC_ARTIFACT_ERROR_KINDS` and the static branches in
+   `_retry_stop_decision()` with registry lookups while preserving current
+   outputs.
+4. Add tests asserting every known current failure kind has a registry entry and
+   existing retry/block decisions are unchanged.
+5. Add a generated or hand-maintained markdown table listing names, categories,
+   retry behavior, and operator messages.
+
+Open questions:
+
+- Should unknown failure kinds default to retry or human gate? Current behavior
+  mostly retries unless a specific deterministic rule matches.
+- Should child-reported `failure_kind` values be required to use the registry,
+  or remain free-form child evidence?
+
+Concerns to validate:
+
+- Dashboards and queries that look for `outer_artifacts_missing` should also
+  include `writer_tool_denied_no_artifacts` and `writer_silent_with_turns`.
+
+### Plan B - Attempt Evidence Manifest
+
+Assumptions:
+
+- The manifest is an index and summary, not a copy of all evidence.
+- Prompt files, stdout/stderr files, and transcripts may contain sensitive
+  content, so manifests store paths, hashes, byte counts, and short diagnostic
+  summaries only.
+- Manifest schema version starts at 1 and evolves independently from
+  `phase_sessions.v1.json`.
+
+Implementation:
+
+1. Add `schemas/phase_attempt_evidence.schema.json`.
+2. Add `py/swarm_do/pipeline/phase_attempt_evidence.py` with helpers to
+   hash/index known files and build a manifest from phase state, command
+   metadata, classification, diff evidence, and artifact validation.
+3. Call the writer from `_build_attempt_evidence()` after stdout/stderr tails,
+   diff summary, transcript diagnostics, and recovery markdown are available.
+4. Add `attempt_evidence_path` to `schemas/phase_sessions.schema.json` attempt
+   history and surface it in `phase_attempts.py`.
+5. Extend `phases status --attempts` to print the evidence path for failed or
+   blocked attempts.
+6. Test missing files, partial artifacts, transcript diagnostics present/absent,
+   and redaction behavior.
+
+Open questions:
+
+- Should the manifest live under `phase_recovery/<phase_id>/` or inside the
+  launch attempt directory? Recommendation: recovery directory, because it can
+  index both launch and recovery files.
+- Should manifests include hashes for invalid result/handoff artifacts?
+  Recommendation: yes, when files exist.
+
+Concerns to validate:
+
+- Avoid creating a second source of truth. Manifest status fields should be
+  summaries of existing state, not independently mutable state.
+
+### Plan C - Table-Driven Autopilot Policy
+
+Assumptions:
+
+- First slice preserves existing behavior.
+- Policy decisions must be explainable in status output and run events.
+- Cost gates are useful, but should not be defaulted until cost evidence is
+  consistently available.
+
+Implementation:
+
+1. Add a policy evaluator that consumes taxonomy entries plus runtime evidence:
+   return code, artifact error kinds, changed files, partial artifacts, elapsed
+   time, same-failure count, attempt count, retry policy config, and known cost
+   metrics.
+2. Replace `_retry_stop_decision()`, same-failure handling, and
+   `_needs_recovery_retry()` decision glue with calls that return a structured
+   policy result.
+3. Record `policy_action`, `policy_reason`, and `policy_inputs` in attempt
+   history or the evidence manifest; keep `retry_policy_decision` for backward
+   compatibility.
+4. Add tests proving existing cases still return the same phase status, blocked
+   reason, retry decision, and next retry time.
+5. Add optional config keys for per-attempt/per-run cost gates only after the
+   evidence manifest can supply reliable cost totals.
+
+Open questions:
+
+- Should same-failure limit be represented as a policy override or as a taxonomy
+  rule? Recommendation: policy override, because it depends on phase history.
+- Should `launcher_workspace_error` and `launcher_prompt_sensitive_path` be
+  terminal or human-gated? Current behavior human-gates; preserve that first.
+
+Concerns to validate:
+
+- Too much policy indirection can make recovery hard to debug. Tests should
+  assert both final status and explanation fields.
+
+### Plan D - Schema Contract Guide And Fixtures
+
+Assumptions:
+
+- Existing schemas remain the contract.
+- The main gap is operator/model readability, not missing required fields.
+- Examples should be validated by tests so docs cannot drift.
+
+Implementation:
+
+1. Add a guide under `docs/` that explains required fields, identity checks,
+   status meanings, retry behavior, and common validation failures.
+2. Add complete result/handoff example pairs under `docs/examples/` for
+   `complete`, `failed` retryable, `blocked`, and `needs_input`.
+3. Add tests that load every example pair through `validate_phase_artifacts()`
+   or a fixture equivalent.
+4. Add negative fixtures for common failures: result identity mismatch,
+   prepared sha mismatch, attempt mismatch, handoff status mismatch,
+   object-vs-string array mistakes, and unprepared completed work-unit ids.
+5. Update the launcher artifact contract only if examples reveal confusing or
+   redundant wording.
+
+Open questions:
+
+- Should examples use real-looking ULIDs and hashes or obvious placeholder
+  values? Recommendation: use real valid synthetic values so examples can be
+  machine-validated.
+
+Concerns to validate:
+
+- Do not loosen schemas to accommodate model mistakes before confirming those
+  mistakes are common and semantically harmless.
+
+### Plan E - Crash-Resume Matrix And Live-Child Guard
+
+Assumptions:
+
+- Recovery should prefer preserving potentially active work over starting a
+  duplicate attempt.
+- Fixture tests are enough for the first slice; no live model calls are needed.
+- Same-host child liveness is more trustworthy than cross-host liveness.
+
+Implementation:
+
+1. Add phase recovery tests for:
+   - parent died after child wrote valid artifacts;
+   - child died with no artifacts;
+   - child died with partial invalid artifacts;
+   - nonzero launcher with valid artifacts;
+   - zero-returncode no-artifact launch;
+   - lease expired while same-host child pid/process group is still alive.
+2. Change `_active_phase_decision()` so an expired lease with a proven live
+   same-host child is preserved instead of immediately becoming
+   `lease_expired_no_artifacts`.
+3. Add an explicit action/status detail such as
+   `expired_lease_child_alive_preserved` so operators can tell why recovery did
+   not reclaim the phase.
+4. Keep cross-host or unknown-liveness expired leases on the current
+   conservative recovery path.
+5. Verify `phases recover --dry-run` reports the same decision without mutating
+   state.
+
+Open questions:
+
+- If a child is alive but the process group no longer matches, should recovery
+  treat it as dead or human-gate? Current code treats group mismatch as dead;
+  keep that unless a real counterexample appears.
+
+Concerns to validate:
+
+- `os.kill(pid, 0)` can return true for reused pids. Process group matching
+  reduces that risk but does not eliminate it on every platform.
+
+### Plan F - Replay Harness Fixtures
+
+Assumptions:
+
+- Replay means deterministic harness-state replay, not model-output replay.
+- Fixture schemas can be internal at first.
+- The same fixtures should support taxonomy, evidence manifest, and
+  crash-resume tests.
+
+Implementation:
+
+1. Add minimal sanitized run directories under
+   `py/swarm_do/pipeline/tests/fixtures/replay_runs/`.
+2. Add a helper that copies a fixture run into a temp data dir and runs
+   `reconcile_phase_sessions()`, `summarize_phase_attempts()`, and evidence
+   manifest validation against it.
+3. Cover at least one fixture per P0 failure class:
+   `writer_tool_denied_no_artifacts`, `writer_silent_with_turns`,
+   `partial_artifacts_invalid`, deterministic schema failure, expired lease,
+   and adopted valid artifacts.
+4. Keep a README in the fixture directory stating redaction rules and explicitly
+   saying raw live transcripts should not be checked in.
+
+Open questions:
+
+- Should there be a `bin/swarm phases replay` command later? Recommendation:
+  not until the internal fixture format survives a few changes.
+
+Concerns to validate:
+
+- Fixture drift can become maintenance drag. Keep fixtures minimal and validate
+  through public-ish module APIs rather than asserting every private field.
+
+### Plan G - Operator Run Summary
+
+Assumptions:
+
+- This is presentation over existing state, not a new state store.
+- It depends on the evidence manifest for a clean "inspect this packet" link.
+- TUI and CLI should share the same summarizer.
+
+Implementation:
+
+1. Add a summary helper that composes `phase_status()` and
+   `summarize_phase_attempts()` into one run summary object.
+2. Include status, phase table, active/blocked phase, last failure, failed and
+   total cost, changed files, evidence path, and next safe command.
+3. Add `bin/swarm phases summary <run_id>` or make `phases status --summary`
+   call the helper.
+4. Update the TUI phase-session detail panel to display the shared summary
+   rather than rebuilding a separate partial view.
+5. Add tests for blocked, retry-waiting, complete, and active runs.
+
+Open questions:
+
+- Should summary be the default `phases status` output once stable, or an
+  explicit flag? Recommendation: explicit first, default later if it proves
+  better.
+
+Concerns to validate:
+
+- The summary must not hide raw evidence paths. A polished view that makes
+  debugging harder would undercut the durable-run advantage.

@@ -93,8 +93,8 @@ class ExecutionWorkspaceTests(unittest.TestCase):
             self.assertEqual(workspace.mode, "safe-symlink")
             self.assertEqual(workspace.launcher_repo_root.resolve(strict=False), repo.resolve(strict=False))
 
-    def test_launcher_workspace_under_sensitive_root_fails(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
+    def test_sensitive_data_dir_falls_back_to_non_sensitive_launcher_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as td, mock.patch.dict(os.environ, {"XDG_DATA_HOME": str(Path(td) / "xdg")}):
             root = Path(td)
             sensitive = root / "home" / ".claude"
             repo = sensitive / "plugins" / "swarm-do"
@@ -102,8 +102,12 @@ class ExecutionWorkspaceTests(unittest.TestCase):
             repo.mkdir(parents=True)
             data.mkdir()
 
-            with self.assertRaises(ExecutionWorkspaceError):
-                create_execution_workspace(repo, data_dir=data, sensitive_roots=[sensitive])
+            workspace = create_execution_workspace(repo, data_dir=data, sensitive_roots=[sensitive])
+
+            self.assertEqual(workspace.mode, "safe-symlink")
+            self.assertFalse(str(workspace.launcher_repo_root).startswith(str(data)))
+            self.assertTrue(str(workspace.launcher_repo_root).startswith(str(Path(td) / "xdg")))
+            self.assertEqual(workspace.launcher_repo_root.resolve(strict=False), repo.resolve(strict=False))
 
     def test_prompt_rewrite_and_assertion_for_option_b(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -120,6 +124,26 @@ class ExecutionWorkspaceTests(unittest.TestCase):
             self.assertEqual(count, 1)
             self.assertIn(str(workspace.launcher_repo_root), rewritten)
             self.assertNotIn(str(repo), rewritten)
+            workspace.assert_prompt_safe(rewritten)
+            with self.assertRaises(ExecutionWorkspaceError):
+                workspace.assert_prompt_safe(text)
+
+    def test_prompt_rewrite_and_assertion_handle_json_escaped_slashes(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            repo = root / "home" / ".claude" / "plugins" / "swarm-do"
+            data = root / "data"
+            repo.mkdir(parents=True)
+            data.mkdir()
+            workspace = create_execution_workspace(repo, data_dir=data, sensitive_roots=[root / "home" / ".claude"])
+            escaped_repo = str(repo).replace("/", r"\/")
+            text = f'{{"file_path":"{escaped_repo}\\/py\\/swarm_do\\/pipeline\\/phase_pump.py"}}'
+
+            rewritten, count = workspace.rewrite_prompt(text)
+
+            self.assertEqual(count, 1)
+            self.assertNotIn(escaped_repo, rewritten)
+            self.assertIn(str(workspace.launcher_repo_root).replace("/", r"\/"), rewritten)
             workspace.assert_prompt_safe(rewritten)
             with self.assertRaises(ExecutionWorkspaceError):
                 workspace.assert_prompt_safe(text)

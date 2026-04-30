@@ -150,8 +150,6 @@ def _is_suspicious_launch(
         return False
     if launcher_result.get("returncode") != 0:
         return False
-    if not stdout and not metrics:
-        return False
     if base_kind not in {"outer_artifacts_missing", "outer_json_invalid_no_artifacts", "outer_json_missing_no_artifacts"}:
         return False
     return (
