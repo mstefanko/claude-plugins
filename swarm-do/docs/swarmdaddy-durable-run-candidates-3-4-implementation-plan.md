@@ -1,6 +1,6 @@
 # SwarmDaddy Durable Run Candidates 3-4 Implementation Plan
 
-Status: implementation-ready after codebase research
+Status: implementation-ready after codebase research and review revision
 Date: 2026-04-30
 Source research: `docs/swarmdaddy-durable-run-capabilities-research-plan.md`
 Builds on: `docs/swarmdaddy-durable-run-candidates-1-2-implementation-plan.md`
@@ -56,6 +56,26 @@ The current tree already implements important foundations for both candidates:
 The remaining work is therefore not "invent policy" or "invent schemas." It is
 to make policy decisions data-driven and explainable, then make the artifact
 contract easy for models and operators to follow without broad schema churn.
+
+## Review Validation Update
+
+The 2026-04-30 review findings were validated against the current tree and are
+accurate. This revision resolves them with explicit implementation contracts:
+
+- `schemas/phase_sessions.schema.json` and
+  `schemas/phase_attempt_evidence.schema.json` both use
+  `additionalProperties: false` on the relevant objects, so policy writes must
+  land after exact schema fragments are added.
+- `init_phase_sessions()` currently returns existing state immediately when
+  `phase_sessions.v1.json` exists; this plan now defines when idempotent init
+  may reconfigure policy and when persisted state wins.
+- `bin/swarm do` is the argparse entry point for both `--prepared` and
+  `--prepare --continue`; `phases init` and `phases pump` are the only `phases`
+  subcommands that need policy flags in P0.
+- `policy_reason` is a closed P0 explanation value, while
+  `retry_policy_decision` remains the existing backward-compatible string field.
+  Spend gates therefore use specific `policy_reason` values and the legacy
+  `retry_policy_decision="spend_threshold"` label.
 
 ## Final Recommendation
 
@@ -139,7 +159,7 @@ class AutopilotPolicyInput:
     failure_retry_class: str | None
     attempt: int
     same_failure_count: int
-    max_attempts: int
+    max_session_attempts: int
     recovery_attempts_used: int
     needs_recovery_retry: bool
     returncode: int | None
@@ -149,6 +169,7 @@ class AutopilotPolicyInput:
     elapsed_seconds: float | None
     retry_after_seconds_requested: int | None
     current_attempt_cost_usd: float | None
+    cost_confidence: str | None
     failed_phase_cost_usd: float
     failed_run_cost_usd: float
     unknown_failed_attempt_count: int
@@ -192,16 +213,52 @@ Allowed initial `policy_reason` values:
 - `normal_retry`
 - `recovery_retry_required`
 
+These `policy_reason` values are the closed initial set. By contrast,
+`retry_policy_decision` is intentionally not an enum in
+`phase_sessions.v1.json`; it remains a compatibility/status label. For
+launcher eligibility gates, write the literal failure kind, for example
+`retry_policy_decision="claude_cli_missing"`. For both spend gates, write
+`retry_policy_decision="spend_threshold"` and use `policy_reason` to identify
+which threshold fired.
+
 ### Policy Configuration
 
 Keep policy configuration in the existing `phase_sessions.v1.json.retry_policy`
 object. Extend `DEFAULT_RETRY_POLICY` and `schemas/phase_sessions.schema.json`
-with optional nullable fields:
+with these fields:
 
-- `autopilot_profile`: enum string, default `"standard"`.
-- `max_failed_attempt_cost_usd`: number or null.
-- `max_failed_run_cost_usd`: number or null.
-- `max_phase_attempt_budget_usd`: number or null.
+```python
+DEFAULT_RETRY_POLICY = {
+    ...
+    "autopilot_profile": "standard",
+    "max_failed_attempt_cost_usd": None,
+    "max_failed_run_cost_usd": None,
+    "max_phase_attempt_budget_usd": None,
+}
+```
+
+Add this exact fragment to
+`schemas/phase_sessions.schema.json#/properties/retry_policy/properties` before
+any runtime writes include the new keys:
+
+```json
+"autopilot_profile": {
+  "type": "string",
+  "enum": ["standard", "dogfood", "strict"]
+},
+"max_failed_attempt_cost_usd": {
+  "type": ["number", "null"],
+  "minimum": 0
+},
+"max_failed_run_cost_usd": {
+  "type": ["number", "null"],
+  "minimum": 0
+},
+"max_phase_attempt_budget_usd": {
+  "type": ["number", "null"],
+  "minimum": 0
+}
+```
 
 Profile semantics:
 
@@ -217,10 +274,45 @@ the wrong default surface for durable unattended runs.
 Override precedence:
 
 1. CLI flags.
-2. Environment variables.
-3. Existing `phase_sessions.v1.json.retry_policy`.
+2. Existing non-null `phase_sessions.v1.json.retry_policy` values.
+3. Environment variables, only for new state or missing/null fields.
 4. Profile defaults.
 5. `DEFAULT_RETRY_POLICY`.
+
+This precedence is intentional: durable state wins once a run exists. CLI flags
+are explicit operator commands and may update existing state. Environment
+variables are defaults for newly initialized runs and are allowed to fill
+missing/null fields for old normalized state, but they must not overwrite a
+persisted non-null policy value.
+
+Define the data carrier in `phase_autopilot_policy.py` and implement the
+args/env resolver in `cli.py`, not ad hoc merging. Keep `argparse` imports out
+of `phase_sessions.py`:
+
+```python
+@dataclass(frozen=True)
+class ResolvedPolicyUpdate:
+    forced_overrides: dict[str, Any]
+    default_overrides: dict[str, Any]
+
+
+def policy_update_from_args_and_env(args: argparse.Namespace) -> ResolvedPolicyUpdate:
+    ...
+```
+
+`forced_overrides` contains only CLI-supplied values. `default_overrides`
+contains environment-derived and profile-derived values. `configure_retry_policy`
+must apply forced overrides over existing state and default overrides only when
+the destination key is absent or `None`.
+
+Profile expansion must also be deterministic:
+
+- A CLI `--policy-profile dogfood` or `--policy-profile strict` expands into
+  forced overrides for the fields listed in the profile table.
+- Individual CLI numeric flags override values implied by the CLI profile.
+- `SWARM_PHASE_AUTOPILOT_PROFILE` expands into default overrides only.
+- A persisted `autopilot_profile` expands only for missing/null fields; it must
+  not overwrite persisted threshold values.
 
 Add environment variables:
 
@@ -229,8 +321,17 @@ Add environment variables:
 - `SWARM_MAX_FAILED_RUN_COST_USD`
 - `SWARM_MAX_PHASE_ATTEMPT_BUDGET_USD`
 
-Add CLI flags to `bin/swarm phases init`, `bin/swarm phases pump`,
-`bin/swarm do --prepared`, and `bin/swarm do --prepare --continue`:
+Add CLI flags to these argparse parsers in `py/swarm_do/pipeline/cli.py`:
+
+- the top-level `do` parser, because it is the single entry point for both
+  `bin/swarm do --prepared` and `bin/swarm do --prepare --continue`
+- the `phases init` parser
+- the `phases pump` parser
+
+Do not add P0 policy flags to `phases recover`, `phases status`, or the
+artifact-adoption subcommands; they should read already persisted policy.
+
+Flags to add:
 
 - `--policy-profile {standard,dogfood,strict}`
 - `--max-failed-attempt-cost-usd <float>`
@@ -238,7 +339,15 @@ Add CLI flags to `bin/swarm phases init`, `bin/swarm phases pump`,
 - `--max-phase-attempt-budget-usd <float>`
 
 Keep existing `--max-budget-usd` as a compatibility alias for
-`--max-phase-attempt-budget-usd`.
+`--max-phase-attempt-budget-usd`, but preserve current behavior while plumbing:
+
+- On the `do` parser, keep the existing `max_budget_usd` destination and have
+  `policy_update_from_args_and_env()` treat it as
+  `max_phase_attempt_budget_usd` when the new flag is unset.
+- On the `phases pump` parser, keep the existing `max_budget_usd` destination
+  for direct forwarding compatibility and apply the same normalization.
+- `--max-phase-attempt-budget-usd` takes precedence over `--max-budget-usd` if
+  both are supplied.
 
 Do not extend `schemas/preset.schema.json` in P0. Presets already have an
 estimated-budget table. Autopilot policy is runtime recovery policy; it should
@@ -248,11 +357,31 @@ prove itself through CLI/env dogfood before becoming preset surface area.
 
 Update `phase_sessions.py`:
 
-- Add `retry_policy_overrides` to `init_phase_sessions()`.
-- Add `configure_retry_policy(run_id, overrides, *, data_dir)` that merges
-  validated overrides into existing state and emits no new event type.
+- Add `policy_update: ResolvedPolicyUpdate | None` to
+  `init_phase_sessions()`.
+- Add `configure_retry_policy(run_id, policy_update, *, data_dir)` that merges
+  validated forced/default overrides into existing state and emits no new event
+  type.
 - Normalize old state with the new nullable fields.
 - Keep new fields optional and do not bump `schema_version`.
+
+`init_phase_sessions()` idempotence semantics must be exact:
+
+- If state does not exist, initialize from `DEFAULT_RETRY_POLICY`, apply the
+  selected profile defaults, apply environment/default overrides, then apply
+  CLI forced overrides before the first state write.
+- If state already exists and no CLI forced overrides were supplied, load,
+  normalize, and return the existing state unchanged except for filling newly
+  introduced missing/null default fields during normalization.
+- If state already exists and CLI forced overrides were supplied, call
+  `configure_retry_policy()` inside the same lock, return
+  `initialized=False`, and include `policy_configured=True` in the payload.
+- Environment-derived values must not re-apply over existing non-null state on
+  the idempotent path.
+
+`configure_retry_policy()` must validate profiles and numeric thresholds before
+writing, reject negative numbers with `PhaseSessionError`, and call
+`_validate_state()` before the atomic write.
 
 Update `phase_pump.py`:
 
@@ -267,7 +396,15 @@ Update `phase_pump.py`:
 Update `cli.py`:
 
 - Parse policy CLI flags once into a small override object.
-- Pass overrides to `init_phase_sessions()` and `pump_phases()`.
+- Pass the resolved policy update to `init_phase_sessions()` and
+  `pump_phases()`.
+- For `cmd_phases`, `phases init` calls `init_phase_sessions(...,
+  policy_update=...)`; `phases pump` calls `pump_phases(...,
+  policy_update=...)`.
+- For `cmd_do`, `_dispatch_with_phase_sessions()` passes the same args-derived
+  policy update to `pump_phases(init_if_missing=True, ...)`. This covers both
+  `do --prepared` and `do --prepare --continue` because both dispatch through
+  `_dispatch_prepared()` and `_dispatch_with_phase_sessions()`.
 - In JSON output for `do --prepared --phase-sessions auto`, include the resolved
   policy profile and threshold values under `phase_sessions.policy`.
 
@@ -291,6 +428,19 @@ Update `phase_recovery.py`:
 
 Spend-input calculation:
 
+- Add `py/swarm_do/pipeline/phase_spend.py`.
+- Add a frozen dataclass named `FailedSpendSnapshot` with:
+  `current_attempt_cost_usd`, `current_attempt_cost_confidence`,
+  `failed_phase_cost_usd`, `failed_run_cost_usd`, and
+  `unknown_failed_attempt_count`.
+- Add `failed_spend_snapshot(run_id, phase_id, attempt, *, data_dir=None,
+  include_archived=False) -> FailedSpendSnapshot`.
+- Export `is_failed_attempt(row: Mapping[str, Any]) -> bool` from
+  `phase_attempts.py` by promoting the current `_is_failed_attempt()` helper;
+  keep the old semantics.
+- Implement `failed_spend_snapshot()` by calling `summarize_phase_attempts()`,
+  filtering rows through `is_failed_attempt()`, and reading the current
+  attempt row by `(phase_id, attempt)`.
 - Use provider-reported cost only: `total_cost_usd` or normalized
   `modelUsage.*.costUSD` from `phase_attempt_metrics.stdout_metrics()`.
 - Treat `cost_confidence="conflict"` as unknown for gating.
@@ -298,19 +448,99 @@ Spend-input calculation:
   fabricated dollar value.
 - Unknown cost still counts against attempt limits and same-failure limits.
 - Failed-run cost excludes adopted successful attempts and includes only
-  attempts that `_is_failed_attempt()` would count today.
+  attempts that `is_failed_attempt()` counts today.
+- Failed-phase cost is the same failed-cost calculation restricted to the
+  current phase id.
+- Archived attempts remain excluded from P0 policy gates unless
+  `include_archived=True` is explicitly passed for a future operator command.
 
 ### Policy Persistence
 
 Add optional fields to `attempt_history[]` in
-`schemas/phase_sessions.schema.json`:
+`schemas/phase_sessions.schema.json`. Because
+`attempt_history[].items.additionalProperties` is `false`, this schema fragment
+must land before recovery writes the fields:
 
-- `policy_action`
-- `policy_reason`
-- `policy_inputs`
+```json
+"policy_action": {
+  "type": ["string", "null"],
+  "enum": [
+    "retry",
+    "retry_after_backoff",
+    "recovery_retry",
+    "human_gate",
+    "retry_exhausted",
+    "terminal",
+    null
+  ]
+},
+"policy_reason": {
+  "type": ["string", "null"],
+  "enum": [
+    "taxonomy_human_gate",
+    "deterministic_contract_failure",
+    "permission_contract_failure",
+    "same_failure_limit",
+    "retry_budget_exhausted",
+    "recovery_retry_budget_exhausted",
+    "failed_attempt_spend_threshold",
+    "failed_run_spend_threshold",
+    "child_do_not_retry",
+    "child_nonretryable_failed",
+    "retry_after_requested",
+    "normal_retry",
+    "recovery_retry_required",
+    null
+  ]
+},
+"policy_inputs": {
+  "type": ["object", "null"],
+  "additionalProperties": false,
+  "properties": {
+    "failure_kind": { "type": ["string", "null"] },
+    "failure_category": { "type": ["string", "null"] },
+    "failure_retry_class": { "type": ["string", "null"] },
+    "attempt": { "type": ["integer", "null"], "minimum": 1 },
+    "same_failure_count": { "type": ["integer", "null"], "minimum": 0 },
+    "max_session_attempts": { "type": ["integer", "null"], "minimum": 1 },
+    "max_recovery_attempts": { "type": ["integer", "null"], "minimum": 0 },
+    "max_consecutive_same_failure_kind": { "type": ["integer", "null"], "minimum": 1 },
+    "recovery_attempts_used": { "type": ["integer", "null"], "minimum": 0 },
+    "needs_recovery_retry": { "type": ["boolean", "null"] },
+    "recovery_timeout_threshold_seconds": { "type": ["integer", "null"], "minimum": 1 },
+    "retry_sleep_threshold_seconds": { "type": ["integer", "null"], "minimum": 0 },
+    "short_retry_backoff_seconds": { "type": ["integer", "null"], "minimum": 0 },
+    "max_retry_after_seconds": { "type": ["integer", "null"], "minimum": 0 },
+    "returncode": { "type": ["integer", "null"] },
+    "artifact_error_kinds": { "type": "array", "items": { "type": "string" } },
+    "partial_artifacts": { "type": ["boolean", "null"] },
+    "changed_file_count": { "type": ["integer", "null"], "minimum": 0 },
+    "elapsed_seconds": { "type": ["number", "null"], "minimum": 0 },
+    "retry_after_seconds_requested": { "type": ["integer", "null"], "minimum": 0 },
+    "current_attempt_cost_usd": { "type": ["number", "null"], "minimum": 0 },
+    "failed_phase_cost_usd": { "type": ["number", "null"], "minimum": 0 },
+    "failed_run_cost_usd": { "type": ["number", "null"], "minimum": 0 },
+    "unknown_failed_attempt_count": { "type": ["integer", "null"], "minimum": 0 },
+    "cost_confidence": {
+      "type": ["string", "null"],
+      "enum": ["provider_reported", "unknown", "conflict", null]
+    },
+    "max_failed_attempt_cost_usd": { "type": ["number", "null"], "minimum": 0 },
+    "max_failed_run_cost_usd": { "type": ["number", "null"], "minimum": 0 },
+    "max_phase_attempt_budget_usd": { "type": ["number", "null"], "minimum": 0 },
+    "handoff_do_not_retry": { "type": ["boolean", "null"] }
+  }
+}
+```
 
-Add the same optional fields to the `failure` object in
-`schemas/phase_attempt_evidence.schema.json`.
+Add the same `policy_action`, `policy_reason`, and `policy_inputs` fragments to
+`schemas/phase_attempt_evidence.schema.json#/properties/failure/properties`.
+Do not add them to the `failure.required` list; old evidence manifests must
+remain valid after normalization.
+
+`policy_inputs` is intentionally sparse. It has no `required` list, but because
+`additionalProperties` is `false`, recovery code must only write the named
+properties above.
 
 Add these fields to recovery action dictionaries and run-event `details`:
 
@@ -341,21 +571,24 @@ The evaluator must reproduce this behavior:
 
 | Evidence | Decision |
 | --- | --- |
-| `claude_cli_missing` or `launcher_ineligible` | `human_gate`, `blocked_reason=retry_policy_human_gate`, `retry_policy_decision=<failure_kind>` |
-| `launcher_workspace_error` or `launcher_prompt_sensitive_path` | `human_gate`, `retry_policy_decision=deterministic_contract_failure` |
-| `permission_contract_failure` | `human_gate`, `blocked_reason=permission_contract_failure`, `retry_policy_decision=permission_contract_failure` |
-| `outer_json_invalid_no_artifacts` with return code 0 | `human_gate`, `retry_policy_decision=deterministic_contract_failure` |
-| `outer_artifacts_missing` with return code 0 | `human_gate`, `retry_policy_decision=deterministic_contract_failure` |
-| `writer_tool_denied_no_artifacts` with return code 0 | `human_gate`, `retry_policy_decision=deterministic_contract_failure` |
-| `writer_silent_with_turns` with return code 0 | `human_gate`, `retry_policy_decision=deterministic_contract_failure` |
-| Artifact error in `path_escape`, identity mismatch, SHA mismatch, attempt mismatch, handoff status mismatch, or unprepared completed work unit | `human_gate`, `blocked_reason=deterministic_contract_failure`, `retry_policy_decision=deterministic_contract_failure` |
-| Same failure kind count reaches `max_consecutive_same_failure_kind` | `human_gate`, `retry_policy_decision=same_failure_limit` |
-| Known current failed-attempt cost exceeds `max_failed_attempt_cost_usd` | `human_gate`, `retry_policy_decision=spend_threshold` |
-| Known failed-run cost exceeds `max_failed_run_cost_usd` | `human_gate`, `retry_policy_decision=spend_threshold` |
-| Attempt budget exhausted for retryable failure | `retry_exhausted` |
-| Dirty, partial, or long attempt and recovery budget remains | `recovery_retry` |
-| Retryable failure with child `retry_after_seconds` | `retry_after_backoff`, clamped to `max_retry_after_seconds` |
-| Retryable transport/lifecycle/launcher failure | `retry_after_backoff` using the fallback schedule |
+| `claude_cli_missing` or `launcher_ineligible` | `policy_action=human_gate`, `policy_reason=taxonomy_human_gate`, `blocked_reason=retry_policy_human_gate`, `retry_policy_decision=<literal failure_kind>` |
+| `launcher_workspace_error` or `launcher_prompt_sensitive_path` | `policy_action=human_gate`, `policy_reason=deterministic_contract_failure`, `retry_policy_decision=deterministic_contract_failure` |
+| `permission_contract_failure` | `policy_action=human_gate`, `policy_reason=permission_contract_failure`, `blocked_reason=permission_contract_failure`, `retry_policy_decision=permission_contract_failure` |
+| `outer_json_invalid_no_artifacts` with return code 0 | `policy_action=human_gate`, `policy_reason=deterministic_contract_failure`, `retry_policy_decision=deterministic_contract_failure` |
+| `outer_artifacts_missing` with return code 0 | `policy_action=human_gate`, `policy_reason=deterministic_contract_failure`, `retry_policy_decision=deterministic_contract_failure` |
+| `writer_tool_denied_no_artifacts` with return code 0 | `policy_action=human_gate`, `policy_reason=deterministic_contract_failure`, `retry_policy_decision=deterministic_contract_failure` |
+| `writer_silent_with_turns` with return code 0 | `policy_action=human_gate`, `policy_reason=deterministic_contract_failure`, `retry_policy_decision=deterministic_contract_failure` |
+| Artifact error in `path_escape`, identity mismatch, SHA mismatch, attempt mismatch, handoff status mismatch, or unprepared completed work unit | `policy_action=human_gate`, `policy_reason=deterministic_contract_failure`, `blocked_reason=deterministic_contract_failure`, `retry_policy_decision=deterministic_contract_failure` |
+| Same failure kind count reaches `max_consecutive_same_failure_kind` | `policy_action=human_gate`, `policy_reason=same_failure_limit`, `retry_policy_decision=same_failure_limit` |
+| Known current failed-attempt cost exceeds `max_failed_attempt_cost_usd` | `policy_action=human_gate`, `policy_reason=failed_attempt_spend_threshold`, `retry_policy_decision=spend_threshold` |
+| Known failed-run cost exceeds `max_failed_run_cost_usd` | `policy_action=human_gate`, `policy_reason=failed_run_spend_threshold`, `retry_policy_decision=spend_threshold` |
+| Child handoff sets `do_not_retry=true` for an otherwise retryable failure | `policy_action=human_gate`, `policy_reason=child_do_not_retry`, `blocked_reason=child_reported_blocked`, `retry_policy_decision=child_do_not_retry` |
+| Child result is failed and not retryable | `policy_action=terminal`, `policy_reason=child_nonretryable_failed`, `retry_policy_decision=child_nonretryable_failed` |
+| Dirty, partial, or long attempt needs recovery but recovery budget is spent | `policy_action=retry_exhausted`, `policy_reason=recovery_retry_budget_exhausted`, `retry_policy_decision=retry_exhausted` |
+| Attempt budget exhausted for retryable failure | `policy_action=retry_exhausted`, `policy_reason=retry_budget_exhausted`, `retry_policy_decision=retry_exhausted` |
+| Dirty, partial, or long attempt and recovery budget remains | `policy_action=recovery_retry`, `policy_reason=recovery_retry_required` |
+| Retryable failure with child `retry_after_seconds` | `policy_action=retry_after_backoff`, `policy_reason=retry_after_requested`, clamped to `max_retry_after_seconds` |
+| Retryable transport/lifecycle/launcher failure | `policy_action=retry_after_backoff`, `policy_reason=normal_retry`, using the fallback schedule |
 
 Fallback backoff schedule remains:
 
@@ -372,7 +605,8 @@ Add `py/swarm_do/pipeline/tests/test_phase_autopilot_policy.py`:
 - Unknown child-reported failure kinds remain child-controlled and do not create
   a registry-only human gate.
 - `dogfood` profile resolves the expected dollar thresholds.
-- CLI override values win over environment/profile defaults.
+- CLI override values win over persisted/environment/profile defaults; persisted
+  non-null values win over environment defaults.
 - Unknown cost is not counted as `$0.00`.
 
 Update `test_phase_recovery.py`:
@@ -544,7 +778,10 @@ Example rules:
 - Use real synthetic values, not angle-bracket placeholders.
 - Use `run_id="01ARZ3NDEKTSV4RRFFQ69G5FAV"`.
 - Use `phase_id="1"` and `phase_attempt=1`.
-- Use valid 64-character lowercase hex strings for prepared and phase shas.
+- Use `prepared_plan_sha` value
+  `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`.
+- Use `phase_content_sha` value
+  `bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`.
 - Use `handoff_path` values relative to the data directory:
   `runs/01ARZ3NDEKTSV4RRFFQ69G5FAV/phase_handoffs/1/attempt-1.handoff.json`.
 - Keep `completed_work_units` empty in all examples.
@@ -584,6 +821,21 @@ Add `py/swarm_do/pipeline/tests/test_phase_artifact_contract.py`:
 - Every docs example pair can be copied into a synthetic run directory and
   accepted by `validate_phase_artifacts()` after the synthetic prepared
   artifact/state shas are aligned.
+- Add a helper named `_copy_example_pair_into_phase_session_run(tmp_path,
+  result_name, handoff_name)` that:
+  - creates an accepted prepared run with one phase
+  - initializes phase sessions and claims/starts phase `1`
+  - rewrites `phase_sessions.v1.json["prepared_plan_sha"]` to the example
+    prepared-plan SHA constant
+  - rewrites `prepared_plan.v1.json["prepared_plan_sha"]` to the example
+    prepared-plan SHA constant
+  - rewrites `prepared_plan.v1.json["phase_map"][0]["content_sha"]` to the
+    example phase-content SHA constant
+  - copies the example result to
+    `runs/<run_id>/phase_results/1/attempt-1.result.json`
+  - copies the example handoff to
+    `runs/<run_id>/phase_handoffs/1/attempt-1.handoff.json`
+  - calls `validate_phase_artifacts()` and returns the validated paths
 - `phase_artifact_contract_markdown()` includes the same status values and
   required array type rules as the schemas.
 - `_append_claude_print_contract()` uses the shared contract text and still
@@ -626,6 +878,31 @@ Update `test_phase_pump.py`:
 
 ## Ordered Work Breakdown
 
+### P0.0 - Schema Fragments And Policy Defaults
+
+Files:
+
+- `schemas/phase_sessions.schema.json`
+- `schemas/phase_attempt_evidence.schema.json`
+- `py/swarm_do/pipeline/phase_sessions.py`
+- `py/swarm_do/pipeline/tests/test_phase_sessions.py`
+- `py/swarm_do/pipeline/tests/test_phase_evidence.py`
+
+Work:
+
+1. Add the exact `retry_policy`, `policy_action`, `policy_reason`, and
+   `policy_inputs` schema fragments from this plan.
+2. Extend `DEFAULT_RETRY_POLICY` with the new nullable policy fields.
+3. Normalize old phase-session state with the new keys before validation.
+4. Add evidence-schema coverage for optional `failure.policy_*` fields.
+
+Acceptance:
+
+- Old state and old evidence manifests remain valid.
+- A state file containing the new policy fields validates.
+- An evidence manifest containing the new failure policy fields validates.
+- Runtime code is not allowed to write new policy fields before this step lands.
+
 ### P0.1 - Extract Autopilot Policy
 
 Files:
@@ -637,7 +914,7 @@ Files:
 
 Work:
 
-1. Add dataclasses, profile defaults, override resolution, and evaluator.
+1. Add policy dataclasses, profile constants, and evaluator.
 2. Wire `_retry_or_exhaust()` through the evaluator.
 3. Preserve existing behavior for current recovery tests.
 4. Persist policy action/reason in attempt records and recovery actions.
@@ -655,14 +932,13 @@ Files:
 - `py/swarm_do/pipeline/phase_sessions.py`
 - `py/swarm_do/pipeline/phase_pump.py`
 - `py/swarm_do/pipeline/cli.py`
-- `schemas/phase_sessions.schema.json`
 - `py/swarm_do/pipeline/tests/test_phase_sessions.py`
 - `py/swarm_do/pipeline/tests/test_phase_pump.py`
 - `py/swarm_do/pipeline/tests/test_command_profiles.py`
 
 Work:
 
-1. Add nullable runtime policy fields.
+1. Use the P0.0 nullable runtime policy fields in policy configuration.
 2. Add `configure_retry_policy()`.
 3. Add CLI/env override resolution.
 4. Resolve and forward per-attempt Claude budget from policy.
@@ -671,7 +947,8 @@ Acceptance:
 
 - Old state loads.
 - Dogfood profile applies thresholds.
-- CLI values override environment/profile values.
+- CLI values override persisted/environment/profile values.
+- Environment values fill only missing/null persisted policy fields.
 - Existing `--max-budget-usd` still works.
 
 ### P0.3 - Failed-Spend Gates
@@ -679,6 +956,7 @@ Acceptance:
 Files:
 
 - `py/swarm_do/pipeline/phase_autopilot_policy.py`
+- `py/swarm_do/pipeline/phase_spend.py`
 - `py/swarm_do/pipeline/phase_recovery.py`
 - `py/swarm_do/pipeline/phase_attempt_metrics.py`
 - `py/swarm_do/pipeline/phase_attempts.py`
@@ -749,9 +1027,13 @@ The implementation decisions for this slice are fixed:
 
 - Policy module home: `phase_autopilot_policy.py`.
 - Durable policy config home: `phase_sessions.v1.json.retry_policy`.
+- Schema update order: P0.0 lands before any runtime policy writes.
+- Idempotent init: persisted state wins unless CLI forced overrides are present.
 - Initial policy profiles: `standard`, `dogfood`, and `strict`.
 - No `fast` profile in this pass.
-- Override precedence: CLI, environment, existing state, profile, defaults.
+- Override precedence: CLI, existing persisted non-null state, environment for
+  new or missing/null fields, profile, defaults.
+- Failed-spend helper: `phase_spend.failed_spend_snapshot()`.
 - Unknown cost: never converted to dollars; still counts against attempt and
   same-failure limits.
 - Spend gates: opt-in except dogfood/strict profiles.
@@ -770,6 +1052,7 @@ Run the focused suite after implementation:
 ```bash
 PYTHONPATH=py python3 -m unittest \
   py.swarm_do.pipeline.tests.test_phase_autopilot_policy \
+  py.swarm_do.pipeline.tests.test_phase_evidence \
   py.swarm_do.pipeline.tests.test_phase_recovery \
   py.swarm_do.pipeline.tests.test_phase_sessions \
   py.swarm_do.pipeline.tests.test_phase_pump \

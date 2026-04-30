@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from .context_bundle import render_context_bundle
-from .execution_workspace import ExecutionWorkspaceError, create_execution_workspace
+from .execution_workspace import ExecutionWorkspaceError, create_execution_workspace, is_sensitive_path
 from .paths import REPO_ROOT, resolve_data_dir
 from .phase_sessions import (
     PhaseSessionError,
@@ -126,9 +126,9 @@ def pump_phases(
             lease_command=f"phase-pump:{launcher}",
         )
         running_phase = started["phase"]
-        context = render_context_bundle(run_id=run_id, phase_id=phase_id, role="dispatcher", data_dir=base)
 
         if launcher == "manual":
+            context = render_context_bundle(run_id=run_id, phase_id=phase_id, role="dispatcher", data_dir=base)
             launch = _prepare_phase_launch(
                 run_id,
                 phase_id,
@@ -151,7 +151,6 @@ def pump_phases(
                 run_id,
                 phase_id,
                 running_phase,
-                prompt_path=Path(context["prompt_path"]),
                 lease_owner=str(claim["lease_owner"]),
                 claude_runner=claude_runner,
                 claude_path=claude_path,
@@ -198,6 +197,7 @@ def pump_phases(
                 return dict(recovery_result["result"])
             continue
 
+        context = render_context_bundle(run_id=run_id, phase_id=phase_id, role="dispatcher", data_dir=base)
         fake_status = fake_sequence[phase_number] if phase_number < len(fake_sequence) else "complete"
         if fake_status not in RESULT_STATUS_FOR_COMMAND:
             raise ValueError(f"unknown fake phase status: {fake_status}")
@@ -500,7 +500,7 @@ def _run_claude_print_phase(
     phase_id: str,
     phase: Mapping[str, Any],
     *,
-    prompt_path: Path,
+    prompt_path: Path | None = None,
     lease_owner: str,
     claude_runner: ClaudeRunner | None,
     claude_path: str | None,
@@ -512,7 +512,22 @@ def _run_claude_print_phase(
     result_path = phase_result_path(run_id, phase_id, attempt, data_dir=data_dir)
     handoff_path = phase_handoff_path(run_id, phase_id, attempt, data_dir=data_dir)
     try:
-        workspace = create_execution_workspace(_prepared_repo_root(run_id, data_dir=data_dir), data_dir=data_dir)
+        prepared = _prepared_artifact(run_id, data_dir=data_dir)
+        workspace = create_execution_workspace(
+            _prepared_repo_root(run_id, data_dir=data_dir, prepared=prepared),
+            data_dir=data_dir,
+            run_id=run_id,
+            prepared_plan=prepared,
+        )
+        if prompt_path is None:
+            context = render_context_bundle(
+                run_id=run_id,
+                phase_id=phase_id,
+                role="dispatcher",
+                data_dir=data_dir,
+                repo_root=workspace.launcher_repo_root,
+            )
+            prompt_path = Path(context["prompt_path"])
         prompt_text = prompt_path.read_text(encoding="utf-8")
         prompt_text = _append_claude_print_contract(
             prompt_text,
@@ -530,12 +545,15 @@ def _run_claude_print_phase(
         workspace.assert_prompt_safe(prompt_text)
     except ExecutionWorkspaceError as exc:
         reason = "launcher_prompt_sensitive_path" if "sensitive source path" in str(exc) else "launcher_workspace_error"
+        fallback_prompt_path = prompt_path or Path(
+            render_context_bundle(run_id=run_id, phase_id=phase_id, role="dispatcher", data_dir=data_dir)["prompt_path"]
+        )
         launch = _prepare_phase_launch(
             run_id,
             phase_id,
             phase,
             launcher="claude-print",
-            source_prompt_path=prompt_path,
+            source_prompt_path=fallback_prompt_path,
             data_dir=data_dir,
             workspace_metadata={
                 "launcher_exception": str(exc),
@@ -759,6 +777,14 @@ def _run_real_claude(
     refresh_interval = max(1, int(policy.get("refresh_interval_seconds") or 300))
     timeout_seconds = max(1, int(policy.get("running_ttl_seconds") or 14400) - (2 * refresh_interval))
     started = time.monotonic()
+    env = os.environ.copy()
+    if cwd is not None:
+        previous_pwd = env.get("PWD")
+        env["PWD"] = str(cwd)
+        if previous_pwd and not is_sensitive_path(Path(previous_pwd)):
+            env["OLDPWD"] = previous_pwd
+        else:
+            env.pop("OLDPWD", None)
     proc = subprocess.Popen(
         list(argv),
         stdin=subprocess.PIPE if prompt_text is not None else None,
@@ -767,6 +793,7 @@ def _run_real_claude(
         text=True,
         start_new_session=True,
         cwd=str(cwd) if cwd is not None else None,
+        env=env,
     )
     process_group_id: int | None = None
     metadata_error: str | None = None
@@ -867,16 +894,23 @@ def _status_prepared_sha(run_id: str, *, data_dir: Path) -> str:
     return value if isinstance(value, str) else "0" * 64
 
 
-def _prepared_repo_root(run_id: str, *, data_dir: Path) -> Path:
+def _prepared_artifact(run_id: str, *, data_dir: Path) -> dict[str, Any]:
     status = phase_status(run_id, data_dir=data_dir)
     prepared_path = Path(str(status.get("prepared_artifact_path") or data_dir / "runs" / run_id / "prepared_plan.v1.json"))
     if not prepared_path.is_absolute() and not prepared_path.is_file():
         prepared_path = data_dir / "runs" / run_id / "prepared_plan.v1.json"
     try:
-        prepared = json.loads(prepared_path.read_text(encoding="utf-8"))
+        value = json.loads(prepared_path.read_text(encoding="utf-8"))
     except Exception:
+        return {}
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _prepared_repo_root(run_id: str, *, data_dir: Path, prepared: Mapping[str, Any] | None = None) -> Path:
+    payload = prepared if prepared is not None else _prepared_artifact(run_id, data_dir=data_dir)
+    if not payload:
         return REPO_ROOT
-    value = prepared.get("repo_root")
+    value = payload.get("repo_root")
     return Path(str(value)).expanduser() if isinstance(value, str) and value else REPO_ROOT
 
 

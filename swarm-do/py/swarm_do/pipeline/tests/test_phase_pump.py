@@ -226,7 +226,13 @@ class PhasePumpTests(unittest.TestCase):
             root = Path(td)
             fake_home = root / "home"
             repo = fake_home / ".claude" / "plugins" / "swarm-do"
-            repo, data, run_id = make_prepared_run(root, phase_count=1, repo_path=repo)
+            repo, data, run_id = make_prepared_run(
+                root,
+                phase_count=1,
+                repo_path=repo,
+                commit_plan=True,
+                ignore_run_artifacts=True,
+            )
             base_runner = _claude_runner(data, run_id, ["complete"])
             seen: dict[str, str] = {}
 
@@ -249,10 +255,14 @@ class PhasePumpTests(unittest.TestCase):
 
             self.assertEqual(result["status"], "complete")
             command = json.loads((data / "runs" / run_id / "phase_launches" / "1" / "attempt-1" / "command.json").read_text(encoding="utf-8"))
-            self.assertEqual(command["execution_workspace_mode"], "safe-symlink")
+            self.assertEqual(command["execution_workspace_mode"], "safe-worktree")
             self.assertEqual(command["real_repo_root"], str(repo.resolve(strict=False)))
-            self.assertTrue(command["launcher_cwd"].startswith(str(data / "launcher-workspaces")))
-            self.assertGreater(command["prompt_rewrite_count"], 0)
+            self.assertEqual(command["source_project_root"], str(repo.resolve(strict=False)))
+            self.assertEqual(command["project_subdir"], "")
+            self.assertTrue(command["launcher_cwd"].startswith(str((data / "worktrees" / run_id / "repo").resolve(strict=False))))
+            self.assertEqual(command["launcher_cwd"], command["safe_project_root"])
+            self.assertTrue(Path(command["run_worktree_manifest_path"]).is_file())
+            self.assertGreaterEqual(command["prompt_rewrite_count"], 0)
             prompt = seen["prompt"]
             self.assertNotIn(str(repo), prompt)
             self.assertNotIn(str(repo.resolve(strict=False)), prompt)
@@ -411,6 +421,8 @@ class PhasePumpTests(unittest.TestCase):
                 )
 
             self.assertEqual(popen_kwargs["cwd"], str(cwd))
+            self.assertEqual(popen_kwargs["env"]["PWD"], str(cwd))
+            self.assertNotIn(".claude", popen_kwargs["env"].get("OLDPWD", ""))
 
     def test_real_claude_launcher_writes_stdin_once_and_refreshes_lease(self) -> None:
         with tempfile.TemporaryDirectory() as td:

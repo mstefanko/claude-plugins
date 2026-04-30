@@ -411,7 +411,7 @@ Defer to v2. Justifications:
   a role redefinition, not a lens overlay (violates §A1 above).
 - The user's global guidance routes UI work through the
   `frontend-design` skill, which is invoked by writers, not analysis
-  fan-outs (`/Users/mstefanko/.claude/CLAUDE.md`).
+  fan-outs (`<sensitive-home>/CLAUDE.md`).
 - Re-examine if/when a UI-aware research role is added. Until then, "UX"
   considerations should live as a checklist line inside `risk-discovery` or
   `architecture-risk`, not as their own lens.
@@ -858,7 +858,7 @@ measurement phase, exactly as proposed at plan §445-463.
 - `swarm-do/pipelines/hybrid-review.yaml:24-31`
 - `swarm-do/pipelines/mco-review-lab.yaml:24-37`
 - `swarm-do/pipelines/default.yaml`
-- `/Users/mstefanko/.claude/CLAUDE.md` (frontend-design routing)
+- `<sensitive-home>/CLAUDE.md` (frontend-design routing)
 
 ### External evidence
 

@@ -81,6 +81,23 @@ def classify_launcher_failure(
     ):
         diagnostics = _safe_diagnose_launch(launcher_result, command_metadata, projects_dir=projects_dir)
         if diagnostics is not None:
+            canonical = diagnostics.canonical_path_hits[-1] if diagnostics.canonical_path_hits else None
+            if canonical is not None:
+                details = {
+                    "tool_name": canonical.tool_name,
+                    "tool_error_kind": canonical.error_kind,
+                    "message_excerpt": canonical.message_excerpt,
+                    "sensitive_path_excerpt": canonical.message_excerpt,
+                    "transcript_path": str(diagnostics.transcript_path) if diagnostics.transcript_path else None,
+                }
+                return _classification(
+                    "canonical_path_leaked_in_tool_result",
+                    last_error=_diagnostic_last_error(canonical.tool_name, canonical.error_kind, canonical.message_excerpt),
+                    transcript_diagnostics=diagnostics,
+                    outer=outer,
+                    metrics=metrics,
+                    details=details,
+                )
             diagnostic = diagnostics.primary_tool_error()
             if diagnostic is not None:
                 details = {

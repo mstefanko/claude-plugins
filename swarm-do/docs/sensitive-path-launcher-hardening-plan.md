@@ -447,7 +447,7 @@ Probe setup:
 
 ```bash
 SAFE=/tmp/swarm-do-sensitive-path-probe
-REAL=/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/swarm-do
+REAL=<sensitive-source>/swarm-do
 TARGET_REAL="$REAL/probe-abs-sensitive-path.txt"
 TARGET_SAFE="$SAFE/probe-safe-sensitive-path.txt"
 ln -sfn "$REAL" "$SAFE"
@@ -518,7 +518,7 @@ Steps:
    - `session_id` present
 5. Add the canonical transcript project-dir example from the investigation:
    - input:
-     `/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/swarm-do`
+     `<sensitive-source>/swarm-do`
    - expected:
      `-Users-mstefanko--claude-plugins-marketplaces-mstefanko-plugins-swarm-do`
    - Note: preserve the leading dash. Do not strip it.

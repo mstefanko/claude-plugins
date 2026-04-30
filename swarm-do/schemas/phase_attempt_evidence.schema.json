@@ -105,6 +105,14 @@
         "safe_cwd_enabled": { "type": ["boolean", "null"] },
         "launcher_cwd": { "type": ["string", "null"] },
         "launcher_repo_root": { "type": ["string", "null"] },
+        "source_git_top_level": { "type": ["string", "null"] },
+        "source_project_root": { "type": ["string", "null"] },
+        "safe_git_worktree_root": { "type": ["string", "null"] },
+        "safe_project_root": { "type": ["string", "null"] },
+        "project_subdir": { "type": ["string", "null"] },
+        "run_execution_branch": { "type": ["string", "null"] },
+        "git_base_sha": { "type": ["string", "null"] },
+        "run_worktree_manifest_path": { "type": ["string", "null"] },
         "real_repo_root_recorded": { "type": "boolean" }
       }
     },

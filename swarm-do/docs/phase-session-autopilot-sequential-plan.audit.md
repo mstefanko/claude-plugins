@@ -1,8 +1,8 @@
 # Audit: phase-session-autopilot-sequential-plan.md
 
-Audit target: `/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/swarm-do/docs/phase-session-autopilot-sequential-plan.md`
-Foundation reference: `/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/swarm-do/docs/phase-session-foundation-plan.md`
-Repo: `/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins`
+Audit target: `<sensitive-source>/swarm-do/docs/phase-session-autopilot-sequential-plan.md`
+Foundation reference: `<sensitive-source>/swarm-do/docs/phase-session-foundation-plan.md`
+Repo: `<sensitive-source>`
 Code path under audit: `swarm-do/py/swarm_do/pipeline/...` (note: foundation plan paths are written `py/swarm_do/...`; the actual prefix is `swarm-do/py/swarm_do/...`).
 
 ---

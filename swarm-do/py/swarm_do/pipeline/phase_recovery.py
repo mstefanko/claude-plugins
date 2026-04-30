@@ -549,13 +549,13 @@ def _build_attempt_evidence(
     retry_policy = state.get("retry_policy") if isinstance(state.get("retry_policy"), Mapping) else {}
     if isinstance(retry_policy.get("worktree_baseline_path"), str):
         baseline_path = retry_policy.get("worktree_baseline_path")
-    diff = changed_files_since_baseline(baseline_path, repo_root=repo_root)
+    command = _command_metadata(launch_dir)
+    diff = changed_files_since_baseline(baseline_path, repo_root=_attempt_diff_repo_root(command, repo_root))
     diff_summary_path = recovery_dir / f"attempt-{attempt}.diff-summary.md"
     diff_summary = str(diff.get("diff_summary") or diff.get("warning") or "No baseline-relative diff evidence.")
     diff_summary_path.write_text(diff_summary.rstrip() + "\n", encoding="utf-8")
     recovery_context_path = recovery_dir / f"attempt-{attempt}.recovery.md"
     changed_files = [str(item) for item in diff.get("changed_files") or [] if isinstance(item, str)]
-    command = _command_metadata(launch_dir)
     completed_at = utc_now()
     elapsed = _elapsed_seconds(phase, completed_at)
     classification: FailureClassification | None = None
@@ -619,6 +619,8 @@ def _build_attempt_evidence(
         "changed_files": changed_files,
         "diff_summary_path": str(diff_summary_path),
         "recovery_context_path": str(recovery_context_path),
+        "command_metadata": _execution_workspace_evidence(command),
+        **_execution_workspace_evidence(command),
         **failure_kind_details(failure_kind),
         **diagnostic_evidence,
     }
@@ -676,7 +678,7 @@ def _diagnostic_evidence(
     elif classification.last_error:
         evidence["diagnostic_last_error"] = classification.last_error
     details = dict(classification.details or {})
-    for key in ("tool_name", "tool_error_kind", "message_excerpt"):
+    for key in ("tool_name", "tool_error_kind", "message_excerpt", "sensitive_path_excerpt"):
         if details.get(key) is not None:
             evidence[key] = details[key]
     return evidence
@@ -684,7 +686,11 @@ def _diagnostic_evidence(
 
 def _has_diagnostic_signal(classification: FailureClassification) -> bool:
     diagnostics = classification.transcript_diagnostics
-    if classification.failure_kind in {"writer_tool_denied_no_artifacts", "writer_silent_with_turns"}:
+    if classification.failure_kind in {
+        "writer_tool_denied_no_artifacts",
+        "writer_silent_with_turns",
+        "canonical_path_leaked_in_tool_result",
+    }:
         return True
     if diagnostics is None:
         return bool(classification.last_error or classification.details)
@@ -701,8 +707,32 @@ def _attempt_diagnostic_details(evidence: Mapping[str, Any]) -> dict[str, Any]:
         "tool_name",
         "tool_error_kind",
         "message_excerpt",
+        "sensitive_path_excerpt",
     )
     return {key: evidence[key] for key in keys if key in evidence}
+
+
+def _attempt_diff_repo_root(command: Mapping[str, Any], repo_root: Path | None) -> Path | None:
+    if command.get("execution_workspace_mode") == "safe-worktree" and isinstance(command.get("safe_project_root"), str):
+        return Path(str(command["safe_project_root"]))
+    return repo_root
+
+
+def _execution_workspace_evidence(command: Mapping[str, Any]) -> dict[str, Any]:
+    keys = (
+        "execution_workspace_mode",
+        "source_git_top_level",
+        "source_project_root",
+        "safe_git_worktree_root",
+        "safe_project_root",
+        "project_subdir",
+        "run_execution_branch",
+        "git_base_sha",
+        "git_base_ref",
+        "run_worktree_manifest_path",
+        "copied_ignored_artifacts",
+    )
+    return {key: command[key] for key in keys if key in command}
 
 
 def _taxonomy_note_details(evidence: Mapping[str, Any]) -> dict[str, Any]:
@@ -741,6 +771,8 @@ def _retry_stop_decision(failure_kind: str, evidence: Mapping[str, Any]) -> tupl
         return (BLOCKED_RETRY_POLICY_HUMAN_GATE, failure_kind)
     if retry_class == "human_gate" and failure_kind in {"launcher_workspace_error", "launcher_prompt_sensitive_path"}:
         return (BLOCKED_RETRY_POLICY_HUMAN_GATE, "deterministic_contract_failure")
+    if retry_class == "human_gate" and failure_kind == "canonical_path_leaked_in_tool_result":
+        return (BLOCKED_PERMISSION_CONTRACT_FAILURE, "permission_contract_failure")
     if retry_class == "human_gate" and failure_kind == "permission_contract_failure":
         return (BLOCKED_PERMISSION_CONTRACT_FAILURE, "permission_contract_failure")
     if failure_kind in {"outer_json_invalid_no_artifacts", "outer_artifacts_missing"} and returncode == 0:

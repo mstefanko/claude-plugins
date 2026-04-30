@@ -12,7 +12,7 @@
 
 ## TL;DR for the next session
 
-> **2026-04-30 — Round 2 update.** Round 1 fix shipped via commits `3faaf44 Sensitive path` and `79b08e1 Fixing gaps`: a "safe-symlink" execution workspace under `~/.local/share/swarmdaddy/launcher-workspaces/<hash>/repo` that the launcher uses as cwd, plus a full jsonl-parsing failure-kind heuristic in `phase_recovery.py`. **The heuristic is working perfectly** — Phase 2's re-attempt produced `last_failure_kind=writer_tool_denied_no_artifacts` with the exact `<tool_use_error>` string in `last_error`. **The structural fix is incomplete:** Phase 2 still hit the same Write rejection because `pwd` (the very first Bash call in every writer session) returns the canonical real path on macOS, leaking `/Users/mstefanko/.claude/...` to the model, which then uses that prefix for absolute Write calls. See "Round 2" section at the bottom for the new evidence, three follow-up fix options (R2-1/R2-2/R2-3), and reproducer probes.
+> **2026-04-30 — Round 2 update.** Round 1 fix shipped via commits `3faaf44 Sensitive path` and `79b08e1 Fixing gaps`: a "safe-symlink" execution workspace under `~/.local/share/swarmdaddy/launcher-workspaces/<hash>/repo` that the launcher uses as cwd, plus a full jsonl-parsing failure-kind heuristic in `phase_recovery.py`. **The heuristic is working perfectly** — Phase 2's re-attempt produced `last_failure_kind=writer_tool_denied_no_artifacts` with the exact `<tool_use_error>` string in `last_error`. **The structural fix is incomplete:** Phase 2 still hit the same Write rejection because `pwd` (the very first Bash call in every writer session) returns the canonical real path on macOS, leaking `<sensitive-home>/...` to the model, which then uses that prefix for absolute Write calls. See "Round 2" section at the bottom for the new evidence, three follow-up fix options (R2-1/R2-2/R2-3), and reproducer probes.
 
 - **Root cause confirmed:** Claude Code blocks `Write`/`Edit` (and "sensitive" Bash writes) for any path/cwd inside `~/.claude/`. The block is independent of `--permission-mode`, `--allowedTools`, `--add-dir`, and `--dangerously-skip-permissions`. Empirically refuted three flag-based fixes; only changing the writer's `cwd` (via a symlink outside `~/.claude/`) worked.
 - **Why we hit this in production:** the swarmdaddy plugin source tree lives at `~/.claude/plugins/marketplaces/mstefanko-plugins/swarm-do/`, so every writer subprocess is launched with cwd inside the deny zone. The phase_pump launcher hardcodes `--permission-mode dontAsk` (`phase_pump.py:447-451`), and the project already hit the same issue for state writes — `paths.py:14-21` documents the workaround for the *state dir*, but never extended it to *source-tree writes*.
@@ -43,7 +43,7 @@
 
 > **Claim 1 — bypassPermissions is the right mode: VALID.** The agent ran claude --help and confirmed the choices include bypassPermissions; dontAsk is real too (I was wrong to suspect it was project-invented). Pre-merge sanity probe:
 > ```
-> cd /Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/swarm-do && \
+> cd <sensitive-source>/swarm-do && \
 >   echo 'Write ./tmp-perm-probe.txt with content "ok".' | \
 >   claude -p --permission-mode bypassPermissions --output-format json --allowedTools Write \
 >   2>&1 | tail -20 && ls -la tmp-perm-probe.txt
@@ -103,14 +103,14 @@ Three options, ranked by invasiveness. None of these are decided; the next sessi
 2. In `phase_pump.py`'s subprocess invocation (around `phase_pump.py:447`), pass `cwd=<symlink>` to the `subprocess.Popen` / `subprocess.run` call.
 3. Keep `--permission-mode dontAsk` (or switch to `bypassPermissions` — both worked in probe C, since the deciding factor is cwd).
 
-**Risk:** the launcher prompt embeds *absolute* `/Users/mstefanko/.claude/.../...` paths for context files, prepared plan, work units, the launcher result/handoff target paths, and so on (`context_bundle.py:445`-ish, `phase_pump.py` various). If the writer infers absolute paths from the prompt and uses them in its Write calls, the path string will still contain `/.claude/` and the sensitive-path guard will fire. Unverified — depends on Claude path-check semantics (cwd substring vs file_path substring vs canonicalised path).
+**Risk:** the launcher prompt embeds *absolute* `<sensitive-home>/.../...` paths for context files, prepared plan, work units, the launcher result/handoff target paths, and so on (`context_bundle.py:445`-ish, `phase_pump.py` various). If the writer infers absolute paths from the prompt and uses them in its Write calls, the path string will still contain `/.claude/` and the sensitive-path guard will fire. Unverified — depends on Claude path-check semantics (cwd substring vs file_path substring vs canonicalised path).
 
 **Probe to settle the risk:**
 ```bash
 # Inside symlinked cwd, give the model an absolute ~/.claude/ path to write
-ln -sfn /Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/swarm-do /tmp/swarm-do-symlink
+ln -sfn <sensitive-source>/swarm-do /tmp/swarm-do-symlink
 cd /tmp/swarm-do-symlink
-echo 'Write /Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/swarm-do/probe-abs.txt content "ok"' \
+echo 'Write <sensitive-source>/swarm-do/probe-abs.txt content "ok"' \
   | /Applications/cmux.app/Contents/Resources/bin/claude -p --permission-mode bypassPermissions \
     --output-format json --allowedTools Write > /tmp/probeAbs.json
 # If the file lands → Option A works as-is.
@@ -183,7 +183,7 @@ Read `~/.claude/projects/<encoded-cwd>/<session_id>.jsonl` after a writer ends, 
 
 **Implementation sketch:**
 - `session_id` is in the launcher's stdout JSON (`launcher_result["stdout"]` already parsed via `parse_claude_print_json`). Extract it.
-- Encode the cwd → projects dir name (replace `/` with `-`, handle leading `/`). The encoding rule is observable: `cwd=/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/swarm-do` → `-Users-mstefanko--claude-plugins-marketplaces-mstefanko-plugins-swarm-do`. Note the *double* dash for `.` — needs care.
+- Encode the cwd → projects dir name (replace `/` with `-`, handle leading `/`). The encoding rule is observable: `cwd=<sensitive-source>/swarm-do` → `-Users-mstefanko--claude-plugins-marketplaces-mstefanko-plugins-swarm-do`. Note the *double* dash for `.` — needs care.
 - Open `~/.claude/projects/<encoded>/<session_id>.jsonl`, stream-parse lines, extract any `tool_use_error` strings from `tool_result` content.
 - Attach to recovery markers and a new `failure_kind`.
 
@@ -258,7 +258,7 @@ The expected output for the as-of-2026-04-30 CLI version is the table in the "Em
 ### Re-run Phase 2 after a fix
 
 ```bash
-cd /Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/swarm-do
+cd <sensitive-source>/swarm-do
 
 # 1. Tests still green (some assert on argv shape)
 PYTHONPATH=py python3 -m unittest swarm_do.pipeline.tests.test_phase_pump
@@ -316,7 +316,7 @@ After resetting Phase 2 (`/tmp/reset-phase2.py`) and refreshing `git_base_sha` (
 | Writer session id | `f8826cd4-a2a5-410b-9d13-61d298a90fa0` |
 | `prompt_rewrite_count` | `0` (prompt was already clean — nothing to rewrite) |
 | `/.claude/` substrings in launcher prompt | **0** |
-| Write tool call's `file_path` arg | `/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/swarm-do/hooks/run-with-profile.sh` |
+| Write tool call's `file_path` arg | `<sensitive-source>/swarm-do/hooks/run-with-profile.sh` |
 
 The model used the canonical real path in its Write call, even though that string never appeared in the prompt it received.
 
@@ -325,10 +325,10 @@ The model used the canonical real path in its Write call, even though that strin
 The first Bash call in the new Phase 2 transcript:
 ```
 B: pwd && ls -la
-R: /Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/swarm-do | total 96 ...
+R: <sensitive-source>/swarm-do | total 96 ...
 ```
 
-Once the model has the canonical root, every absolute path it constructs starts with `/Users/mstefanko/.claude/...`. Write calls trip the sensitive-path guard regardless of the carefully-arranged safe cwd.
+Once the model has the canonical root, every absolute path it constructs starts with `<sensitive-home>/...`. Write calls trip the sensitive-path guard regardless of the carefully-arranged safe cwd.
 
 **Mechanism:** Python's `subprocess.Popen(cwd=<symlink>)` calls `chdir()`. On macOS, `chdir()` resolves the symlink before exporting `$PWD` into the child env. The shell's `pwd` builtin reads `$PWD` and prints whatever's there — canonical, not symlink. The launcher's safe-symlink workspace correctly sets *cwd*, but unintentionally sets `$PWD` to the canonical path.
 
@@ -406,12 +406,12 @@ Run these from a shell, no swarmdaddy state involved.
 ```bash
 # The exact mechanism from production
 mkdir -p /tmp/leak-test
-ln -sfn /Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/swarm-do /tmp/leak-test/repo
+ln -sfn <sensitive-source>/swarm-do /tmp/leak-test/repo
 
 cd /tmp/leak-test/repo
 echo "PWD=$PWD"
-pwd          # expect canonical /Users/mstefanko/.claude/... ← the leak
-pwd -P       # expect canonical /Users/mstefanko/.claude/...
+pwd          # expect canonical <sensitive-home>/... ← the leak
+pwd -P       # expect canonical <sensitive-home>/...
 pwd -L       # may print symlink /tmp/leak-test/repo if shell honors -L
 
 rm -rf /tmp/leak-test
@@ -420,7 +420,7 @@ rm -rf /tmp/leak-test
 ### Probe P1 — does setting `$PWD` in env let `pwd` return the symlink?
 
 ```bash
-ln -sfn /Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/swarm-do /tmp/leak-test
+ln -sfn <sensitive-source>/swarm-do /tmp/leak-test
 cd /tmp/leak-test
 PWD=/tmp/leak-test bash -c 'echo "shell:$0  PWD=$PWD  pwd=$(pwd)  pwd -P=$(pwd -P)  pwd -L=$(pwd -L)"'
 PWD=/tmp/leak-test zsh  -c 'echo "shell:$0  PWD=$PWD  pwd=$(pwd)  pwd -P=$(pwd -P)  pwd -L=$(pwd -L)"'
@@ -433,7 +433,7 @@ If `pwd` reports `/tmp/leak-test` in either shell → R2-1 viable. If both shell
 
 ```bash
 mkdir -p /tmp/leak-test
-ln -sfn /Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/swarm-do /tmp/leak-test/repo
+ln -sfn <sensitive-source>/swarm-do /tmp/leak-test/repo
 
 cd /
 PWD=/tmp/leak-test/repo /Applications/cmux.app/Contents/Resources/bin/claude \

@@ -16,6 +16,8 @@ def make_prepared_run(
     run_id: str = RUN_ID,
     phase_count: int = 3,
     repo_path: Path | None = None,
+    commit_plan: bool = False,
+    ignore_run_artifacts: bool = False,
 ) -> tuple[Path, Path, str]:
     repo = repo_path or tmp / "repo"
     data = tmp / "data"
@@ -23,8 +25,13 @@ def make_prepared_run(
     repo.mkdir()
     data.mkdir()
     _git_init(repo)
+    if ignore_run_artifacts:
+        (repo / ".gitignore").write_text("data/runs/\n", encoding="utf-8")
+        _git_commit(repo, [".gitignore"], "ignore run artifacts")
     plan = repo / "plan.md"
     plan.write_text(_plan_text(phase_count), encoding="utf-8")
+    if commit_plan:
+        _git_commit(repo, ["plan.md"], "add plan")
     result = prepare_plan_run(
         "plan.md",
         run_id=run_id,
@@ -50,6 +57,18 @@ def _git_init(repo: Path) -> None:
     (repo / "seed.txt").write_text("seed\n", encoding="utf-8")
     subprocess.run(["git", "add", "seed.txt"], cwd=repo, check=True, env=env)
     subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=repo, check=True, env=env)
+
+
+def _git_commit(repo: Path, paths: list[str], message: str) -> None:
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "T",
+        "GIT_AUTHOR_EMAIL": "t@example.test",
+        "GIT_COMMITTER_NAME": "T",
+        "GIT_COMMITTER_EMAIL": "t@example.test",
+    }
+    subprocess.run(["git", "add", *paths], cwd=repo, check=True, env=env)
+    subprocess.run(["git", "commit", "-q", "-m", message], cwd=repo, check=True, env=env)
 
 
 def _plan_text(phase_count: int) -> str:

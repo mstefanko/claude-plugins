@@ -9,11 +9,11 @@
 The Phase 0 absolute path probe was run from the launcher-visible symlink
 `/tmp/swarm-do-sensitive-path-probe` pointing at the real checkout:
 
-`/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/swarm-do`
+`<sensitive-source>/swarm-do`
 
 Probe A asked Claude Code to write the real absolute sensitive path:
 
-`/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/swarm-do/probe-abs-sensitive-path.txt`
+`<sensitive-source>/swarm-do/probe-abs-sensitive-path.txt`
 
 Result:
 

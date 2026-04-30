@@ -97,7 +97,7 @@ The Phase 2 live probe is hand-wavy: "Ask Claude to write a temporary file throu
 ```bash
 # Probe: does Claude write an absolute /.claude/ path when invoked from a symlinked cwd?
 SAFE=/tmp/swarm-do-symlink
-REAL=/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/swarm-do
+REAL=<sensitive-source>/swarm-do
 ln -sfn "$REAL" "$SAFE"
 cd "$SAFE"
 echo "Write $REAL/probe-abs.txt with content \"ok\"." | \

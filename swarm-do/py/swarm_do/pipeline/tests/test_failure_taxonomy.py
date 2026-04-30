@@ -14,6 +14,14 @@ class FailureTaxonomyTests(unittest.TestCase):
         self.assertEqual(details["failure_operator_title"], "Launcher exited before artifacts")
         self.assertTrue(details["failure_known"])
 
+    def test_canonical_path_leak_kind_is_permission_human_gate(self) -> None:
+        details = failure_kind_details("canonical_path_leaked_in_tool_result")
+
+        self.assertEqual(details["failure_category"], "permission")
+        self.assertEqual(details["failure_retry_class"], "human_gate")
+        self.assertEqual(details["failure_operator_title"], "Canonical source path leaked to writer")
+        self.assertTrue(details["failure_known"])
+
     def test_unknown_child_reported_failure_is_child_controlled(self) -> None:
         details = failure_kind_details("worker_custom_failure")
 

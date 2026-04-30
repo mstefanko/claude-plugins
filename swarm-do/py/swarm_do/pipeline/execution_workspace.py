@@ -7,7 +7,7 @@ import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 
 class ExecutionWorkspaceError(RuntimeError):
@@ -23,11 +23,14 @@ class ExecutionWorkspace:
     sensitive_prefixes: tuple[str, ...]
     safe_cwd_enabled: bool = True
     real_repo_spellings: tuple[str, ...] = ()
+    prompt_rewrite_pairs: tuple[tuple[str, str], ...] = ()
+    prompt_sensitive_spellings: tuple[str, ...] = ()
+    worktree_metadata: Mapping[str, Any] | None = None
 
     def rewrite_prompt(self, text: str) -> tuple[str, int]:
         """Rewrite exact real repo-root spellings to the launcher-visible path."""
 
-        if self.mode != "safe-symlink":
+        if self.mode not in {"safe-symlink", "safe-worktree"} and not self.prompt_rewrite_pairs:
             return text, 0
         rewritten = text
         count = 0
@@ -43,9 +46,10 @@ class ExecutionWorkspace:
     def assert_prompt_safe(self, text: str) -> None:
         """Fail before launch when the real sensitive repo root leaked."""
 
-        if self.mode != "safe-symlink":
+        if self.mode not in {"safe-symlink", "safe-worktree"} and not self.prompt_sensitive_spellings:
             return
-        leaks = [spelling for spelling in self._sensitive_repo_spelling_variants() if spelling and spelling in text]
+        candidates = (*self._sensitive_repo_spelling_variants(), *self._prompt_sensitive_spelling_variants())
+        leaks = [spelling for spelling in candidates if spelling and spelling in text]
         if leaks:
             sample = leaks[0]
             raise ExecutionWorkspaceError(f"launcher prompt still contains sensitive source path: {sample}")
@@ -61,6 +65,8 @@ class ExecutionWorkspace:
         }
         if prompt_rewrite_count is not None:
             metadata["prompt_rewrite_count"] = int(prompt_rewrite_count)
+        if self.worktree_metadata:
+            metadata.update(dict(self.worktree_metadata))
         return metadata
 
     def _real_repo_spellings(self) -> tuple[str, ...]:
@@ -83,13 +89,28 @@ class ExecutionWorkspace:
             escaped_spelling = _json_slash_escape(spelling)
             if escaped_spelling != spelling:
                 pairs.append((escaped_spelling, _json_slash_escape(launcher)))
+        for spelling, replacement in self.prompt_rewrite_pairs:
+            pairs.append((spelling, replacement))
+            escaped_spelling = _json_slash_escape(spelling)
+            escaped_replacement = _json_slash_escape(replacement)
+            if escaped_spelling != spelling:
+                pairs.append((escaped_spelling, escaped_replacement))
         return tuple(dict.fromkeys(pairs))
+
+    def _prompt_sensitive_spelling_variants(self) -> tuple[str, ...]:
+        values: list[str] = []
+        for spelling in self.prompt_sensitive_spellings:
+            values.append(spelling)
+            values.append(_json_slash_escape(spelling))
+        return tuple(dict.fromkeys(value for value in values if value))
 
 
 def create_execution_workspace(
     repo_root: Path,
     *,
     data_dir: Path,
+    run_id: str | None = None,
+    prepared_plan: Mapping[str, Any] | None = None,
     enabled: bool | None = None,
     home: Path | None = None,
     sensitive_roots: Iterable[Path] | None = None,
@@ -119,6 +140,38 @@ def create_execution_workspace(
             mode="real",
             sensitive_prefixes=prefixes,
             real_repo_spellings=real_repo_spellings,
+        )
+    if run_id and prepared_plan is not None:
+        try:
+            from .execution_worktree import materialize_run_execution_worktree
+
+            worktree = materialize_run_execution_worktree(
+                run_id,
+                source_project_root=real_repo_root,
+                data_dir=Path(data_dir),
+                prepared_plan=prepared_plan,
+                sensitive_prefixes=prefixes,
+            )
+        except Exception as exc:
+            raise ExecutionWorkspaceError(str(exc)) from exc
+        rewrite_pairs = _worktree_rewrite_pairs(worktree)
+        sensitive_spellings = (
+            str(worktree.source_project_root),
+            str(worktree.source_git_root),
+            str(worktree.source_project_root.resolve(strict=False)),
+            str(worktree.source_git_root.resolve(strict=False)),
+        )
+        return ExecutionWorkspace(
+            real_repo_root=worktree.source_project_root,
+            launcher_repo_root=worktree.safe_project_root,
+            launcher_cwd=worktree.safe_project_root,
+            mode="safe-worktree",
+            sensitive_prefixes=prefixes,
+            safe_cwd_enabled=True,
+            real_repo_spellings=real_repo_spellings,
+            prompt_rewrite_pairs=rewrite_pairs,
+            prompt_sensitive_spellings=tuple(dict.fromkeys(sensitive_spellings)),
+            worktree_metadata=worktree.to_metadata(),
         )
     launcher_repo_root = _ensure_launcher_symlink(real_repo_root, data_dir=Path(data_dir), sensitive_prefixes=prefixes)
     return ExecutionWorkspace(
@@ -243,6 +296,19 @@ def _unique_paths(paths: Iterable[Path]) -> tuple[Path, ...]:
 
 def _json_slash_escape(value: str) -> str:
     return value.replace("/", r"\/")
+
+
+def _worktree_rewrite_pairs(worktree: Any) -> tuple[tuple[str, str], ...]:
+    pairs = [
+        (str(worktree.source_project_root), str(worktree.safe_project_root)),
+        (str(worktree.source_project_root.resolve(strict=False)), str(worktree.safe_project_root.resolve(strict=False))),
+        (str(worktree.source_git_root), str(worktree.safe_git_root)),
+        (str(worktree.source_git_root.resolve(strict=False)), str(worktree.safe_git_root.resolve(strict=False))),
+    ]
+    for artifact in worktree.copied_artifacts:
+        pairs.append((str(artifact.source_path), str(artifact.destination_path)))
+        pairs.append((str(artifact.source_path.resolve(strict=False)), str(artifact.destination_path.resolve(strict=False))))
+    return tuple(dict.fromkeys((source, destination) for source, destination in pairs if source and destination))
 
 
 __all__ = [

@@ -6,6 +6,7 @@ Known SwarmDaddy-owned phase-session failure kinds.
 | --- | --- | --- | --- | --- |
 | `adoptable_artifacts` | `artifact` | `adopt` | Valid artifacts can be adopted | `valid_result_artifact, valid_handoff_artifact` |
 | `attempt_mismatch` | `artifact_contract` | `human_gate` | Artifact contract error | `artifact_contract_errors` |
+| `canonical_path_leaked_in_tool_result` | `permission` | `human_gate` | Canonical source path leaked to writer | `transcript_diagnostics, command_metadata, sensitive_path_excerpt` |
 | `child_process_dead_no_artifacts` | `lifecycle` | `retry` | Child process ended before artifacts | `child_liveness, launch_dir` |
 | `claude_cli_missing` | `environment` | `human_gate` | Claude CLI is unavailable | `command_metadata, launch_dir` |
 | `completed_work_units_not_prepared` | `artifact_contract` | `human_gate` | Artifact contract error | `artifact_contract_errors` |

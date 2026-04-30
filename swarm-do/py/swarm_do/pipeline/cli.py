@@ -1969,20 +1969,39 @@ def cmd_worktrees(args: argparse.Namespace) -> int:
         unit_worktree_path,
     )
 
-    repo = Path(args.repo)
     try:
-        if args.worktrees_command == "names":
+        if args.worktrees_command == "adopt-run":
+            from .execution_worktree import adopt_run_worktree
+
+            payload = adopt_run_worktree(
+                args.run_id,
+                data_dir=Path(args.data_dir) if args.data_dir else resolve_data_dir(),
+                apply=bool(args.apply),
+            )
+        elif args.worktrees_command == "cleanup-run":
+            from .execution_worktree import cleanup_run_worktree
+
+            payload = cleanup_run_worktree(
+                args.run_id,
+                data_dir=Path(args.data_dir) if args.data_dir else resolve_data_dir(),
+                apply=bool(args.apply),
+            )
+        elif args.worktrees_command == "names":
+            repo = Path(args.repo)
             payload = {
                 "integration_branch": integration_branch_name(args.run_id),
                 "unit_branch": unit_branch_name(args.run_id, args.unit_id) if args.unit_id else None,
                 "worktree_path": str(unit_worktree_path(repo, args.run_id, args.unit_id)) if args.unit_id else None,
             }
         elif args.worktrees_command == "ensure-integration":
+            repo = Path(args.repo)
             payload = {"integration_branch": ensure_integration_branch(repo, args.run_id, base_ref=args.base_ref)}
         elif args.worktrees_command == "add-unit":
+            repo = Path(args.repo)
             path, branch = add_unit_worktree(repo, args.run_id, args.unit_id, base_ref=args.base_ref)
             payload = {"unit_branch": branch, "worktree_path": str(path)}
         elif args.worktrees_command == "merge":
+            repo = Path(args.repo)
             result = merge_unit_branch(repo, args.integration_branch, args.unit_branch)
             payload = {
                 "integration_branch": result.integration_branch,
@@ -2015,10 +2034,48 @@ def cmd_worktrees(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
-        for key, value in payload.items():
-            if value is not None:
-                print(f"{key}: {value}")
+        if args.worktrees_command == "adopt-run":
+            print(_format_worktree_adopt(payload))
+        elif args.worktrees_command == "cleanup-run":
+            print(_format_worktree_cleanup(payload))
+        else:
+            for key, value in payload.items():
+                if value is not None:
+                    print(f"{key}: {value}")
     return 0
+
+
+def _format_worktree_adopt(payload: Mapping[str, Any]) -> str:
+    action = "applied" if payload.get("applied") else "dry-run"
+    lines = [f"worktrees adopt-run: {payload.get('run_id')} {action}"]
+    lines.append(f"  safe_project_root: {payload.get('safe_project_root')}")
+    lines.append(f"  source_project_root: {payload.get('source_project_root')}")
+    lines.append(f"  changed_files: {len(payload.get('changed_files') or [])}")
+    for operation in payload.get("copyback_operations") or []:
+        if isinstance(operation, Mapping):
+            lines.append(f"    - {operation.get('action')} {operation.get('path')} -> {operation.get('destination_path')}")
+    blocked = payload.get("blocked_paths") or []
+    if blocked:
+        lines.append(f"  blocked_paths: {len(blocked)}")
+        for item in blocked:
+            if isinstance(item, Mapping):
+                lines.append(f"    - {item.get('path')}: {item.get('reason')}")
+    if not payload.get("applied"):
+        lines.append(f"  apply: {payload.get('apply_command')}")
+    return "\n".join(lines)
+
+
+def _format_worktree_cleanup(payload: Mapping[str, Any]) -> str:
+    action = "removed" if payload.get("applied") else "dry-run"
+    lines = [f"worktrees cleanup-run: {payload.get('run_id')} {action}"]
+    lines.append(f"  safe_git_worktree_root: {payload.get('safe_git_worktree_root')}")
+    if payload.get("preserved_reason"):
+        lines.append(f"  preserved: {payload.get('preserved_reason')}")
+    for target in payload.get("targets") or []:
+        lines.append(f"    - {target}")
+    if not payload.get("applied"):
+        lines.append(f"  apply: {payload.get('apply_command')}")
+    return "\n".join(lines)
 
 
 def cmd_selftest(args: argparse.Namespace) -> int:
@@ -2407,6 +2464,18 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--repo", default=".")
     p.add_argument("--integration-branch", required=True)
     p.add_argument("--unit-branch", required=True)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_worktrees)
+    p = worktrees_sub.add_parser("adopt-run")
+    p.add_argument("run_id")
+    p.add_argument("--data-dir")
+    p.add_argument("--apply", action="store_true")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_worktrees)
+    p = worktrees_sub.add_parser("cleanup-run")
+    p.add_argument("run_id")
+    p.add_argument("--data-dir")
+    p.add_argument("--apply", action="store_true")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_worktrees)
 

@@ -214,7 +214,26 @@
                 "diagnostic_last_error": { "type": ["string", "null"] },
                 "tool_name": { "type": ["string", "null"] },
                 "tool_error_kind": { "type": ["string", "null"] },
-                "message_excerpt": { "type": ["string", "null"] }
+                "message_excerpt": { "type": ["string", "null"] },
+                "sensitive_path_excerpt": { "type": ["string", "null"] },
+                "command_metadata": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "execution_workspace_mode": { "type": ["string", "null"] },
+                "source_git_top_level": { "type": ["string", "null"] },
+                "source_project_root": { "type": ["string", "null"] },
+                "safe_git_worktree_root": { "type": ["string", "null"] },
+                "safe_project_root": { "type": ["string", "null"] },
+                "project_subdir": { "type": ["string", "null"] },
+                "run_execution_branch": { "type": ["string", "null"] },
+                "git_base_sha": { "type": ["string", "null"] },
+                "git_base_ref": { "type": ["string", "null"] },
+                "run_worktree_manifest_path": { "type": ["string", "null"] },
+                "copied_ignored_artifacts": {
+                  "type": "array",
+                  "items": { "type": "object", "additionalProperties": true }
+                }
               }
             }
           }

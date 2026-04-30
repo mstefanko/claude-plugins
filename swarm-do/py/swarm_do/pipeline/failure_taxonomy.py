@@ -136,6 +136,17 @@ _SPECS = (
         ("transcript_diagnostics", "launch_dir"),
     ),
     FailureKindSpec(
+        "canonical_path_leaked_in_tool_result",
+        "permission",
+        "human_gate",
+        "Canonical source path leaked to writer",
+        (
+            "A prompt or tool result exposed a path under the sensitive source checkout. "
+            "Do not retry the same workspace mode; rerun from the safe-worktree launcher path."
+        ),
+        ("transcript_diagnostics", "command_metadata", "sensitive_path_excerpt"),
+    ),
+    FailureKindSpec(
         "writer_silent_with_turns",
         "writer_runtime",
         "human_gate",
