@@ -281,6 +281,7 @@ class CommandProfileTests(unittest.TestCase):
         self.assertIsNone(pump.call_args.kwargs["max_phases"])
         self.assertTrue(pump.call_args.kwargs["init_if_missing"])
         self.assertEqual(pump.call_args.kwargs["max_budget_usd"], 3.50)
+        self.assertEqual(pump.call_args.kwargs["policy_update"].forced_overrides["max_phase_attempt_budget_usd"], 3.50)
 
     def test_do_prepared_phase_sessions_auto_returns_nonzero_when_launcher_blocked(self) -> None:
         repo, _data, _artifact_path = self._accepted_prepared_run()

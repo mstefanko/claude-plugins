@@ -113,6 +113,9 @@ class PhaseEvidenceTests(unittest.TestCase):
             self.assertEqual(manifest["failure"]["failure_kind"], "lease_expired_no_artifacts")
             self.assertEqual(manifest["failure"]["failure_category"], "lifecycle")
             self.assertEqual(manifest["failure"]["retry_decision"], "retry")
+            self.assertEqual(manifest["failure"]["policy_action"], "retry_after_backoff")
+            self.assertEqual(manifest["failure"]["policy_reason"], "normal_retry")
+            self.assertEqual(manifest["failure"]["policy_inputs"]["failure_kind"], "lease_expired_no_artifacts")
             self.assertTrue(Path(manifest["recovery"]["recovery_context_path"]).is_file())
 
 

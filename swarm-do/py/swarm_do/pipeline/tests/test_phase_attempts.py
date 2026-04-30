@@ -136,6 +136,9 @@ class PhaseAttemptSummaryTests(unittest.TestCase):
                     "attempt": 1,
                     "failure_kind": "launcher_nonzero_no_artifacts",
                     "retry_decision": "retry",
+                    "policy_action": "retry_after_backoff",
+                    "policy_reason": "normal_retry",
+                    "policy_inputs": {"failure_kind": "launcher_nonzero_no_artifacts"},
                     "adopted": False,
                     "partial_artifacts": False,
                     "artifact_error_kinds": [],
@@ -149,6 +152,9 @@ class PhaseAttemptSummaryTests(unittest.TestCase):
             row = summary["attempts"]["rows"][0]
             self.assertEqual(row["failure_category"], "launcher")
             self.assertEqual(row["failure_retry_class"], "retry")
+            self.assertEqual(row["policy_action"], "retry_after_backoff")
+            self.assertEqual(row["policy_reason"], "normal_retry")
+            self.assertEqual(row["policy_inputs"], {"failure_kind": "launcher_nonzero_no_artifacts"})
             self.assertEqual(summary["last_failure"], None)
 
 

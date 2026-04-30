@@ -13,9 +13,11 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 from .context_bundle import render_context_bundle
 from .execution_workspace import ExecutionWorkspaceError, create_execution_workspace, is_sensitive_path
 from .paths import REPO_ROOT, resolve_data_dir
+from .phase_artifact_contract import phase_artifact_contract_markdown
 from .phase_sessions import (
     PhaseSessionError,
     claim_next_phase,
+    configure_retry_policy,
     init_phase_sessions,
     load_phase_sessions,
     phase_handoff_path,
@@ -61,11 +63,32 @@ def pump_phases(
     claude_runner: ClaudeRunner | None = None,
     claude_path: str | None = None,
     max_budget_usd: float | None = None,
+    policy_update: Any | None = None,
     data_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Run the foreground pump over manual or fake-test launchers."""
 
     base = data_dir or resolve_data_dir()
+    if launcher not in ENABLED_LAUNCHERS:
+        raise ValueError(f"unsupported launcher: {launcher}")
+    _append_pump_event(base, run_id=run_id, event_type="phase_pump_started", details={"launcher": launcher})
+
+    status = phase_status(run_id, data_dir=base)
+    if status["status"] == "not_initialized":
+        if not init_if_missing:
+            _append_pump_event(base, run_id=run_id, event_type="phase_pump_stopped", details={"status": "not_initialized"})
+            return {"status": "not_initialized", "completed_phases": [], "recommended_command": status["recommended_command"]}
+        init_phase_sessions(run_id, data_dir=base, policy_update=policy_update)
+    elif _policy_update_has_values(policy_update):
+        configure_retry_policy(run_id, policy_update, data_dir=base)
+
+    retry_policy = load_phase_sessions(run_id, data_dir=base).get("retry_policy")
+    resolved_max_budget_usd = max_budget_usd
+    if resolved_max_budget_usd is None and isinstance(retry_policy, Mapping):
+        value = retry_policy.get("max_phase_attempt_budget_usd")
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            resolved_max_budget_usd = float(value)
+
     if launcher == "claude-print":
         capability = next(item for item in doctor_report().get("launchers", []) if item.get("name") == "claude-print")
         if not capability.get("eligible"):
@@ -77,17 +100,6 @@ def pump_phases(
             )
             _append_pump_event(base, run_id=run_id, event_type="phase_pump_stopped", details={"status": "ineligible"})
             return {"status": "ineligible", "launcher": launcher, "capability": capability, "completed_phases": []}
-
-    if launcher not in ENABLED_LAUNCHERS:
-        raise ValueError(f"unsupported launcher: {launcher}")
-    _append_pump_event(base, run_id=run_id, event_type="phase_pump_started", details={"launcher": launcher})
-
-    status = phase_status(run_id, data_dir=base)
-    if status["status"] == "not_initialized":
-        if not init_if_missing:
-            _append_pump_event(base, run_id=run_id, event_type="phase_pump_stopped", details={"status": "not_initialized"})
-            return {"status": "not_initialized", "completed_phases": [], "recommended_command": status["recommended_command"]}
-        init_phase_sessions(run_id, data_dir=base)
 
     completed: list[dict[str, Any]] = []
     manual: dict[str, Any] | None = None
@@ -154,7 +166,7 @@ def pump_phases(
                 lease_owner=str(claim["lease_owner"]),
                 claude_runner=claude_runner,
                 claude_path=claude_path,
-                max_budget_usd=max_budget_usd,
+                max_budget_usd=resolved_max_budget_usd,
                 data_dir=base,
             )
             if launch["status"] != "launched":
@@ -248,6 +260,10 @@ def format_pump_result(result: Mapping[str, Any]) -> str:
     if recommended:
         lines.append(f"next: {recommended}")
     return "\n".join(lines)
+
+
+def _policy_update_has_values(policy_update: Any | None) -> bool:
+    return bool(getattr(policy_update, "forced_overrides", None) or getattr(policy_update, "default_overrides", None))
 
 
 def _handle_recovery_decision(
@@ -676,75 +692,21 @@ def _append_claude_print_contract(
     prepared_plan_sha: str = "",
     phase_content_sha: str = "",
 ) -> str:
-    result_template = {
-        "schema_version": 1,
-        "run_id": run_id,
-        "phase_id": phase_id,
-        "phase_attempt": phase_attempt,
-        "status": "<one of: " + ", ".join(status_values) + ">",
-        "launcher": "claude-print",
-        "session_name": session_name,
-        "prepared_plan_sha": prepared_plan_sha,
-        "phase_content_sha": phase_content_sha,
-        "started_at": "<ISO-8601 UTC timestamp, e.g. 2026-04-29T18:00:00Z>",
-        "completed_at": "<ISO-8601 UTC timestamp, e.g. 2026-04-29T18:08:00Z>",
-        "handoff_path": str(handoff_path),
-        "summary": "<1-3 sentence summary of work done>",
-        "completed_work_units": [],
-        "failed_work_units": [],
-        "blocked_reason": None,
-        "needs_input": [],
-        "validation": [],
-        "artifacts": [],
-        "error": None,
-    }
-    handoff_template = {
-        "schema_version": 1,
-        "run_id": run_id,
-        "phase_id": phase_id,
-        "phase_attempt": phase_attempt,
-        "status": "<same value as result.status>",
-        "written_at": "<ISO-8601 UTC timestamp>",
-        "summary": "<1-3 sentence handoff summary for the next phase>",
-        "decisions": [],
-        "changed_files": [],
-        "completed_work_units": [],
-        "open_items": [],
-        "blockers": [],
-        "do_not_retry": [],
-        "validation_summary": [],
-        "artifacts": [],
-        "next_phase_context": [],
-    }
+    artifact_contract = phase_artifact_contract_markdown(
+        result_path=result_path,
+        handoff_path=handoff_path,
+        status_values=status_values,
+        run_id=run_id,
+        phase_id=phase_id,
+        phase_attempt=phase_attempt,
+        launcher="claude-print",
+        session_name=session_name,
+        prepared_plan_sha=prepared_plan_sha,
+        phase_content_sha=phase_content_sha,
+    )
     contract = [
         "",
-        "## Launcher Artifact Contract",
-        "",
-        f"- Write the phase result JSON exactly to: {result_path}",
-        f"- Write the phase handoff JSON exactly to: {handoff_path}",
-        f"- The result status must be one of: {', '.join(status_values)}",
-        "- Return a final JSON object containing status, result_path, handoff_path, and session_name.",
-        "- Do not start another orchestrator or mutate the global phase queue.",
-        "",
-        "Both files are validated against strict JSON schemas. Use these templates verbatim, replacing only the `<...>` placeholder values. Do not add or remove keys.",
-        "",
-        "Array-element type rules (the schemas reject other shapes):",
-        "- `result.completed_work_units`, `result.failed_work_units`, `result.needs_input`: each item is a plain string.",
-        "- In phase-session mode, `result.completed_work_units` and `handoff.completed_work_units` must stay empty unless you are using a prepared unit id shown in the informational decomposition. Put semantic accomplishments in `summary`, `artifacts`, or `validation`.",
-        "- `result.validation`: each item is a JSON object (e.g. `{\"command\": \"pytest\", \"status\": \"passed\"}`).",
-        "- `result.artifacts`: each item is a JSON object (e.g. `{\"path\": \"docs/examples/x.json\", \"kind\": \"fixture\"}`).",
-        "- `handoff.decisions`, `handoff.changed_files`, `handoff.completed_work_units`, `handoff.open_items`, `handoff.blockers`, `handoff.do_not_retry`, `handoff.validation_summary`, `handoff.next_phase_context`: each item is a plain string. Do NOT use objects.",
-        "- `handoff.artifacts`: each item is a JSON object.",
-        "",
-        "Phase result JSON template:",
-        "```json",
-        json.dumps(result_template, indent=2),
-        "```",
-        "",
-        "Phase handoff JSON template:",
-        "```json",
-        json.dumps(handoff_template, indent=2),
-        "```",
+        artifact_contract,
         "",
         "## Tool Usage",
         "",

@@ -170,6 +170,8 @@ class PhaseRecoveryTests(unittest.TestCase):
             self.assertEqual(phase["blocked_reason"], "retry_policy_human_gate")
             self.assertEqual(phase["retry_policy_decision"], "same_failure_limit")
             self.assertEqual(phase["last_failure_kind"], "launcher_nonzero_no_artifacts")
+            self.assertEqual(phase["attempt_history"][-1]["policy_action"], "human_gate")
+            self.assertEqual(phase["attempt_history"][-1]["policy_reason"], "same_failure_limit")
             events = _run_events(data)
             self.assertIn("phase_session_blocked", [row["event_type"] for row in events])
             blocked = [row for row in events if row["event_type"] == "phase_session_blocked"][-1]
@@ -200,6 +202,55 @@ class PhaseRecoveryTests(unittest.TestCase):
             self.assertEqual(phase["retry_policy_decision"], "deterministic_contract_failure")
             self.assertEqual(phase["last_failure_kind"], "outer_artifacts_missing")
             self.assertEqual(phase["attempt_history"][0]["failure_category"], "artifact_contract")
+            self.assertEqual(phase["attempt_history"][0]["policy_reason"], "deterministic_contract_failure")
+
+    def test_failed_attempt_spend_threshold_blocks(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            _patch_retry_policy(data, run_id, {"max_failed_attempt_cost_usd": 1.0})
+            claim_next_phase(run_id, data_dir=data, repo_root=repo, lease_owner="owner-1")
+            start_phase(run_id, "1", launcher="claude-print", lease_owner="owner-1", data_dir=data)
+            _write_stdout(data, run_id, "1", 1, {"total_cost_usd": 1.25})
+
+            result = reconcile_phase_sessions(
+                run_id,
+                data_dir=data,
+                repo_root=repo,
+                launcher_result={"status": "launched", "returncode": 1, "stdout": "", "stderr": "boom"},
+                now=datetime(2026, 4, 29, tzinfo=UTC),
+            )
+
+            self.assertEqual(result["status"], "blocked")
+            state = json.loads(phase_session_path(run_id, data_dir=data).read_text(encoding="utf-8"))
+            history = state["phases"][0]["attempt_history"][0]
+            self.assertEqual(history["retry_decision"], "spend_threshold")
+            self.assertEqual(history["policy_reason"], "failed_attempt_spend_threshold")
+            self.assertEqual(history["policy_inputs"]["current_attempt_cost_usd"], 1.25)
+
+    def test_cost_conflict_is_unknown_for_spend_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            _patch_retry_policy(data, run_id, {"max_failed_attempt_cost_usd": 0.01})
+            claim_next_phase(run_id, data_dir=data, repo_root=repo, lease_owner="owner-1")
+            start_phase(run_id, "1", launcher="claude-print", lease_owner="owner-1", data_dir=data)
+            _write_stdout(data, run_id, "1", 1, {"total_cost_usd": 1.0, "modelUsage": {"claude": {"costUSD": 2.0}}})
+
+            result = reconcile_phase_sessions(
+                run_id,
+                data_dir=data,
+                repo_root=repo,
+                launcher_result={"status": "launched", "returncode": 1, "stdout": "", "stderr": "boom"},
+                now=datetime(2026, 4, 29, tzinfo=UTC),
+            )
+
+            self.assertEqual(result["status"], "retry_waiting")
+            state = json.loads(phase_session_path(run_id, data_dir=data).read_text(encoding="utf-8"))
+            history = state["phases"][0]["attempt_history"][0]
+            self.assertEqual(history["policy_reason"], "normal_retry")
+            self.assertEqual(history["policy_inputs"]["cost_confidence"], "conflict")
+            self.assertEqual(history["policy_inputs"]["unknown_failed_attempt_count"], 1)
 
     def test_zero_returncode_empty_result_with_turns_blocks_as_silent_writer(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -354,6 +405,13 @@ def _patch_phase(data: Path, run_id: str, updates: dict) -> None:
     path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def _patch_retry_policy(data: Path, run_id: str, updates: dict) -> None:
+    path = phase_session_path(run_id, data_dir=data)
+    state = json.loads(path.read_text(encoding="utf-8"))
+    state["retry_policy"].update(updates)
+    path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def _run_events(data: Path) -> list[dict]:
     path = data / "telemetry" / "run_events.jsonl"
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -363,6 +421,13 @@ def _write_command(data: Path, run_id: str, phase_id: str, attempt: int, payload
     path = data / "runs" / run_id / "phase_launches" / phase_id / f"attempt-{attempt}" / "command.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
+def _write_stdout(data: Path, run_id: str, phase_id: str, attempt: int, payload: dict) -> Path:
+    path = data / "runs" / run_id / "phase_launches" / phase_id / f"attempt-{attempt}" / "stdout.txt"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
     return path
 
 

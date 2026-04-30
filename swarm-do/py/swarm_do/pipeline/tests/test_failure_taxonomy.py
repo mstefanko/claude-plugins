@@ -36,6 +36,22 @@ class FailureTaxonomyTests(unittest.TestCase):
         for kind in known_failure_kinds():
             self.assertIn(f"`{kind}`", markdown)
 
+    def test_phase_artifact_contract_error_kinds_are_known(self) -> None:
+        for kind in (
+            "status_mismatch",
+            "result_identity_mismatch",
+            "prepared_plan_sha_mismatch",
+            "phase_content_sha_mismatch",
+            "handoff_identity_mismatch",
+            "attempt_mismatch",
+            "handoff_status_mismatch",
+            "completed_work_units_not_prepared",
+            "path_escape",
+        ):
+            with self.subTest(kind=kind):
+                self.assertIn(kind, known_failure_kinds())
+                self.assertTrue(failure_kind_details(kind)["failure_known"])
+
 
 if __name__ == "__main__":
     unittest.main()

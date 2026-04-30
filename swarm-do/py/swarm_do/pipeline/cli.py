@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -37,6 +38,7 @@ from .registry import (
 )
 from .rollout import format_status, history_lines, load_state, mark_dogfood, set_field
 from .validation import schema_lint_pipeline, schema_lint_work_units, validate_preset_and_pipeline
+from .phase_autopilot_policy import ResolvedPolicyUpdate, expand_profile
 
 
 def _ensure_current_file() -> Path:
@@ -665,6 +667,64 @@ def _phase_sessions_mode(args: argparse.Namespace) -> str:
     return value
 
 
+def policy_update_from_args_and_env(args: argparse.Namespace) -> ResolvedPolicyUpdate:
+    forced: dict[str, Any] = {}
+    profile = getattr(args, "policy_profile", None)
+    if profile:
+        forced.update(expand_profile(str(profile)))
+    attempt_budget = getattr(args, "max_phase_attempt_budget_usd", None)
+    legacy_budget = getattr(args, "max_budget_usd", None)
+    if attempt_budget is not None:
+        forced["max_phase_attempt_budget_usd"] = attempt_budget
+    elif legacy_budget is not None:
+        forced["max_phase_attempt_budget_usd"] = legacy_budget
+    for arg_name, policy_key in (
+        ("max_failed_attempt_cost_usd", "max_failed_attempt_cost_usd"),
+        ("max_failed_run_cost_usd", "max_failed_run_cost_usd"),
+    ):
+        value = getattr(args, arg_name, None)
+        if value is not None:
+            forced[policy_key] = value
+
+    defaults: dict[str, Any] = {}
+    env_profile = os.environ.get("SWARM_PHASE_AUTOPILOT_PROFILE")
+    if env_profile:
+        defaults.update(expand_profile(env_profile))
+    for env_name, policy_key in (
+        ("SWARM_MAX_FAILED_ATTEMPT_COST_USD", "max_failed_attempt_cost_usd"),
+        ("SWARM_MAX_FAILED_RUN_COST_USD", "max_failed_run_cost_usd"),
+        ("SWARM_MAX_PHASE_ATTEMPT_BUDGET_USD", "max_phase_attempt_budget_usd"),
+    ):
+        raw = os.environ.get(env_name)
+        if raw is not None and raw != "":
+            defaults[policy_key] = float(raw)
+    return ResolvedPolicyUpdate(forced_overrides=forced, default_overrides=defaults)
+
+
+def _phase_attempt_budget_cli_value(args: argparse.Namespace) -> float | None:
+    value = getattr(args, "max_phase_attempt_budget_usd", None)
+    if value is not None:
+        return value
+    return getattr(args, "max_budget_usd", None)
+
+
+def _policy_payload_for_run(run_id: str) -> dict[str, Any] | None:
+    try:
+        from .phase_sessions import load_phase_sessions
+
+        retry_policy = load_phase_sessions(run_id).get("retry_policy")
+    except Exception:
+        return None
+    if not isinstance(retry_policy, Mapping):
+        return None
+    return {
+        "autopilot_profile": retry_policy.get("autopilot_profile"),
+        "max_failed_attempt_cost_usd": retry_policy.get("max_failed_attempt_cost_usd"),
+        "max_failed_run_cost_usd": retry_policy.get("max_failed_run_cost_usd"),
+        "max_phase_attempt_budget_usd": retry_policy.get("max_phase_attempt_budget_usd"),
+    }
+
+
 def _print_prepared_dispatch(args: argparse.Namespace, payload: Mapping[str, Any]) -> None:
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))
@@ -687,7 +747,8 @@ def _dispatch_with_phase_sessions(args: argparse.Namespace, dispatch_payload: Ma
         launcher=launcher,
         max_phases=None,
         init_if_missing=True,
-        max_budget_usd=getattr(args, "max_budget_usd", None),
+        max_budget_usd=_phase_attempt_budget_cli_value(args),
+        policy_update=policy_update_from_args_and_env(args),
     )
     payload = dict(dispatch_payload)
     payload["phase_sessions"] = {
@@ -697,6 +758,9 @@ def _dispatch_with_phase_sessions(args: argparse.Namespace, dispatch_payload: Ma
         "completed_phase_count": len(pump_payload.get("completed_phases") or []),
         "pump": pump_payload,
     }
+    policy = _policy_payload_for_run(run_id)
+    if policy is not None:
+        payload["phase_sessions"]["policy"] = policy
     payload["status_label"] = _phase_session_status_label(str(pump_payload.get("status") or "unknown"))
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))
@@ -1238,7 +1302,7 @@ def cmd_phases(args: argparse.Namespace) -> int:
     try:
         command = args.phases_command
         if command == "init":
-            payload = init_phase_sessions(args.run_id)
+            payload = init_phase_sessions(args.run_id, policy_update=policy_update_from_args_and_env(args))
             exit_code = 0
         elif command == "status":
             payload = phase_status(args.run_id)
@@ -1335,7 +1399,8 @@ def cmd_phases(args: argparse.Namespace) -> int:
                 init_if_missing=args.init,
                 stop_on_checkpoint=args.stop_on_checkpoint,
                 fake_statuses=args.fake_status or (),
-                max_budget_usd=args.max_budget_usd,
+                max_budget_usd=_phase_attempt_budget_cli_value(args),
+                policy_update=policy_update_from_args_and_env(args),
             )
             exit_code = 0 if payload.get("status") in {"complete", "max_phases", "manual_waiting", "checkpoint"} else 2
         elif command == "decisions":
@@ -1437,6 +1502,8 @@ def _format_phase_status(payload: Mapping[str, Any]) -> str:
                 bits.append(f"retry_class={row.get('failure_retry_class')}")
             if row.get("retry_decision"):
                 bits.append(f"retry_decision={row.get('retry_decision')}")
+            if row.get("policy_reason"):
+                bits.append(f"policy_reason={row.get('policy_reason')}")
             if row.get("failure_operator_title"):
                 bits.append(f"message={row.get('failure_operator_title')}")
             if row.get("evidence_path"):
@@ -1509,6 +1576,8 @@ def _format_phase_recovery(payload: Mapping[str, Any]) -> str:
         ]
         if action.get("failure_kind"):
             bits.append(f"failure={action.get('failure_kind')}")
+        if action.get("policy_reason"):
+            bits.append(f"policy_reason={action.get('policy_reason')}")
         if action.get("next_retry_at"):
             bits.append(f"next_retry_at={action.get('next_retry_at')}")
         lines.append("  - " + " ".join(bits))
@@ -1670,6 +1739,8 @@ def _format_phase_evidence(payload: Mapping[str, Any]) -> str:
             bits.append(f"retry_class={item.get('failure_retry_class')}")
         if item.get("retry_decision"):
             bits.append(f"retry_decision={item.get('retry_decision')}")
+        if item.get("policy_reason"):
+            bits.append(f"policy_reason={item.get('policy_reason')}")
         if item.get("changed_file_count") is not None:
             bits.append(f"changed={item.get('changed_file_count')}")
         if item.get("evidence_path"):
@@ -2200,6 +2271,7 @@ def _build_parser() -> argparse.ArgumentParser:
     do.add_argument("--continue", dest="prepare_continue", action="store_true", help="auto-accept safe prepared output and continue dispatch")
     do.add_argument("--phase-sessions", choices=["auto", "off"], default="off", help="run accepted prepared phases through the fresh-session pump")
     do.add_argument("--max-budget-usd", type=float, help="forwarded to the claude-print phase-session launcher")
+    _add_phase_policy_flags(do)
     do.add_argument("--bd-epic-id")
     do.add_argument("--no-write-state", action="store_true")
     do.add_argument("--json", action="store_true")
@@ -2269,6 +2341,7 @@ def _build_parser() -> argparse.ArgumentParser:
     phases_sub = phases.add_subparsers(dest="phases_command")
     p = phases_sub.add_parser("init")
     p.add_argument("run_id")
+    _add_phase_policy_flags(p)
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_phases)
     p = phases_sub.add_parser("status")
@@ -2347,6 +2420,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--stop-on-checkpoint", action="store_true")
     p.add_argument("--fake-status", action="append", choices=["complete", "failed", "blocked", "needs_input"], help=argparse.SUPPRESS)
     p.add_argument("--max-budget-usd", type=float)
+    _add_phase_policy_flags(p)
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_phases)
     p = phases_sub.add_parser("decisions")
@@ -2502,6 +2576,13 @@ def _build_parser() -> argparse.ArgumentParser:
     selftest.set_defaults(func=cmd_selftest)
 
     return parser
+
+
+def _add_phase_policy_flags(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--policy-profile", choices=["standard", "dogfood", "strict"])
+    parser.add_argument("--max-failed-attempt-cost-usd", type=float)
+    parser.add_argument("--max-failed-run-cost-usd", type=float)
+    parser.add_argument("--max-phase-attempt-budget-usd", type=float)
 
 
 def main(argv: list[str] | None = None) -> int:

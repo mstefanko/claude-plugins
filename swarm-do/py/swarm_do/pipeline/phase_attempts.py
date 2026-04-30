@@ -127,6 +127,9 @@ def _row_from_mapping(
         "status": item.get("status") or phase.get("status"),
         "failure_kind": item.get("failure_kind") or phase.get("last_failure_kind"),
         "retry_decision": item.get("retry_decision") or phase.get("retry_policy_decision"),
+        "policy_action": item.get("policy_action"),
+        "policy_reason": item.get("policy_reason"),
+        "policy_inputs": item.get("policy_inputs") if isinstance(item.get("policy_inputs"), Mapping) else None,
         "adopted": item.get("adopted"),
         "started_at": item.get("started_at") or phase.get("started_at"),
         "completed_at": item.get("completed_at") or phase.get("completed_at"),
@@ -182,6 +185,9 @@ def _merge_launch_dirs(rows: list[dict[str, Any]], launch_root: Path, *, archive
                 "status": "unknown",
                 "failure_kind": None,
                 "retry_decision": None,
+                "policy_action": None,
+                "policy_reason": None,
+                "policy_inputs": None,
                 "failure_category": None,
                 "failure_retry_class": None,
                 "failure_operator_title": None,
@@ -296,6 +302,9 @@ def _apply_manifest_projection(row: dict[str, Any], manifest: Mapping[str, Any])
         "failure_operator_title": failure.get("failure_operator_title"),
         "failure_operator_message": failure.get("failure_operator_message"),
         "failure_known": failure.get("failure_known"),
+        "policy_action": failure.get("policy_action"),
+        "policy_reason": failure.get("policy_reason"),
+        "policy_inputs": failure.get("policy_inputs") if isinstance(failure.get("policy_inputs"), Mapping) else None,
     }.items():
         if key == "status" and row.get(key) in {None, "unknown"} and value is not None:
             row[key] = value
@@ -342,7 +351,7 @@ def _cost_summary(
         if row.get("cost_confidence") == "provider_reported" and isinstance(cost, (int, float)):
             total += float(cost)
             bucket["total_usd"] += float(cost)
-            if _is_failed_attempt(row):
+            if is_failed_attempt(row):
                 failed += float(cost)
                 bucket["failed_usd"] += float(cost)
         else:
@@ -382,7 +391,7 @@ def _attempt_counts_by_phase(attempts: list[dict[str, Any]]) -> dict[str, int]:
     return counts
 
 
-def _is_failed_attempt(row: Mapping[str, Any]) -> bool:
+def is_failed_attempt(row: Mapping[str, Any]) -> bool:
     if row.get("adopted") is True or row.get("retry_decision") == "adopted":
         return False
     if row.get("failure_kind"):
@@ -410,6 +419,8 @@ def _last_failure(status: Mapping[str, Any]) -> dict[str, Any] | None:
                 "attempt": phase.get("attempt"),
                 "failure_kind": phase.get("last_failure_kind"),
                 "retry_decision": phase.get("retry_policy_decision"),
+                "policy_action": phase.get("policy_action"),
+                "policy_reason": phase.get("policy_reason"),
                 "blocked_reason": phase.get("blocked_reason"),
                 "evidence_path": phase.get("evidence_path"),
                 **details,
@@ -485,4 +496,4 @@ def _attempt_sort_key(row: Mapping[str, Any]) -> tuple[str, str, int, str]:
     return (_archive_key(row), str(row.get("phase_id") or ""), int(row.get("attempt") or 0), str(row.get("launch_dir") or ""))
 
 
-__all__ = ["summarize_phase_attempts"]
+__all__ = ["is_failed_attempt", "summarize_phase_attempts"]

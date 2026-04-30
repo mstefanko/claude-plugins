@@ -1,0 +1,24 @@
+{
+  "artifacts": [],
+  "blockers": [
+    "Choose whether the workflow should retry automatically after a product-decision block."
+  ],
+  "changed_files": [],
+  "completed_work_units": [],
+  "decisions": [],
+  "do_not_retry": [
+    "Await the product decision before retrying."
+  ],
+  "next_phase_context": [],
+  "open_items": [
+    "Ask the owner for the desired behavior."
+  ],
+  "phase_attempt": 1,
+  "phase_id": "1",
+  "run_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+  "schema_version": 1,
+  "status": "blocked",
+  "summary": "Operator review is required.",
+  "validation_summary": [],
+  "written_at": "2026-04-29T18:08:30Z"
+}

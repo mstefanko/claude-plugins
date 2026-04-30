@@ -130,6 +130,8 @@ class PhaseSessionRunRow:
     cleanup_untracked_files: tuple[str, ...] = ()
     failure_category: str | None = None
     failure_operator_title: str | None = None
+    policy_action: str | None = None
+    policy_reason: str | None = None
     evidence_path: str | None = None
 
 
@@ -2931,6 +2933,8 @@ def phase_session_run_rows(data_dir: Path | None = None, limit: int = 20) -> lis
                     failure_operator_title=last_failure.get("failure_operator_title")
                     if isinstance(last_failure.get("failure_operator_title"), str)
                     else None,
+                    policy_action=_last_policy_field(attempt_rows, "policy_action"),
+                    policy_reason=_last_policy_field(attempt_rows, "policy_reason"),
                     evidence_path=last_failure.get("evidence_path") if isinstance(last_failure.get("evidence_path"), str) else None,
                 )
             )
@@ -2954,6 +2958,8 @@ def phase_session_run_rows(data_dir: Path | None = None, limit: int = 20) -> lis
                     cleanup_untracked_files=(),
                     failure_category=None,
                     failure_operator_title=None,
+                    policy_action=None,
+                    policy_reason=None,
                     evidence_path=None,
                 )
             )
@@ -2971,6 +2977,8 @@ def phase_session_runs_text(rows: list[PhaseSessionRunRow]) -> str:
         failure = row.last_failure or "-"
         if row.failure_category or row.failure_operator_title:
             failure = f"{failure} [{row.failure_category or '-'}] {row.failure_operator_title or ''}".rstrip()
+        if row.policy_reason:
+            failure = f"{failure} policy={row.policy_reason}"
         unknown = f" unknown={row.unknown_cost_attempt_count}" if row.unknown_cost_attempt_count else ""
         untracked = f" untracked={len(row.cleanup_untracked_files)}" if row.cleanup_untracked_files else ""
         lines.append(
@@ -2997,6 +3005,14 @@ def _cleanup_untracked_files(attempt_rows: tuple[Mapping[str, Any], ...]) -> lis
             if isinstance(path, str) and path not in files:
                 files.append(path)
     return files
+
+
+def _last_policy_field(attempt_rows: tuple[Mapping[str, Any], ...], key: str) -> str | None:
+    for row in reversed(attempt_rows):
+        value = row.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
 
 
 def _active_phase_label(status: Mapping[str, Any]) -> str | None:

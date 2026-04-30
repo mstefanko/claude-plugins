@@ -13,6 +13,7 @@ from swarm_do.pipeline.phase_sessions import (
     cancel_phase_session_run,
     claim_next_phase,
     cleanup_phase_generated_artifacts,
+    configure_retry_policy,
     init_phase_sessions,
     load_phase_sessions,
     phase_handoff_path,
@@ -23,6 +24,7 @@ from swarm_do.pipeline.phase_sessions import (
     record_phase_result,
     start_phase,
 )
+from swarm_do.pipeline.phase_autopilot_policy import ResolvedPolicyUpdate
 from swarm_do.pipeline.tests.phase_session_fixtures import make_prepared_run
 
 
@@ -163,7 +165,53 @@ class PhaseSessionTests(unittest.TestCase):
 
             self.assertEqual(loaded["retry_policy"]["max_session_attempts"], 2)
             self.assertEqual(loaded["retry_policy"]["short_retry_backoff_seconds"], 60)
+            self.assertEqual(loaded["retry_policy"]["autopilot_profile"], "standard")
+            self.assertIsNone(loaded["retry_policy"]["max_failed_attempt_cost_usd"])
             self.assertEqual(loaded["phases"][0]["attempt_history"], [])
+
+    def test_configure_retry_policy_persists_validated_overrides(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+
+            configured = configure_retry_policy(
+                run_id,
+                ResolvedPolicyUpdate(
+                    forced_overrides={"autopilot_profile": "dogfood", "max_failed_run_cost_usd": 3.25},
+                    default_overrides={"max_failed_attempt_cost_usd": 1.0},
+                ),
+                data_dir=data,
+            )
+
+            policy = configured["state"]["retry_policy"]
+            self.assertEqual(policy["autopilot_profile"], "dogfood")
+            self.assertEqual(policy["max_failed_run_cost_usd"], 3.25)
+            self.assertEqual(policy["max_failed_attempt_cost_usd"], 1.0)
+            self.assertEqual(policy["max_phase_attempt_budget_usd"], 1.5)
+
+    def test_configure_retry_policy_rejects_invalid_values(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+
+            with self.assertRaises(PhaseSessionError):
+                configure_retry_policy(
+                    run_id,
+                    ResolvedPolicyUpdate(
+                        forced_overrides={"autopilot_profile": "turbo"},
+                        default_overrides={},
+                    ),
+                    data_dir=data,
+                )
+            with self.assertRaises(PhaseSessionError):
+                configure_retry_policy(
+                    run_id,
+                    ResolvedPolicyUpdate(
+                        forced_overrides={"max_failed_attempt_cost_usd": -0.01},
+                        default_overrides={},
+                    ),
+                    data_dir=data,
+                )
 
     def test_init_refuses_to_resnapshot_when_phase_artifacts_exist_without_state(self) -> None:
         with tempfile.TemporaryDirectory() as td:

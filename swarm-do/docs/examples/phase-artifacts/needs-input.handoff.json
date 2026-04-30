@@ -1,0 +1,20 @@
+{
+  "artifacts": [],
+  "blockers": [],
+  "changed_files": [],
+  "completed_work_units": [],
+  "decisions": [],
+  "do_not_retry": [],
+  "next_phase_context": [],
+  "open_items": [
+    "Confirm the external API endpoint to use."
+  ],
+  "phase_attempt": 1,
+  "phase_id": "1",
+  "run_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+  "schema_version": 1,
+  "status": "needs_input",
+  "summary": "Waiting on endpoint confirmation.",
+  "validation_summary": [],
+  "written_at": "2026-04-29T18:08:30Z"
+}

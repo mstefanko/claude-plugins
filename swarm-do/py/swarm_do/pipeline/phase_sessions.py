@@ -22,6 +22,12 @@ except ImportError:  # pragma: no cover - v1 is POSIX-only by design.
 from .paths import REPO_ROOT, resolve_data_dir
 from .prepare import STATUS_ACCEPTED, StalePreparedArtifactError, check_stale, load_prepared_artifact
 from .failure_taxonomy import failure_kind_details
+from .phase_autopilot_policy import (
+    ResolvedPolicyUpdate,
+    profile_defaults,
+    retry_policy_config,
+    validate_policy_overrides,
+)
 from .phase_evidence import MANIFEST_SCHEMA_VERSION, attempt_evidence_path, write_attempt_evidence_manifest
 from .run_state import _atomic_json_write, append_run_event, utc_now, validate_run_event
 
@@ -69,6 +75,10 @@ DEFAULT_RETRY_POLICY = {
     "short_retry_backoff_seconds": 60,
     "max_retry_after_seconds": 1800,
     "max_consecutive_same_failure_kind": 2,
+    "autopilot_profile": "standard",
+    "max_failed_attempt_cost_usd": None,
+    "max_failed_run_cost_usd": None,
+    "max_phase_attempt_budget_usd": None,
     "worktree_baseline_path": None,
     "worktree_baseline_warning": None,
 }
@@ -138,6 +148,7 @@ def init_phase_sessions(
     data_dir: Path | None = None,
     repo_root: Path | None = None,
     mode: str = "cli-pump",
+    policy_update: ResolvedPolicyUpdate | None = None,
 ) -> dict[str, Any]:
     """Initialize state from an accepted prepared artifact, idempotently."""
 
@@ -146,6 +157,15 @@ def init_phase_sessions(
         state_path = phase_session_path(run_id, data_dir=base)
         if state_path.exists():
             state = load_phase_sessions(run_id, data_dir=base)
+            if _policy_update_forces(policy_update):
+                state = _configure_retry_policy_in_state(state, policy_update)
+                _touch_and_write(base, run_id, state)
+                return {
+                    "initialized": False,
+                    "policy_configured": True,
+                    "state": state,
+                    "state_path": str(state_path),
+                }
             return {"initialized": False, "state": state, "state_path": str(state_path)}
 
         prepared = _load_accepted_prepared(run_id, data_dir=base, repo_root=repo_root)
@@ -199,7 +219,7 @@ def init_phase_sessions(
                 }
             )
             previous_phase_id = phase_id
-        retry_policy = dict(DEFAULT_RETRY_POLICY)
+        retry_policy = _retry_policy_with_update({}, policy_update)
         try:
             from .worktree_baseline import snapshot_worktree_baseline
 
@@ -235,6 +255,22 @@ def init_phase_sessions(
             bd_epic_id=_bd_epic_id(prepared),
         )
         return {"initialized": True, "state": state, "state_path": str(state_path)}
+
+
+def configure_retry_policy(
+    run_id: str,
+    policy_update: ResolvedPolicyUpdate | None,
+    *,
+    data_dir: Path | None = None,
+) -> dict[str, Any]:
+    """Merge validated retry-policy overrides into durable state."""
+
+    base = data_dir or resolve_data_dir()
+    with locked_phase_sessions(run_id, data_dir=base):
+        state = _read_state_object(phase_session_path(run_id, data_dir=base))
+        state = _configure_retry_policy_in_state(state, policy_update)
+        _touch_and_write(base, run_id, state)
+        return {"policy_configured": True, "state": state, "state_path": str(phase_session_path(run_id, data_dir=base))}
 
 
 def load_phase_sessions(run_id: str, *, data_dir: Path | None = None) -> dict[str, Any]:
@@ -728,6 +764,7 @@ def abandon_attempt_and_retry(
                 "retry_after_seconds": retry_after_seconds,
                 "evidence_path": evidence_path,
                 **_taxonomy_event_details(record),
+                **_policy_event_details(record),
             },
         )
         return {"retry": True, "phase": _phase_summary(phase), "state": state}
@@ -812,6 +849,7 @@ def mark_retry_exhausted(
                 "recommended_command": f"bin/swarm phases status {run_id}",
                 "evidence_path": evidence_path,
                 **_taxonomy_event_details(record),
+                **_policy_event_details(record),
             },
         )
         return {"retry_exhausted": True, "phase": _phase_summary(phase), "state": state}
@@ -875,6 +913,7 @@ def mark_phase_blocked(
             "recommended_command": f"bin/swarm phases status {run_id} --attempts --cost",
             "evidence_path": evidence_path,
             **_taxonomy_event_details(record),
+            **_policy_event_details(record),
         }
         event_details.update(dict(details or {}))
         _append_phase_event(
@@ -1254,12 +1293,7 @@ def _reset_phase_to_pending(phase: dict[str, Any]) -> None:
 
 def _normalize_state(state: dict[str, Any]) -> None:
     retry_policy = state.get("retry_policy")
-    if not isinstance(retry_policy, dict):
-        state["retry_policy"] = dict(DEFAULT_RETRY_POLICY)
-    else:
-        normalized_policy = dict(DEFAULT_RETRY_POLICY)
-        normalized_policy.update(retry_policy)
-        state["retry_policy"] = normalized_policy
+    state["retry_policy"] = _normalize_retry_policy(retry_policy)
     for phase in state.get("phases") or []:
         if not isinstance(phase, dict):
             continue
@@ -1284,6 +1318,72 @@ def _normalize_state(state: dict[str, Any]) -> None:
         phase.setdefault("evidence_path", None)
         if not isinstance(phase.get("attempt_history"), list):
             phase["attempt_history"] = []
+
+
+def _read_state_object(path: Path) -> dict[str, Any]:
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise PhaseSessionError(f"phase-session state is invalid JSON: {path}") from exc
+    except OSError as exc:
+        raise PhaseSessionError(f"phase-session state is not readable: {path}") from exc
+    if not isinstance(state, dict):
+        raise PhaseSessionError("phase-session state root must be an object")
+    return state
+
+
+def _policy_update_forces(policy_update: ResolvedPolicyUpdate | None) -> bool:
+    forced = getattr(policy_update, "forced_overrides", None)
+    return isinstance(forced, dict) and bool(forced)
+
+
+def _configure_retry_policy_in_state(
+    state: dict[str, Any],
+    policy_update: ResolvedPolicyUpdate | None,
+) -> dict[str, Any]:
+    state = dict(state)
+    state["retry_policy"] = _retry_policy_with_update(state.get("retry_policy"), policy_update)
+    _normalize_state(state)
+    _validate_state(state)
+    return state
+
+
+def _retry_policy_with_update(
+    retry_policy: Any,
+    policy_update: ResolvedPolicyUpdate | None,
+) -> dict[str, Any]:
+    existing = dict(retry_policy) if isinstance(retry_policy, Mapping) else {}
+    defaults = dict(getattr(policy_update, "default_overrides", {}) or {})
+    forced = dict(getattr(policy_update, "forced_overrides", {}) or {})
+    try:
+        validate_policy_overrides(defaults)
+        validate_policy_overrides(forced)
+    except ValueError as exc:
+        raise PhaseSessionError(str(exc)) from exc
+    for key, value in defaults.items():
+        if existing.get(key) is None:
+            existing[key] = value
+    existing.update(forced)
+    return _normalize_retry_policy(existing)
+
+
+def _normalize_retry_policy(retry_policy: Any) -> dict[str, Any]:
+    existing = dict(retry_policy) if isinstance(retry_policy, Mapping) else {}
+    profile_value = existing.get("autopilot_profile")
+    profile = profile_value if isinstance(profile_value, str) and profile_value else str(DEFAULT_RETRY_POLICY["autopilot_profile"])
+    try:
+        normalized = dict(DEFAULT_RETRY_POLICY)
+        normalized.update(profile_defaults(profile))
+        normalized["autopilot_profile"] = profile
+        for key, value in existing.items():
+            if value is not None:
+                normalized[key] = value
+            elif key not in normalized:
+                normalized[key] = value
+        retry_policy_config(normalized)
+    except ValueError as exc:
+        raise PhaseSessionError(str(exc)) from exc
+    return normalized
 
 
 def _string_list(value: Any) -> list[str]:
@@ -1693,6 +1793,18 @@ def _taxonomy_event_details(record: Mapping[str, Any]) -> dict[str, Any]:
         for key, value in details.items()
         if key in fields
     }
+
+
+def _policy_event_details(record: Mapping[str, Any]) -> dict[str, Any]:
+    details: dict[str, Any] = {}
+    for key in ("policy_action", "policy_reason"):
+        value = record.get(key)
+        if isinstance(value, str) and value:
+            details[key] = value
+    policy_inputs = record.get("policy_inputs")
+    if isinstance(policy_inputs, Mapping):
+        details["policy_inputs"] = dict(policy_inputs)
+    return details
 
 
 def _write_attempt_evidence_best_effort(

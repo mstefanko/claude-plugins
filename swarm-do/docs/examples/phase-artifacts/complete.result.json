@@ -1,0 +1,32 @@
+{
+  "artifacts": [
+    {
+      "kind": "file",
+      "path": "docs/phase-1.md"
+    }
+  ],
+  "blocked_reason": null,
+  "completed_at": "2026-04-29T18:08:00Z",
+  "completed_work_units": [],
+  "error": null,
+  "failed_work_units": [],
+  "handoff_path": "runs/01ARZ3NDEKTSV4RRFFQ69G5FAV/phase_handoffs/1/attempt-1.handoff.json",
+  "launcher": "claude-print",
+  "needs_input": [],
+  "phase_attempt": 1,
+  "phase_content_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "phase_id": "1",
+  "prepared_plan_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "run_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+  "schema_version": 1,
+  "session_name": "swarmdaddy-01ARZ3NDEKTSV4RRFFQ69G5FAV-1-attempt-1",
+  "started_at": "2026-04-29T18:00:00Z",
+  "status": "complete",
+  "summary": "Implemented the phase and wrote the requested documentation.",
+  "validation": [
+    {
+      "command": "python3 -m unittest py.swarm_do.pipeline.tests.test_phase_sessions",
+      "status": "passed"
+    }
+  ]
+}

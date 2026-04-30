@@ -10,8 +10,15 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .paths import REPO_ROOT, resolve_data_dir
+from .phase_autopilot_policy import (
+    AutopilotPolicyInput,
+    evaluate_autopilot_policy,
+    fallback_retry_after_seconds as _policy_fallback_retry_after_seconds,
+    retry_policy_config,
+)
 from .failure_taxonomy import failure_kind_details
 from .phase_failure_classifier import FailureClassification, classify_launcher_failure
+from .phase_spend import FailedSpendSnapshot, failed_spend_snapshot
 from .phase_sessions import (
     BLOCKED_DETERMINISTIC_CONTRACT_FAILURE,
     BLOCKED_PERMISSION_CONTRACT_FAILURE,
@@ -48,7 +55,6 @@ from .phase_beads import write_phase_beads_note
 ACTIVE_STATUSES = {STATUS_LEASED, STATUS_RUNNING}
 STOP_STATUSES = (STATUS_BLOCKED, STATUS_NEEDS_INPUT, STATUS_RETRY_EXHAUSTED)
 MAX_RECONCILIATION_PASSES = 20
-DEFAULT_BACKOFF_SCHEDULE_SECONDS = (60, 180, 600)
 
 
 def reconcile_phase_sessions(
@@ -132,7 +138,8 @@ def reconcile_phase_sessions(
             result = artifact["result"]
             handoff = artifact["handoff"]
             terminal_status = str(result.get("status"))
-            retryable_failed = terminal_status == "failed" and bool(result.get("retryable")) and not _handoff_do_not_retry(handoff)
+            handoff_do_not_retry = _handoff_do_not_retry(handoff)
+            retryable_failed = terminal_status == "failed" and bool(result.get("retryable"))
             evidence = _build_attempt_evidence(
                 run_id,
                 phase,
@@ -158,6 +165,7 @@ def reconcile_phase_sessions(
                     failure_kind=str(result.get("failure_kind") or "structured_retryable_failed"),
                     launcher_error=_result_error(result),
                     retry_after_seconds=_retry_after_seconds(result, state),
+                    handoff_do_not_retry=handoff_do_not_retry,
                     dry_run=dry_run,
                 )
                 actions.append(action)
@@ -327,17 +335,62 @@ def _retry_or_exhaust(
     launcher_error: str | None,
     retry_after_seconds: int | None,
     dry_run: bool,
+    handoff_do_not_retry: bool = False,
 ) -> dict[str, Any]:
     attempt = int(phase.get("attempt") or 0)
     retry_policy = state.get("retry_policy") if isinstance(state.get("retry_policy"), Mapping) else {}
-    max_attempts = int(phase.get("max_session_attempts") or retry_policy.get("max_session_attempts") or 3)
+    config = retry_policy_config(retry_policy)
+    max_attempts = int(phase.get("max_session_attempts") or config.max_session_attempts)
     phase_id = str(phase["phase_id"])
-
-    stop_decision = _retry_stop_decision(failure_kind, evidence)
     same_failure_count = _same_failure_count(phase, failure_kind, include_current=True)
-    same_failure_limit = int(retry_policy.get("max_consecutive_same_failure_kind") or 2)
-    if stop_decision is not None:
-        blocked_reason, retry_policy_decision = stop_decision
+    needs_recovery_retry = _needs_recovery_retry(evidence, state)
+    recovery_attempts_used = sum(
+        1
+        for item in phase.get("attempt_history") or []
+        if isinstance(item, Mapping) and item.get("retry_decision") == "recovery_retry"
+    )
+    spend = _spend_snapshot(run_id, phase_id, attempt, data_dir=data_dir)
+    decision = evaluate_autopilot_policy(
+        AutopilotPolicyInput(
+            failure_kind=failure_kind,
+            failure_category=_string_or_none(evidence.get("failure_category")),
+            failure_retry_class=_string_or_none(evidence.get("failure_retry_class")),
+            attempt=attempt,
+            same_failure_count=same_failure_count,
+            max_session_attempts=max_attempts,
+            recovery_attempts_used=recovery_attempts_used,
+            needs_recovery_retry=needs_recovery_retry,
+            returncode=evidence.get("returncode") if isinstance(evidence.get("returncode"), int) else None,
+            artifact_error_kinds=tuple(str(item) for item in evidence.get("artifact_error_kinds") or [] if isinstance(item, str)),
+            partial_artifacts=bool(evidence.get("partial_artifacts")),
+            changed_file_count=len([item for item in evidence.get("changed_files") or [] if isinstance(item, str)]),
+            elapsed_seconds=float(evidence["elapsed_seconds"]) if isinstance(evidence.get("elapsed_seconds"), (int, float)) else None,
+            retry_after_seconds_requested=retry_after_seconds,
+            current_attempt_cost_usd=spend.current_attempt_cost_usd,
+            cost_confidence=spend.current_attempt_cost_confidence,
+            failed_phase_cost_usd=spend.failed_phase_cost_usd,
+            failed_run_cost_usd=spend.failed_run_cost_usd,
+            unknown_failed_attempt_count=spend.unknown_failed_attempt_count,
+            handoff_do_not_retry=handoff_do_not_retry,
+        ),
+        config,
+        operator_title=_string_or_none(evidence.get("failure_operator_title")),
+        operator_message=_string_or_none(evidence.get("failure_operator_message")),
+    )
+    record = dict(evidence)
+    record.update(
+        {
+            "retry_decision": decision.retry_policy_decision,
+            "policy_action": decision.action,
+            "policy_reason": decision.policy_reason,
+            "policy_inputs": decision.inputs,
+            "retry_after_seconds": decision.retry_after_seconds,
+        }
+    )
+    policy_details = _policy_action_details(decision)
+
+    if decision.action == "human_gate":
+        blocked_reason = decision.blocked_reason or BLOCKED_RETRY_POLICY_HUMAN_GATE
         evidence_path = None
         if not dry_run:
             blocked = mark_phase_blocked(
@@ -345,13 +398,14 @@ def _retry_or_exhaust(
                 phase_id,
                 failure_kind=failure_kind,
                 blocked_reason=blocked_reason,
-                retry_policy_decision=retry_policy_decision,
+                retry_policy_decision=decision.retry_policy_decision,
                 data_dir=data_dir,
                 launcher_error=launcher_error,
-                attempt_record={**evidence, "retry_decision": retry_policy_decision},
+                attempt_record=record,
                 details={
                     "same_failure_count": same_failure_count,
-                    "max_consecutive_same_failure_kind": same_failure_limit,
+                    "max_consecutive_same_failure_kind": config.max_consecutive_same_failure_kind,
+                    **policy_details,
                     **_attempt_diagnostic_details(evidence),
                 },
             )
@@ -363,7 +417,9 @@ def _retry_or_exhaust(
                 phase_id=phase_id,
                 details={
                     "failure_kind": failure_kind,
-                    "retry_policy_decision": retry_policy_decision,
+                    "retry_policy_decision": decision.retry_policy_decision,
+                    "policy_action": decision.action,
+                    "policy_reason": decision.policy_reason,
                     "evidence_path": evidence_path,
                     **_taxonomy_note_details(evidence),
                     **_attempt_diagnostic_details(evidence),
@@ -376,66 +432,13 @@ def _retry_or_exhaust(
             "status": STATUS_BLOCKED,
             "failure_kind": failure_kind,
             "blocked_reason": blocked_reason,
-            "retry_decision": retry_policy_decision,
+            "retry_decision": decision.retry_policy_decision,
             "evidence_path": evidence_path,
+            **policy_details,
             **_taxonomy_note_details(evidence),
         }
 
-    if same_failure_count >= same_failure_limit:
-        retry_policy_decision = "same_failure_limit"
-        evidence_path = None
-        if not dry_run:
-            blocked = mark_phase_blocked(
-                run_id,
-                phase_id,
-                failure_kind=failure_kind,
-                blocked_reason=BLOCKED_RETRY_POLICY_HUMAN_GATE,
-                retry_policy_decision=retry_policy_decision,
-                data_dir=data_dir,
-                launcher_error=launcher_error,
-                attempt_record={**evidence, "retry_decision": retry_policy_decision},
-                details={
-                    "same_failure_count": same_failure_count,
-                    "max_consecutive_same_failure_kind": same_failure_limit,
-                    **_attempt_diagnostic_details(evidence),
-                },
-            )
-            evidence_path = (blocked.get("phase") or {}).get("evidence_path") if isinstance(blocked.get("phase"), Mapping) else None
-            _write_recovery_note(
-                run_id,
-                data_dir,
-                kind="phase_human_gated",
-                phase_id=phase_id,
-                details={
-                    "failure_kind": failure_kind,
-                    "retry_policy_decision": retry_policy_decision,
-                    "same_failure_count": same_failure_count,
-                    "evidence_path": evidence_path,
-                    **_taxonomy_note_details(evidence),
-                    **_attempt_diagnostic_details(evidence),
-                },
-            )
-        return {
-            "phase_id": phase.get("phase_id"),
-            "attempt": attempt,
-            "action": "blocked",
-            "status": STATUS_BLOCKED,
-            "failure_kind": failure_kind,
-            "blocked_reason": BLOCKED_RETRY_POLICY_HUMAN_GATE,
-            "retry_decision": retry_policy_decision,
-            "same_failure_count": same_failure_count,
-            "evidence_path": evidence_path,
-            **_taxonomy_note_details(evidence),
-        }
-
-    needs_recovery_retry = _needs_recovery_retry(evidence, state)
-    max_recovery_attempts = int(retry_policy.get("max_recovery_attempts") or 0)
-    recovery_attempts_used = sum(
-        1
-        for item in phase.get("attempt_history") or []
-        if isinstance(item, Mapping) and item.get("retry_decision") == "recovery_retry"
-    )
-    if attempt >= max_attempts or (needs_recovery_retry and recovery_attempts_used >= max_recovery_attempts):
+    if decision.action == "retry_exhausted":
         evidence_path = None
         if not dry_run:
             exhausted = mark_retry_exhausted(
@@ -444,7 +447,7 @@ def _retry_or_exhaust(
                 failure_kind=failure_kind,
                 data_dir=data_dir,
                 launcher_error=launcher_error,
-                attempt_record=evidence,
+                attempt_record=record,
             )
             evidence_path = (exhausted.get("phase") or {}).get("evidence_path") if isinstance(exhausted.get("phase"), Mapping) else None
             _write_recovery_note(
@@ -455,6 +458,8 @@ def _retry_or_exhaust(
                 details={
                     "failure_kind": failure_kind,
                     "recovery_context_path": evidence.get("recovery_context_path"),
+                    "policy_action": decision.action,
+                    "policy_reason": decision.policy_reason,
                     "evidence_path": evidence_path,
                     **_taxonomy_note_details(evidence),
                 },
@@ -467,15 +472,12 @@ def _retry_or_exhaust(
             "failure_kind": failure_kind,
             "retry_decision": "retry_exhausted",
             "evidence_path": evidence_path,
+            **policy_details,
             **_taxonomy_note_details(evidence),
         }
 
-    retry_after_seconds = retry_after_seconds if retry_after_seconds is not None else _fallback_retry_after_seconds(attempt, retry_policy)
+    retry_after_seconds = int(decision.retry_after_seconds or 0)
     next_retry_at = _format_dt(now + timedelta(seconds=retry_after_seconds)) if retry_after_seconds > 0 else None
-    retry_decision = "recovery_retry" if needs_recovery_retry else "retry"
-    record = dict(evidence)
-    record["retry_decision"] = retry_decision
-    record["retry_after_seconds"] = retry_after_seconds if retry_after_seconds > 0 else None
     evidence_path = None
     if not dry_run:
         retry = abandon_attempt_and_retry(
@@ -499,6 +501,8 @@ def _retry_or_exhaust(
                     "failure_kind": failure_kind,
                     "next_retry_at": next_retry_at,
                     "recovery_context_path": evidence.get("recovery_context_path"),
+                    "policy_action": decision.action,
+                    "policy_reason": decision.policy_reason,
                     "evidence_path": evidence_path,
                     **_taxonomy_note_details(evidence),
                 },
@@ -509,10 +513,11 @@ def _retry_or_exhaust(
         "action": "retry_scheduled" if next_retry_at else "retry_ready",
         "status": STATUS_RETRY_WAITING if next_retry_at else "ready",
         "failure_kind": failure_kind,
-        "retry_decision": retry_decision,
+        "retry_decision": decision.retry_policy_decision,
         "next_retry_at": next_retry_at,
         "retry_after_seconds": retry_after_seconds if retry_after_seconds > 0 else None,
         "evidence_path": evidence_path,
+        **policy_details,
         **_taxonomy_note_details(evidence),
     }
 
@@ -746,6 +751,31 @@ def _taxonomy_note_details(evidence: Mapping[str, Any]) -> dict[str, Any]:
     return {key: evidence[key] for key in keys if key in evidence}
 
 
+def _policy_action_details(decision: Any) -> dict[str, Any]:
+    return {
+        "policy_action": decision.action,
+        "policy_reason": decision.policy_reason,
+        "policy_inputs": dict(decision.inputs),
+    }
+
+
+def _spend_snapshot(run_id: str, phase_id: str, attempt: int, *, data_dir: Path) -> FailedSpendSnapshot:
+    try:
+        return failed_spend_snapshot(run_id, phase_id, attempt, data_dir=data_dir)
+    except Exception:
+        return FailedSpendSnapshot(
+            current_attempt_cost_usd=None,
+            current_attempt_cost_confidence="unknown",
+            failed_phase_cost_usd=0.0,
+            failed_run_cost_usd=0.0,
+            unknown_failed_attempt_count=1 if attempt > 0 else 0,
+        )
+
+
+def _string_or_none(value: Any) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
 def _same_failure_count(phase: Mapping[str, Any], failure_kind: str, *, include_current: bool) -> int:
     count = 1 if include_current else 0
     for item in phase.get("attempt_history") or []:
@@ -755,12 +785,7 @@ def _same_failure_count(phase: Mapping[str, Any], failure_kind: str, *, include_
 
 
 def _fallback_retry_after_seconds(attempt: int, retry_policy: Mapping[str, Any]) -> int:
-    maximum = int(retry_policy.get("max_retry_after_seconds") or 1800)
-    configured = retry_policy.get("short_retry_backoff_seconds")
-    if isinstance(configured, int) and configured > 0 and attempt <= 1:
-        return min(configured, maximum)
-    index = min(max(attempt - 1, 0), len(DEFAULT_BACKOFF_SCHEDULE_SECONDS) - 1)
-    return min(DEFAULT_BACKOFF_SCHEDULE_SECONDS[index], maximum)
+    return _policy_fallback_retry_after_seconds(attempt, retry_policy_config(retry_policy))
 
 
 def _retry_stop_decision(failure_kind: str, evidence: Mapping[str, Any]) -> tuple[str, str] | None:

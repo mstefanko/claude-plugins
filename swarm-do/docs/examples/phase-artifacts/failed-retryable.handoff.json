@@ -1,0 +1,22 @@
+{
+  "artifacts": [],
+  "blockers": [],
+  "changed_files": [],
+  "completed_work_units": [],
+  "decisions": [
+    "No source changes were made before the transient failure."
+  ],
+  "do_not_retry": [],
+  "next_phase_context": [],
+  "open_items": [
+    "Retry the same phase after the requested backoff."
+  ],
+  "phase_attempt": 1,
+  "phase_id": "1",
+  "run_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+  "schema_version": 1,
+  "status": "failed",
+  "summary": "Retry is safe because no files changed.",
+  "validation_summary": [],
+  "written_at": "2026-04-29T18:08:30Z"
+}

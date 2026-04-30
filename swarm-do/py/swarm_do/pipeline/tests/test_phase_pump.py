@@ -13,6 +13,7 @@ from swarm_do.pipeline.paths import REPO_ROOT
 from swarm_do.pipeline import phase_pump
 from swarm_do.pipeline.execution_workspace import is_sensitive_path
 from swarm_do.pipeline.phase_pump import pump_phases
+from swarm_do.pipeline.phase_autopilot_policy import ResolvedPolicyUpdate
 from swarm_do.pipeline.phase_sessions import claim_next_phase, init_phase_sessions, phase_session_path, phase_status, start_phase
 from swarm_do.pipeline.run_state import active_run_path, load_active_run, write_active_run
 from swarm_do.pipeline.tests.phase_session_fixtures import make_prepared_run
@@ -97,6 +98,63 @@ class PhasePumpTests(unittest.TestCase):
             self.assertEqual(result["status"], "complete")
             self.assertEqual(len(result["completed_phases"]), 2)
             self.assertEqual(phase_status(run_id, data_dir=data, repo_root=repo)["status"], "complete")
+
+    def test_claude_print_forwards_legacy_max_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            base_runner = _claude_runner(data, run_id, ["complete"])
+            seen: dict[str, list[str]] = {}
+
+            def runner(argv, prompt_text):
+                seen["argv"] = list(argv)
+                return base_runner(argv, prompt_text)
+
+            with mock.patch("swarm_do.pipeline.phase_pump.doctor_report", return_value=_eligible_claude_report()):
+                result = pump_phases(
+                    run_id,
+                    launcher="claude-print",
+                    max_phases=1,
+                    init_if_missing=True,
+                    claude_runner=runner,
+                    max_budget_usd=3.5,
+                    data_dir=data,
+                )
+
+            self.assertEqual(result["status"], "complete")
+            self.assertIn("--max-budget-usd", seen["argv"])
+            self.assertEqual(seen["argv"][seen["argv"].index("--max-budget-usd") + 1], "3.5")
+
+    def test_claude_print_uses_policy_attempt_budget_when_cli_budget_absent(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(
+                run_id,
+                data_dir=data,
+                repo_root=repo,
+                policy_update=ResolvedPolicyUpdate(
+                    forced_overrides={"max_phase_attempt_budget_usd": 1.25},
+                    default_overrides={},
+                ),
+            )
+            base_runner = _claude_runner(data, run_id, ["complete"])
+            seen: dict[str, list[str]] = {}
+
+            def runner(argv, prompt_text):
+                seen["argv"] = list(argv)
+                return base_runner(argv, prompt_text)
+
+            with mock.patch("swarm_do.pipeline.phase_pump.doctor_report", return_value=_eligible_claude_report()):
+                result = pump_phases(
+                    run_id,
+                    launcher="claude-print",
+                    max_phases=1,
+                    claude_runner=runner,
+                    data_dir=data,
+                )
+
+            self.assertEqual(result["status"], "complete")
+            self.assertIn("--max-budget-usd", seen["argv"])
+            self.assertEqual(seen["argv"][seen["argv"].index("--max-budget-usd") + 1], "1.25")
 
     def test_claude_print_failed_phase_stops_downstream(self) -> None:
         with tempfile.TemporaryDirectory() as td:
