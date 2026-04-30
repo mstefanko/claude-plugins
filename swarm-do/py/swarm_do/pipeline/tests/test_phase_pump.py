@@ -11,6 +11,7 @@ from unittest import mock
 
 from swarm_do.pipeline.paths import REPO_ROOT
 from swarm_do.pipeline import phase_pump
+from swarm_do.pipeline.execution_workspace import is_sensitive_path
 from swarm_do.pipeline.phase_pump import pump_phases
 from swarm_do.pipeline.phase_sessions import claim_next_phase, init_phase_sessions, phase_session_path, phase_status, start_phase
 from swarm_do.pipeline.run_state import active_run_path, load_active_run, write_active_run
@@ -211,8 +212,13 @@ class PhasePumpTests(unittest.TestCase):
             command = json.loads((data / "runs" / run_id / "phase_launches" / "1" / "attempt-1" / "command.json").read_text(encoding="utf-8"))
             self.assertEqual(command["settings_path"], str(data / "runs" / run_id / "writer-settings.json"))
             self.assertTrue((data / "runs" / run_id / "writer-settings.json").is_file())
-            self.assertEqual(command["execution_workspace_mode"], "real")
-            self.assertEqual(command["launcher_cwd"], str(repo.resolve(strict=False)))
+            expected_mode = "safe-symlink" if is_sensitive_path(repo) else "real"
+            self.assertEqual(command["execution_workspace_mode"], expected_mode)
+            if expected_mode == "real":
+                self.assertEqual(command["launcher_cwd"], str(repo.resolve(strict=False)))
+            else:
+                self.assertEqual(command["real_repo_root"], str(repo.resolve(strict=False)))
+                self.assertEqual(command["launcher_cwd"], command["launcher_repo_root"])
             self.assertTrue(Path(status["phases"][0]["evidence_path"]).is_file())
 
     def test_claude_print_rewrites_sensitive_repo_paths_and_records_safe_cwd(self) -> None:

@@ -56,6 +56,22 @@ class PhaseEvidenceTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "unexpected property"):
                 read_attempt_evidence_manifest(evidence_path)
 
+    def test_manifest_schema_rejects_missing_required_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            claim_next_phase(run_id, data_dir=data, repo_root=repo, lease_owner="owner-1")
+            started = start_phase(run_id, "1", launcher="manual", lease_owner="owner-1", data_dir=data)
+            result_path = _write_result(data, run_id, started["phase"], status="complete")
+            recorded = record_phase_result(run_id, "1", json_file=result_path, expected_status="complete", data_dir=data)
+            evidence_path = Path(recorded["phase"]["evidence_path"])
+            payload = json.loads(evidence_path.read_text(encoding="utf-8"))
+            payload["paths"].pop("launch_dir")
+            evidence_path.write_text(json.dumps(payload), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "missing required property 'launch_dir'"):
+                read_attempt_evidence_manifest(evidence_path)
+
     def test_cli_evidence_payload_returns_redacted_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
