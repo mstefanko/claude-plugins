@@ -1715,7 +1715,7 @@ if TEXTUAL_IMPORT_ERROR is None:
             self._refresh_dashboard_graph()
             phase_table = self.query_one("#phase-sessions", DataTable)
             phase_table.clear(columns=True)
-            phase_table.add_columns("run", "status", "active", "phases", "attempts", "failed", "cost", "last failure")
+            phase_table.add_columns("run", "status", "active", "phases", "attempts", "failed", "cost", "last failure", "category", "message")
             phase_rows = phase_session_run_rows()
             for row in phase_rows[:8]:
                 phase_table.add_row(
@@ -1727,9 +1727,11 @@ if TEXTUAL_IMPORT_ERROR is None:
                     "unknown" if row.failed_cost_usd is None else f"${row.failed_cost_usd:.2f}",
                     "unknown" if row.total_cost_usd is None else f"${row.total_cost_usd:.2f}",
                     row.last_failure or "-",
+                    row.failure_category or "-",
+                    row.failure_operator_title or "-",
                 )
             if not phase_rows:
-                phase_table.add_row("none", "no phase-session runs", "", "", "", "", "", "")
+                phase_table.add_row("none", "no phase-session runs", "", "", "", "", "", "", "", "")
             self.query_one("#phase-session-title", Static).update("Phase Sessions")
             table = self.query_one("#inflight", DataTable)
             table.clear(columns=True)
@@ -1930,7 +1932,20 @@ if TEXTUAL_IMPORT_ERROR is None:
             table = self.query_one("#runs-table", DataTable)
             selected = getattr(table, "cursor_row", 0)
             table.clear(columns=True)
-            table.add_columns("run", "status", "active", "phases", "attempts", "failed attempts", "failed cost", "total cost", "last failure", "updated")
+            table.add_columns(
+                "run",
+                "status",
+                "active",
+                "phases",
+                "attempts",
+                "failed attempts",
+                "failed cost",
+                "total cost",
+                "last failure",
+                "category",
+                "message",
+                "updated",
+            )
             for row in rows:
                 table.add_row(
                     row.run_id,
@@ -1942,10 +1957,12 @@ if TEXTUAL_IMPORT_ERROR is None:
                     "unknown" if row.failed_cost_usd is None else f"${row.failed_cost_usd:.2f}",
                     "unknown" if row.total_cost_usd is None else f"${row.total_cost_usd:.2f}",
                     row.last_failure or "-",
+                    row.failure_category or "-",
+                    row.failure_operator_title or "-",
                     row.updated_at or "-",
                 )
             if not rows:
-                table.add_row("none", "no phase-session runs", "", "", "", "", "", "", "", "")
+                table.add_row("none", "no phase-session runs", "", "", "", "", "", "", "", "", "", "")
                 self.query_one("#runs-detail", Static).update("No phase-session runs.")
             else:
                 index = min(max(int(selected or 0), 0), len(rows) - 1)
@@ -1977,9 +1994,28 @@ if TEXTUAL_IMPORT_ERROR is None:
             attempt_lines = [
                 f"- phase={attempt.get('phase_id')} attempt={attempt.get('attempt')} "
                 f"status={attempt.get('status')} failure={attempt.get('failure_kind') or '-'} "
+                f"category={attempt.get('failure_category') or '-'} "
                 f"cost={_attempt_cost_label(attempt)}"
                 for attempt in row.attempt_rows[-8:]
             ]
+            evidence_lines = []
+            if row.evidence_path:
+                evidence_lines.append(f"- manifest: {row.evidence_path}")
+            for attempt in row.attempt_rows[-8:]:
+                for label, key in (
+                    ("manifest", "evidence_path"),
+                    ("recovery", "recovery_context_path"),
+                    ("diff", "diff_summary_path"),
+                    ("transcript", "transcript_diagnostics_path"),
+                ):
+                    value = attempt.get(key)
+                    if value:
+                        evidence_lines.append(f"- phase={attempt.get('phase_id')} attempt={attempt.get('attempt')} {label}: {value}")
+                changed = attempt.get("changed_files")
+                if isinstance(changed, list) and changed:
+                    evidence_lines.append(
+                        f"- phase={attempt.get('phase_id')} attempt={attempt.get('attempt')} changed_files={len(changed)}"
+                    )
             body = [
                 f"run {row.run_id} status={row.status}",
                 f"recommended: {row.recommended_action or '-'}",
@@ -1989,6 +2025,9 @@ if TEXTUAL_IMPORT_ERROR is None:
                 "",
                 "Recent Attempts",
                 *(attempt_lines or ["- none"]),
+                "",
+                "Evidence",
+                *(evidence_lines or ["- none"]),
             ]
             if row.cleanup_untracked_files:
                 body.extend(

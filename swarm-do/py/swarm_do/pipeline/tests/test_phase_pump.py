@@ -29,6 +29,8 @@ class PhasePumpTests(unittest.TestCase):
             self.assertEqual(len(result["completed_phases"]), 3)
             status = phase_status(run_id, data_dir=data, repo_root=repo)
             self.assertEqual(status["status"], "complete")
+            evidence = Path(status["phases"][0]["evidence_path"])
+            self.assertTrue(evidence.is_file())
 
     def test_failed_fake_phase_stops_with_resume_point(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -52,6 +54,9 @@ class PhasePumpTests(unittest.TestCase):
             self.assertEqual(result["status"], "manual_waiting")
             self.assertTrue(Path(result["manual"]["prompt_path"]).is_file())
             self.assertIn("phases complete", result["manual"]["follow_up_command"])
+            command = json.loads((data / "runs" / run_id / "phase_launches" / "1" / "attempt-1" / "command.json").read_text(encoding="utf-8"))
+            self.assertEqual(command["launcher"], "manual")
+            self.assertEqual(command["prompt_delivery"], "manual")
 
     def test_claude_print_reports_ineligible_without_claiming_phase(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -134,8 +139,32 @@ class PhasePumpTests(unittest.TestCase):
             self.assertEqual(state["phases"][0]["status"], "retry_waiting")
             self.assertEqual(state["phases"][0]["attempt_history"][0]["retry_after_seconds"], 60)
             self.assertEqual(state["phases"][0]["last_failure_kind"], "launcher_nonzero_no_artifacts")
+            self.assertTrue(Path(state["phases"][0]["attempt_history"][0]["evidence_path"]).is_file())
             self.assertTrue(state["phases"][0]["attempt_history"])
             self.assertNotEqual(phase_status(run_id, data_dir=data, repo_root=repo)["status"], "complete")
+
+    def test_claude_cli_missing_records_launch_dir_and_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+
+            with mock.patch("swarm_do.pipeline.phase_pump.doctor_report", return_value=_eligible_claude_report()), mock.patch(
+                "swarm_do.pipeline.phase_pump.shutil.which",
+                return_value=None,
+            ):
+                result = pump_phases(
+                    run_id,
+                    launcher="claude-print",
+                    max_phases=1,
+                    init_if_missing=True,
+                    data_dir=data,
+                )
+
+            self.assertEqual(result["status"], "blocked")
+            state = json.loads(phase_session_path(run_id, data_dir=data).read_text(encoding="utf-8"))
+            history = state["phases"][0]["attempt_history"][0]
+            self.assertEqual(history["failure_kind"], "claude_cli_missing")
+            self.assertTrue(Path(history["launch_dir"]).is_dir())
+            self.assertTrue(Path(history["evidence_path"]).is_file())
 
     def test_claude_print_nonzero_complete_artifacts_are_adopted(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -158,6 +187,7 @@ class PhasePumpTests(unittest.TestCase):
             history = status["phases"][0]["attempt_history"]
             self.assertEqual(history[0]["failure_kind"], "launcher_nonzero_with_artifacts")
             self.assertTrue(history[0]["adopted"])
+            self.assertTrue(Path(history[0]["evidence_path"]).is_file())
 
     def test_claude_print_replayed_fixture_records_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -183,6 +213,7 @@ class PhasePumpTests(unittest.TestCase):
             self.assertTrue((data / "runs" / run_id / "writer-settings.json").is_file())
             self.assertEqual(command["execution_workspace_mode"], "real")
             self.assertEqual(command["launcher_cwd"], str(repo.resolve(strict=False)))
+            self.assertTrue(Path(status["phases"][0]["evidence_path"]).is_file())
 
     def test_claude_print_rewrites_sensitive_repo_paths_and_records_safe_cwd(self) -> None:
         with tempfile.TemporaryDirectory() as td:

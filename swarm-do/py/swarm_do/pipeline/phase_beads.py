@@ -65,7 +65,17 @@ def _note_text(run_id: str, *, kind: str, phase_id: str | None, details: Mapping
     lines = [f"swarm-do phase-session event: {kind}", f"run_id: {run_id}"]
     if phase_id:
         lines.append(f"phase_id: {phase_id}")
-    for key in ("failure_kind", "next_retry_at", "recovery_context_path", "result_path", "handoff_path"):
+    for key in (
+        "failure_kind",
+        "failure_category",
+        "failure_retry_class",
+        "failure_operator_title",
+        "next_retry_at",
+        "evidence_path",
+        "recovery_context_path",
+        "result_path",
+        "handoff_path",
+    ):
         value = details.get(key)
         if value:
             lines.append(f"{key}: {value}")

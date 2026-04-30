@@ -13,6 +13,9 @@ the system must first be able to restart after parent death, inspect persisted
 state and artifacts, adopt valid work, preserve evidence from abandoned
 attempts, and only then decide whether another child should launch.
 
+The shared operator vocabulary for these decisions lives in
+[`docs/failure-taxonomy.md`](failure-taxonomy.md).
+
 North star:
 
 - Never duplicate an active phase.

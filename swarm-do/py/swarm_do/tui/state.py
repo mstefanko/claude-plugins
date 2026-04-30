@@ -128,6 +128,9 @@ class PhaseSessionRunRow:
     phases: tuple[Mapping[str, Any], ...]
     attempt_rows: tuple[Mapping[str, Any], ...]
     cleanup_untracked_files: tuple[str, ...] = ()
+    failure_category: str | None = None
+    failure_operator_title: str | None = None
+    evidence_path: str | None = None
 
 
 ACCEPTED_MAINTAINER_ACTIONS = frozenset(
@@ -2906,6 +2909,7 @@ def phase_session_run_rows(data_dir: Path | None = None, limit: int = 20) -> lis
             attempt_rows = tuple(row for row in attempts.get("rows") or [] if isinstance(row, Mapping))
             cost = evidence.get("cost") if isinstance(evidence.get("cost"), Mapping) else {}
             phases = tuple(phase for phase in status.get("phases") or [] if isinstance(phase, Mapping))
+            last_failure = evidence.get("last_failure") if isinstance(evidence.get("last_failure"), Mapping) else {}
             rows.append(
                 PhaseSessionRunRow(
                     run_id=run_id,
@@ -2917,12 +2921,17 @@ def phase_session_run_rows(data_dir: Path | None = None, limit: int = 20) -> lis
                     failed_cost_usd=_float_or_none(cost.get("failed_usd")),
                     total_cost_usd=_float_or_none(cost.get("total_usd")),
                     unknown_cost_attempt_count=int(cost.get("unknown_attempt_count") or 0),
-                    last_failure=_phase_last_failure_label(evidence.get("last_failure")),
+                    last_failure=_phase_last_failure_label(last_failure),
                     updated_at=status.get("updated_at") if isinstance(status.get("updated_at"), str) else None,
                     recommended_action=evidence.get("recommended_action") if isinstance(evidence.get("recommended_action"), str) else None,
                     phases=phases,
                     attempt_rows=attempt_rows,
                     cleanup_untracked_files=tuple(_cleanup_untracked_files(attempt_rows)),
+                    failure_category=last_failure.get("failure_category") if isinstance(last_failure.get("failure_category"), str) else None,
+                    failure_operator_title=last_failure.get("failure_operator_title")
+                    if isinstance(last_failure.get("failure_operator_title"), str)
+                    else None,
+                    evidence_path=last_failure.get("evidence_path") if isinstance(last_failure.get("evidence_path"), str) else None,
                 )
             )
         except Exception as exc:
@@ -2943,6 +2952,9 @@ def phase_session_run_rows(data_dir: Path | None = None, limit: int = 20) -> lis
                     phases=(),
                     attempt_rows=(),
                     cleanup_untracked_files=(),
+                    failure_category=None,
+                    failure_operator_title=None,
+                    evidence_path=None,
                 )
             )
     return rows
@@ -2957,6 +2969,8 @@ def phase_session_runs_text(rows: list[PhaseSessionRunRow]) -> str:
         failed = _format_usd(row.failed_cost_usd)
         active = row.active_phase or "-"
         failure = row.last_failure or "-"
+        if row.failure_category or row.failure_operator_title:
+            failure = f"{failure} [{row.failure_category or '-'}] {row.failure_operator_title or ''}".rstrip()
         unknown = f" unknown={row.unknown_cost_attempt_count}" if row.unknown_cost_attempt_count else ""
         untracked = f" untracked={len(row.cleanup_untracked_files)}" if row.cleanup_untracked_files else ""
         lines.append(

@@ -1,14 +1,18 @@
 # Investigation: writers can't Write/Edit inside `~/.claude/`
 
-**Status:** open — root cause confirmed, fix path NOT yet decided.
+**Status:** open — Round 1 fix shipped; Round 2 leak vector identified; fix path for Round 2 NOT yet decided.
 **Date:** 2026-04-30
 **Triggering run:** `01KQF2CF61YV7SYVREEWRE4GFB`, Phase 2 ("Hook Runtime Profiles").
 **Failed-phase artifacts:** `~/.local/share/swarmdaddy/runs/01KQF2CF61YV7SYVREEWRE4GFB/`
-**Writer session transcript:** `~/.claude/projects/-Users-mstefanko--claude-plugins-marketplaces-mstefanko-plugins-swarm-do/6c8d27b0-a6e4-4a68-adf6-2a1299d50c75.jsonl`
+**Writer session transcripts:**
+- Round 1 (original failure): `~/.claude/projects/-Users-mstefanko--claude-plugins-marketplaces-mstefanko-plugins-swarm-do/6c8d27b0-a6e4-4a68-adf6-2a1299d50c75.jsonl`
+- Round 2 (post-fix re-attempt): `~/.claude/projects/-Users-mstefanko--claude-plugins-marketplaces-mstefanko-plugins-swarm-do/f8826cd4-a2a5-410b-9d13-61d298a90fa0.jsonl`
 
 ---
 
 ## TL;DR for the next session
+
+> **2026-04-30 — Round 2 update.** Round 1 fix shipped via commits `3faaf44 Sensitive path` and `79b08e1 Fixing gaps`: a "safe-symlink" execution workspace under `~/.local/share/swarmdaddy/launcher-workspaces/<hash>/repo` that the launcher uses as cwd, plus a full jsonl-parsing failure-kind heuristic in `phase_recovery.py`. **The heuristic is working perfectly** — Phase 2's re-attempt produced `last_failure_kind=writer_tool_denied_no_artifacts` with the exact `<tool_use_error>` string in `last_error`. **The structural fix is incomplete:** Phase 2 still hit the same Write rejection because `pwd` (the very first Bash call in every writer session) returns the canonical real path on macOS, leaking `/Users/mstefanko/.claude/...` to the model, which then uses that prefix for absolute Write calls. See "Round 2" section at the bottom for the new evidence, three follow-up fix options (R2-1/R2-2/R2-3), and reproducer probes.
 
 - **Root cause confirmed:** Claude Code blocks `Write`/`Edit` (and "sensitive" Bash writes) for any path/cwd inside `~/.claude/`. The block is independent of `--permission-mode`, `--allowedTools`, `--add-dir`, and `--dangerously-skip-permissions`. Empirically refuted three flag-based fixes; only changing the writer's `cwd` (via a symlink outside `~/.claude/`) worked.
 - **Why we hit this in production:** the swarmdaddy plugin source tree lives at `~/.claude/plugins/marketplaces/mstefanko-plugins/swarm-do/`, so every writer subprocess is launched with cwd inside the deny zone. The phase_pump launcher hardcodes `--permission-mode dontAsk` (`phase_pump.py:447-451`), and the project already hit the same issue for state writes — `paths.py:14-21` documents the workaround for the *state dir*, but never extended it to *source-tree writes*.
@@ -284,3 +288,178 @@ If `phases recover` reports a `deterministic_contract_failure` it can't unblock,
 - Allowed-tools helper: `phase_pump.py` near `_allowed_tools_arg` (used at lines 435 + 451)
 - Captured fixture launcher (mirror of phase_pump argv shape): `swarm-do/py/swarm_do/pipeline/capture_claude_print_fixture.py:55-70`
 - Tests that assert on argv shape (will need updating if argv changes): `swarm-do/py/swarm_do/pipeline/tests/test_phase_pump.py:181-185`, `test_provider_review.py:565-595, 676, 1908`
+
+---
+
+# Round 2 — 2026-04-30 (post-fix)
+
+## What shipped between Round 1 and Round 2
+
+Two commits landed: `3faaf44 Sensitive path` and `79b08e1 Fixing gaps`. Inspection of `phase_launches/2/attempt-1/command.json` after the re-pump shows the new shape:
+
+- **Execution workspace abstraction.** The launcher creates (or reuses) `~/.local/share/swarmdaddy/launcher-workspaces/<hash>/repo` as a symlink to the real plugin path, then uses it as the writer subprocess `cwd`. Recorded in `command.json` as `launcher_cwd`, `launcher_repo_root`, `real_repo_root`, `safe_cwd_enabled: true`, `execution_workspace_mode: "safe-symlink"`.
+- **Prompt rewriting.** Launcher prompts are rewritten to use the safe symlink path; the assembled prompt is asserted to contain no `/.claude/` substrings (`assert_prompt_safe`). On the Round 2 re-attempt the assembled prompt indeed contained zero `/.claude/` substrings — the rewrite layer is correct.
+- **Full jsonl-parsing heuristic in `phase_recovery.py`.** Not the cheap version we recommended in Round 1's Claim 3 — the *full* version that reads the writer's `~/.claude/projects/<encoded>/<session_id>.jsonl`, scans for `tool_use_error` results, and emits `failure_kind=writer_tool_denied_no_artifacts` with `last_error` carrying the literal rejection string. **In production it worked exactly as advertised.**
+- **`--permission-mode` is unchanged** — still `dontAsk`. The argv shape and the rest of the launcher invariants are otherwise the same as before.
+
+## Round 2 re-pump evidence
+
+After resetting Phase 2 (`/tmp/reset-phase2.py`) and refreshing `git_base_sha` (`/tmp/refresh-git-base.py`), `phases pump` dispatched a fresh attempt. Result:
+
+| Field | Value |
+|---|---|
+| `status` | `blocked` |
+| `last_failure_kind` | `writer_tool_denied_no_artifacts` |
+| `last_error` | `Write tool_disabled: <tool_use_error>Error: No such tool available: Write. Write exists but is not enabled in this context. Use one of the available tools instead.</tool_use_error>` |
+| `retry_policy_decision` | `deterministic_contract_failure` |
+| `started_at` / `completed_at` | 2026-04-30T18:09:07Z → 18:10:32Z (~85s) |
+| Writer session id | `f8826cd4-a2a5-410b-9d13-61d298a90fa0` |
+| `prompt_rewrite_count` | `0` (prompt was already clean — nothing to rewrite) |
+| `/.claude/` substrings in launcher prompt | **0** |
+| Write tool call's `file_path` arg | `/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/swarm-do/hooks/run-with-profile.sh` |
+
+The model used the canonical real path in its Write call, even though that string never appeared in the prompt it received.
+
+## Root cause for Round 2 — `pwd` leaks the canonical path
+
+The first Bash call in the new Phase 2 transcript:
+```
+B: pwd && ls -la
+R: /Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/swarm-do | total 96 ...
+```
+
+Once the model has the canonical root, every absolute path it constructs starts with `/Users/mstefanko/.claude/...`. Write calls trip the sensitive-path guard regardless of the carefully-arranged safe cwd.
+
+**Mechanism:** Python's `subprocess.Popen(cwd=<symlink>)` calls `chdir()`. On macOS, `chdir()` resolves the symlink before exporting `$PWD` into the child env. The shell's `pwd` builtin reads `$PWD` and prints whatever's there — canonical, not symlink. The launcher's safe-symlink workspace correctly sets *cwd*, but unintentionally sets `$PWD` to the canonical path.
+
+**Other leak channels observed in the Round 2 transcript:**
+1. `Read` on a directory path returns an `EISDIR` error message that includes the canonical path string.
+2. `README.md` contains documentation references to `~/.claude/plugins/cache/.../swarmdaddy/` paths in prose (around README line 700). The model Read README during context-gathering and saw canonical paths in the body.
+3. Anything else that resolves symlinks: `pwd -P`, `realpath`, `readlink -f`, `git rev-parse --show-toplevel`, Python `Path.resolve()`, etc. Any one of these called by the model leaks the real path.
+
+The "safe-symlink" workspace fixes the *prompt* surface; it does not seal the *runtime environment*. Multiple independent canonical-path-leak channels exist.
+
+## Round 2 fix options
+
+Numbered for cross-reference. Pick one or combine.
+
+### R2-1 — Plug the `pwd` leak (cheapest, partial)
+
+**Sketch:**
+- In `phase_pump.py`'s subprocess invocation, pass `env={**os.environ, "PWD": str(safe_symlink_path)}`.
+- With `$PWD` already set in the env, the shell's `pwd` builtin will print `$PWD` (the symlink path) rather than recomputing.
+- Add a one-line instruction to the writer prompt scaffolding: *"All file-path arguments must be relative to your current working directory. Do not invoke `pwd -P`, `realpath`, `readlink -f`, `git rev-parse --show-toplevel`, or any command that resolves symlinks; do not concatenate against absolute prefixes you discover at runtime."*
+
+**Cost:** ~10 LOC + a sentence in prompt. Plus a probe to verify the `PWD` env trick works on this shell version (see "Reproducer probes" below).
+**Catches:** the `pwd` leak, the most direct vector. Trains the model toward relative paths.
+**Misses:** Read-on-directory error leaks, README leaks, anything else that internally resolves symlinks.
+**Risk:** the model may ignore the prompt instruction; or hit a different vector (e.g. `git ls-files` resolves to canonical for some operations); or the shell builtin honoring `$PWD` may depend on shell version.
+
+### R2-2 — Path-redaction interposer (most defensive, most invasive)
+
+**Sketch:**
+- Add a hook (or launcher-level interposer on stdout) that intercepts Bash and Read tool *results* before they reach the model.
+- Rewrite any occurrence of the canonical real path → safe symlink path in the result content.
+- Possible mechanisms: PostToolUse hook in writer-settings.json (verify Claude Code's hook contract supports rewriting tool_result payloads); or stream-edit the JSON tool-result frames in the launcher subprocess plumbing.
+
+**Cost:** unclear — depends on whether Claude Code's PostToolUse hook can mutate tool_result content. If hooks can't, this requires custom launcher plumbing that intercepts the streaming JSON frames.
+**Catches:** all known leak vectors *that flow through tool results*.
+**Misses:** anything where the canonical path arrives via channels the interposer can't intercept (system info, model "knowledge" from training, hook-injected text).
+**Risk:** brittle, ties launcher to Claude Code hook contract; could rewrite legitimate occurrences in unexpected ways (e.g. test output that intentionally references canonical paths); ongoing maintenance as Claude Code internals evolve.
+
+### R2-3 — Move the source tree out of `~/.claude/` (structural)
+
+Same as Option C from Round 1. Maintain swarm-do source at e.g. `~/projects/swarm-do/`; have the plugin marketplace symlink/copy from there. With no canonical `/.claude/` path *to* leak, the entire class of bugs disappears.
+
+**Cost:** one-time relocation; plugin marketplace conventions need confirming with the marketplace owner.
+**Catches:** all leak vectors permanently. No ongoing maintenance.
+**Misses:** nothing.
+**Risk:** plugin marketplace expectations around source location; needs an explicit decision about whether the marketplace copy is the source-of-truth or a downstream artifact.
+
+## Recommended path
+
+**R2-1 first as a 30-minute experiment.** It's low-cost, the failure mechanism is direct, and closing the `pwd` channel may be sufficient on its own (the model may stop concatenating against an absolute prefix once it doesn't trivially have one). **Then re-run Phase 2.** If the next failure still references `~/.claude/...`, the writer transcript will show *which* leak vector survived (Read/README/something else). That result determines whether to escalate to R2-2 or R2-3.
+
+R2-3 is the right long-term answer; defer to it only if R2-1 isn't enough or if there's appetite to relocate the source tree. R2-2 is mostly a stopgap for environments where R2-3 is genuinely off the table.
+
+## Re-evaluation: cheap vs full Round 1 Claim 3 heuristic
+
+The shipped fix used the **full jsonl-parsing heuristic**, not the cheap one Round 1 had recommended. In production it worked exactly as designed — `last_error` carries the literal tool error string, attribution is unambiguous, operator can act without spelunking. The coupling concern (Claude Code transcript schema being internal-and-unstable) didn't bite this time, but remains a forward risk: if Anthropic renames `tool_use_error` or restructures `tool_result.content`, the heuristic silently degrades back to `outer_artifacts_missing`.
+
+**Add a regression test now** with a frozen Phase-2 jsonl fixture so any future Claude Code schema change is caught at CI time rather than on a live run. The fixture is the existing transcript at `~/.claude/projects/-Users-mstefanko--claude-plugins-marketplaces-mstefanko-plugins-swarm-do/f8826cd4-a2a5-410b-9d13-61d298a90fa0.jsonl` — copy a redacted version into `py/swarm_do/pipeline/tests/fixtures/claude_print/` and assert the heuristic emits `writer_tool_denied_no_artifacts` plus the expected `last_error`.
+
+## Open questions for the next session
+
+1. **Does setting `$PWD` in subprocess env make `pwd` return the logical path?** Shell-version dependent. Verify with the probe below before assuming R2-1 works.
+2. **Audit the writer's possible canonical-path-leak commands.** Decide which to forbid in the prompt scaffolding: `pwd` (verified leak), `pwd -P` (always canonical), `realpath`, `readlink -f`, `git rev-parse --show-toplevel`, `git ls-files` paths, `find`, `mdfind`, `python3 -c 'import os; print(os.getcwd())'` (uses canonical), Python `Path(__file__).resolve()`. Test which actually leak in the safe-symlink workspace.
+3. **Where exactly does the new heuristic in `phase_recovery.py` parse jsonl from?** The Round 2 evidence shows the `~/.claude/projects/<encoded>/<session_id>.jsonl` directory uses the *canonical* cwd (note the `-Users-mstefanko--claude-plugins-...` encoding — that's the canonical path, not the launcher-workspaces symlink). So the heuristic must be encoding the real path, not the safe path. Confirm this is correct and document it.
+4. **Should `assert_prompt_safe` extend to runtime tool_result content?** A streaming guard that watches for `/.claude/` substrings in tool results during the run could fail-fast on the first leak rather than waiting for the writer to give up — diagnostic, not corrective.
+5. **R2-3 plugin layout decision.** Does the marketplace expect source under `plugins/marketplaces/<vendor>/`, or is symlink-from-elsewhere acceptable? Read marketplace docs and/or ask the marketplace owner before committing to this option.
+6. **Documentation hygiene:** scrub `README.md` (and other in-repo docs the writer might Read) of any `~/.claude/...` path references that aren't strictly necessary. Reduce the leak surface even if R2-1/2/3 are deferred.
+
+## Reproducer probes (Round 2)
+
+Run these from a shell, no swarmdaddy state involved.
+
+### Probe P0 — confirm the `pwd` leak
+
+```bash
+# The exact mechanism from production
+mkdir -p /tmp/leak-test
+ln -sfn /Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/swarm-do /tmp/leak-test/repo
+
+cd /tmp/leak-test/repo
+echo "PWD=$PWD"
+pwd          # expect canonical /Users/mstefanko/.claude/... ← the leak
+pwd -P       # expect canonical /Users/mstefanko/.claude/...
+pwd -L       # may print symlink /tmp/leak-test/repo if shell honors -L
+
+rm -rf /tmp/leak-test
+```
+
+### Probe P1 — does setting `$PWD` in env let `pwd` return the symlink?
+
+```bash
+ln -sfn /Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/swarm-do /tmp/leak-test
+cd /tmp/leak-test
+PWD=/tmp/leak-test bash -c 'echo "shell:$0  PWD=$PWD  pwd=$(pwd)  pwd -P=$(pwd -P)  pwd -L=$(pwd -L)"'
+PWD=/tmp/leak-test zsh  -c 'echo "shell:$0  PWD=$PWD  pwd=$(pwd)  pwd -P=$(pwd -P)  pwd -L=$(pwd -L)"'
+rm -f /tmp/leak-test
+```
+
+If `pwd` reports `/tmp/leak-test` in either shell → R2-1 viable. If both shells report canonical → R2-1 needs additional shell coercion (e.g. `setopt CHASE_LINKS` semantics, or a `cd -L` wrapper).
+
+### Probe P2 — full end-to-end with `claude -p`
+
+```bash
+mkdir -p /tmp/leak-test
+ln -sfn /Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/swarm-do /tmp/leak-test/repo
+
+cd /
+PWD=/tmp/leak-test/repo /Applications/cmux.app/Contents/Resources/bin/claude \
+  -p --permission-mode dontAsk --output-format json \
+  --allowedTools "Bash(pwd:*) Write" \
+  <<< 'Run "pwd" then write ./probe.txt with content "ok". Stop after.'
+
+ls -la /tmp/leak-test/repo/probe.txt   # if landed → R2-1 plus prompt-only fix is sufficient
+rm -f /tmp/leak-test/repo/probe.txt
+rm -rf /tmp/leak-test
+```
+
+If `probe.txt` lands → R2-1 alone solves it. If denied → check the model's Bash output: did `pwd` report symlink (R2-1 worked but model still hit a leak) or canonical (R2-1's `PWD` env trick failed)? Either result narrows the next step.
+
+## Helper artifacts created during the investigation
+
+These exist on disk and are useful for the next session:
+
+- `/tmp/reset-phase2.py` — resets Phase 2 of run `01KQF2CF61YV7SYVREEWRE4GFB` to dispatchable state. Backs up `phase_sessions.v1.json` to `phase_sessions.v1.json.bak-before-phase2-reset` first.
+- `/tmp/refresh-git-base.py` — updates all `git_base_sha` occurrences in the prepared plan to current HEAD. Backs up to `prepared_plan.v1.json.bak-before-git-base-refresh`. Use after committing fixes between attempts so the prepared plan's drift check passes.
+- `/tmp/swarm-perm-probe.sh`, `/tmp/swarm-perm-probe2.sh` — Round 1 sensitive-path probes (bypassPermissions / --dangerously-skip-permissions / --add-dir / cwd-via-symlink). Use these to re-confirm the underlying CLI behavior hasn't changed before assuming Round 1 conclusions still hold.
+
+## Files / line numbers (Round 2 additions)
+
+- Execution workspace abstraction (Round 1 fix shipped here): `swarm-do/py/swarm_do/pipeline/phase_pump.py:430-445` (`workspace.rewrite_prompt`, `workspace.assert_prompt_safe`, `ExecutionWorkspaceError`).
+- Subprocess invocation that needs the `PWD` env (R2-1 site): the `Popen`/`run` call in `phase_pump.py` after the argv assembly — find the spawn site near line 470+.
+- New failure_kind classifier (Round 1 fix shipped here): `swarm-do/py/swarm_do/pipeline/phase_recovery.py` — search for `writer_tool_denied_no_artifacts` to find both the emitter and the `_retry_stop_decision` mapping.
+- README leak surface: `swarm-do/README.md` ~line 700 (refers to `~/.claude/plugins/cache/.../swarmdaddy/`).
+

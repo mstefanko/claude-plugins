@@ -129,11 +129,18 @@ def pump_phases(
         context = render_context_bundle(run_id=run_id, phase_id=phase_id, role="dispatcher", data_dir=base)
 
         if launcher == "manual":
-            prompt_path = context["prompt_path"]
-            result_path = phase_result_path(run_id, phase_id, int(running_phase["attempt"]), data_dir=base)
+            launch = _prepare_phase_launch(
+                run_id,
+                phase_id,
+                running_phase,
+                launcher="manual",
+                source_prompt_path=Path(context["prompt_path"]),
+                data_dir=base,
+            )
+            result_path = launch["result_path"]
             manual = {
                 "phase": running_phase,
-                "prompt_path": prompt_path,
+                "prompt_path": str(launch["launcher_prompt_path"]),
                 "follow_up_command": f"bin/swarm phases complete {run_id} --phase {phase_id} --json-file {result_path}",
             }
             _append_pump_event(base, run_id=run_id, event_type="phase_pump_stopped", details={"status": "manual_waiting", **manual})
@@ -194,6 +201,15 @@ def pump_phases(
         fake_status = fake_sequence[phase_number] if phase_number < len(fake_sequence) else "complete"
         if fake_status not in RESULT_STATUS_FOR_COMMAND:
             raise ValueError(f"unknown fake phase status: {fake_status}")
+        _prepare_phase_launch(
+            run_id,
+            phase_id,
+            running_phase,
+            launcher="fake-test",
+            source_prompt_path=Path(context["prompt_path"]),
+            data_dir=base,
+            workspace_metadata={"returncode": 0},
+        )
         result_file = _write_fake_result(
             run_id,
             phase_id,
@@ -333,6 +349,93 @@ def _sleep_interruptibly(seconds: int) -> None:
         time.sleep(min(1.0, remaining))
 
 
+def _prepare_phase_launch(
+    run_id: str,
+    phase_id: str,
+    phase: Mapping[str, Any],
+    *,
+    launcher: str,
+    source_prompt_path: Path,
+    data_dir: Path,
+    prompt_text: str | None = None,
+    argv: Sequence[str] | None = None,
+    settings_path: Path | None = None,
+    settings_sha: str | None = None,
+    workspace_metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    attempt = int(phase["attempt"])
+    run_dir = data_dir / "runs" / run_id
+    launch_dir = run_dir / "phase_launches" / phase_id / f"attempt-{attempt}"
+    launch_dir.mkdir(parents=True, exist_ok=True)
+    result_path = phase_result_path(run_id, phase_id, attempt, data_dir=data_dir)
+    handoff_path = phase_handoff_path(run_id, phase_id, attempt, data_dir=data_dir)
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    handoff_path.parent.mkdir(parents=True, exist_ok=True)
+    launcher_prompt_path = launch_dir / "dispatcher.launcher.prompt.md"
+    if prompt_text is None:
+        prompt_text = source_prompt_path.read_text(encoding="utf-8")
+    launcher_prompt_path.write_text(prompt_text, encoding="utf-8")
+    prompt_sha = _sha256_file(launcher_prompt_path)
+    prompt_delivery = {
+        "manual": "manual",
+        "fake-test": "synthetic",
+        "claude-print": "stdin",
+    }.get(launcher, "unknown")
+    metadata: dict[str, Any] = {
+        "launcher": launcher,
+        "prompt_path": str(launcher_prompt_path),
+        "prompt_sha": prompt_sha,
+        "prompt_delivery": prompt_delivery,
+        "source_prompt_path": str(source_prompt_path),
+        "source_prompt_sha": _sha256_file(source_prompt_path),
+        "result_path": str(result_path),
+        "handoff_path": str(handoff_path),
+        "env_redacted": True,
+        "parent_pid": os.getpid(),
+        "child_pid": None,
+        "process_group_id": None,
+        "returncode": None,
+        "started_at": None,
+        "completed_at": None,
+        "elapsed_seconds": None,
+        "execution_workspace_mode": None,
+        "safe_cwd_enabled": None,
+        "launcher_cwd": None,
+        "launcher_repo_root": None,
+        "real_repo_root": None,
+    }
+    if argv is not None:
+        metadata["argv"] = list(argv)
+    if settings_path is not None:
+        metadata["settings_path"] = str(settings_path)
+    if settings_sha is not None:
+        metadata["settings_sha"] = settings_sha
+    metadata.update(dict(workspace_metadata or {}))
+    command_path = launch_dir / "command.json"
+    command_path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    record_launch_metadata(
+        run_id,
+        phase_id,
+        data_dir=data_dir,
+        launch_dir=launch_dir,
+        command_path=command_path,
+        parent_pid=os.getpid(),
+        prompt_sha=prompt_sha,
+        expected_result_path=result_path,
+        expected_handoff_path=handoff_path,
+    )
+    return {
+        "launch_dir": launch_dir,
+        "command_path": command_path,
+        "launcher_prompt_path": launcher_prompt_path,
+        "result_path": result_path,
+        "handoff_path": handoff_path,
+        "prompt_sha": prompt_sha,
+        "source_prompt_sha": metadata["source_prompt_sha"],
+        "metadata": metadata,
+    }
+
+
 def _write_fake_result(
     run_id: str,
     phase_id: str,
@@ -406,13 +509,8 @@ def _run_claude_print_phase(
 ) -> dict[str, Any]:
     attempt = int(phase["attempt"])
     run_dir = data_dir / "runs" / run_id
-    launch_dir = run_dir / "phase_launches" / phase_id / f"attempt-{attempt}"
-    launch_dir.mkdir(parents=True, exist_ok=True)
     result_path = phase_result_path(run_id, phase_id, attempt, data_dir=data_dir)
     handoff_path = phase_handoff_path(run_id, phase_id, attempt, data_dir=data_dir)
-    result_path.parent.mkdir(parents=True, exist_ok=True)
-    handoff_path.parent.mkdir(parents=True, exist_ok=True)
-    launcher_prompt_path = launch_dir / "dispatcher.launcher.prompt.md"
     try:
         workspace = create_execution_workspace(_prepared_repo_root(run_id, data_dir=data_dir), data_dir=data_dir)
         prompt_text = prompt_path.read_text(encoding="utf-8")
@@ -432,25 +530,34 @@ def _run_claude_print_phase(
         workspace.assert_prompt_safe(prompt_text)
     except ExecutionWorkspaceError as exc:
         reason = "launcher_prompt_sensitive_path" if "sensitive source path" in str(exc) else "launcher_workspace_error"
-        metadata = {
-            "prompt_path": str(launcher_prompt_path),
-            "prompt_delivery": "stdin",
-            "source_prompt_path": str(prompt_path),
-            "source_prompt_sha": _sha256_file(prompt_path),
-            "result_path": str(result_path),
-            "handoff_path": str(handoff_path),
-            "launcher_exception": str(exc),
-            "reason": reason,
-            "env_redacted": True,
-        }
-        (launch_dir / "command.json").write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        return {"status": "launcher_error", "reason": reason, "launch_dir": str(launch_dir)}
-    launcher_prompt_path.write_text(prompt_text, encoding="utf-8")
-    prompt_sha = _sha256_file(launcher_prompt_path)
+        launch = _prepare_phase_launch(
+            run_id,
+            phase_id,
+            phase,
+            launcher="claude-print",
+            source_prompt_path=prompt_path,
+            data_dir=data_dir,
+            workspace_metadata={
+                "launcher_exception": str(exc),
+                "reason": reason,
+            },
+        )
+        return {"status": "launcher_error", "reason": reason, "launch_dir": str(launch["launch_dir"])}
+    workspace_metadata = workspace.to_metadata(prompt_rewrite_count=prompt_rewrite_count)
 
     resolved_claude = claude_path or shutil.which("claude") or ("claude" if claude_runner is not None else None)
     if not resolved_claude:
-        return {"status": "launcher_error", "reason": "claude_cli_missing"}
+        launch = _prepare_phase_launch(
+            run_id,
+            phase_id,
+            phase,
+            launcher="claude-print",
+            source_prompt_path=prompt_path,
+            data_dir=data_dir,
+            prompt_text=prompt_text,
+            workspace_metadata={**workspace_metadata, "reason": "claude_cli_missing"},
+        )
+        return {"status": "launcher_error", "reason": "claude_cli_missing", "launch_dir": str(launch["launch_dir"])}
     writer_settings_path = run_dir / "writer-settings.json"
     writer_settings = {"permissions": {"allow": _allowed_tools_arg(), "deny": []}}
     _write_json_if_changed(writer_settings_path, writer_settings)
@@ -472,32 +579,22 @@ def _run_claude_print_phase(
     ]
     if max_budget_usd is not None:
         argv.extend(["--max-budget-usd", str(max_budget_usd)])
-    metadata = {
-        "argv": list(argv),
-        "prompt_path": str(launcher_prompt_path),
-        "prompt_sha": prompt_sha,
-        "prompt_delivery": "stdin",
-        "source_prompt_path": str(prompt_path),
-        "source_prompt_sha": _sha256_file(prompt_path),
-        "result_path": str(result_path),
-        "handoff_path": str(handoff_path),
-        "settings_path": str(writer_settings_path),
-        "settings_sha": writer_settings_sha,
-        "env_redacted": True,
-        **workspace.to_metadata(prompt_rewrite_count=prompt_rewrite_count),
-    }
-    (launch_dir / "command.json").write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    record_launch_metadata(
+    launch = _prepare_phase_launch(
         run_id,
         phase_id,
+        phase,
+        launcher="claude-print",
+        source_prompt_path=prompt_path,
         data_dir=data_dir,
-        launch_dir=launch_dir,
-        command_path=launch_dir / "command.json",
-        parent_pid=os.getpid(),
-        prompt_sha=prompt_sha,
-        expected_result_path=result_path,
-        expected_handoff_path=handoff_path,
+        prompt_text=prompt_text,
+        argv=argv,
+        settings_path=writer_settings_path,
+        settings_sha=writer_settings_sha,
+        workspace_metadata=workspace_metadata,
     )
+    launch_dir = launch["launch_dir"]
+    metadata = launch["metadata"]
+    prompt_sha = str(launch["prompt_sha"])
 
     try:
         if claude_runner is not None:

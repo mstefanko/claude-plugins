@@ -46,6 +46,13 @@ class PhaseRecoveryTests(unittest.TestCase):
             self.assertEqual(phase["attempt_history"][0]["retry_after_seconds"], 60)
             self.assertEqual(phase["last_failure_kind"], "lease_expired_no_artifacts")
             self.assertEqual(phase["attempt_history"][0]["retry_decision"], "retry")
+            self.assertEqual(phase["attempt_history"][0]["failure_category"], "lifecycle")
+            self.assertEqual(phase["attempt_history"][0]["failure_retry_class"], "retry")
+            self.assertTrue(Path(phase["attempt_history"][0]["evidence_path"]).is_file())
+            events = _run_events(data)
+            retry = [row for row in events if row["event_type"] == "phase_attempt_retry_scheduled"][-1]
+            self.assertEqual(retry["details"]["failure_category"], "lifecycle")
+            self.assertTrue(Path(retry["details"]["evidence_path"]).is_file())
 
     def test_active_lease_without_child_liveness_is_preserved(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -192,6 +199,7 @@ class PhaseRecoveryTests(unittest.TestCase):
             self.assertEqual(phase["blocked_reason"], "retry_policy_human_gate")
             self.assertEqual(phase["retry_policy_decision"], "deterministic_contract_failure")
             self.assertEqual(phase["last_failure_kind"], "outer_artifacts_missing")
+            self.assertEqual(phase["attempt_history"][0]["failure_category"], "artifact_contract")
 
     def test_zero_returncode_empty_result_with_turns_blocks_as_silent_writer(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -225,6 +233,7 @@ class PhaseRecoveryTests(unittest.TestCase):
             self.assertIn("14 turns", phase["last_error"])
             history = phase["attempt_history"][0]
             self.assertEqual(history["failure_kind"], "writer_silent_with_turns")
+            self.assertEqual(history["failure_category"], "writer_runtime")
             self.assertEqual(history["transcript_found"], False)
             self.assertTrue(Path(history["transcript_diagnostics_path"]).is_file())
             recovery = Path(history["recovery_context_path"]).read_text(encoding="utf-8")
@@ -269,6 +278,7 @@ class PhaseRecoveryTests(unittest.TestCase):
             history = phase["attempt_history"][0]
             self.assertEqual(history["tool_name"], "Write")
             self.assertEqual(history["tool_error_kind"], "tool_disabled")
+            self.assertEqual(history["failure_category"], "writer_runtime")
             self.assertTrue(Path(history["transcript_diagnostics_path"]).is_file())
 
     def test_dry_run_reports_without_mutation(self) -> None:

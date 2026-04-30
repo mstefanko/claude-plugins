@@ -11,16 +11,11 @@ import re
 from pathlib import Path
 from typing import Any, Mapping
 
+from .failure_taxonomy import failure_kind_details
 from .paths import resolve_data_dir
+from .phase_attempt_metrics import TOKEN_FIELDS, stdout_metrics
+from .phase_evidence import read_attempt_evidence_manifest
 from .phase_sessions import load_phase_sessions, phase_status
-
-
-TOKEN_FIELDS = (
-    "input_tokens",
-    "cache_creation_input_tokens",
-    "cache_read_input_tokens",
-    "output_tokens",
-)
 
 
 def summarize_phase_attempts(
@@ -120,7 +115,10 @@ def _row_from_mapping(
     if launch_dir is None and attempt > 0:
         launch_dir = root / "phase_launches" / phase_id / f"attempt-{attempt}"
     command = _read_json_object((launch_dir / "command.json") if launch_dir else None)
-    metrics = _stdout_metrics((launch_dir / "stdout.txt") if launch_dir else None)
+    metrics = stdout_metrics((launch_dir / "stdout.txt") if launch_dir else None)
+    evidence_path = _evidence_path(item, phase, launch_dir)
+    manifest = _read_manifest(evidence_path)
+    taxonomy = _taxonomy_details(item, phase)
     row = {
         "run_id": run_id,
         "phase_id": phase_id,
@@ -138,6 +136,7 @@ def _row_from_mapping(
         "child_pid": item.get("child_pid") or phase.get("child_pid") or command.get("child_pid"),
         "process_group_id": item.get("process_group_id") or phase.get("process_group_id") or command.get("process_group_id"),
         "launch_dir": str(launch_dir) if launch_dir else None,
+        "evidence_path": str(evidence_path) if evidence_path else None,
         "result_path": item.get("result_path") or phase.get("result_path") or phase.get("expected_result_path") or command.get("result_path"),
         "handoff_path": item.get("handoff_path") or phase.get("handoff_path") or phase.get("expected_handoff_path") or command.get("handoff_path"),
         "recovery_context_path": item.get("recovery_context_path") or phase.get("recovery_context_path"),
@@ -149,7 +148,10 @@ def _row_from_mapping(
         "archived": archived_label is not None,
         "archive": archived_label,
     }
+    row.update(taxonomy)
     row.update(metrics)
+    if manifest is not None:
+        _apply_manifest_projection(row, manifest)
     return row
 
 
@@ -168,15 +170,23 @@ def _merge_launch_dirs(rows: list[dict[str, Any]], launch_root: Path, *, archive
         key = (archived_label or "", phase_id, attempt)
         row = by_key.get(key)
         command = _read_json_object(attempt_dir / "command.json")
-        metrics = _stdout_metrics(attempt_dir / "stdout.txt")
+        metrics = stdout_metrics(attempt_dir / "stdout.txt")
         if row is None:
+            evidence_path = attempt_dir / "evidence.json" if (attempt_dir / "evidence.json").is_file() else None
+            manifest = _read_manifest(evidence_path)
             row = {
+                "run_id": None,
                 "phase_id": phase_id,
                 "phase_title": phase_id,
                 "attempt": attempt,
                 "status": "unknown",
                 "failure_kind": None,
                 "retry_decision": None,
+                "failure_category": None,
+                "failure_retry_class": None,
+                "failure_operator_title": None,
+                "failure_operator_message": None,
+                "failure_known": False,
                 "started_at": None,
                 "completed_at": None,
                 "elapsed_seconds": None,
@@ -185,6 +195,7 @@ def _merge_launch_dirs(rows: list[dict[str, Any]], launch_root: Path, *, archive
                 "child_pid": command.get("child_pid"),
                 "process_group_id": command.get("process_group_id"),
                 "launch_dir": str(attempt_dir),
+                "evidence_path": str(evidence_path) if evidence_path else None,
                 "result_path": command.get("result_path"),
                 "handoff_path": command.get("handoff_path"),
                 "recovery_context_path": None,
@@ -197,11 +208,14 @@ def _merge_launch_dirs(rows: list[dict[str, Any]], launch_root: Path, *, archive
                 "archive": archived_label,
             }
             row.update(metrics)
+            if manifest is not None:
+                _apply_manifest_projection(row, manifest)
             rows.append(row)
             by_key[key] = row
             continue
         for key_name, value in {
             "launch_dir": str(attempt_dir),
+            "evidence_path": str(attempt_dir / "evidence.json") if (attempt_dir / "evidence.json").is_file() else None,
             "launcher_returncode": command.get("returncode"),
             "child_pid": command.get("child_pid"),
             "process_group_id": command.get("process_group_id"),
@@ -211,100 +225,102 @@ def _merge_launch_dirs(rows: list[dict[str, Any]], launch_root: Path, *, archive
             if row.get(key_name) is None and value is not None:
                 row[key_name] = value
         row.update(metrics)
+        manifest = _read_manifest(Path(str(row["evidence_path"]))) if isinstance(row.get("evidence_path"), str) else None
+        if manifest is not None:
+            _apply_manifest_projection(row, manifest)
 
 
-def _stdout_metrics(path: Path | None) -> dict[str, Any]:
+def _taxonomy_details(item: Mapping[str, Any], phase: Mapping[str, Any]) -> dict[str, Any]:
+    failure_kind = item.get("failure_kind") or phase.get("last_failure_kind")
+    details = failure_kind_details(failure_kind)
+    for key in (
+        "failure_category",
+        "failure_retry_class",
+        "failure_operator_title",
+        "failure_operator_message",
+        "failure_known",
+    ):
+        if item.get(key) is not None:
+            details[key] = item.get(key)
+        elif phase.get(key) is not None:
+            details[key] = phase.get(key)
+    return details
+
+
+def _evidence_path(item: Mapping[str, Any], phase: Mapping[str, Any], launch_dir: Path | None) -> Path | None:
+    value = item.get("evidence_path") or phase.get("evidence_path")
+    if isinstance(value, str) and value:
+        return Path(value)
+    if launch_dir is not None:
+        candidate = launch_dir / "evidence.json"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _read_manifest(path: Path | None) -> dict[str, Any] | None:
     if path is None or not path.is_file():
-        return _unknown_metrics()
-    text = path.read_text(encoding="utf-8", errors="replace")
-    if not text.strip():
-        result = _unknown_metrics()
-        result["stdout_parse_error"] = "stdout is empty"
-        return result
+        return None
     try:
-        payload = json.loads(text)
-    except json.JSONDecodeError as exc:
-        result = _unknown_metrics()
-        result["stdout_parse_error"] = str(exc)
-        return result
-    if not isinstance(payload, Mapping):
-        result = _unknown_metrics()
-        result["stdout_parse_error"] = "stdout JSON is not an object"
-        return result
-    metrics = _cost_metrics(payload)
-    usage = payload.get("usage") if isinstance(payload.get("usage"), Mapping) else {}
-    for field in TOKEN_FIELDS:
-        metrics[field] = _int_or_none(usage.get(field))
-    metrics["duration_ms"] = _int_or_none(payload.get("duration_ms"))
-    metrics["duration_api_ms"] = _int_or_none(payload.get("duration_api_ms"))
-    metrics["num_turns"] = _int_or_none(payload.get("num_turns"))
-    denials = payload.get("permission_denials")
-    metrics["permission_denial_count"] = len(denials) if isinstance(denials, list) else (_int_or_none(denials) or 0)
-    metrics["stdout_parse_error"] = None
-    return metrics
+        return read_attempt_evidence_manifest(path)
+    except Exception:
+        return None
 
 
-def _unknown_metrics() -> dict[str, Any]:
-    return {
-        "total_cost_usd": None,
-        "cost_confidence": "unknown",
-        "cost_source": "unknown",
-        "provider_reported_total_cost_usd": None,
-        "model_usage_cost_usd": None,
-        "permission_denial_count": 0,
-        **{field: None for field in TOKEN_FIELDS},
-        "duration_ms": None,
-        "duration_api_ms": None,
-        "num_turns": None,
-    }
-
-
-def _cost_metrics(payload: Mapping[str, Any]) -> dict[str, Any]:
-    direct = _number_or_none(payload.get("total_cost_usd"))
-    model_usage_cost = _model_usage_cost(payload.get("modelUsage"))
-    if direct is not None and model_usage_cost is not None and abs(direct - model_usage_cost) > 0.000001:
-        return {
-            "total_cost_usd": None,
-            "cost_confidence": "conflict",
-            "cost_source": "conflict",
-            "provider_reported_total_cost_usd": direct,
-            "model_usage_cost_usd": model_usage_cost,
-        }
-    if direct is not None:
-        return {
-            "total_cost_usd": direct,
-            "cost_confidence": "provider_reported",
-            "cost_source": "total_cost_usd",
-            "provider_reported_total_cost_usd": direct,
-            "model_usage_cost_usd": model_usage_cost,
-        }
-    if model_usage_cost is not None:
-        return {
-            "total_cost_usd": model_usage_cost,
-            "cost_confidence": "provider_reported",
-            "cost_source": "modelUsage.costUSD",
-            "provider_reported_total_cost_usd": None,
-            "model_usage_cost_usd": model_usage_cost,
-        }
-    return _unknown_metrics() | {"stdout_parse_error": None}
-
-
-def _model_usage_cost(value: Any) -> float | None:
-    costs: list[float] = []
-
-    def walk(obj: Any) -> None:
-        if isinstance(obj, Mapping):
-            cost = _number_or_none(obj.get("costUSD"))
-            if cost is not None:
-                costs.append(cost)
-            for child in obj.values():
-                walk(child)
-        elif isinstance(obj, list):
-            for child in obj:
-                walk(child)
-
-    walk(value)
-    return sum(costs) if costs else None
+def _apply_manifest_projection(row: dict[str, Any], manifest: Mapping[str, Any]) -> None:
+    paths = manifest.get("paths") if isinstance(manifest.get("paths"), Mapping) else {}
+    process = manifest.get("process") if isinstance(manifest.get("process"), Mapping) else {}
+    artifacts = manifest.get("artifacts") if isinstance(manifest.get("artifacts"), Mapping) else {}
+    metrics = manifest.get("metrics") if isinstance(manifest.get("metrics"), Mapping) else {}
+    failure = manifest.get("failure") if isinstance(manifest.get("failure"), Mapping) else {}
+    recovery = manifest.get("recovery") if isinstance(manifest.get("recovery"), Mapping) else {}
+    for key, value in {
+        "status": manifest.get("status"),
+        "session_name": manifest.get("session_name"),
+        "launch_dir": paths.get("launch_dir"),
+        "evidence_path": paths.get("evidence_path"),
+        "result_path": paths.get("result_path"),
+        "handoff_path": paths.get("handoff_path"),
+        "launcher_returncode": process.get("returncode"),
+        "child_pid": process.get("child_pid"),
+        "process_group_id": process.get("process_group_id"),
+        "recovery_context_path": recovery.get("recovery_context_path"),
+        "stdout_tail_path": recovery.get("stdout_tail_path"),
+        "stderr_tail_path": recovery.get("stderr_tail_path"),
+        "diff_summary_path": recovery.get("diff_summary_path"),
+        "transcript_diagnostics_path": recovery.get("transcript_diagnostics_path"),
+        "failure_kind": failure.get("failure_kind"),
+        "retry_decision": failure.get("retry_decision"),
+        "failure_category": failure.get("failure_category"),
+        "failure_retry_class": failure.get("failure_retry_class"),
+        "failure_operator_title": failure.get("failure_operator_title"),
+        "failure_operator_message": failure.get("failure_operator_message"),
+        "failure_known": failure.get("failure_known"),
+    }.items():
+        if key == "status" and row.get(key) in {None, "unknown"} and value is not None:
+            row[key] = value
+        elif key == "failure_known" and row.get(key) in {None, False} and value is not None:
+            row[key] = value
+        elif row.get(key) is None and value is not None:
+            row[key] = value
+    if not row.get("changed_files") and isinstance(artifacts.get("changed_files"), list):
+        row["changed_files"] = _string_list(artifacts.get("changed_files"))
+    for key in (
+        "total_cost_usd",
+        "cost_confidence",
+        "input_tokens",
+        "cache_creation_input_tokens",
+        "cache_read_input_tokens",
+        "output_tokens",
+        "duration_ms",
+        "duration_api_ms",
+        "num_turns",
+        "permission_denial_count",
+    ):
+        if key == "cost_confidence" and row.get(key) in {None, "unknown"} and metrics.get(key) is not None:
+            row[key] = metrics.get(key)
+        elif row.get(key) is None and metrics.get(key) is not None:
+            row[key] = metrics.get(key)
 
 
 def _cost_summary(
@@ -379,12 +395,24 @@ def _is_failed_attempt(row: Mapping[str, Any]) -> bool:
 def _last_failure(status: Mapping[str, Any]) -> dict[str, Any] | None:
     for phase in reversed(status.get("phases") or []):
         if isinstance(phase, Mapping) and phase.get("last_failure_kind"):
+            details = failure_kind_details(phase.get("last_failure_kind"))
+            for key in (
+                "failure_category",
+                "failure_retry_class",
+                "failure_operator_title",
+                "failure_operator_message",
+                "failure_known",
+            ):
+                if phase.get(key) is not None:
+                    details[key] = phase.get(key)
             return {
                 "phase_id": phase.get("phase_id"),
                 "attempt": phase.get("attempt"),
                 "failure_kind": phase.get("last_failure_kind"),
                 "retry_decision": phase.get("retry_policy_decision"),
                 "blocked_reason": phase.get("blocked_reason"),
+                "evidence_path": phase.get("evidence_path"),
+                **details,
             }
     return None
 
@@ -440,22 +468,6 @@ def _path_value(value: Any, *, root: Path) -> Path | None:
     if candidate.exists():
         return candidate
     return Path(value)
-
-
-def _number_or_none(value: Any) -> float | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    return None
-
-
-def _int_or_none(value: Any) -> int | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value
-    return None
 
 
 def _string_list(value: Any) -> list[str]:

@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from swarm_do.pipeline.phase_attempts import summarize_phase_attempts
-from swarm_do.pipeline.phase_sessions import claim_next_phase, init_phase_sessions, start_phase
+from swarm_do.pipeline.phase_sessions import claim_next_phase, init_phase_sessions, phase_session_path, start_phase
 from swarm_do.pipeline.tests.phase_session_fixtures import make_prepared_run
 
 
@@ -121,6 +121,35 @@ class PhaseAttemptSummaryTests(unittest.TestCase):
             row = summary["attempts"]["rows"][0]
             self.assertEqual(row["launcher_returncode"], 0)
             self.assertEqual(summary["cost"]["total_usd"], 0.01)
+
+    def test_legacy_attempt_history_derives_taxonomy_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            claim_next_phase(run_id, data_dir=data, repo_root=repo, lease_owner="owner-1")
+            start_phase(run_id, "1", launcher="claude-print", lease_owner="owner-1", data_dir=data)
+            path = phase_session_path(run_id, data_dir=data)
+            state = json.loads(path.read_text(encoding="utf-8"))
+            phase = state["phases"][0]
+            phase["attempt_history"].append(
+                {
+                    "attempt": 1,
+                    "failure_kind": "launcher_nonzero_no_artifacts",
+                    "retry_decision": "retry",
+                    "adopted": False,
+                    "partial_artifacts": False,
+                    "artifact_error_kinds": [],
+                    "changed_files": [],
+                }
+            )
+            path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+            summary = summarize_phase_attempts(run_id, data_dir=data)
+
+            row = summary["attempts"]["rows"][0]
+            self.assertEqual(row["failure_category"], "launcher")
+            self.assertEqual(row["failure_retry_class"], "retry")
+            self.assertEqual(summary["last_failure"], None)
 
 
 def _write_stdout(data: Path, run_id: str, phase_id: str, attempt: int, payload: dict) -> None:

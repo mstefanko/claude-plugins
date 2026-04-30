@@ -202,7 +202,11 @@ class TuiStateTests(EnvTestCase):
 
         self.assertEqual(rows[0].status, "blocked")
         self.assertEqual(rows[0].cleanup_untracked_files, ("docs/phase-1.md",))
+        self.assertEqual(rows[0].failure_category, "operator")
+        self.assertEqual(rows[0].failure_operator_title, "Operator cancelled the phase")
+        self.assertTrue(rows[0].evidence_path)
         self.assertIn("untracked=1", rendered)
+        self.assertIn("[operator]", rendered)
 
     def test_token_burn_keeps_backend_na_when_tokens_are_null(self) -> None:
         rows = [

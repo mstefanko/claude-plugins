@@ -21,6 +21,8 @@ except ImportError:  # pragma: no cover - v1 is POSIX-only by design.
 
 from .paths import REPO_ROOT, resolve_data_dir
 from .prepare import STATUS_ACCEPTED, StalePreparedArtifactError, check_stale, load_prepared_artifact
+from .failure_taxonomy import failure_kind_details
+from .phase_evidence import MANIFEST_SCHEMA_VERSION, attempt_evidence_path, write_attempt_evidence_manifest
 from .run_state import _atomic_json_write, append_run_event, utc_now, validate_run_event
 
 
@@ -192,6 +194,7 @@ def init_phase_sessions(
                     "expected_handoff_path": None,
                     "launch_metadata_error": None,
                     "recovery_context_path": None,
+                    "evidence_path": None,
                     "attempt_history": [],
                 }
             )
@@ -460,6 +463,7 @@ def start_phase(
         phase["expected_handoff_path"] = None
         phase["launch_metadata_error"] = None
         phase["recovery_context_path"] = None
+        phase["evidence_path"] = None
         _touch_and_write(base, run_id, state)
         _append_phase_event(
             base,
@@ -548,6 +552,13 @@ def record_phase_result(
         if int(phase.get("attempt") or 0) != int(result["phase_attempt"]):
             raise PhaseSessionError("result attempt does not match running phase attempt")
         phase_status = _apply_phase_result(phase, result=result, result_path=result_path, handoff_path=handoff_path)
+        evidence_path = _write_attempt_evidence_best_effort(
+            base,
+            run_id=run_id,
+            state=state,
+            phase=phase,
+            transition="record_phase_result",
+        )
         _touch_and_write(base, run_id, state)
         _append_phase_event(
             base,
@@ -572,6 +583,7 @@ def record_phase_result(
             phase=phase,
             result_path=_display_path(result_path),
             handoff_path=_display_path(handoff_path),
+            details={"evidence_path": evidence_path} if evidence_path else None,
         )
         return {"recorded": True, "phase": _phase_summary(phase), "state": state}
 
@@ -614,8 +626,21 @@ def adopt_phase_result(
         if int(phase.get("attempt") or 0) != int(result["phase_attempt"]):
             raise PhaseSessionError("result attempt does not match current phase attempt")
         phase_status = _apply_phase_result(phase, result=result, result_path=result_path, handoff_path=handoff_path)
+        record = dict(attempt_record or {})
+        record.setdefault("status", phase_status)
+        record.setdefault("retry_decision", "adopted")
+        evidence_path = _write_attempt_evidence_best_effort(
+            base,
+            run_id=run_id,
+            state=state,
+            phase=phase,
+            transition="adopt_phase_result",
+            attempt_record=record,
+        )
+        if evidence_path:
+            record["evidence_path"] = evidence_path
         if attempt_record is not None:
-            _append_attempt_history(phase, attempt_record)
+            _append_attempt_history(phase, record)
         _touch_and_write(base, run_id, state)
         _append_phase_event(
             base,
@@ -626,8 +651,10 @@ def adopt_phase_result(
             handoff_path=_display_path(handoff_path),
             details={
                 "status": result_status,
-                "failure_kind": (attempt_record or {}).get("failure_kind"),
+                "failure_kind": record.get("failure_kind"),
                 "retry_decision": "adopted",
+                "evidence_path": evidence_path,
+                **_taxonomy_event_details(record),
             },
         )
         _append_phase_event(
@@ -637,6 +664,7 @@ def adopt_phase_result(
             phase=phase,
             result_path=_display_path(result_path),
             handoff_path=_display_path(handoff_path),
+            details={"evidence_path": evidence_path} if evidence_path else None,
         )
         return {"adopted": True, "phase": _phase_summary(phase), "state": state}
 
@@ -663,6 +691,17 @@ def abandon_attempt_and_retry(
         record.setdefault("retry_decision", "retry")
         record.setdefault("retry_after_seconds", retry_after_seconds)
         record.setdefault("adopted", False)
+        record.setdefault("status", STATUS_RETRY_WAITING if next_retry_at else STATUS_PENDING)
+        evidence_path = _write_attempt_evidence_best_effort(
+            base,
+            run_id=run_id,
+            state=state,
+            phase=phase,
+            transition="abandon_attempt_and_retry",
+            attempt_record=record,
+        )
+        if evidence_path:
+            record["evidence_path"] = evidence_path
         _append_attempt_history(phase, record)
         phase["status"] = STATUS_RETRY_WAITING if next_retry_at else STATUS_PENDING
         phase["lease_owner"] = None
@@ -683,7 +722,13 @@ def abandon_attempt_and_retry(
             event_type=event_type,
             phase=phase,
             reason=failure_kind,
-            details={"failure_kind": failure_kind, "next_retry_at": next_retry_at, "retry_after_seconds": retry_after_seconds},
+            details={
+                "failure_kind": failure_kind,
+                "next_retry_at": next_retry_at,
+                "retry_after_seconds": retry_after_seconds,
+                "evidence_path": evidence_path,
+                **_taxonomy_event_details(record),
+            },
         )
         return {"retry": True, "phase": _phase_summary(phase), "state": state}
 
@@ -730,6 +775,17 @@ def mark_retry_exhausted(
         record.setdefault("failure_kind", failure_kind)
         record.setdefault("retry_decision", "retry_exhausted")
         record.setdefault("adopted", False)
+        record.setdefault("status", STATUS_RETRY_EXHAUSTED)
+        evidence_path = _write_attempt_evidence_best_effort(
+            base,
+            run_id=run_id,
+            state=state,
+            phase=phase,
+            transition="mark_retry_exhausted",
+            attempt_record=record,
+        )
+        if evidence_path:
+            record["evidence_path"] = evidence_path
         _append_attempt_history(phase, record)
         now = utc_now()
         phase["status"] = STATUS_RETRY_EXHAUSTED
@@ -751,7 +807,12 @@ def mark_retry_exhausted(
             event_type="phase_attempt_retry_exhausted",
             phase=phase,
             reason=failure_kind,
-            details={"failure_kind": failure_kind, "recommended_command": f"bin/swarm phases status {run_id}"},
+            details={
+                "failure_kind": failure_kind,
+                "recommended_command": f"bin/swarm phases status {run_id}",
+                "evidence_path": evidence_path,
+                **_taxonomy_event_details(record),
+            },
         )
         return {"retry_exhausted": True, "phase": _phase_summary(phase), "state": state}
 
@@ -778,6 +839,18 @@ def mark_phase_blocked(
         record.setdefault("failure_kind", failure_kind)
         record["retry_decision"] = retry_policy_decision
         record.setdefault("adopted", False)
+        record.setdefault("status", STATUS_BLOCKED)
+        record.setdefault("blocked_reason", blocked_reason)
+        evidence_path = _write_attempt_evidence_best_effort(
+            base,
+            run_id=run_id,
+            state=state,
+            phase=phase,
+            transition="mark_phase_blocked",
+            attempt_record=record,
+        )
+        if evidence_path:
+            record["evidence_path"] = evidence_path
         _append_attempt_history(phase, record)
         now = utc_now()
         phase["status"] = STATUS_BLOCKED
@@ -800,6 +873,8 @@ def mark_phase_blocked(
             "blocked_reason": blocked_reason,
             "retry_policy_decision": retry_policy_decision,
             "recommended_command": f"bin/swarm phases status {run_id} --attempts --cost",
+            "evidence_path": evidence_path,
+            **_taxonomy_event_details(record),
         }
         event_details.update(dict(details or {}))
         _append_phase_event(
@@ -1174,6 +1249,7 @@ def _reset_phase_to_pending(phase: dict[str, Any]) -> None:
     phase["blocked_reason"] = None
     phase["retry_policy_decision"] = None
     phase["blocked_at"] = None
+    phase["evidence_path"] = None
 
 
 def _normalize_state(state: dict[str, Any]) -> None:
@@ -1205,6 +1281,7 @@ def _normalize_state(state: dict[str, Any]) -> None:
         phase.setdefault("expected_handoff_path", None)
         phase.setdefault("launch_metadata_error", None)
         phase.setdefault("recovery_context_path", None)
+        phase.setdefault("evidence_path", None)
         if not isinstance(phase.get("attempt_history"), list):
             phase["attempt_history"] = []
 
@@ -1369,6 +1446,7 @@ def _phase_summary(phase: Mapping[str, Any] | None) -> dict[str, Any] | None:
         "expected_handoff_path",
         "launch_metadata_error",
         "recovery_context_path",
+        "evidence_path",
         "attempt_history",
     )
     return {key: phase.get(key) for key in keys}
@@ -1524,7 +1602,7 @@ def _attempt_record_from_phase(phase: Mapping[str, Any]) -> dict[str, Any]:
     started = _parse_dt(phase.get("started_at"))
     completed = _parse_dt(phase.get("completed_at")) or _utc_now_dt()
     elapsed = (completed - started).total_seconds() if started is not None else None
-    return {
+    record = {
         "attempt": int(phase.get("attempt") or 0),
         "session_name": phase.get("session_name"),
         "launcher": _launcher_from_command(phase.get("lease_command")),
@@ -1544,6 +1622,8 @@ def _attempt_record_from_phase(phase: Mapping[str, Any]) -> dict[str, Any]:
         "retry_decision": None,
         "retry_after_seconds": None,
         "adopted": False,
+        "partial_artifacts": False,
+        "evidence_path": phase.get("evidence_path"),
         "stdout_tail_path": None,
         "stderr_tail_path": None,
         "changed_files": [],
@@ -1551,6 +1631,8 @@ def _attempt_record_from_phase(phase: Mapping[str, Any]) -> dict[str, Any]:
         "diff_summary_path": None,
         "recovery_context_path": phase.get("recovery_context_path"),
     }
+    record.update(_taxonomy_event_details(record))
+    return record
 
 
 def _append_attempt_history(phase: dict[str, Any], record: Mapping[str, Any]) -> None:
@@ -1558,7 +1640,17 @@ def _append_attempt_history(phase: dict[str, Any], record: Mapping[str, Any]) ->
     if attempt <= 0:
         return
     item = dict(_attempt_record_from_phase(phase))
-    item.update({key: value for key, value in record.items() if value is not None})
+    item.update(
+        {
+            key: value
+            for key, value in record.items()
+            if value is not None and key not in {"status", "blocked_reason"}
+        }
+    )
+    taxonomy = _taxonomy_event_details(item)
+    for key, value in taxonomy.items():
+        if item.get(key) is None:
+            item[key] = value
     item["attempt"] = attempt
     item["adopted"] = bool(item.get("adopted"))
     history = phase.setdefault("attempt_history", [])
@@ -1584,6 +1676,74 @@ def _append_attempt_history(phase: dict[str, Any], record: Mapping[str, Any]) ->
         ) == signature:
             return
     history.append(item)
+
+
+def _taxonomy_event_details(record: Mapping[str, Any]) -> dict[str, Any]:
+    failure_kind = record.get("failure_kind")
+    details = failure_kind_details(failure_kind)
+    fields = {
+        "failure_category",
+        "failure_retry_class",
+        "failure_operator_title",
+        "failure_operator_message",
+        "failure_known",
+    }
+    return {
+        key: value
+        for key, value in details.items()
+        if key in fields
+    }
+
+
+def _write_attempt_evidence_best_effort(
+    data_dir: Path,
+    *,
+    run_id: str,
+    state: Mapping[str, Any],
+    phase: dict[str, Any],
+    transition: str,
+    attempt_record: Mapping[str, Any] | None = None,
+) -> str | None:
+    attempt = int((attempt_record or {}).get("attempt") or phase.get("attempt") or 0)
+    if attempt <= 0:
+        return None
+    phase_id = str(phase.get("phase_id") or "")
+    launch_dir = phase.get("launch_dir")
+    evidence_path = attempt_evidence_path(data_dir, run_id, phase_id, attempt)
+    try:
+        path = write_attempt_evidence_manifest(
+            run_id,
+            phase,
+            state=state,
+            attempt_record=attempt_record,
+            data_dir=data_dir,
+        )
+    except Exception as exc:
+        try:
+            _append_phase_event(
+                data_dir,
+                run_id=run_id,
+                event_type="phase_attempt_evidence_failed",
+                phase=phase,
+                reason="manifest_write_failed",
+                details={
+                    "phase_id": phase_id,
+                    "attempt": attempt,
+                    "launcher": (attempt_record or {}).get("launcher") or _launcher_from_command(phase.get("lease_command")),
+                    "transition": transition,
+                    "launch_dir": launch_dir,
+                    "evidence_path": str(evidence_path),
+                    "error_class": exc.__class__.__name__,
+                    "error_message": str(exc),
+                    "manifest_schema_version": MANIFEST_SCHEMA_VERSION,
+                },
+            )
+        except Exception:
+            pass
+        return None
+    value = str(path)
+    phase["evidence_path"] = value
+    return value
 
 
 def _launcher_from_command(value: Any) -> str | None:

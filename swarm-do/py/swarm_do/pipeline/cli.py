@@ -1299,6 +1299,19 @@ def cmd_phases(args: argparse.Namespace) -> int:
         elif command == "archive":
             payload = archive_phase_session_evidence(args.run_id, label=args.label)
             exit_code = 0
+        elif command == "evidence":
+            if args.attempt is not None and not args.phase:
+                print("swarm: phases evidence: --attempt requires --phase", file=sys.stderr)
+                return 1
+            if args.raw_local and not args.json:
+                print("swarm: phases evidence: --raw-local requires --json", file=sys.stderr)
+                return 1
+            payload, exit_code = _phase_evidence_payload(
+                args.run_id,
+                phase_id=args.phase,
+                attempt=args.attempt,
+                raw_local=args.raw_local,
+            )
         elif command in {"complete", "fail", "block", "needs-input"}:
             expected = {
                 "complete": "complete",
@@ -1361,6 +1374,8 @@ def cmd_phases(args: argparse.Namespace) -> int:
         print(_format_phase_cleanup(payload))
     elif args.phases_command == "archive":
         print(_format_phase_archive(payload))
+    elif args.phases_command == "evidence":
+        print(_format_phase_evidence(payload))
     else:
         print(json.dumps(payload, indent=2, sort_keys=True))
     return exit_code
@@ -1416,8 +1431,16 @@ def _format_phase_status(payload: Mapping[str, Any]) -> str:
             ]
             if row.get("failure_kind"):
                 bits.append(f"failure={row.get('failure_kind')}")
+            if row.get("failure_category"):
+                bits.append(f"category={row.get('failure_category')}")
+            if row.get("failure_retry_class"):
+                bits.append(f"retry_class={row.get('failure_retry_class')}")
             if row.get("retry_decision"):
-                bits.append(f"retry={row.get('retry_decision')}")
+                bits.append(f"retry_decision={row.get('retry_decision')}")
+            if row.get("failure_operator_title"):
+                bits.append(f"message={row.get('failure_operator_title')}")
+            if row.get("evidence_path"):
+                bits.append(f"evidence={row.get('evidence_path')}")
             bits.append(f"cost={cost_value}")
             if row.get("archived"):
                 bits.append(f"archive={row.get('archive')}")
@@ -1432,6 +1455,7 @@ def _format_phase_status(payload: Mapping[str, Any]) -> str:
             f"phase={last_failure.get('phase_id')} "
             f"attempt={last_failure.get('attempt')} "
             f"failure={last_failure.get('failure_kind')} "
+            f"category={last_failure.get('failure_category') or 'n/a'} "
             f"retry={last_failure.get('retry_decision') or 'n/a'}"
         )
     if payload.get("last_error"):
@@ -1535,6 +1559,124 @@ def _format_phase_archive(payload: Mapping[str, Any]) -> str:
     lines = [f"phase archive: {payload.get('run_id')} -> {payload.get('archive_dir')}"]
     for target in payload.get("copied") or []:
         lines.append(f"  - {target}")
+    return "\n".join(lines)
+
+
+def _phase_evidence_payload(
+    run_id: str,
+    *,
+    phase_id: str | None,
+    attempt: int | None,
+    raw_local: bool,
+) -> tuple[dict[str, Any], int]:
+    from .phase_evidence import attempt_evidence_path, read_attempt_evidence_manifest, redacted_attempt_evidence
+    from .phase_sessions import load_phase_sessions
+
+    base = resolve_data_dir()
+    try:
+        state = load_phase_sessions(run_id, data_dir=base)
+    except Exception as exc:
+        return {"run_id": run_id, "count": 0, "error": str(exc), "manifests": []}, 3
+    paths: list[Path] = []
+    for phase in state.get("phases") or []:
+        if not isinstance(phase, Mapping):
+            continue
+        current_phase_id = str(phase.get("phase_id") or "")
+        if phase_id is not None and current_phase_id != phase_id:
+            continue
+        for value in (phase.get("evidence_path"),):
+            path = _phase_cli_path(value, base=base, run_id=run_id)
+            if path is not None:
+                paths.append(path)
+        for item in phase.get("attempt_history") or []:
+            if not isinstance(item, Mapping):
+                continue
+            item_attempt = int(item.get("attempt") or 0)
+            if attempt is not None and item_attempt != attempt:
+                continue
+            path = _phase_cli_path(item.get("evidence_path"), base=base, run_id=run_id)
+            if path is not None:
+                paths.append(path)
+        if attempt is not None:
+            paths.append(attempt_evidence_path(base, run_id, current_phase_id, attempt))
+    launch_root = base / "runs" / run_id / "phase_launches"
+    if attempt is None:
+        pattern = f"{phase_id}/attempt-*/evidence.json" if phase_id is not None else "*/attempt-*/evidence.json"
+        paths.extend(sorted(launch_root.glob(pattern)))
+    selected = _dedupe_existing_paths(paths)
+    selector_specific = phase_id is not None and attempt is not None
+    if selector_specific and not selected:
+        return {"run_id": run_id, "phase_id": phase_id, "attempt": attempt, "count": 0, "manifests": []}, 2
+    manifests: list[dict[str, Any]] = []
+    try:
+        for path in selected:
+            manifest = read_attempt_evidence_manifest(path)
+            if raw_local:
+                manifests.append(manifest)
+            else:
+                manifests.append(redacted_attempt_evidence(manifest))
+    except Exception as exc:
+        return {"run_id": run_id, "count": 0, "error": str(exc), "manifests": []}, 3
+    if phase_id is not None and not manifests:
+        return {"run_id": run_id, "phase_id": phase_id, "attempt": attempt, "count": 0, "manifests": []}, 2
+    return {"run_id": run_id, "phase_id": phase_id, "attempt": attempt, "count": len(manifests), "manifests": manifests}, 0
+
+
+def _phase_cli_path(value: Any, *, base: Path, run_id: str) -> Path | None:
+    if not isinstance(value, str) or not value:
+        return None
+    path = Path(value)
+    if path.is_absolute():
+        return path
+    candidates = (path, REPO_ROOT / path, base / path, base / "runs" / run_id / path)
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return path
+
+
+def _dedupe_existing_paths(paths: list[Path]) -> list[Path]:
+    seen: set[str] = set()
+    result: list[Path] = []
+    for path in paths:
+        if not path.is_file():
+            continue
+        key = str(path.resolve(strict=False))
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(path)
+    return sorted(result, key=lambda item: str(item))
+
+
+def _format_phase_evidence(payload: Mapping[str, Any]) -> str:
+    lines = [f"phase evidence: {payload.get('run_id')} count={payload.get('count') or 0}"]
+    if payload.get("error"):
+        lines.append(f"  error: {payload.get('error')}")
+    for item in payload.get("manifests") or []:
+        if not isinstance(item, Mapping):
+            continue
+        bits = [
+            f"phase={item.get('phase_id')}",
+            f"attempt={item.get('attempt')}",
+            f"status={item.get('status')}",
+            f"launcher={item.get('launcher') or '-'}",
+        ]
+        if item.get("failure_kind"):
+            bits.append(f"failure={item.get('failure_kind')}")
+        if item.get("failure_category"):
+            bits.append(f"category={item.get('failure_category')}")
+        if item.get("failure_retry_class"):
+            bits.append(f"retry_class={item.get('failure_retry_class')}")
+        if item.get("retry_decision"):
+            bits.append(f"retry_decision={item.get('retry_decision')}")
+        if item.get("changed_file_count") is not None:
+            bits.append(f"changed={item.get('changed_file_count')}")
+        if item.get("evidence_path"):
+            bits.append(f"evidence={item.get('evidence_path')}")
+        lines.append("  - " + " ".join(bits))
+        if item.get("recovery_context_path"):
+            lines.append(f"      recovery={item.get('recovery_context_path')}")
     return "\n".join(lines)
 
 
@@ -2131,6 +2273,13 @@ def _build_parser() -> argparse.ArgumentParser:
     p = phases_sub.add_parser("archive")
     p.add_argument("run_id")
     p.add_argument("--label")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_phases)
+    p = phases_sub.add_parser("evidence")
+    p.add_argument("run_id")
+    p.add_argument("--phase")
+    p.add_argument("--attempt", type=int)
+    p.add_argument("--raw-local", action="store_true")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_phases)
     p = phases_sub.add_parser("pump")

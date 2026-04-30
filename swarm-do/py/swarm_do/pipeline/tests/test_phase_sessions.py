@@ -9,6 +9,7 @@ from unittest import mock
 from swarm_do.pipeline.phase_sessions import (
     BLOCKED_OPERATOR_CANCELLED,
     PhaseSessionError,
+    archive_phase_session_evidence,
     cancel_phase_session_run,
     claim_next_phase,
     cleanup_phase_generated_artifacts,
@@ -67,6 +68,7 @@ class PhaseSessionTests(unittest.TestCase):
             result_path = _write_result(data, run_id, started["phase"], status="complete")
             recorded = record_phase_result(run_id, "1", json_file=result_path, expected_status="complete", data_dir=data)
             self.assertEqual(recorded["phase"]["status"], "complete")
+            self.assertTrue(Path(recorded["phase"]["evidence_path"]).is_file())
 
             claim2 = claim_next_phase(run_id, data_dir=data, repo_root=repo, lease_owner="owner-2")
             self.assertTrue(claim2["claimed"])
@@ -269,6 +271,20 @@ class PhaseSessionTests(unittest.TestCase):
 
             with self.assertRaisesRegex(PhaseSessionError, "outside generated artifact allowlist"):
                 cleanup_phase_generated_artifacts(run_id, data_dir=data, phase_id="../escape", apply=True)
+
+    def test_archive_copies_attempt_evidence_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            claim_next_phase(run_id, data_dir=data, repo_root=repo, lease_owner="owner-1")
+            started = start_phase(run_id, "1", launcher="manual", lease_owner="owner-1", data_dir=data)
+            result_path = _write_result(data, run_id, started["phase"], status="complete")
+            record_phase_result(run_id, "1", json_file=result_path, expected_status="complete", data_dir=data)
+
+            archived = archive_phase_session_evidence(run_id, data_dir=data, label="test")
+
+            manifest = Path(archived["archive_dir"]) / "phase_launches" / "1" / "attempt-1" / "evidence.json"
+            self.assertTrue(manifest.is_file())
 
 
 def _write_result(data: Path, run_id: str, phase: dict, *, status: str) -> Path:

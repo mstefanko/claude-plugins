@@ -154,6 +154,7 @@
           "expected_handoff_path": { "type": ["string", "null"] },
           "launch_metadata_error": { "type": ["string", "null"] },
           "recovery_context_path": { "type": ["string", "null"] },
+          "evidence_path": { "type": ["string", "null"] },
           "attempt_history": {
             "type": "array",
             "items": {
@@ -176,6 +177,11 @@
                 "handoff_path": { "type": ["string", "null"] },
                 "returncode": { "type": ["integer", "null"] },
                 "failure_kind": { "type": ["string", "null"] },
+                "failure_category": { "type": ["string", "null"] },
+                "failure_retry_class": { "type": ["string", "null"] },
+                "failure_operator_title": { "type": ["string", "null"] },
+                "failure_operator_message": { "type": ["string", "null"] },
+                "failure_known": { "type": ["boolean", "null"] },
                 "retry_decision": { "type": ["string", "null"] },
                 "retry_after_seconds": { "type": ["integer", "null"], "minimum": 0 },
                 "adopted": { "type": "boolean" },
@@ -198,6 +204,7 @@
                   "type": "object",
                   "additionalProperties": true
                 },
+                "evidence_path": { "type": ["string", "null"] },
                 "diff_summary_path": { "type": ["string", "null"] },
                 "recovery_context_path": { "type": ["string", "null"] },
                 "transcript_diagnostics_path": { "type": ["string", "null"] },
