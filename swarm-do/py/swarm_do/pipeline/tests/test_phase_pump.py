@@ -292,7 +292,8 @@ class PhasePumpTests(unittest.TestCase):
 
                 def __init__(self) -> None:
                     self.returncode = None
-                    self.stdin = FakeStdin()
+                    self.stdin_handle = FakeStdin()
+                    self.stdin = self.stdin_handle
                     self.wait_calls = 0
 
                 def wait(self, timeout=None):
@@ -303,6 +304,8 @@ class PhasePumpTests(unittest.TestCase):
                     return 0
 
                 def communicate(self):
+                    if self.stdin is not None:
+                        raise AssertionError("stdin should be detached before communicate")
                     return "{}", ""
 
             proc = FakeProc()
@@ -326,8 +329,9 @@ class PhasePumpTests(unittest.TestCase):
                     prompt_text="hello",
                 )
 
-            self.assertEqual(proc.stdin.writes, ["hello"])
-            self.assertTrue(proc.stdin.closed)
+            self.assertEqual(proc.stdin_handle.writes, ["hello"])
+            self.assertTrue(proc.stdin_handle.closed)
+            self.assertIsNone(proc.stdin)
             events = (data / "telemetry" / "run_events.jsonl").read_text(encoding="utf-8")
             self.assertIn("phase_session_refreshed", events)
 

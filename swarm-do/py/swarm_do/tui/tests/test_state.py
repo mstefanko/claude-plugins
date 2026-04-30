@@ -185,6 +185,25 @@ class TuiStateTests(EnvTestCase):
         self.assertIn("status=ready", rendered)
         self.assertIn("attempts=0", rendered)
 
+    def test_phase_session_run_rows_show_cancel_cleanup_artifacts(self) -> None:
+        from swarm_do.pipeline.phase_sessions import cancel_phase_session_run, claim_next_phase, init_phase_sessions, start_phase
+        from swarm_do.pipeline.tests.phase_session_fixtures import make_prepared_run
+
+        repo, data, run_id = make_prepared_run(self.root, phase_count=1)
+        init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+        claim_next_phase(run_id, data_dir=data, repo_root=repo, lease_owner="owner-1")
+        start_phase(run_id, "1", launcher="manual", lease_owner="owner-1", data_dir=data)
+        (repo / "docs").mkdir(exist_ok=True)
+        (repo / "docs" / "phase-1.md").write_text("partial work\n", encoding="utf-8")
+        cancel_phase_session_run(run_id, data_dir=data, repo_root=repo, kill_child=False)
+
+        rows = phase_session_run_rows(data)
+        rendered = phase_session_runs_text(rows)
+
+        self.assertEqual(rows[0].status, "blocked")
+        self.assertEqual(rows[0].cleanup_untracked_files, ("docs/phase-1.md",))
+        self.assertIn("untracked=1", rendered)
+
     def test_token_burn_keeps_backend_na_when_tokens_are_null(self) -> None:
         rows = [
             {

@@ -1885,11 +1885,11 @@ if TEXTUAL_IMPORT_ERROR is None:
 
 
     class RunsScreen(Screen):
-        BINDINGS = [("r", "refresh_runs", "Refresh")]
+        BINDINGS = [("r", "refresh_runs", "Refresh"), ("c", "cancel_phase_session", "Cancel")]
         HELP = (
             "Runs\n\n"
             "Global: 1 Dashboard, 2 Runs, 3 Presets, 4 Settings, Ctrl+P Commands, q Quit.\n"
-            "Local: r refresh phase-session runs."
+            "Local: r refresh phase-session runs, c cancel selected phase-session run."
         )
 
         def compose(self) -> ComposeResult:
@@ -1909,6 +1909,21 @@ if TEXTUAL_IMPORT_ERROR is None:
 
         def action_refresh_runs(self) -> None:
             self.refresh_runs()
+
+        def action_cancel_phase_session(self) -> None:
+            row = self._selected_row()
+            if row is None:
+                self.app.push_screen(MessageModal("No run selected", "There is no phase-session run to cancel."))
+                return
+            try:
+                from swarm_do.pipeline.phase_sessions import cancel_phase_session_run
+
+                payload = cancel_phase_session_run(row.run_id)
+            except Exception as exc:
+                self.app.push_screen(MessageModal("Cancel failed", str(exc)))
+                return
+            self.refresh_runs()
+            self.app.push_screen(MessageModal("Cancel recorded", f"Marked phase {payload.get('phase_id')} operator_cancelled."))
 
         def refresh_runs(self) -> None:
             rows = phase_session_run_rows()
@@ -1940,10 +1955,18 @@ if TEXTUAL_IMPORT_ERROR is None:
             _refresh_chrome(self)
 
         def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+            row = self._selected_row(event.cursor_row)
+            if row is None:
+                return
+            self._show_row(row)
+
+        def _selected_row(self, cursor_row: int | None = None) -> Any | None:
             rows = phase_session_run_rows()
             if not rows:
-                return
-            self._show_row(rows[min(max(event.cursor_row, 0), len(rows) - 1)])
+                return None
+            table = self.query_one("#runs-table", DataTable)
+            index = table.cursor_row if cursor_row is None else cursor_row
+            return rows[min(max(int(index or 0), 0), len(rows) - 1)]
 
         def _show_row(self, row: Any) -> None:
             phase_lines = [
@@ -1967,6 +1990,14 @@ if TEXTUAL_IMPORT_ERROR is None:
                 "Recent Attempts",
                 *(attempt_lines or ["- none"]),
             ]
+            if row.cleanup_untracked_files:
+                body.extend(
+                    [
+                        "",
+                        "Untracked Artifacts",
+                        *(f"- {path}" for path in row.cleanup_untracked_files[:12]),
+                    ]
+                )
             self.query_one("#runs-detail", Static).update("\n".join(body))
 
 

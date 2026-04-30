@@ -98,7 +98,29 @@ class PhaseAttemptSummaryTests(unittest.TestCase):
             self.assertEqual(row["provider_reported_total_cost_usd"], 1.0)
             self.assertEqual(row["model_usage_cost_usd"], 2.0)
             self.assertIsNone(row["total_cost_usd"])
+            self.assertEqual(summary["cost"]["total_usd"], 0.0)
+            self.assertEqual(summary["cost"]["failed_usd"], 0.0)
             self.assertEqual(summary["cost"]["unknown_attempt_count"], 1)
+
+    def test_legacy_command_without_settings_path_is_readable(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            claim_next_phase(run_id, data_dir=data, repo_root=repo, lease_owner="owner-1")
+            start_phase(run_id, "1", launcher="claude-print", lease_owner="owner-1", data_dir=data)
+            launch = data / "runs" / run_id / "phase_launches" / "1" / "attempt-1"
+            launch.mkdir(parents=True, exist_ok=True)
+            (launch / "command.json").write_text(
+                json.dumps({"returncode": 0, "result_path": "legacy.result.json", "handoff_path": "legacy.handoff.json"}),
+                encoding="utf-8",
+            )
+            _write_stdout(data, run_id, "1", 1, {"total_cost_usd": 0.01})
+
+            summary = summarize_phase_attempts(run_id, data_dir=data)
+
+            row = summary["attempts"]["rows"][0]
+            self.assertEqual(row["launcher_returncode"], 0)
+            self.assertEqual(summary["cost"]["total_usd"], 0.01)
 
 
 def _write_stdout(data: Path, run_id: str, phase_id: str, attempt: int, payload: dict) -> None:

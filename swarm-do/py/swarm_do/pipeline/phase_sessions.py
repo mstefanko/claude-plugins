@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import signal
 import socket
 import time
 import uuid
@@ -811,6 +813,124 @@ def mark_phase_blocked(
         return {"blocked": True, "phase": _phase_summary(phase), "state": state}
 
 
+def cancel_phase_session_run(
+    run_id: str,
+    *,
+    data_dir: Path | None = None,
+    repo_root: Path | None = None,
+    phase_id: str | None = None,
+    kill_child: bool = True,
+) -> dict[str, Any]:
+    """Durably mark the current phase as operator-cancelled."""
+
+    base = data_dir or resolve_data_dir()
+    state = load_phase_sessions(run_id, data_dir=base)
+    phase = _phase_to_cancel(state, phase_id)
+    if phase is None:
+        raise PhaseSessionError(f"no active phase-session phase to cancel for run {run_id}")
+    target_phase_id = str(phase["phase_id"])
+    child = _cancel_child_process_details(phase, kill_child=kill_child)
+    cleanup = _cancel_cleanup_details(state, target_phase_id, data_dir=base, repo_root=repo_root)
+    record = _attempt_record_from_phase(phase)
+    record.update(
+        {
+            "failure_kind": BLOCKED_OPERATOR_CANCELLED,
+            "retry_decision": BLOCKED_OPERATOR_CANCELLED,
+            "adopted": False,
+            "child_process": child,
+            "cleanup": cleanup,
+            "changed_files": cleanup.get("untracked_artifacts_by_phase", {}).get(target_phase_id, []),
+        }
+    )
+    result = mark_phase_blocked(
+        run_id,
+        target_phase_id,
+        failure_kind=BLOCKED_OPERATOR_CANCELLED,
+        blocked_reason=BLOCKED_OPERATOR_CANCELLED,
+        retry_policy_decision=BLOCKED_OPERATOR_CANCELLED,
+        data_dir=base,
+        launcher_error="operator cancelled phase session",
+        attempt_record=record,
+        details={"child_process": child, "cleanup": cleanup},
+    )
+    return {
+        "cancelled": True,
+        "run_id": run_id,
+        "phase_id": target_phase_id,
+        "phase": result["phase"],
+        "child_process": child,
+        "cleanup": cleanup,
+        "state": result["state"],
+    }
+
+
+def cleanup_phase_generated_artifacts(
+    run_id: str,
+    *,
+    data_dir: Path | None = None,
+    phase_id: str | None = None,
+    apply: bool = False,
+) -> dict[str, Any]:
+    base = data_dir or resolve_data_dir()
+    targets = _phase_generated_artifact_targets(run_id, data_dir=base, phase_id=phase_id)
+    removed: list[str] = []
+    existing = [target for target in targets if target.exists()]
+    if apply:
+        for target in existing:
+            if target.is_dir():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
+            removed.append(str(target))
+    return {
+        "run_id": run_id,
+        "phase_id": phase_id,
+        "applied": apply,
+        "targets": [str(target) for target in targets],
+        "existing_targets": [str(target) for target in existing],
+        "removed": removed,
+    }
+
+
+def archive_phase_session_evidence(
+    run_id: str,
+    *,
+    data_dir: Path | None = None,
+    label: str | None = None,
+) -> dict[str, Any]:
+    base = data_dir or resolve_data_dir()
+    run_dir = base / "runs" / run_id
+    if not run_dir.is_dir():
+        raise PhaseSessionError(f"run evidence directory not found: {run_dir}")
+    suffix = _archive_label(label) if label else utc_now().replace(":", "").replace("-", "").replace(".", "")
+    archive_dir = run_dir / f".archived-{suffix}"
+    index = 1
+    while archive_dir.exists():
+        archive_dir = run_dir / f".archived-{suffix}-{index}"
+        index += 1
+    archive_dir.mkdir(parents=True)
+    copied: list[str] = []
+    for name in (
+        STATE_FILENAME,
+        "checkpoint.v1.json",
+        "writer-settings.json",
+        "phase_results",
+        "phase_handoffs",
+        "phase_launches",
+        "phase_recovery",
+    ):
+        source = run_dir / name
+        if not source.exists():
+            continue
+        target = archive_dir / name
+        if source.is_dir():
+            shutil.copytree(source, target)
+        else:
+            shutil.copy2(source, target)
+        copied.append(str(target))
+    return {"run_id": run_id, "archive_dir": str(archive_dir), "copied": copied}
+
+
 def record_launch_metadata(
     run_id: str,
     phase_id: str,
@@ -1024,6 +1144,17 @@ def _active_phase(state: Mapping[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+def _phase_to_cancel(state: Mapping[str, Any], phase_id: str | None) -> dict[str, Any] | None:
+    if phase_id is not None:
+        phase = _find_phase(state, phase_id)
+        return phase if phase.get("status") not in TERMINAL_STATUSES else None
+    for status in (STATUS_RUNNING, STATUS_LEASED, STATUS_RETRY_WAITING, STATUS_STALE):
+        for phase in state.get("phases") or []:
+            if isinstance(phase, dict) and phase.get("status") == status:
+                return phase
+    return None
+
+
 def _find_phase(state: Mapping[str, Any], phase_id: str) -> dict[str, Any]:
     for phase in state.get("phases") or []:
         if isinstance(phase, dict) and phase.get("phase_id") == phase_id:
@@ -1082,6 +1213,117 @@ def _string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, str)]
+
+
+def _cancel_child_process_details(phase: Mapping[str, Any], *, kill_child: bool) -> dict[str, Any]:
+    child_pid = phase.get("child_pid")
+    process_group_id = phase.get("process_group_id")
+    child_alive = _pid_alive(child_pid) if isinstance(child_pid, int) and child_pid > 0 else None
+    details: dict[str, Any] = {
+        "child_pid": child_pid if isinstance(child_pid, int) else None,
+        "process_group_id": process_group_id if isinstance(process_group_id, int) else None,
+        "child_alive_before_cancel": child_alive,
+        "kill_requested": bool(kill_child),
+        "kill_attempted": False,
+        "kill_signal": None,
+        "kill_target": None,
+        "kill_error": None,
+    }
+    if not kill_child:
+        return details
+    if child_alive is False:
+        return details
+    current_pid = os.getpid()
+    current_pgid = os.getpgrp() if hasattr(os, "getpgrp") else None
+    try:
+        if isinstance(process_group_id, int) and process_group_id > 0 and process_group_id != current_pgid:
+            details["kill_attempted"] = True
+            details["kill_signal"] = "SIGTERM"
+            details["kill_target"] = f"pgid:{process_group_id}"
+            os.killpg(process_group_id, signal.SIGTERM)
+        elif isinstance(child_pid, int) and child_pid > 0 and child_pid != current_pid:
+            details["kill_attempted"] = True
+            details["kill_signal"] = "SIGTERM"
+            details["kill_target"] = f"pid:{child_pid}"
+            os.kill(child_pid, signal.SIGTERM)
+    except ProcessLookupError:
+        details["kill_error"] = "process_not_found"
+    except Exception as exc:
+        details["kill_error"] = str(exc)
+    return details
+
+
+def _pid_alive(pid: int) -> bool | None:
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return None
+    except OSError:
+        return None
+
+
+def _cancel_cleanup_details(
+    state: Mapping[str, Any],
+    phase_id: str,
+    *,
+    data_dir: Path,
+    repo_root: Path | None,
+) -> dict[str, Any]:
+    retry_policy = state.get("retry_policy") if isinstance(state.get("retry_policy"), Mapping) else {}
+    baseline_path = retry_policy.get("worktree_baseline_path") if isinstance(retry_policy.get("worktree_baseline_path"), str) else None
+    untracked: list[str] = []
+    warning = None
+    try:
+        from .worktree_baseline import changed_files_since_baseline
+
+        changed = changed_files_since_baseline(baseline_path, repo_root=repo_root)
+        warning = changed.get("warning") if isinstance(changed.get("warning"), str) else None
+        changed_files = {str(item) for item in changed.get("changed_files") or [] if isinstance(item, str)}
+        for line in changed.get("current_status_porcelain") or []:
+            if isinstance(line, str) and line.startswith("?? ") and line[3:] in changed_files:
+                untracked.append(line[3:])
+    except Exception as exc:
+        warning = str(exc)
+    by_phase = {phase_id: untracked} if untracked else {}
+    return {
+        "untracked_artifacts_by_phase": by_phase,
+        "untracked_artifact_count": len(untracked),
+        "warning": warning,
+        "commands": {
+            "keep": "no command needed; run evidence and source files are preserved",
+            "inspect": f"bin/swarm phases status {state.get('run_id')} --attempts --cost --events",
+            "remove_generated_phase_artifacts": f"bin/swarm phases cleanup {state.get('run_id')} --phase {phase_id} --generated-artifacts --apply",
+            "archive_run_evidence": f"bin/swarm phases archive {state.get('run_id')}",
+        },
+    }
+
+
+def _phase_generated_artifact_targets(run_id: str, *, data_dir: Path, phase_id: str | None) -> list[Path]:
+    run_dir = data_dir / "runs" / run_id
+    specs: list[tuple[Path, Path]] = []
+    for name in ("phase_results", "phase_handoffs", "phase_launches", "phase_recovery"):
+        root = run_dir / name
+        target = root / phase_id if phase_id else root
+        specs.append((root, target))
+    targets: list[Path] = []
+    for root, target in specs:
+        root_resolved = root.resolve(strict=False)
+        target_resolved = target.resolve(strict=False)
+        try:
+            target_resolved.relative_to(root_resolved)
+        except ValueError as exc:
+            raise PhaseSessionError(f"refusing cleanup target outside generated artifact allowlist: {target}") from exc
+        targets.append(target)
+    return targets
+
+
+def _archive_label(label: str) -> str:
+    if not label or any(ch not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-" for ch in label):
+        raise PhaseSessionError("archive label may only contain letters, digits, dot, underscore, and dash")
+    return label
 
 
 def _touch_and_write(data_dir: Path, run_id: str, state: dict[str, Any]) -> None:
@@ -1553,7 +1795,10 @@ __all__ = [
     "PhaseSessionLockTimeout",
     "abandon_attempt_and_retry",
     "adopt_phase_result",
+    "archive_phase_session_evidence",
+    "cancel_phase_session_run",
     "claim_next_phase",
+    "cleanup_phase_generated_artifacts",
     "generate_lease_owner",
     "init_phase_sessions",
     "load_phase_sessions",

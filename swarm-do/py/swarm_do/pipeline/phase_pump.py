@@ -676,6 +676,10 @@ def _run_real_claude(
         proc.stdin.write(prompt_text)
         proc.stdin.flush()
         proc.stdin.close()
+        # ``communicate()`` still tries to flush ``stdin`` when the handle is
+        # attached, even if the caller closed it. Detach it after the one-time
+        # write so later collection only drains stdout/stderr.
+        proc.stdin = None
     while True:
         elapsed = time.monotonic() - started
         if elapsed > timeout_seconds:

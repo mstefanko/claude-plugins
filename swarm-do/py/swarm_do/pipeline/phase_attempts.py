@@ -143,6 +143,9 @@ def _row_from_mapping(
         "recovery_context_path": item.get("recovery_context_path") or phase.get("recovery_context_path"),
         "stdout_tail_path": item.get("stdout_tail_path"),
         "stderr_tail_path": item.get("stderr_tail_path"),
+        "changed_files": _string_list(item.get("changed_files")),
+        "cleanup": item.get("cleanup") if isinstance(item.get("cleanup"), Mapping) else None,
+        "child_process": item.get("child_process") if isinstance(item.get("child_process"), Mapping) else None,
         "archived": archived_label is not None,
         "archive": archived_label,
     }
@@ -187,6 +190,9 @@ def _merge_launch_dirs(rows: list[dict[str, Any]], launch_root: Path, *, archive
                 "recovery_context_path": None,
                 "stdout_tail_path": None,
                 "stderr_tail_path": None,
+                "changed_files": [],
+                "cleanup": None,
+                "child_process": None,
                 "archived": archived_label is not None,
                 "archive": archived_label,
             }
@@ -450,6 +456,12 @@ def _int_or_none(value: Any) -> int | None:
     if isinstance(value, int):
         return value
     return None
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
 
 
 def _archive_key(row: Mapping[str, Any]) -> str:

@@ -127,6 +127,7 @@ class PhaseSessionRunRow:
     recommended_action: str | None
     phases: tuple[Mapping[str, Any], ...]
     attempt_rows: tuple[Mapping[str, Any], ...]
+    cleanup_untracked_files: tuple[str, ...] = ()
 
 
 ACCEPTED_MAINTAINER_ACTIONS = frozenset(
@@ -2921,6 +2922,7 @@ def phase_session_run_rows(data_dir: Path | None = None, limit: int = 20) -> lis
                     recommended_action=evidence.get("recommended_action") if isinstance(evidence.get("recommended_action"), str) else None,
                     phases=phases,
                     attempt_rows=attempt_rows,
+                    cleanup_untracked_files=tuple(_cleanup_untracked_files(attempt_rows)),
                 )
             )
         except Exception as exc:
@@ -2940,6 +2942,7 @@ def phase_session_run_rows(data_dir: Path | None = None, limit: int = 20) -> lis
                     recommended_action=None,
                     phases=(),
                     attempt_rows=(),
+                    cleanup_untracked_files=(),
                 )
             )
     return rows
@@ -2955,12 +2958,31 @@ def phase_session_runs_text(rows: list[PhaseSessionRunRow]) -> str:
         active = row.active_phase or "-"
         failure = row.last_failure or "-"
         unknown = f" unknown={row.unknown_cost_attempt_count}" if row.unknown_cost_attempt_count else ""
+        untracked = f" untracked={len(row.cleanup_untracked_files)}" if row.cleanup_untracked_files else ""
         lines.append(
             f"{row.run_id} status={row.status} active={active} "
             f"phases={row.completed_phases}/{len(row.phases)} attempts={row.attempts} "
-            f"failed_attempts={row.failed_attempts} cost={cost} failed={failed}{unknown} last={failure}"
+            f"failed_attempts={row.failed_attempts} cost={cost} failed={failed}{unknown}{untracked} last={failure}"
         )
     return "\n".join(lines)
+
+
+def _cleanup_untracked_files(attempt_rows: tuple[Mapping[str, Any], ...]) -> list[str]:
+    files: list[str] = []
+    for row in attempt_rows:
+        cleanup = row.get("cleanup")
+        if isinstance(cleanup, Mapping):
+            by_phase = cleanup.get("untracked_artifacts_by_phase")
+            if isinstance(by_phase, Mapping):
+                for paths in by_phase.values():
+                    if isinstance(paths, list):
+                        for path in paths:
+                            if isinstance(path, str) and path not in files:
+                                files.append(path)
+        for path in row.get("changed_files") or []:
+            if isinstance(path, str) and path not in files:
+                files.append(path)
+    return files
 
 
 def _active_phase_label(status: Mapping[str, Any]) -> str | None:

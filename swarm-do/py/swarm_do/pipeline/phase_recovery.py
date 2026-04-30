@@ -231,46 +231,6 @@ def reconcile_phase_sessions(
             partial_artifacts=artifact.get("partial", False),
             artifact_error_kinds=artifact.get("error_kinds") or [],
         )
-        if _hard_stop_failure(failure_kind, artifact):
-            blocked_reason = _blocked_reason_for_hard_stop(failure_kind, artifact)
-            retry_policy_decision = (
-                "permission_contract_failure"
-                if blocked_reason == BLOCKED_PERMISSION_CONTRACT_FAILURE
-                else "deterministic_contract_failure"
-            )
-            record = {**evidence, "retry_decision": retry_policy_decision, "artifact_error_kinds": artifact.get("error_kinds") or []}
-            if not dry_run:
-                mark_phase_blocked(
-                    run_id,
-                    phase_id,
-                    failure_kind=failure_kind,
-                    blocked_reason=blocked_reason,
-                    retry_policy_decision=retry_policy_decision,
-                    data_dir=base,
-                    launcher_error=_launcher_error(launcher_result, artifact),
-                    attempt_record=record,
-                    details={"artifact_error_kinds": artifact.get("error_kinds") or []},
-                )
-            actions.append(
-                {
-                    "phase_id": phase_id,
-                    "attempt": attempt,
-                    "action": "blocked",
-                    "status": STATUS_BLOCKED,
-                    "failure_kind": failure_kind,
-                    "blocked_reason": blocked_reason,
-                    "retry_decision": retry_policy_decision,
-                }
-            )
-            if not dry_run:
-                _write_recovery_note(
-                    run_id,
-                    base,
-                    kind="phase_human_gated",
-                    phase_id=phase_id,
-                    details=actions[-1],
-                )
-            return _decision(run_id, base, STATUS_BLOCKED, actions, blocked_reason=blocked_reason)
         action = _retry_or_exhaust(
             run_id,
             phase,
@@ -364,11 +324,11 @@ def _retry_or_exhaust(
     max_attempts = int(phase.get("max_session_attempts") or retry_policy.get("max_session_attempts") or 3)
     phase_id = str(phase["phase_id"])
 
-    deterministic_decision = _deterministic_retry_stop(failure_kind, evidence)
+    stop_decision = _retry_stop_decision(failure_kind, evidence)
     same_failure_count = _same_failure_count(phase, failure_kind, include_current=True)
     same_failure_limit = int(retry_policy.get("max_consecutive_same_failure_kind") or 2)
-    if deterministic_decision is not None:
-        blocked_reason, retry_policy_decision = deterministic_decision
+    if stop_decision is not None:
+        blocked_reason, retry_policy_decision = stop_decision
         if not dry_run:
             mark_phase_blocked(
                 run_id,
@@ -630,8 +590,10 @@ def _fallback_retry_after_seconds(attempt: int, retry_policy: Mapping[str, Any])
     return min(DEFAULT_BACKOFF_SCHEDULE_SECONDS[index], maximum)
 
 
-def _deterministic_retry_stop(failure_kind: str, evidence: Mapping[str, Any]) -> tuple[str, str] | None:
+def _retry_stop_decision(failure_kind: str, evidence: Mapping[str, Any]) -> tuple[str, str] | None:
     returncode = evidence.get("returncode")
+    if failure_kind in {"claude_cli_missing", "launcher_ineligible"}:
+        return (BLOCKED_RETRY_POLICY_HUMAN_GATE, failure_kind)
     if failure_kind == "permission_contract_failure":
         return (BLOCKED_PERMISSION_CONTRACT_FAILURE, "permission_contract_failure")
     if failure_kind in {"outer_json_invalid_no_artifacts", "outer_artifacts_missing"} and returncode == 0:
@@ -652,12 +614,6 @@ _DETERMINISTIC_ARTIFACT_ERROR_KINDS = {
     "handoff_status_mismatch",
     "completed_work_units_not_prepared",
 }
-
-
-def _blocked_reason_for_hard_stop(failure_kind: str, artifact: Mapping[str, Any]) -> str:
-    if failure_kind == "permission_contract_failure":
-        return BLOCKED_PERMISSION_CONTRACT_FAILURE
-    return BLOCKED_DETERMINISTIC_CONTRACT_FAILURE
 
 
 def _active_phase_decision(phase: Mapping[str, Any], *, now: datetime) -> dict[str, Any]:
@@ -816,12 +772,6 @@ def _launcher_error(launcher_result: Mapping[str, Any] | None, artifact: Mapping
     if launcher_result.get("returncode") is not None:
         return f"launcher returncode {launcher_result.get('returncode')}"
     return None
-
-
-def _hard_stop_failure(failure_kind: str, artifact: Mapping[str, Any]) -> bool:
-    if failure_kind in {"claude_cli_missing", "launcher_ineligible", "permission_contract_failure"}:
-        return True
-    return any(kind in _DETERMINISTIC_ARTIFACT_ERROR_KINDS for kind in artifact.get("error_kinds") or [])
 
 
 def _result_error(result: Mapping[str, Any]) -> str | None:

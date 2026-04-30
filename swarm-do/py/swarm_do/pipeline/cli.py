@@ -927,6 +927,16 @@ def cmd_handoff(args: argparse.Namespace) -> int:
 def cmd_cancel(args: argparse.Namespace) -> int:
     run = find_in_flight(args.issue_id)
     if run is None:
+        try:
+            from .phase_sessions import cancel_phase_session_run, phase_session_path
+
+            if phase_session_path(args.issue_id).is_file():
+                payload = cancel_phase_session_run(args.issue_id)
+                print(f"cancelled phase-session run {args.issue_id} phase={payload.get('phase_id')}")
+                return 0
+        except Exception as exc:
+            print(f"swarm: cancel: {exc}", file=sys.stderr)
+            return 1
         print(f"swarm: cancel: no in-flight run for {args.issue_id}", file=sys.stderr)
         return 1
     try:
@@ -1213,8 +1223,11 @@ def cmd_phases(args: argparse.Namespace) -> int:
     from .phase_pump import format_pump_result, pump_phases
     from .phase_recovery import reconcile_phase_sessions
     from .phase_sessions import (
+        archive_phase_session_evidence,
         claim_next_phase,
         init_phase_sessions,
+        cancel_phase_session_run,
+        cleanup_phase_generated_artifacts,
         phase_status,
         reap_expired_phases,
         record_phase_result,
@@ -1275,6 +1288,17 @@ def cmd_phases(args: argparse.Namespace) -> int:
         elif command == "recover":
             payload = reconcile_phase_sessions(args.run_id, dry_run=args.dry_run)
             exit_code = 0 if payload.get("status") not in {"drift"} else 3
+        elif command == "cancel":
+            payload = cancel_phase_session_run(args.run_id, phase_id=args.phase, kill_child=not args.no_kill)
+            exit_code = 0
+        elif command == "cleanup":
+            if not args.generated_artifacts:
+                raise ValueError("cleanup requires --generated-artifacts")
+            payload = cleanup_phase_generated_artifacts(args.run_id, phase_id=args.phase, apply=args.apply)
+            exit_code = 0
+        elif command == "archive":
+            payload = archive_phase_session_evidence(args.run_id, label=args.label)
+            exit_code = 0
         elif command in {"complete", "fail", "block", "needs-input"}:
             expected = {
                 "complete": "complete",
@@ -1331,6 +1355,12 @@ def cmd_phases(args: argparse.Namespace) -> int:
         print(_format_phase_status(payload))
     elif args.phases_command == "recover":
         print(_format_phase_recovery(payload))
+    elif args.phases_command == "cancel":
+        print(_format_phase_cancel(payload))
+    elif args.phases_command == "cleanup":
+        print(_format_phase_cleanup(payload))
+    elif args.phases_command == "archive":
+        print(_format_phase_archive(payload))
     else:
         print(json.dumps(payload, indent=2, sort_keys=True))
     return exit_code
@@ -1392,6 +1422,9 @@ def _format_phase_status(payload: Mapping[str, Any]) -> str:
             if row.get("archived"):
                 bits.append(f"archive={row.get('archive')}")
             lines.append("    - " + " ".join(bits))
+            cleanup = row.get("cleanup")
+            if isinstance(cleanup, Mapping) and cleanup.get("untracked_artifact_count"):
+                lines.append(f"        untracked_artifacts={cleanup.get('untracked_artifact_count')}")
     last_failure = payload.get("last_failure")
     if isinstance(last_failure, Mapping):
         lines.append(
@@ -1458,6 +1491,50 @@ def _format_phase_recovery(payload: Mapping[str, Any]) -> str:
     status = payload.get("phase_status")
     if isinstance(status, Mapping) and status.get("recommended_command"):
         lines.append(f"  next_command: {status.get('recommended_command')}")
+    return "\n".join(lines)
+
+
+def _format_phase_cancel(payload: Mapping[str, Any]) -> str:
+    lines = [f"phase cancel: {payload.get('run_id')} phase={payload.get('phase_id')}"]
+    child = payload.get("child_process")
+    if isinstance(child, Mapping):
+        target = child.get("kill_target") or "none"
+        attempted = "yes" if child.get("kill_attempted") else "no"
+        lines.append(f"  child_alive: {child.get('child_alive_before_cancel')} kill_attempted={attempted} target={target}")
+        if child.get("kill_error"):
+            lines.append(f"  kill_error: {child.get('kill_error')}")
+    cleanup = payload.get("cleanup")
+    if isinstance(cleanup, Mapping):
+        by_phase = cleanup.get("untracked_artifacts_by_phase")
+        if not isinstance(by_phase, Mapping):
+            by_phase = {}
+        lines.append(f"  untracked_artifacts: {cleanup.get('untracked_artifact_count') or 0}")
+        for cleanup_phase, paths in by_phase.items():
+            if isinstance(paths, list):
+                for path in paths:
+                    lines.append(f"    - phase={cleanup_phase} {path}")
+        commands = cleanup.get("commands")
+        if isinstance(commands, Mapping):
+            lines.append("  cleanup:")
+            for name, command in commands.items():
+                lines.append(f"    {name}: {command}")
+    return "\n".join(lines)
+
+
+def _format_phase_cleanup(payload: Mapping[str, Any]) -> str:
+    action = "removed" if payload.get("applied") else "would remove"
+    lines = [f"phase cleanup: {payload.get('run_id')} {action} {len(payload.get('existing_targets') or [])} generated artifact targets"]
+    for target in payload.get("existing_targets") or []:
+        lines.append(f"  - {target}")
+    if not payload.get("applied"):
+        lines.append("  rerun with --apply to delete these generated run artifacts")
+    return "\n".join(lines)
+
+
+def _format_phase_archive(payload: Mapping[str, Any]) -> str:
+    lines = [f"phase archive: {payload.get('run_id')} -> {payload.get('archive_dir')}"]
+    for target in payload.get("copied") or []:
+        lines.append(f"  - {target}")
     return "\n".join(lines)
 
 
@@ -2021,6 +2098,24 @@ def _build_parser() -> argparse.ArgumentParser:
     p = phases_sub.add_parser("recover")
     p.add_argument("run_id")
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_phases)
+    p = phases_sub.add_parser("cancel")
+    p.add_argument("run_id")
+    p.add_argument("--phase")
+    p.add_argument("--no-kill", action="store_true", help="mark cancelled without signalling the child process")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_phases)
+    p = phases_sub.add_parser("cleanup")
+    p.add_argument("run_id")
+    p.add_argument("--phase")
+    p.add_argument("--generated-artifacts", action="store_true")
+    p.add_argument("--apply", action="store_true", help="delete the listed generated run artifacts")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_phases)
+    p = phases_sub.add_parser("archive")
+    p.add_argument("run_id")
+    p.add_argument("--label")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_phases)
     p = phases_sub.add_parser("pump")

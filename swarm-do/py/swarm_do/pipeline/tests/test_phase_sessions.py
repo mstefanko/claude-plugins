@@ -4,10 +4,14 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from swarm_do.pipeline.phase_sessions import (
+    BLOCKED_OPERATOR_CANCELLED,
     PhaseSessionError,
+    cancel_phase_session_run,
     claim_next_phase,
+    cleanup_phase_generated_artifacts,
     init_phase_sessions,
     load_phase_sessions,
     phase_handoff_path,
@@ -212,6 +216,59 @@ class PhaseSessionTests(unittest.TestCase):
 
             with self.assertRaisesRegex(PhaseSessionError, "completed_work_units"):
                 record_phase_result(run_id, "1", json_file=result_path, expected_status="complete", data_dir=data)
+
+    def test_cancel_marks_active_phase_operator_cancelled(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            claim_next_phase(run_id, data_dir=data, repo_root=repo, lease_owner="owner-1")
+            start_phase(run_id, "1", launcher="manual", lease_owner="owner-1", data_dir=data)
+            (repo / "docs" / "phase-1.md").parent.mkdir(exist_ok=True)
+            (repo / "docs" / "phase-1.md").write_text("partial work\n", encoding="utf-8")
+
+            payload = cancel_phase_session_run(run_id, data_dir=data, repo_root=repo, kill_child=False)
+
+            self.assertTrue(payload["cancelled"])
+            self.assertEqual(payload["phase_id"], "1")
+            state = load_phase_sessions(run_id, data_dir=data)
+            phase = state["phases"][0]
+            self.assertEqual(phase["status"], "blocked")
+            self.assertEqual(phase["blocked_reason"], BLOCKED_OPERATOR_CANCELLED)
+            self.assertEqual(phase["retry_policy_decision"], BLOCKED_OPERATOR_CANCELLED)
+            self.assertEqual(phase["attempt_history"][0]["retry_decision"], BLOCKED_OPERATOR_CANCELLED)
+            self.assertEqual(payload["cleanup"]["untracked_artifacts_by_phase"], {"1": ["docs/phase-1.md"]})
+            events = [json.loads(line) for line in (data / "telemetry" / "run_events.jsonl").read_text(encoding="utf-8").splitlines()]
+            blocked = [row for row in events if row["event_type"] == "phase_session_blocked"][-1]
+            self.assertEqual(blocked["reason"], BLOCKED_OPERATOR_CANCELLED)
+
+    def test_cancel_records_child_kill_attempt(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            claim_next_phase(run_id, data_dir=data, repo_root=repo, lease_owner="owner-1")
+            start_phase(run_id, "1", launcher="manual", lease_owner="owner-1", data_dir=data)
+            path = phase_session_path(run_id, data_dir=data)
+            state = json.loads(path.read_text(encoding="utf-8"))
+            state["phases"][0]["child_pid"] = 123
+            state["phases"][0]["process_group_id"] = 456
+            path.write_text(json.dumps(state), encoding="utf-8")
+
+            with mock.patch("swarm_do.pipeline.phase_sessions._pid_alive", return_value=True), mock.patch(
+                "swarm_do.pipeline.phase_sessions.os.killpg"
+            ) as killpg:
+                payload = cancel_phase_session_run(run_id, data_dir=data, repo_root=repo)
+
+            killpg.assert_called_once()
+            self.assertTrue(payload["child_process"]["kill_attempted"])
+            self.assertEqual(payload["child_process"]["kill_target"], "pgid:456")
+
+    def test_cleanup_refuses_generated_artifact_path_escape(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+
+            with self.assertRaisesRegex(PhaseSessionError, "outside generated artifact allowlist"):
+                cleanup_phase_generated_artifacts(run_id, data_dir=data, phase_id="../escape", apply=True)
 
 
 def _write_result(data: Path, run_id: str, phase: dict, *, status: str) -> Path:

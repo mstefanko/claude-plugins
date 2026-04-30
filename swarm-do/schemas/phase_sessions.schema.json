@@ -190,6 +190,14 @@
                   "type": "array",
                   "items": { "type": "string" }
                 },
+                "child_process": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "cleanup": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
                 "diff_summary_path": { "type": ["string", "null"] },
                 "recovery_context_path": { "type": ["string", "null"] }
               }
