@@ -424,6 +424,7 @@ bin/swarm providers evidence <provider-findings.json>
 bin/swarm providers calibrate-consensus <samples.json> [--output <report.json>] [--json]
 bin/swarm permissions check [--role <role>] [--scope repo|user] [--path <settings.json>]
 bin/swarm permissions install --role <role> [--dry-run] [--rollback] [--scope repo|user] [--path <settings.json>]
+bin/swarm selftest [--plan <path>] [--preset <name|current>] [--json] [--strict]
 
 bin/swarm status
 bin/swarm rollout show [--json]

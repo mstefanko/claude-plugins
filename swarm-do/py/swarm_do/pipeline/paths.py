@@ -13,7 +13,16 @@ def resolve_data_dir() -> Path:
     base = os.environ.get("CLAUDE_PLUGIN_DATA")
     if base:
         return Path(base)
-    return REPO_ROOT / "data"
+    # The dispatcher launches writer subprocesses with `claude -p
+    # --permission-mode dontAsk`. Claude Code auto-denies Write/Edit to any
+    # path inside the user's `~/.claude/` tree in that mode, regardless of
+    # allow rules in --settings, --allowedTools, or --setting-sources. The
+    # historical fallback `<REPO_ROOT>/data` lives inside
+    # `~/.claude/plugins/...`, so writer phase artifacts (result.json,
+    # handoff.json) cannot land there in the dontAsk launcher path.
+    # Default to the XDG user data dir, which is outside `~/.claude/`.
+    xdg = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+    return Path(xdg) / "swarmdaddy"
 
 
 def stock_presets_dir() -> Path:

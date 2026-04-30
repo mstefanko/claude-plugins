@@ -1879,6 +1879,21 @@ def cmd_worktrees(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_selftest(args: argparse.Namespace) -> int:
+    from .selftest import format_json, format_text, run_selftest
+
+    report = run_selftest(
+        plan_path=args.plan,
+        preset=args.preset,
+        strict=args.strict,
+    )
+    if args.json:
+        print(format_json(report))
+    else:
+        print(format_text(report))
+    return report.exit_status
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="swarm")
     sub = parser.add_subparsers(dest="subcommand")
@@ -2261,6 +2276,13 @@ def _build_parser() -> argparse.ArgumentParser:
     # --role retained so legacy invocations error out with a useful message.
     p.add_argument("--role", action="append")
     p.set_defaults(func=cmd_permissions_install)
+    selftest = sub.add_parser("selftest")
+    selftest.add_argument("--plan", help="optional plan path; enables preset-dry-run check")
+    selftest.add_argument("--preset", help="preset to inspect; defaults to active preset (or stock default pipeline)")
+    selftest.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    selftest.add_argument("--strict", action="store_true", help="upgrade advisory failures to non-zero exit")
+    selftest.set_defaults(func=cmd_selftest)
+
     return parser
 
 
