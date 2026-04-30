@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
@@ -120,7 +122,10 @@ def resolve_run_execution_worktree(
     worktree_run_root = Path(data_dir).expanduser() / "worktrees" / run_id
     safe_git = (worktree_run_root / "repo").resolve(strict=False)
     safe_project = (safe_git / project_subdir).resolve(strict=False) if project_subdir else safe_git
+    manifest_path = worktree_run_root / "manifest.json"
     _assert_not_sensitive(safe_git, sensitive_prefixes=sensitive_prefixes)
+    _assert_not_sensitive(safe_project, sensitive_prefixes=sensitive_prefixes)
+    _assert_not_sensitive(manifest_path, sensitive_prefixes=sensitive_prefixes)
     base_ref = str(prepared_plan.get("git_base_ref") or "HEAD")
     base_sha = _prepared_base_sha(source_project, prepared_plan, base_ref=base_ref)
     copy_specs = _artifact_copy_specs(
@@ -139,7 +144,7 @@ def resolve_run_execution_worktree(
         branch=execution_branch_name(run_id),
         base_sha=base_sha,
         base_ref=base_ref,
-        manifest_path=worktree_run_root / "manifest.json",
+        manifest_path=manifest_path,
         copy_specs=copy_specs,
     )
 
@@ -302,21 +307,18 @@ def _assert_supported_git_checkout(source_project: Path) -> None:
 
 def _assert_clean_source_project(resolved: ResolvedExecutionWorktree) -> None:
     scope = resolved.project_subdir or "."
-    lines = _git_lines(
+    entries = _git_status_entries(
         resolved.source_git_root,
-        "status",
-        "--porcelain=v1",
-        "--untracked-files=all",
-        "--",
         scope,
     )
     allowed = {_git_relative_artifact_path(resolved, spec.relative_path) for spec in resolved.copy_specs}
     dirty: list[str] = []
-    for line in lines:
-        rel = _status_path(line)
-        if not rel or rel in allowed:
+    for entry in entries:
+        paths = [entry.get("path"), entry.get("original_path")]
+        present_paths = [path for path in paths if isinstance(path, str) and path]
+        if present_paths and all(path in allowed for path in present_paths):
             continue
-        dirty.append(rel)
+        dirty.append(_format_status_entry(entry))
     if dirty:
         raise RunExecutionWorktreeError(
             "source checkout has relevant dirty files under the project subdir; "
@@ -342,19 +344,19 @@ def _copy_required_artifacts(resolved: ResolvedExecutionWorktree) -> list[Copied
             continue
         destination = resolved.safe_project_root / spec.relative_path
         destination.parent.mkdir(parents=True, exist_ok=True)
-        source_bytes = spec.source_path.read_bytes()
+        source_sha = _sha256_file(spec.source_path)
         transformed = False
         if spec.transform is not None:
-            destination.write_bytes(spec.transform(source_bytes, resolved))
+            _atomic_write_bytes(destination, spec.transform(spec.source_path.read_bytes(), resolved))
             transformed = True
         else:
-            shutil.copy2(spec.source_path, destination)
+            _atomic_copy2(spec.source_path, destination)
         copied.append(
             CopiedArtifact(
                 source_path=spec.source_path.resolve(strict=False),
                 destination_path=destination.resolve(strict=False),
                 relative_path=str(spec.relative_path),
-                source_sha256=_sha256_bytes(source_bytes),
+                source_sha256=source_sha,
                 destination_sha256=_sha256_file(destination),
                 kind=spec.kind,
                 transformed=transformed,
@@ -473,20 +475,62 @@ def _prepared_base_sha(source_project: Path, prepared_plan: Mapping[str, Any], *
 
 
 def _status_changes(repo: Path, *, project_subdir: str = "") -> list[dict[str, str]]:
-    return [
-        {"status": line[:2], "path": _project_relative_status_path(_status_path(line), project_subdir=project_subdir)}
-        for line in _git_lines(repo, "status", "--porcelain=v1", "--untracked-files=all", "--", ".")
-        if _project_relative_status_path(_status_path(line), project_subdir=project_subdir)
-    ]
+    changes: list[dict[str, str]] = []
+    for entry in _git_status_entries(repo, "."):
+        status = entry["status"]
+        path = _project_relative_status_path(entry["path"], project_subdir=project_subdir)
+        original = _project_relative_status_path(entry.get("original_path") or "", project_subdir=project_subdir)
+        if _is_rename_status(status):
+            if original:
+                changes.append({"status": "D ", "path": original})
+            if path:
+                changes.append({"status": status, "path": path})
+            continue
+        if path:
+            changes.append({"status": status, "path": path})
+    return changes
 
 
-def _status_path(line: str) -> str:
-    if len(line) < 4:
-        return ""
-    path = line[3:]
-    if " -> " in path:
-        path = path.split(" -> ", 1)[1]
-    return path.strip().strip('"')
+def _git_status_entries(repo: Path, *pathspecs: str) -> list[dict[str, str]]:
+    args = ["status", "--porcelain=v1", "-z", "--untracked-files=all"]
+    if pathspecs:
+        args.extend(["--", *pathspecs])
+    output = _run_git(repo, *args, check=True).stdout
+    fields = output.split("\0")
+    entries: list[dict[str, str]] = []
+    index = 0
+    while index < len(fields):
+        field = fields[index]
+        index += 1
+        if not field:
+            continue
+        if len(field) < 4:
+            continue
+        status = field[:2]
+        path = field[3:]
+        entry = {"status": status, "path": path}
+        if _is_rename_status(status) or _is_copy_status(status):
+            if index < len(fields) and fields[index]:
+                entry["original_path"] = fields[index]
+                index += 1
+        entries.append(entry)
+    return entries
+
+
+def _is_rename_status(status: str) -> bool:
+    return "R" in status[:2]
+
+
+def _is_copy_status(status: str) -> bool:
+    return "C" in status[:2]
+
+
+def _format_status_entry(entry: Mapping[str, str]) -> str:
+    path = entry.get("path") or ""
+    original = entry.get("original_path") or ""
+    if original:
+        return f"{original} -> {path}"
+    return path
 
 
 def _project_relative_status_path(path: str, *, project_subdir: str) -> str:
@@ -598,11 +642,50 @@ def _safe_ref_segment(value: str) -> str:
 
 
 def _sha256_file(path: Path) -> str:
-    return _sha256_bytes(path.read_bytes())
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
-def _sha256_bytes(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
+def _atomic_copy2(source: Path, destination: Path) -> None:
+    temp_path: Path | None = None
+    try:
+        with source.open("rb") as src, tempfile.NamedTemporaryFile(
+            "wb",
+            delete=False,
+            dir=str(destination.parent),
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+        ) as tmp:
+            temp_path = Path(tmp.name)
+            shutil.copyfileobj(src, tmp, length=1024 * 1024)
+        shutil.copystat(source, temp_path)
+        os.replace(temp_path, destination)
+    except Exception:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+        raise
+
+
+def _atomic_write_bytes(destination: Path, data: bytes) -> None:
+    temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "wb",
+            delete=False,
+            dir=str(destination.parent),
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+        ) as tmp:
+            temp_path = Path(tmp.name)
+            tmp.write(data)
+        os.replace(temp_path, destination)
+    except Exception:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+        raise
 
 
 __all__ = [

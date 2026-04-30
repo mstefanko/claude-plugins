@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
+import subprocess
 import tempfile
 import unittest
 from datetime import UTC, datetime
@@ -14,6 +16,7 @@ from swarm_do.pipeline.phase_recovery import reconcile_phase_sessions
 from swarm_do.pipeline.phase_sessions import (
     claim_next_phase,
     init_phase_sessions,
+    PhaseSessionError,
     phase_handoff_path,
     phase_result_path,
     phase_session_path,
@@ -21,6 +24,7 @@ from swarm_do.pipeline.phase_sessions import (
     start_phase,
 )
 from swarm_do.pipeline.tests.phase_session_fixtures import make_prepared_run
+from swarm_do.pipeline.worktree_baseline import snapshot_worktree_baseline
 
 
 class PhaseRecoveryTests(unittest.TestCase):
@@ -397,6 +401,70 @@ class PhaseRecoveryTests(unittest.TestCase):
             self.assertIn("attempt.tmp", summary)
             self.assertNotIn("seed.txt", summary)
 
+    def test_safe_worktree_recovery_diffs_safe_project_root(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            repo, data, run_id = make_prepared_run(root, phase_count=1, commit_plan=True, ignore_run_artifacts=True)
+            safe_project = root / "safe-worktree" / "repo"
+            _init_git_repo(safe_project)
+            baseline = snapshot_worktree_baseline(run_id, data_dir=data, repo_root=safe_project)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            _patch_retry_policy(data, run_id, {"worktree_baseline_path": baseline["path"]})
+            claim_next_phase(run_id, data_dir=data, repo_root=repo, lease_owner="owner-1")
+            start_phase(run_id, "1", launcher="claude-print", lease_owner="owner-1", data_dir=data)
+            _write_command(
+                data,
+                run_id,
+                "1",
+                1,
+                {
+                    "argv": ["claude"],
+                    "execution_workspace_mode": "safe-worktree",
+                    "safe_project_root": str(safe_project),
+                },
+            )
+            (repo / "source-only.tmp").write_text("source\n", encoding="utf-8")
+            (safe_project / "safe-only.tmp").write_text("safe\n", encoding="utf-8")
+            _patch_phase(data, run_id, {"lease_expires_at": "2026-01-01T00:00:00Z"})
+
+            reconcile_phase_sessions(
+                run_id,
+                data_dir=data,
+                repo_root=repo,
+                now=datetime(2026, 4, 29, tzinfo=UTC),
+            )
+
+            state = json.loads(phase_session_path(run_id, data_dir=data).read_text(encoding="utf-8"))
+            changed = state["phases"][0]["attempt_history"][0]["changed_files"]
+            self.assertIn("safe-only.tmp", changed)
+            self.assertNotIn("source-only.tmp", changed)
+
+    def test_safe_worktree_recovery_missing_safe_project_root_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1, commit_plan=True, ignore_run_artifacts=True)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            claim_next_phase(run_id, data_dir=data, repo_root=repo, lease_owner="owner-1")
+            start_phase(run_id, "1", launcher="claude-print", lease_owner="owner-1", data_dir=data)
+            _write_command(
+                data,
+                run_id,
+                "1",
+                1,
+                {
+                    "argv": ["claude"],
+                    "execution_workspace_mode": "safe-worktree",
+                },
+            )
+            _patch_phase(data, run_id, {"lease_expires_at": "2026-01-01T00:00:00Z"})
+
+            with self.assertRaisesRegex(PhaseSessionError, "missing safe_project_root"):
+                reconcile_phase_sessions(
+                    run_id,
+                    data_dir=data,
+                    repo_root=repo,
+                    now=datetime(2026, 4, 29, tzinfo=UTC),
+                )
+
 
 def _patch_phase(data: Path, run_id: str, updates: dict) -> None:
     path = phase_session_path(run_id, data_dir=data)
@@ -496,6 +564,21 @@ def _write_result(
     handoff_path.write_text(json.dumps(handoff, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     result_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return result_path
+
+
+def _init_git_repo(repo: Path) -> None:
+    repo.mkdir(parents=True)
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "T",
+        "GIT_AUTHOR_EMAIL": "t@example.test",
+        "GIT_COMMITTER_NAME": "T",
+        "GIT_COMMITTER_EMAIL": "t@example.test",
+    }
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True, env=env)
+    (repo / "seed.txt").write_text("seed\n", encoding="utf-8")
+    subprocess.run(["git", "add", "seed.txt"], cwd=repo, check=True, env=env)
+    subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=repo, check=True, env=env)
 
 
 if __name__ == "__main__":

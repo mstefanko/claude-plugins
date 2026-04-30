@@ -13,15 +13,12 @@ from .paths import REPO_ROOT, resolve_data_dir
 from .phase_autopilot_policy import (
     AutopilotPolicyInput,
     evaluate_autopilot_policy,
-    fallback_retry_after_seconds as _policy_fallback_retry_after_seconds,
     retry_policy_config,
 )
 from .failure_taxonomy import failure_kind_details
 from .phase_failure_classifier import FailureClassification, classify_launcher_failure
 from .phase_spend import FailedSpendSnapshot, failed_spend_snapshot
 from .phase_sessions import (
-    BLOCKED_DETERMINISTIC_CONTRACT_FAILURE,
-    BLOCKED_PERMISSION_CONTRACT_FAILURE,
     BLOCKED_RETRY_POLICY_HUMAN_GATE,
     STATUS_BLOCKED,
     STATUS_COMPLETE,
@@ -718,8 +715,13 @@ def _attempt_diagnostic_details(evidence: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _attempt_diff_repo_root(command: Mapping[str, Any], repo_root: Path | None) -> Path | None:
-    if command.get("execution_workspace_mode") == "safe-worktree" and isinstance(command.get("safe_project_root"), str):
-        return Path(str(command["safe_project_root"]))
+    if command.get("execution_workspace_mode") == "safe-worktree":
+        safe_project_root = command.get("safe_project_root")
+        if not isinstance(safe_project_root, str) or not safe_project_root:
+            raise PhaseSessionError(
+                "safe-worktree command metadata is missing safe_project_root; refusing to diff source checkout"
+            )
+        return Path(safe_project_root)
     return repo_root
 
 
@@ -782,44 +784,6 @@ def _same_failure_count(phase: Mapping[str, Any], failure_kind: str, *, include_
         if isinstance(item, Mapping) and item.get("failure_kind") == failure_kind:
             count += 1
     return count
-
-
-def _fallback_retry_after_seconds(attempt: int, retry_policy: Mapping[str, Any]) -> int:
-    return _policy_fallback_retry_after_seconds(attempt, retry_policy_config(retry_policy))
-
-
-def _retry_stop_decision(failure_kind: str, evidence: Mapping[str, Any]) -> tuple[str, str] | None:
-    returncode = evidence.get("returncode")
-    details = failure_kind_details(failure_kind, evidence)
-    retry_class = details.get("failure_retry_class")
-    if retry_class == "human_gate" and failure_kind in {"claude_cli_missing", "launcher_ineligible"}:
-        return (BLOCKED_RETRY_POLICY_HUMAN_GATE, failure_kind)
-    if retry_class == "human_gate" and failure_kind in {"launcher_workspace_error", "launcher_prompt_sensitive_path"}:
-        return (BLOCKED_RETRY_POLICY_HUMAN_GATE, "deterministic_contract_failure")
-    if retry_class == "human_gate" and failure_kind == "canonical_path_leaked_in_tool_result":
-        return (BLOCKED_PERMISSION_CONTRACT_FAILURE, "permission_contract_failure")
-    if retry_class == "human_gate" and failure_kind == "permission_contract_failure":
-        return (BLOCKED_PERMISSION_CONTRACT_FAILURE, "permission_contract_failure")
-    if failure_kind in {"outer_json_invalid_no_artifacts", "outer_artifacts_missing"} and returncode == 0:
-        return (BLOCKED_RETRY_POLICY_HUMAN_GATE, "deterministic_contract_failure")
-    if failure_kind in {"writer_tool_denied_no_artifacts", "writer_silent_with_turns"} and returncode == 0:
-        return (BLOCKED_RETRY_POLICY_HUMAN_GATE, "deterministic_contract_failure")
-    artifact_error_kinds = {str(item) for item in evidence.get("artifact_error_kinds") or [] if isinstance(item, str)}
-    if artifact_error_kinds & _DETERMINISTIC_ARTIFACT_ERROR_KINDS:
-        return (BLOCKED_DETERMINISTIC_CONTRACT_FAILURE, "deterministic_contract_failure")
-    return None
-
-
-_DETERMINISTIC_ARTIFACT_ERROR_KINDS = {
-    "path_escape",
-    "result_identity_mismatch",
-    "prepared_plan_sha_mismatch",
-    "phase_content_sha_mismatch",
-    "handoff_identity_mismatch",
-    "attempt_mismatch",
-    "handoff_status_mismatch",
-    "completed_work_units_not_prepared",
-}
 
 
 def _active_phase_decision(phase: Mapping[str, Any], *, now: datetime) -> dict[str, Any]:

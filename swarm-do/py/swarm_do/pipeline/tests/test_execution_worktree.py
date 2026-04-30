@@ -60,6 +60,23 @@ class ExecutionWorktreeTests(unittest.TestCase):
             self.assertEqual(manifest["safe_project_root"], str(worktree.safe_project_root))
             self.assertGreaterEqual(len(manifest["copied_artifacts"]), 3)
 
+    def test_top_level_project_mapping_uses_safe_git_root_as_project_root(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            git_root, project, data, prepared = _prepared_top_level(root)
+
+            resolved = resolve_run_execution_worktree(
+                RUN_ID,
+                source_project_root=project,
+                data_dir=data,
+                prepared_plan=prepared,
+                sensitive_prefixes=[str(root / "home" / ".claude")],
+            )
+
+            self.assertEqual(resolved.source_git_root, git_root.resolve(strict=False))
+            self.assertEqual(resolved.project_subdir, "")
+            self.assertEqual(resolved.safe_project_root, resolved.safe_git_root)
+
     def test_dirty_source_project_blocks_safe_worktree(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -77,6 +94,105 @@ class ExecutionWorktreeTests(unittest.TestCase):
                 )
 
             self.assertIn("dirty.md", str(raised.exception))
+
+    def test_unignored_copied_run_artifacts_do_not_dirty_block(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _git_root, _project, data, prepared = _prepared_monorepo(root, ignore_run_artifacts=False)
+
+            worktree = materialize_run_execution_worktree(
+                RUN_ID,
+                source_project_root=Path(prepared["repo_root"]),
+                data_dir=data,
+                prepared_plan=prepared,
+                sensitive_prefixes=[str(root / "home" / ".claude")],
+            )
+            dry_run = adopt_run_worktree(RUN_ID, data_dir=data)
+
+            self.assertTrue(worktree.safe_project_root.is_dir())
+            self.assertTrue(dry_run["blocked_paths"])
+            self.assertTrue(all(item["path"].startswith("data/runs/") for item in dry_run["blocked_paths"]))
+            self.assertEqual(dry_run["copyback_operations"], [])
+
+    def test_submodule_and_sparse_checkout_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            child = root / "child"
+            super_repo = root / "home" / ".claude" / "plugins" / "super"
+            _init_seed_repo(child)
+            _init_seed_repo(super_repo)
+            _git(super_repo, "-c", "protocol.file.allow=always", "submodule", "add", str(child), "modules/child")
+            _git(super_repo, "commit", "-q", "-m", "add submodule")
+            submodule = super_repo / "modules" / "child"
+            submodule_prepared = {"git_base_sha": _git(submodule, "rev-parse", "HEAD"), "prepared_plan_path": "data/runs/x/prepared.md"}
+
+            with self.assertRaisesRegex(RunExecutionWorktreeError, "submodule"):
+                resolve_run_execution_worktree(
+                    RUN_ID,
+                    source_project_root=submodule,
+                    data_dir=root / "data",
+                    prepared_plan=submodule_prepared,
+                    sensitive_prefixes=[str(root / "home" / ".claude")],
+                )
+
+            _git(super_repo, "config", "core.sparseCheckout", "true")
+            sparse_prepared = {"git_base_sha": _git(super_repo, "rev-parse", "HEAD"), "prepared_plan_path": "data/runs/x/prepared.md"}
+            with self.assertRaisesRegex(RunExecutionWorktreeError, "sparse-checkout"):
+                resolve_run_execution_worktree(
+                    RUN_ID,
+                    source_project_root=super_repo,
+                    data_dir=root / "data",
+                    prepared_plan=sparse_prepared,
+                    sensitive_prefixes=[str(root / "home" / ".claude")],
+                )
+
+    def test_existing_execution_branch_is_not_reset(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            git_root, project, data, prepared = _prepared_monorepo(root)
+            (project / "wrong-base.txt").write_text("wrong base\n", encoding="utf-8")
+            _git(git_root, "add", "swarm-do/wrong-base.txt")
+            _git(git_root, "commit", "-q", "-m", "wrong base")
+            wrong_sha = _git(git_root, "rev-parse", "HEAD")
+            _git(git_root, "branch", execution_branch_name(RUN_ID), wrong_sha)
+
+            with self.assertRaisesRegex(RunExecutionWorktreeError, "branch already exists"):
+                materialize_run_execution_worktree(
+                    RUN_ID,
+                    source_project_root=project,
+                    data_dir=data,
+                    prepared_plan=prepared,
+                    sensitive_prefixes=[str(root / "home" / ".claude")],
+                )
+
+            self.assertEqual(_git(git_root, "rev-parse", execution_branch_name(RUN_ID)), wrong_sha)
+
+    def test_concurrent_runs_use_distinct_worktrees_and_branches(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _git_root, project, data, prepared = _prepared_monorepo(root)
+            other_run_id = "01BRZ3NDEKTSV4RRFFQ69G5FAV"
+            other_prepared = _prepare_existing_project(project, data, other_run_id)
+
+            first = materialize_run_execution_worktree(
+                RUN_ID,
+                source_project_root=project,
+                data_dir=data,
+                prepared_plan=prepared,
+                sensitive_prefixes=[str(root / "home" / ".claude")],
+            )
+            second = materialize_run_execution_worktree(
+                other_run_id,
+                source_project_root=project,
+                data_dir=data,
+                prepared_plan=other_prepared,
+                sensitive_prefixes=[str(root / "home" / ".claude")],
+            )
+
+            self.assertNotEqual(first.safe_git_root, second.safe_git_root)
+            self.assertNotEqual(first.branch, second.branch)
+            self.assertTrue(first.safe_git_root.is_dir())
+            self.assertTrue(second.safe_git_root.is_dir())
 
     def test_adopt_run_dry_run_apply_and_cleanup(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -111,14 +227,85 @@ class ExecutionWorktreeTests(unittest.TestCase):
             self.assertTrue(cleanup_applied["applied"])
             self.assertFalse(worktree.safe_git_root.exists())
 
+    def test_adopt_run_handles_git_rename_as_delete_and_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _git_root, project, data, prepared = _prepared_monorepo(root)
+            worktree = materialize_run_execution_worktree(
+                RUN_ID,
+                source_project_root=project,
+                data_dir=data,
+                prepared_plan=prepared,
+                sensitive_prefixes=[str(root / "home" / ".claude")],
+            )
+            _git(worktree.safe_project_root, "mv", "plan.md", "plan-renamed.md")
 
-def _prepared_monorepo(root: Path) -> tuple[Path, Path, Path, dict]:
+            dry_run = adopt_run_worktree(RUN_ID, data_dir=data)
+            operations = {(item["action"], item["path"]) for item in dry_run["copyback_operations"]}
+
+            self.assertIn(("delete", "plan.md"), operations)
+            self.assertIn(("copy", "plan-renamed.md"), operations)
+            adopt_run_worktree(RUN_ID, data_dir=data, apply=True)
+            self.assertFalse((project / "plan.md").exists())
+            self.assertIn("### Phase 1: Tiny", (project / "plan-renamed.md").read_text(encoding="utf-8"))
+
+    def test_cleanup_preserves_unadopted_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _git_root, project, data, prepared = _prepared_monorepo(root)
+            worktree = materialize_run_execution_worktree(
+                RUN_ID,
+                source_project_root=project,
+                data_dir=data,
+                prepared_plan=prepared,
+                sensitive_prefixes=[str(root / "home" / ".claude")],
+            )
+
+            dry_run = cleanup_run_worktree(RUN_ID, data_dir=data)
+
+            self.assertFalse(dry_run["eligible"])
+            self.assertIn("unadopted", dry_run["preserved_reason"])
+            with self.assertRaisesRegex(RunExecutionWorktreeError, "unadopted"):
+                cleanup_run_worktree(RUN_ID, data_dir=data, apply=True)
+            self.assertTrue(worktree.safe_git_root.exists())
+
+
+def _prepared_monorepo(root: Path, *, run_id: str = RUN_ID, ignore_run_artifacts: bool = True) -> tuple[Path, Path, Path, dict]:
     git_root = root / "home" / ".claude" / "plugins" / "mstefanko-plugins"
     project = git_root / "swarm-do"
     data = root / "data"
     project.mkdir(parents=True)
     data.mkdir()
     _git(git_root, "init", "-q", "-b", "main")
+    add_paths = ["swarm-do/plan.md"]
+    if ignore_run_artifacts:
+        (project / ".gitignore").write_text("data/runs/\n", encoding="utf-8")
+        add_paths.append("swarm-do/.gitignore")
+    (project / "plan.md").write_text(
+        (
+            "### Phase 1: Tiny\n\n"
+            "Do a tiny thing.\n\n"
+            "### Files to create / modify\n"
+            "- docs/new.md\n\n"
+            "### Acceptance Criteria\n"
+            "- Tiny thing is done.\n\n"
+            "### Validation Commands\n"
+            "- python3 -m unittest py.swarm_do.pipeline.tests.test_execution_worktree\n"
+        ),
+        encoding="utf-8",
+    )
+    _git(git_root, "add", *add_paths)
+    _git(git_root, "commit", "-q", "-m", "seed")
+    prepared = _prepare_existing_project(project, data, run_id)
+    return git_root, project, data, prepared
+
+
+def _prepared_top_level(root: Path) -> tuple[Path, Path, Path, dict]:
+    project = root / "home" / ".claude" / "plugins" / "swarm-do"
+    data = root / "data"
+    project.mkdir(parents=True)
+    data.mkdir()
+    _git(project, "init", "-q", "-b", "main")
     (project / ".gitignore").write_text("data/runs/\n", encoding="utf-8")
     (project / "plan.md").write_text(
         (
@@ -133,20 +320,32 @@ def _prepared_monorepo(root: Path) -> tuple[Path, Path, Path, dict]:
         ),
         encoding="utf-8",
     )
-    _git(git_root, "add", "swarm-do/.gitignore", "swarm-do/plan.md")
-    _git(git_root, "commit", "-q", "-m", "seed")
+    _git(project, "add", ".gitignore", "plan.md")
+    _git(project, "commit", "-q", "-m", "seed")
+    prepared = _prepare_existing_project(project, data, RUN_ID)
+    return project, project, data, prepared
+
+
+def _prepare_existing_project(project: Path, data: Path, run_id: str) -> dict:
     result = prepare_plan_run(
         "plan.md",
-        run_id=RUN_ID,
+        run_id=run_id,
         repo_root=project,
         data_dir=data,
         decompose_workers=1,
     )
     if result.status != "ready_for_acceptance":
         raise AssertionError(result.to_dict())
-    accept_prepared(RUN_ID, repo_root=project, data_dir=data)
-    prepared = json.loads((data / "runs" / RUN_ID / "prepared_plan.v1.json").read_text(encoding="utf-8"))
-    return git_root, project, data, prepared
+    accept_prepared(run_id, repo_root=project, data_dir=data)
+    return json.loads((data / "runs" / run_id / "prepared_plan.v1.json").read_text(encoding="utf-8"))
+
+
+def _init_seed_repo(repo: Path) -> None:
+    repo.mkdir(parents=True)
+    _git(repo, "init", "-q", "-b", "main")
+    (repo / "seed.txt").write_text("seed\n", encoding="utf-8")
+    _git(repo, "add", "seed.txt")
+    _git(repo, "commit", "-q", "-m", "seed")
 
 
 def _git(repo: Path, *args: str) -> str:

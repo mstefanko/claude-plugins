@@ -131,6 +131,65 @@ class ClaudeTranscriptDiagnosticsTests(unittest.TestCase):
             self.assertTrue(diagnostics.transcript_found)
             self.assertEqual(diagnostics.tool_errors[0].tool_name, "Write")
 
+    def test_canonical_tripwire_matches_encoded_project_path_case_insensitively(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            transcript = Path(td) / "encoded-leak.jsonl"
+            source = "/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/swarm-do"
+            transcript.write_text(
+                json.dumps(
+                    {
+                        "type": "user",
+                        "message": {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "tool_result",
+                                    "tool_use_id": "toolu_1",
+                                    "is_error": True,
+                                    "content": f"cwd={encode_project_path(source).upper()}",
+                                }
+                            ],
+                        },
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            diagnostics = parse_transcript(transcript, session_id="session-encoded", sensitive_path_patterns=[source])
+
+            self.assertEqual(len(diagnostics.canonical_path_hits), 1)
+            self.assertEqual(diagnostics.canonical_path_hits[0].error_kind, "canonical_path_leaked")
+
+    def test_canonical_tripwire_matches_generic_encoded_claude_segment(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            transcript = Path(td) / "generic-encoded-leak.jsonl"
+            transcript.write_text(
+                json.dumps(
+                    {
+                        "type": "user",
+                        "message": {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "tool_result",
+                                    "tool_use_id": "toolu_1",
+                                    "is_error": True,
+                                    "content": "project=-USERS-OPERATOR--CLAUDE-PLUGINS-SWARM-DO",
+                                }
+                            ],
+                        },
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            diagnostics = parse_transcript(transcript, session_id="session-generic", sensitive_path_patterns=["/.claude/"])
+
+            self.assertEqual(len(diagnostics.canonical_path_hits), 1)
+            self.assertEqual(diagnostics.canonical_path_hits[0].error_kind, "canonical_path_leaked")
+
 
 if __name__ == "__main__":
     unittest.main()

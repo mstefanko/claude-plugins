@@ -349,17 +349,20 @@ def _canonical_patterns(patterns: Iterable[str]) -> tuple[str, ...]:
     for pattern in patterns:
         if not pattern:
             continue
-        values.append(pattern)
-        escaped = _json_slash_escape(pattern)
-        if escaped != pattern:
-            values.append(escaped)
+        candidates = [pattern, *project_dir_candidates(pattern)]
+        for candidate in candidates:
+            values.append(candidate)
+            escaped = _json_slash_escape(candidate)
+            if escaped != candidate:
+                values.append(escaped)
     return tuple(dict.fromkeys(values))
 
 
 def _contains_canonical_path(text: str, patterns: tuple[str, ...]) -> bool:
     if not text:
         return False
-    return any(pattern in text for pattern in patterns)
+    lowered = text.lower()
+    return any(pattern.lower() in lowered for pattern in patterns)
 
 
 def _json_slash_escape(value: str) -> str:
