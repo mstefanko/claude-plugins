@@ -11,7 +11,8 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from .context_bundle import render_context_bundle
-from .paths import resolve_data_dir
+from .execution_workspace import ExecutionWorkspaceError, create_execution_workspace
+from .paths import REPO_ROOT, resolve_data_dir
 from .phase_sessions import (
     PhaseSessionError,
     claim_next_phase,
@@ -39,7 +40,7 @@ from .session_capabilities import doctor_report
 
 
 ENABLED_LAUNCHERS = {"manual", "fake-test", "claude-print"}
-ClaudeRunner = Callable[[Sequence[str]], subprocess.CompletedProcess[str]]
+ClaudeRunner = Callable[[Sequence[str], str], subprocess.CompletedProcess[str]]
 
 RESULT_STATUS_FOR_COMMAND = {
     "complete": "complete",
@@ -412,19 +413,38 @@ def _run_claude_print_phase(
     result_path.parent.mkdir(parents=True, exist_ok=True)
     handoff_path.parent.mkdir(parents=True, exist_ok=True)
     launcher_prompt_path = launch_dir / "dispatcher.launcher.prompt.md"
-    prompt_text = prompt_path.read_text(encoding="utf-8")
-    prompt_text = _append_claude_print_contract(
-        prompt_text,
-        result_path=result_path,
-        handoff_path=handoff_path,
-        status_values=sorted(RESULT_STATUS_FOR_COMMAND),
-        run_id=run_id,
-        phase_id=phase_id,
-        phase_attempt=attempt,
-        session_name=str(phase.get("session_name") or f"swarmdaddy-{run_id}-{phase_id}"),
-        prepared_plan_sha=_status_prepared_sha(run_id, data_dir=data_dir),
-        phase_content_sha=_phase_content_sha(run_id, phase_id, data_dir=data_dir),
-    )
+    try:
+        workspace = create_execution_workspace(_prepared_repo_root(run_id, data_dir=data_dir), data_dir=data_dir)
+        prompt_text = prompt_path.read_text(encoding="utf-8")
+        prompt_text = _append_claude_print_contract(
+            prompt_text,
+            result_path=result_path,
+            handoff_path=handoff_path,
+            status_values=sorted(RESULT_STATUS_FOR_COMMAND),
+            run_id=run_id,
+            phase_id=phase_id,
+            phase_attempt=attempt,
+            session_name=str(phase.get("session_name") or f"swarmdaddy-{run_id}-{phase_id}"),
+            prepared_plan_sha=_status_prepared_sha(run_id, data_dir=data_dir),
+            phase_content_sha=_phase_content_sha(run_id, phase_id, data_dir=data_dir),
+        )
+        prompt_text, prompt_rewrite_count = workspace.rewrite_prompt(prompt_text)
+        workspace.assert_prompt_safe(prompt_text)
+    except ExecutionWorkspaceError as exc:
+        reason = "launcher_prompt_sensitive_path" if "sensitive source path" in str(exc) else "launcher_workspace_error"
+        metadata = {
+            "prompt_path": str(launcher_prompt_path),
+            "prompt_delivery": "stdin",
+            "source_prompt_path": str(prompt_path),
+            "source_prompt_sha": _sha256_file(prompt_path),
+            "result_path": str(result_path),
+            "handoff_path": str(handoff_path),
+            "launcher_exception": str(exc),
+            "reason": reason,
+            "env_redacted": True,
+        }
+        (launch_dir / "command.json").write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        return {"status": "launcher_error", "reason": reason, "launch_dir": str(launch_dir)}
     launcher_prompt_path.write_text(prompt_text, encoding="utf-8")
     prompt_sha = _sha256_file(launcher_prompt_path)
 
@@ -464,6 +484,7 @@ def _run_claude_print_phase(
         "settings_path": str(writer_settings_path),
         "settings_sha": writer_settings_sha,
         "env_redacted": True,
+        **workspace.to_metadata(prompt_rewrite_count=prompt_rewrite_count),
     }
     (launch_dir / "command.json").write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     record_launch_metadata(
@@ -495,6 +516,7 @@ def _run_claude_print_phase(
                 prompt_text=prompt_text,
                 result_path=result_path,
                 handoff_path=handoff_path,
+                cwd=workspace.launcher_cwd,
             )
     except subprocess.TimeoutExpired as exc:
         (launch_dir / "stdout.txt").write_text(exc.stdout or "", encoding="utf-8")
@@ -633,6 +655,7 @@ def _run_real_claude(
     result_path: Path,
     handoff_path: Path,
     prompt_text: str | None = None,
+    cwd: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     state = load_phase_sessions(run_id, data_dir=data_dir)
     policy = state.get("lease_policy") if isinstance(state.get("lease_policy"), Mapping) else {}
@@ -646,6 +669,7 @@ def _run_real_claude(
         stderr=subprocess.PIPE,
         text=True,
         start_new_session=True,
+        cwd=str(cwd) if cwd is not None else None,
     )
     process_group_id: int | None = None
     metadata_error: str | None = None
@@ -744,6 +768,19 @@ def _status_prepared_sha(run_id: str, *, data_dir: Path) -> str:
     status = phase_status(run_id, data_dir=data_dir)
     value = status.get("prepared_plan_sha")
     return value if isinstance(value, str) else "0" * 64
+
+
+def _prepared_repo_root(run_id: str, *, data_dir: Path) -> Path:
+    status = phase_status(run_id, data_dir=data_dir)
+    prepared_path = Path(str(status.get("prepared_artifact_path") or data_dir / "runs" / run_id / "prepared_plan.v1.json"))
+    if not prepared_path.is_absolute() and not prepared_path.is_file():
+        prepared_path = data_dir / "runs" / run_id / "prepared_plan.v1.json"
+    try:
+        prepared = json.loads(prepared_path.read_text(encoding="utf-8"))
+    except Exception:
+        return REPO_ROOT
+    value = prepared.get("repo_root")
+    return Path(str(value)).expanduser() if isinstance(value, str) and value else REPO_ROOT
 
 
 def _phase_content_sha(run_id: str, phase_id: str, *, data_dir: Path) -> str:

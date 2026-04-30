@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .paths import REPO_ROOT, resolve_data_dir
+from .phase_failure_classifier import FailureClassification, classify_launcher_failure
 from .phase_sessions import (
     BLOCKED_DETERMINISTIC_CONTRACT_FAILURE,
     BLOCKED_PERMISSION_CONTRACT_FAILURE,
@@ -230,7 +231,11 @@ def reconcile_phase_sessions(
             adopted=False,
             partial_artifacts=artifact.get("partial", False),
             artifact_error_kinds=artifact.get("error_kinds") or [],
+            classify_launcher=launcher_result is not None,
         )
+        failure_kind = str(evidence.get("failure_kind") or failure_kind)
+        launcher_error = evidence.get("diagnostic_last_error")
+        launcher_error_text = launcher_error if isinstance(launcher_error, str) and launcher_error else _launcher_error(launcher_result, artifact)
         action = _retry_or_exhaust(
             run_id,
             phase,
@@ -239,7 +244,7 @@ def reconcile_phase_sessions(
             now=current_time,
             evidence=evidence,
             failure_kind=failure_kind,
-            launcher_error=_launcher_error(launcher_result, artifact),
+            launcher_error=launcher_error_text,
             retry_after_seconds=None,
             dry_run=dry_run,
         )
@@ -342,6 +347,7 @@ def _retry_or_exhaust(
                 details={
                     "same_failure_count": same_failure_count,
                     "max_consecutive_same_failure_kind": same_failure_limit,
+                    **_attempt_diagnostic_details(evidence),
                 },
             )
             _write_recovery_note(
@@ -349,7 +355,11 @@ def _retry_or_exhaust(
                 data_dir,
                 kind="phase_human_gated",
                 phase_id=phase_id,
-                details={"failure_kind": failure_kind, "retry_policy_decision": retry_policy_decision},
+                details={
+                    "failure_kind": failure_kind,
+                    "retry_policy_decision": retry_policy_decision,
+                    **_attempt_diagnostic_details(evidence),
+                },
             )
         return {
             "phase_id": phase.get("phase_id"),
@@ -376,6 +386,7 @@ def _retry_or_exhaust(
                 details={
                     "same_failure_count": same_failure_count,
                     "max_consecutive_same_failure_kind": same_failure_limit,
+                    **_attempt_diagnostic_details(evidence),
                 },
             )
             _write_recovery_note(
@@ -387,6 +398,7 @@ def _retry_or_exhaust(
                     "failure_kind": failure_kind,
                     "retry_policy_decision": retry_policy_decision,
                     "same_failure_count": same_failure_count,
+                    **_attempt_diagnostic_details(evidence),
                 },
             )
         return {
@@ -490,6 +502,7 @@ def _build_attempt_evidence(
     handoff_path: str | None = None,
     partial_artifacts: bool = False,
     artifact_error_kinds: list[str] | tuple[str, ...] = (),
+    classify_launcher: bool = False,
 ) -> dict[str, Any]:
     attempt = int(phase.get("attempt") or 0)
     recovery_dir = data_dir / "runs" / run_id / "phase_recovery" / str(phase["phase_id"])
@@ -514,6 +527,23 @@ def _build_attempt_evidence(
     command = _command_metadata(launch_dir)
     completed_at = utc_now()
     elapsed = _elapsed_seconds(phase, completed_at)
+    classification: FailureClassification | None = None
+    if classify_launcher:
+        classifier_command = dict(command)
+        classifier_command.setdefault("launcher", launcher or _metadata_launcher(command) or _launcher_from_phase(phase))
+        classification = classify_launcher_failure(
+            launcher_result,
+            {"valid": False, "partial": partial_artifacts},
+            changed_files=changed_files,
+            command_metadata=classifier_command,
+        )
+        failure_kind = classification.failure_kind
+    transcript_diagnostics_path = _write_transcript_diagnostics(
+        recovery_dir,
+        attempt=attempt,
+        classification=classification,
+    )
+    diagnostic_evidence = _diagnostic_evidence(classification, transcript_diagnostics_path)
     recovery_context_path.write_text(
         _recovery_markdown(
             phase=phase,
@@ -527,6 +557,7 @@ def _build_attempt_evidence(
             changed_files=changed_files,
             diff_summary_path=diff_summary_path,
             partial_artifacts=partial_artifacts,
+            diagnostic_evidence=diagnostic_evidence,
         ),
         encoding="utf-8",
     )
@@ -557,6 +588,7 @@ def _build_attempt_evidence(
         "changed_files": changed_files,
         "diff_summary_path": str(diff_summary_path),
         "recovery_context_path": str(recovery_context_path),
+        **diagnostic_evidence,
     }
 
 
@@ -571,6 +603,74 @@ def _needs_recovery_retry(evidence: Mapping[str, Any], state: Mapping[str, Any])
     if evidence.get("partial_artifacts"):
         return True
     return False
+
+
+def _write_transcript_diagnostics(
+    recovery_dir: Path,
+    *,
+    attempt: int,
+    classification: FailureClassification | None,
+) -> Path | None:
+    if classification is None or classification.transcript_diagnostics is None:
+        return None
+    if not _has_diagnostic_signal(classification):
+        return None
+    path = recovery_dir / f"attempt-{attempt}.transcript-diagnostics.json"
+    path.write_text(json.dumps(classification.transcript_diagnostics.to_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
+def _diagnostic_evidence(
+    classification: FailureClassification | None,
+    diagnostics_path: Path | None,
+) -> dict[str, Any]:
+    if classification is None:
+        return {}
+    if not _has_diagnostic_signal(classification):
+        return {}
+    diagnostics = classification.transcript_diagnostics
+    evidence: dict[str, Any] = {}
+    if diagnostics_path is not None:
+        evidence["transcript_diagnostics_path"] = str(diagnostics_path)
+    if diagnostics is not None:
+        evidence.update(
+            {
+                "transcript_found": diagnostics.transcript_found,
+                "transcript_path": str(diagnostics.transcript_path) if diagnostics.transcript_path else None,
+                "tool_errors_count": len(diagnostics.tool_errors),
+                "diagnostic_last_error": classification.last_error or diagnostics.last_error_summary,
+            }
+        )
+    elif classification.last_error:
+        evidence["diagnostic_last_error"] = classification.last_error
+    details = dict(classification.details or {})
+    for key in ("tool_name", "tool_error_kind", "message_excerpt"):
+        if details.get(key) is not None:
+            evidence[key] = details[key]
+    return evidence
+
+
+def _has_diagnostic_signal(classification: FailureClassification) -> bool:
+    diagnostics = classification.transcript_diagnostics
+    if classification.failure_kind in {"writer_tool_denied_no_artifacts", "writer_silent_with_turns"}:
+        return True
+    if diagnostics is None:
+        return bool(classification.last_error or classification.details)
+    return bool(diagnostics.session_id or diagnostics.transcript_found or diagnostics.tool_errors)
+
+
+def _attempt_diagnostic_details(evidence: Mapping[str, Any]) -> dict[str, Any]:
+    keys = (
+        "transcript_diagnostics_path",
+        "transcript_found",
+        "transcript_path",
+        "tool_errors_count",
+        "diagnostic_last_error",
+        "tool_name",
+        "tool_error_kind",
+        "message_excerpt",
+    )
+    return {key: evidence[key] for key in keys if key in evidence}
 
 
 def _same_failure_count(phase: Mapping[str, Any], failure_kind: str, *, include_current: bool) -> int:
@@ -594,9 +694,13 @@ def _retry_stop_decision(failure_kind: str, evidence: Mapping[str, Any]) -> tupl
     returncode = evidence.get("returncode")
     if failure_kind in {"claude_cli_missing", "launcher_ineligible"}:
         return (BLOCKED_RETRY_POLICY_HUMAN_GATE, failure_kind)
+    if failure_kind in {"launcher_workspace_error", "launcher_prompt_sensitive_path"}:
+        return (BLOCKED_RETRY_POLICY_HUMAN_GATE, "deterministic_contract_failure")
     if failure_kind == "permission_contract_failure":
         return (BLOCKED_PERMISSION_CONTRACT_FAILURE, "permission_contract_failure")
     if failure_kind in {"outer_json_invalid_no_artifacts", "outer_artifacts_missing"} and returncode == 0:
+        return (BLOCKED_RETRY_POLICY_HUMAN_GATE, "deterministic_contract_failure")
+    if failure_kind in {"writer_tool_denied_no_artifacts", "writer_silent_with_turns"} and returncode == 0:
         return (BLOCKED_RETRY_POLICY_HUMAN_GATE, "deterministic_contract_failure")
     artifact_error_kinds = {str(item) for item in evidence.get("artifact_error_kinds") or [] if isinstance(item, str)}
     if artifact_error_kinds & _DETERMINISTIC_ARTIFACT_ERROR_KINDS:
@@ -899,6 +1003,7 @@ def _recovery_markdown(
     changed_files: list[str],
     diff_summary_path: Path,
     partial_artifacts: bool,
+    diagnostic_evidence: Mapping[str, Any] | None = None,
 ) -> str:
     lines = [
         f"# Recovery Context: Phase {phase.get('phase_id')} Attempt {phase.get('attempt')}",
@@ -919,6 +1024,26 @@ def _recovery_markdown(
     lines.extend(f"- {path}" for path in changed_files)
     if not changed_files:
         lines.append("- none")
+    diagnostics = dict(diagnostic_evidence or {})
+    if diagnostics:
+        lines.extend(
+            [
+                "",
+                "## Transcript Diagnostics",
+                f"- diagnostics_path: {diagnostics.get('transcript_diagnostics_path') or 'not written'}",
+                f"- transcript_found: {str(bool(diagnostics.get('transcript_found'))).lower()}",
+                f"- transcript_path: {diagnostics.get('transcript_path') or 'unknown'}",
+                f"- tool_errors_count: {diagnostics.get('tool_errors_count', 0)}",
+                f"- last_error_summary: {diagnostics.get('diagnostic_last_error') or 'none'}",
+            ]
+        )
+        if diagnostics.get("tool_name") or diagnostics.get("tool_error_kind"):
+            lines.extend(
+                [
+                    f"- tool_name: {diagnostics.get('tool_name') or 'unknown'}",
+                    f"- tool_error_kind: {diagnostics.get('tool_error_kind') or 'unknown'}",
+                ]
+            )
     lines.extend(
         [
             "",

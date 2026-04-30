@@ -1,0 +1,2 @@
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_write_1","name":"Write","input":{"file_path":"/tmp/swarm-do/write-target.txt","content":"ok"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_write_1","is_error":true,"content":"<tool_use_error>Error: No such tool available: Write. Write exists but is not enabled in this context. Use one of the available tools instead.</tool_use_error>"}]}}

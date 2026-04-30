@@ -1,0 +1,3 @@
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_read_1","name":"Read","input":{"file_path":"/tmp/swarm-do/README.md"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_read_1","is_error":false,"content":"file contents"}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Done."}]}}

@@ -199,7 +199,15 @@
                   "additionalProperties": true
                 },
                 "diff_summary_path": { "type": ["string", "null"] },
-                "recovery_context_path": { "type": ["string", "null"] }
+                "recovery_context_path": { "type": ["string", "null"] },
+                "transcript_diagnostics_path": { "type": ["string", "null"] },
+                "transcript_found": { "type": ["boolean", "null"] },
+                "transcript_path": { "type": ["string", "null"] },
+                "tool_errors_count": { "type": ["integer", "null"], "minimum": 0 },
+                "diagnostic_last_error": { "type": ["string", "null"] },
+                "tool_name": { "type": ["string", "null"] },
+                "tool_error_kind": { "type": ["string", "null"] },
+                "message_excerpt": { "type": ["string", "null"] }
               }
             }
           }

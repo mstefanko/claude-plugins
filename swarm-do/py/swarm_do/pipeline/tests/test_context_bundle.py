@@ -75,12 +75,14 @@ class ContextBundleTests(unittest.TestCase):
             previous = (context_dir / "previous-handoff.md").read_text(encoding="utf-8")
             decisions = (context_dir / "decisions.md").read_text(encoding="utf-8")
             shared = (context_dir / "shared-decisions.md").read_text(encoding="utf-8")
+            prompt = Path(result["prompt_path"]).read_text(encoding="utf-8")
             self.assertNotIn("phase one summary", previous)
             self.assertIn("phase two summary", previous)
             self.assertNotIn("phase one decision", decisions)
             self.assertIn("phase two decision", decisions)
             self.assertEqual(shared, "No shared decisions.\n")
             self.assertIn("shared_decisions_path", result["context"])
+            self.assertIn("historical evidence", prompt)
 
     def test_phase_session_dependencies_override_prepared_fallback_for_handoffs(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -170,6 +172,7 @@ class ContextBundleTests(unittest.TestCase):
 
             prompt = Path(result["prompt_path"]).read_text(encoding="utf-8")
             self.assertIn("## Recovery Context", prompt)
+            self.assertIn("historical evidence", prompt)
             self.assertIn("attempt-1.recovery.md", prompt)
             self.assertEqual(result["context"]["recovery_context_path"], str(recovery_path))
 

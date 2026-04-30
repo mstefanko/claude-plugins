@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import tempfile
@@ -180,6 +181,71 @@ class PhasePumpTests(unittest.TestCase):
             command = json.loads((data / "runs" / run_id / "phase_launches" / "1" / "attempt-1" / "command.json").read_text(encoding="utf-8"))
             self.assertEqual(command["settings_path"], str(data / "runs" / run_id / "writer-settings.json"))
             self.assertTrue((data / "runs" / run_id / "writer-settings.json").is_file())
+            self.assertEqual(command["execution_workspace_mode"], "real")
+            self.assertEqual(command["launcher_cwd"], str(repo.resolve(strict=False)))
+
+    def test_claude_print_rewrites_sensitive_repo_paths_and_records_safe_cwd(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            fake_home = root / "home"
+            repo = fake_home / ".claude" / "plugins" / "swarm-do"
+            repo, data, run_id = make_prepared_run(root, phase_count=1, repo_path=repo)
+            base_runner = _claude_runner(data, run_id, ["complete"])
+            seen: dict[str, str] = {}
+
+            def runner(argv, prompt_text):
+                seen["prompt"] = prompt_text
+                return base_runner(argv, prompt_text)
+
+            with mock.patch("swarm_do.pipeline.phase_pump.doctor_report", return_value=_eligible_claude_report()), mock.patch(
+                "swarm_do.pipeline.execution_workspace.Path.home",
+                return_value=fake_home,
+            ):
+                result = pump_phases(
+                    run_id,
+                    launcher="claude-print",
+                    max_phases=1,
+                    init_if_missing=True,
+                    claude_runner=runner,
+                    data_dir=data,
+                )
+
+            self.assertEqual(result["status"], "complete")
+            command = json.loads((data / "runs" / run_id / "phase_launches" / "1" / "attempt-1" / "command.json").read_text(encoding="utf-8"))
+            self.assertEqual(command["execution_workspace_mode"], "safe-symlink")
+            self.assertEqual(command["real_repo_root"], str(repo.resolve(strict=False)))
+            self.assertTrue(command["launcher_cwd"].startswith(str(data / "launcher-workspaces")))
+            self.assertGreater(command["prompt_rewrite_count"], 0)
+            prompt = seen["prompt"]
+            self.assertNotIn(str(repo), prompt)
+            self.assertNotIn(str(repo.resolve(strict=False)), prompt)
+            self.assertIn(command["launcher_repo_root"], prompt)
+
+    def test_claude_print_safe_cwd_can_be_disabled(self) -> None:
+        with tempfile.TemporaryDirectory() as td, mock.patch.dict(os.environ, {"SWARM_CLAUDE_SAFE_CWD": "0"}):
+            root = Path(td)
+            fake_home = root / "home"
+            repo = fake_home / ".claude" / "plugins" / "swarm-do"
+            repo, data, run_id = make_prepared_run(root, phase_count=1, repo_path=repo)
+
+            with mock.patch("swarm_do.pipeline.phase_pump.doctor_report", return_value=_eligible_claude_report()), mock.patch(
+                "swarm_do.pipeline.execution_workspace.Path.home",
+                return_value=fake_home,
+            ):
+                result = pump_phases(
+                    run_id,
+                    launcher="claude-print",
+                    max_phases=1,
+                    init_if_missing=True,
+                    claude_runner=_claude_runner(data, run_id, ["complete"]),
+                    data_dir=data,
+                )
+
+            self.assertEqual(result["status"], "complete")
+            command = json.loads((data / "runs" / run_id / "phase_launches" / "1" / "attempt-1" / "command.json").read_text(encoding="utf-8"))
+            self.assertEqual(command["execution_workspace_mode"], "disabled")
+            self.assertFalse(command["safe_cwd_enabled"])
+            self.assertEqual(command["launcher_cwd"], str(repo.resolve(strict=False)))
 
     def test_parent_death_with_complete_artifacts_is_adopted_on_next_pump(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -261,6 +327,53 @@ class PhasePumpTests(unittest.TestCase):
             state = json.loads(phase_session_path(run_id, data_dir=data).read_text(encoding="utf-8"))
             self.assertEqual(state["phases"][0]["child_pid"], 12345)
             self.assertEqual(state["phases"][0]["process_group_id"], 12345)
+
+    def test_real_claude_launcher_receives_cwd(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            claim_next_phase(run_id, data_dir=data, repo_root=repo, lease_owner="owner-1")
+            start_phase(run_id, "1", launcher="claude-print", lease_owner="owner-1", data_dir=data)
+            launch_dir = data / "runs" / run_id / "phase_launches" / "1" / "attempt-1"
+            launch_dir.mkdir(parents=True)
+            command_path = launch_dir / "command.json"
+            command_path.write_text("{}", encoding="utf-8")
+            popen_kwargs = {}
+
+            class FakeProc:
+                pid = 12345
+                returncode = 0
+                stdin = None
+
+                def communicate(self, input=None, timeout=None):
+                    return "{}", ""
+
+            def fake_popen(*args, **kwargs):
+                popen_kwargs.update(kwargs)
+                return FakeProc()
+
+            cwd = data / "launcher-workspaces" / "repo"
+            cwd.mkdir(parents=True)
+            with mock.patch("swarm_do.pipeline.phase_pump.subprocess.Popen", side_effect=fake_popen), mock.patch(
+                "swarm_do.pipeline.phase_pump.os.getpgid",
+                return_value=12345,
+            ):
+                phase_pump._run_real_claude(
+                    ["claude"],
+                    run_id=run_id,
+                    phase_id="1",
+                    lease_owner="owner-1",
+                    data_dir=data,
+                    launch_dir=launch_dir,
+                    command_path=command_path,
+                    metadata={},
+                    prompt_sha="a" * 64,
+                    result_path=data / "result.json",
+                    handoff_path=data / "handoff.json",
+                    cwd=cwd,
+                )
+
+            self.assertEqual(popen_kwargs["cwd"], str(cwd))
 
     def test_real_claude_launcher_writes_stdin_once_and_refreshes_lease(self) -> None:
         with tempfile.TemporaryDirectory() as td:

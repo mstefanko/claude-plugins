@@ -6,7 +6,10 @@ import tempfile
 import unittest
 from datetime import UTC, datetime
 from pathlib import Path
+from unittest import mock
 
+from swarm_do.pipeline.claude_transcript_diagnostics import encode_project_path
+from swarm_do.pipeline.paths import REPO_ROOT
 from swarm_do.pipeline.phase_recovery import reconcile_phase_sessions
 from swarm_do.pipeline.phase_sessions import (
     claim_next_phase,
@@ -190,6 +193,84 @@ class PhaseRecoveryTests(unittest.TestCase):
             self.assertEqual(phase["retry_policy_decision"], "deterministic_contract_failure")
             self.assertEqual(phase["last_failure_kind"], "outer_artifacts_missing")
 
+    def test_zero_returncode_empty_result_with_turns_blocks_as_silent_writer(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            claim_next_phase(run_id, data_dir=data, repo_root=repo, lease_owner="owner-1")
+            start_phase(run_id, "1", launcher="claude-print", lease_owner="owner-1", data_dir=data)
+            _write_command(data, run_id, "1", 1, {"argv": ["claude"], "launcher_cwd": "/tmp/missing"})
+            stdout = json.dumps(
+                {
+                    "type": "result",
+                    "session_id": "missing-session",
+                    "result": "",
+                    "num_turns": 14,
+                    "total_cost_usd": 0.73,
+                }
+            )
+
+            result = reconcile_phase_sessions(
+                run_id,
+                data_dir=data,
+                repo_root=repo,
+                launcher_result={"status": "launched", "returncode": 0, "stdout": stdout, "stderr": ""},
+                now=datetime(2026, 4, 29, tzinfo=UTC),
+            )
+
+            self.assertEqual(result["status"], "blocked")
+            state = json.loads(phase_session_path(run_id, data_dir=data).read_text(encoding="utf-8"))
+            phase = state["phases"][0]
+            self.assertEqual(phase["last_failure_kind"], "writer_silent_with_turns")
+            self.assertIn("14 turns", phase["last_error"])
+            history = phase["attempt_history"][0]
+            self.assertEqual(history["failure_kind"], "writer_silent_with_turns")
+            self.assertEqual(history["transcript_found"], False)
+            self.assertTrue(Path(history["transcript_diagnostics_path"]).is_file())
+            recovery = Path(history["recovery_context_path"]).read_text(encoding="utf-8")
+            self.assertIn("## Transcript Diagnostics", recovery)
+
+    def test_write_disabled_transcript_blocks_as_tool_denied(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            fake_home = root / "home"
+            projects = fake_home / ".claude" / "projects"
+            cwd = "/tmp/swarm-do-launcher"
+            session_id = "session-tool-denied"
+            transcript = projects / encode_project_path(cwd) / f"{session_id}.jsonl"
+            transcript.parent.mkdir(parents=True)
+            transcript.write_text(
+                (REPO_ROOT / "py" / "swarm_do" / "pipeline" / "tests" / "fixtures" / "claude_transcripts" / "write-disabled.jsonl").read_text(
+                    encoding="utf-8"
+                ),
+                encoding="utf-8",
+            )
+            repo, data, run_id = make_prepared_run(root, phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            claim_next_phase(run_id, data_dir=data, repo_root=repo, lease_owner="owner-1")
+            start_phase(run_id, "1", launcher="claude-print", lease_owner="owner-1", data_dir=data)
+            _write_command(data, run_id, "1", 1, {"argv": ["claude"], "launcher_cwd": cwd})
+            stdout = json.dumps({"type": "result", "session_id": session_id, "result": "", "num_turns": 14})
+
+            with mock.patch("swarm_do.pipeline.claude_transcript_diagnostics.Path.home", return_value=fake_home):
+                result = reconcile_phase_sessions(
+                    run_id,
+                    data_dir=data,
+                    repo_root=repo,
+                    launcher_result={"status": "launched", "returncode": 0, "stdout": stdout, "stderr": ""},
+                    now=datetime(2026, 4, 29, tzinfo=UTC),
+                )
+
+            self.assertEqual(result["status"], "blocked")
+            state = json.loads(phase_session_path(run_id, data_dir=data).read_text(encoding="utf-8"))
+            phase = state["phases"][0]
+            self.assertEqual(phase["last_failure_kind"], "writer_tool_denied_no_artifacts")
+            self.assertIn("Write tool_disabled", phase["last_error"])
+            history = phase["attempt_history"][0]
+            self.assertEqual(history["tool_name"], "Write")
+            self.assertEqual(history["tool_error_kind"], "tool_disabled")
+            self.assertTrue(Path(history["transcript_diagnostics_path"]).is_file())
+
     def test_dry_run_reports_without_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
@@ -266,6 +347,13 @@ def _patch_phase(data: Path, run_id: str, updates: dict) -> None:
 def _run_events(data: Path) -> list[dict]:
     path = data / "telemetry" / "run_events.jsonl"
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def _write_command(data: Path, run_id: str, phase_id: str, attempt: int, payload: dict) -> Path:
+    path = data / "runs" / run_id / "phase_launches" / phase_id / f"attempt-{attempt}" / "command.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
 
 
 def _write_result(

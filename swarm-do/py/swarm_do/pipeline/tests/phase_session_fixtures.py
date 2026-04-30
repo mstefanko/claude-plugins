@@ -15,9 +15,11 @@ def make_prepared_run(
     *,
     run_id: str = RUN_ID,
     phase_count: int = 3,
+    repo_path: Path | None = None,
 ) -> tuple[Path, Path, str]:
-    repo = tmp / "repo"
+    repo = repo_path or tmp / "repo"
     data = tmp / "data"
+    repo.parent.mkdir(parents=True, exist_ok=True)
     repo.mkdir()
     data.mkdir()
     _git_init(repo)
