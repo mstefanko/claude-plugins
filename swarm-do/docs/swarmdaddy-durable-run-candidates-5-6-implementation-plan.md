@@ -1,7 +1,8 @@
 # SwarmDaddy Durable Run Candidates 5-6 Implementation Plan
 
-Status: implementation-ready after codebase research
+Status: implementation-ready after blocker-resolution revision
 Date: 2026-04-30
+Revised: 2026-05-01
 Source research: `docs/swarmdaddy-durable-run-capabilities-research-plan.md`
 Builds on:
 
@@ -59,6 +60,22 @@ research plan treated as future work:
 The right plan is therefore incremental hardening, matrix coverage, and
 integration semantics. Do not rebuild the runtime.
 
+## Second-Pass Validation
+
+A follow-up analysis found real execution-readiness gaps in the first revision.
+These findings are validated against the current code and are resolved in this
+revision:
+
+| Finding | Validation | Resolution |
+| --- | --- | --- |
+| `adoption_state` migration was unresolved | Valid. `execution_worktree.py` treats `completed` as cleanup-eligible, but no transition writes it and the first revision rejected it without a migration path. | P0 now defines legacy `completed` normalization to `complete_no_changes`, with exact tests. |
+| Active recovery precedence was ambiguous | Valid. `_active_phase_decision()` checks lease expiry before child liveness and does not pin `alive=None` or cross-host behavior. | Candidate 5 now freezes the precedence table and action strings. |
+| Schema shapes were undefined | Valid. The first revision named `run_execution_worktree.schema.json` but did not give JSON types or reconcile overlap with evidence schemas. | Candidate 6 P0 now includes a concrete schema shape and evidence-schema delta. |
+| Schema additivity was not addressed | Valid. Existing schemas use `additionalProperties: false`; new fields must land with schema and reader changes in the same slice. | A compatibility section now defines the additivity and versioning posture. |
+| CLI wiring for `integrate-run` was missing | Valid. Existing `adopt-run` and `cleanup-run` are registered in `py/swarm_do/pipeline/cli.py`, but `integrate-run` was not assigned a registration site. | P1 now names `cmd_worktrees`, parser registration, and formatter/test locations. |
+| Action string was undecided | Valid. "Such as" was not shippable. | Candidate 5 now freezes exact action strings. |
+| Definition of Done was not testable | Valid. Several DoD bullets were outcome prose without named checks. | Candidate 5 and 6 now include named tests and test-backed DoD. |
+
 ## Final Recommendation
 
 Ship Candidate 5 first as a formal crash-resume matrix plus one safety fix:
@@ -78,6 +95,25 @@ The current code is ready for the first two layers of Candidate 6. It is not yet
 ready for parallel per-unit execution because the phase-session pump is still a
 sequential whole-phase launcher and the only per-unit worktree helper mutates
 the source checkout.
+
+## Compatibility Boundaries
+
+These constraints apply to both candidates:
+
+1. Do not add required fields to `phase_sessions.v1.json` or existing attempt
+   evidence manifests in P0. Existing in-flight runs must remain readable.
+2. When adding optional fields to a schema with `additionalProperties: false`,
+   update the schema, writer, reader, and tests in the same commit. Runtime code
+   must not emit a new field before the schema accepts it.
+3. Keep `phase_attempt_evidence.schema.json` at `schema_version=1` for the P0
+   safe-worktree metadata additions because they are optional internal manifest
+   fields. If a future change adds required fields or changes semantics, create
+   schema version 2 and make the reader accept versions 1 and 2.
+4. Normalize legacy run execution worktree manifests at read time. Do not reset
+   branches or delete worktrees during migration.
+5. Legacy source-checkout worktree mutators in `worktrees.py` remain for
+   compatibility, but sensitive source paths must fail closed unless an explicit
+   operator override is added for legacy behavior.
 
 ## Candidate 5 - Crash-Resumable Engineering Runs
 
@@ -123,15 +159,20 @@ active-attempt decision order.
 
 Recovery should use this precedence for active phases with no valid artifacts:
 
-1. If same-host child PID is recorded and process liveness proves the child is
-   dead, recover with `child_process_dead_no_artifacts`.
-2. If same-host child PID is recorded and the child is alive with a matching or
-   unknown process group, preserve `active` even when the persisted lease is
-   expired.
-3. If child liveness is unknown and the lease is unexpired, preserve `active`.
-4. If child liveness is unknown and the lease is expired, recover with
-   `lease_expired_no_artifacts`.
-5. If no child PID exists, use the lease TTL as the source of truth.
+| Case | Action string | Status/failure |
+| --- | --- | --- |
+| Same host, child PID recorded, `_pid_alive(pid)` is `False` | `child_dead` | recover with `child_process_dead_no_artifacts` |
+| Same host, child alive, expected process group recorded and `_process_group_matches()` is `False` | `child_dead` | recover with `child_process_dead_no_artifacts` |
+| Same host, child alive, no expected process group or process group matches | `active_preserved_child_alive` | preserve `active`, even if lease expired |
+| Same host, child liveness is `None`, lease unexpired | `active_preserved_child_unknown` | preserve `active` |
+| Same host, child liveness is `None`, lease expired | `lease_expired` | recover with `lease_expired_no_artifacts` |
+| Cross host, lease unexpired | `active_preserved_cross_host` | preserve `active` |
+| Cross host, lease expired | `lease_expired_cross_host` | recover with `lease_expired_no_artifacts` |
+| No child PID, lease unexpired | `active_preserved_no_child_metadata` | preserve `active` |
+| No child PID, lease expired | `lease_expired` | recover with `lease_expired_no_artifacts` |
+
+`None` from `_pid_alive()` or `_process_group_matches()` means inconclusive
+because of `PermissionError` or `OSError`; it is not proof of death.
 
 Do not add a new phase status. If implementation needs to record the
 expired-but-live case, use a run event detail and keep the phase status
@@ -170,12 +211,10 @@ expired-but-live case, use a run event detail and keep the phase status
 3. Fix `_active_phase_decision()` in `phase_recovery.py`.
 
    - Check same-host child death and live-child evidence before TTL expiry.
-   - Add an action such as `active_preserved_child_alive` for the preserved
-     live-child case.
+   - Use only the action strings in the precedence table above.
    - Include child PID, process group, lease expiry, and host evidence in the
      action details returned by recovery.
-   - Preserve current behavior for cross-host attempts: unknown liveness waits
-     for TTL expiry before recovery.
+   - Preserve cross-host attempts until TTL expiry, then recover by lease.
 
 4. Add idempotency assertions.
 
@@ -186,7 +225,28 @@ expired-but-live case, use a run event detail and keep the phase status
      or rewrite terminal phase state.
    - Preserved active attempts do not append failure history.
 
-5. Tighten phase-status and resume output if needed.
+5. Add named P0 tests.
+
+   Put these in `py/swarm_do/pipeline/tests/test_phase_crash_resume.py` unless
+   a smaller extension to `test_phase_recovery.py` is clearer:
+
+   - `test_parent_death_complete_artifacts_adopts_once`
+   - `test_parent_death_blocked_artifacts_adopts_and_stops`
+   - `test_parent_death_retryable_failed_artifacts_uses_policy_once`
+   - `test_child_dead_no_artifacts_records_retryable_lifecycle_failure`
+   - `test_child_dead_partial_artifacts_uses_recovery_retry_or_gate`
+   - `test_zero_returncode_no_artifacts_human_gates`
+   - `test_expired_same_host_live_child_preserves_active`
+   - `test_expired_same_host_unknown_child_liveness_recovers_by_lease`
+   - `test_expired_cross_host_active_lease_recovers_by_lease`
+   - `test_unexpired_cross_host_active_lease_is_preserved`
+   - `test_retry_waiting_future_reports_wait_without_claim`
+   - `test_retry_waiting_past_due_releases_without_launch`
+   - `test_recover_dry_run_does_not_mutate_state`
+   - `test_recovery_after_retry_decision_is_idempotent`
+   - `test_recovery_after_artifact_adoption_is_idempotent`
+
+6. Tighten phase-status and resume output if needed.
 
    - `phase_status()` should expose enough active-attempt liveness metadata for
      operators to understand why recovery preserved active work.
@@ -194,7 +254,7 @@ expired-but-live case, use a run event detail and keep the phase status
      command recommendation when a phase-session run is active, retry-waiting,
      retry-exhausted, blocked, or drifted.
 
-6. Validate the matrix.
+7. Validate the matrix.
 
    - Run:
      `PYTHONPATH=py python3 -m unittest py.swarm_do.pipeline.tests.test_phase_recovery`
@@ -204,12 +264,16 @@ expired-but-live case, use a run event detail and keep the phase status
 
 ### P1 Work Breakdown
 
-1. Add an optional active-lease repair event.
+1. Add active-lease repair for the expired-but-live same-host case.
 
-   - If a same-host child is live but the lease is expired, mutating recovery may
-     extend `lease_expires_at` without changing `lease_owner`.
-   - Append a run event such as `phase_session_active_preserved` with child
-     liveness details.
+   - Implement only for action `active_preserved_child_alive`.
+   - In mutating recovery, extend `lease_expires_at` to
+     `now + running_ttl_seconds` without changing `lease_owner`.
+   - Append `phase_session_active_preserved` to
+     `schemas/telemetry/run_events.schema.json` before emitting it.
+   - Event details must include `phase_id`, `attempt`, `child_pid`,
+     `process_group_id`, old lease expiry, new lease expiry, and
+     `action="active_preserved_child_alive"`.
    - `--dry-run` reports the repair but does not write it.
 
 2. Add archive-aware crash recovery tests.
@@ -260,6 +324,17 @@ expired-but-live case, use a run event detail and keep the phase status
 Candidate 5 is complete when the crash matrix is fixture-backed, the expired
 same-host-live-child case cannot duplicate work, recovery is idempotent across
 the matrix, and the operator has a clear dry-run path before mutation.
+
+Candidate 5 DoD is test-backed by:
+
+- `test_expired_same_host_live_child_preserves_active`
+- `test_expired_same_host_unknown_child_liveness_recovers_by_lease`
+- `test_expired_cross_host_active_lease_recovers_by_lease`
+- `test_recover_dry_run_does_not_mutate_state`
+- `test_recovery_after_retry_decision_is_idempotent`
+- `test_recovery_after_artifact_adoption_is_idempotent`
+- `test_retry_waiting_future_reports_wait_without_claim`
+- `test_retry_waiting_past_due_releases_without_launch`
 
 ## Candidate 6 - Auditable Worktree Choreography
 
@@ -327,29 +402,137 @@ only after scope manifests and dirty-destination checks exist.
 
    - New schema: `schemas/run_execution_worktree.schema.json`.
    - Validate reads and writes in `execution_worktree.py`.
-   - Required fields:
-     `schema_version`, `run_id`, source/safe roots, `project_subdir`, branch,
-     `base_sha`, `base_ref`, `copied_artifacts`, `adoption_state`,
-     `created_at`, and `last_used_at`.
-   - Define `adoption_state` as a closed enum. Prefer:
-     `unadopted`, `adopted`, `complete_no_changes`, `preserved`, `conflicted`.
-     Avoid the ambiguous existing `completed` value unless a migration maps it
-     to a clearer state.
+   - Add `RUN_EXECUTION_WORKTREE_SCHEMA_PATH` and
+     `validate_run_execution_worktree_manifest(payload)` in
+     `execution_worktree.py`, following the existing schema-validation style in
+     `phase_evidence.py`.
+   - Use this exact P0 schema shape:
 
-2. Add dirty-destination protection to adoption.
+     ```json
+     {
+       "$schema": "https://json-schema.org/draft/07/schema#",
+       "$id": "https://mstefanko-plugins/swarm-do/run_execution_worktree.schema.json#v1",
+       "title": "swarm-do run execution worktree manifest",
+       "type": "object",
+       "additionalProperties": false,
+       "required": [
+         "schema_version",
+         "run_id",
+         "source_git_root",
+         "source_project_root",
+         "safe_git_worktree_root",
+         "safe_project_root",
+         "project_subdir",
+         "branch",
+         "base_sha",
+         "base_ref",
+         "copied_artifacts",
+         "adoption_state",
+         "created_at",
+         "last_used_at"
+       ],
+       "properties": {
+         "schema_version": { "type": "integer", "enum": [1] },
+         "run_id": {
+           "type": "string",
+           "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+         },
+         "source_git_root": { "type": "string", "minLength": 1 },
+         "source_project_root": { "type": "string", "minLength": 1 },
+         "safe_git_worktree_root": { "type": "string", "minLength": 1 },
+         "safe_project_root": { "type": "string", "minLength": 1 },
+         "project_subdir": { "type": "string" },
+         "branch": { "type": "string", "minLength": 1 },
+         "base_sha": {
+           "type": "string",
+           "pattern": "^[0-9a-f]{40}$"
+         },
+         "base_ref": { "type": "string", "minLength": 1 },
+         "copied_artifacts": {
+           "type": "array",
+           "items": {
+             "type": "object",
+             "additionalProperties": false,
+             "required": [
+               "source_path",
+               "destination_path",
+               "relative_path",
+               "source_sha256",
+               "destination_sha256",
+               "kind",
+               "transformed"
+             ],
+             "properties": {
+               "source_path": { "type": "string", "minLength": 1 },
+               "destination_path": { "type": "string", "minLength": 1 },
+               "relative_path": { "type": "string", "minLength": 1 },
+               "source_sha256": {
+                 "type": "string",
+                 "pattern": "^[0-9a-f]{64}$"
+               },
+               "destination_sha256": {
+                 "type": "string",
+                 "pattern": "^[0-9a-f]{64}$"
+               },
+               "kind": { "type": "string", "minLength": 1 },
+               "transformed": { "type": "boolean" }
+             }
+           }
+         },
+         "adoption_state": {
+           "type": "string",
+           "enum": [
+             "unadopted",
+             "adopted",
+             "complete_no_changes",
+             "preserved",
+             "conflicted"
+           ]
+         },
+         "adopted_at": { "type": ["string", "null"], "format": "date-time" },
+         "created_at": { "type": "string", "format": "date-time" },
+         "last_used_at": { "type": "string", "format": "date-time" },
+         "scope_check_path": { "type": ["string", "null"] },
+         "conflict_manifest_path": { "type": ["string", "null"] },
+         "integration_manifest_path": { "type": ["string", "null"] }
+       }
+     }
+     ```
+
+   - Do not include legacy `completed` in the schema enum.
+
+2. Add legacy manifest normalization.
+
+   - Add `_normalize_run_worktree_manifest(raw: Mapping[str, Any]) ->
+     tuple[dict[str, Any], bool]` in `execution_worktree.py`.
+   - Normalization rules:
+     - missing or null `adoption_state` becomes `unadopted`;
+     - `adoption_state="completed"` becomes `complete_no_changes`;
+     - missing optional path fields become `None`;
+     - unknown fields still fail schema validation after normalization.
+   - `_load_manifest()` and `_require_manifest()` return normalized manifests.
+   - Any later write through `materialize_run_execution_worktree()`,
+     `adopt_run_worktree()`, `cleanup_run_worktree()`, or
+     `integrate_run_worktree()` writes the normalized value back.
+   - `cleanup_run_worktree()` treats `adopted` and `complete_no_changes` as
+     cleanup-eligible. It no longer checks for `completed` after normalization.
+
+3. Add dirty-destination protection to adoption.
 
    - Before `adopt_run_worktree(..., apply=True)` copies or deletes a path,
      inspect the source checkout for tracked or untracked changes at every
      destination path.
-   - Block apply with `destination_dirty` if a destination changed since the run
-     base or since the dry-run report.
+   - Use `git status --porcelain=v1 -z -- <path>` from the source git root and
+     project-relative path. A non-empty result blocks that operation with
+     `destination_dirty`.
+   - Also block when a delete operation targets a directory.
    - Include blocked destination paths in both JSON and text output.
    - Keep dry-run side-effect free.
 
-3. Add a scope-check manifest for run adoption.
+4. Add a scope-check manifest for run adoption.
 
-   - Write:
-     `<data-dir>/worktrees/<run-id>/scope-check.json`.
+   - Add `build_run_worktree_scope_check(...)` in
+     `execution_worktree.py`.
    - Inputs:
      prepared artifact, work-unit sidecars for every phase, safe-worktree
      changed files, blocked paths, and adoption operations.
@@ -364,24 +547,53 @@ only after scope manifests and dirty-destination checks exist.
      can be inferred.
    - P1 can promote outside-allowed changes to a hard block once fixture
      coverage is strong.
+   - `adopt-run` dry-run returns the scope-check object but does not write a
+     file.
+   - `adopt-run --apply` writes
+     `<data-dir>/worktrees/<run-id>/scope-check.json` before copyback and stores
+     that path in the run worktree manifest.
 
-4. Add adoption-state transitions.
+5. Add adoption-state transitions.
 
    - `adopt-run --apply` writes `adoption_state="adopted"`.
-   - A dry run with no copyback operations and no blocked paths may offer a
-     separate `mark-complete-no-changes` command or set
-     `complete_no_changes` only under an explicit `--apply` action.
+   - No new mark-complete command. If `adopt-run --apply` has no copyback
+     operations and no blocked paths, it writes
+     `adoption_state="complete_no_changes"`.
    - Do not allow cleanup of `unadopted`, `preserved`, or `conflicted`.
 
-5. Extend evidence schema coverage.
+6. Extend evidence schema coverage.
 
-   - Add missing safe-worktree fields to
-     `schemas/phase_attempt_evidence.schema.json` if needed, especially
-     `git_base_ref` and copied-artifact summaries.
+   - Add exactly these optional fields to
+     `schemas/phase_attempt_evidence.schema.json#/properties/workspace/properties`:
+
+     ```json
+     "git_base_ref": { "type": ["string", "null"] },
+     "copied_ignored_artifacts": {
+       "type": ["array", "null"],
+       "items": {
+         "type": "object",
+         "additionalProperties": true
+       }
+     }
+     ```
+
+   - Update `phase_evidence.py` to emit those fields from `command.json`.
+   - Do not add any other evidence fields in P0.
    - Add tests that read the generated `evidence.json` for a safe-worktree
      attempt, not only `command.json`.
 
-6. Document operator commands.
+7. Guard legacy source-checkout worktree mutators.
+
+   - Update `py/swarm_do/pipeline/cli.py` in `cmd_worktrees` for
+     `ensure-integration`, `add-unit`, and `merge`.
+   - If `is_sensitive_path(Path(args.repo).resolve(strict=False))` is true,
+     return exit code 1 with a message containing
+     `legacy source-checkout worktrees are disabled for sensitive repos`.
+   - Add `--allow-source-worktree` to those three legacy subcommands. The flag
+     is explicit and defaults to false.
+   - `names` remains read-only and does not need the guard.
+
+8. Document operator commands.
 
    - Update the README worktree command list with:
      `bin/swarm worktrees adopt-run <run-id> [--apply] [--json]`
@@ -389,7 +601,31 @@ only after scope manifests and dirty-destination checks exist.
      `bin/swarm worktrees cleanup-run <run-id> [--apply] [--json]`.
    - Mention that cleanup preserves unadopted and conflicted worktrees.
 
-7. Validate P0.
+9. Add named P0 tests.
+
+   Add or extend `py/swarm_do/pipeline/tests/test_execution_worktree.py`:
+
+   - `test_manifest_schema_requires_roots_branch_base_and_artifacts`
+   - `test_manifest_schema_rejects_unknown_fields`
+   - `test_legacy_completed_manifest_migrates_to_complete_no_changes`
+   - `test_cleanup_accepts_complete_no_changes_after_legacy_migration`
+   - `test_adopt_apply_blocks_dirty_destination`
+   - `test_adopt_apply_blocks_delete_directory_operation`
+   - `test_adopt_dry_run_returns_scope_check_without_writing_manifest`
+   - `test_adopt_apply_writes_scope_check_manifest`
+   - `test_adopt_apply_marks_complete_no_changes_when_no_operations`
+   - `test_scope_check_blocks_explicit_blocked_files`
+
+   Add or extend `py/swarm_do/pipeline/tests/test_phase_evidence.py`:
+
+   - `test_safe_worktree_evidence_manifest_includes_git_base_ref_and_copied_artifacts`
+
+   Add or extend `py/swarm_do/pipeline/tests/test_phase_cli.py`:
+
+   - `test_legacy_worktree_mutators_refuse_sensitive_repo_without_override`
+   - `test_legacy_worktree_mutators_allow_sensitive_repo_with_explicit_override`
+
+10. Validate P0.
 
    - Run:
      `PYTHONPATH=py python3 -m unittest py.swarm_do.pipeline.tests.test_execution_worktree`
@@ -413,6 +649,14 @@ only after scope manifests and dirty-destination checks exist.
 
 2. Add `worktrees integrate-run`.
 
+   - CLI registration lives in `py/swarm_do/pipeline/cli.py`.
+   - Add an `elif args.worktrees_command == "integrate-run"` branch in
+     `cmd_worktrees`.
+   - Add a parser beside `adopt-run` and `cleanup-run`:
+     `p = worktrees_sub.add_parser("integrate-run")`.
+   - Parser args:
+     positional `run_id`, optional `--data-dir`, `--apply`, `--json`.
+   - Add `_format_worktree_integrate(payload)` for text output.
    - Dry-run default:
      `bin/swarm worktrees integrate-run <run-id> [--json]`.
    - Apply:
@@ -453,6 +697,13 @@ only after scope manifests and dirty-destination checks exist.
    - Add tests for clean integration merge, conflicting integration merge,
      conflict manifest content, source checkout unchanged during integration,
      and cleanup preserving conflicted worktrees.
+   - Named tests:
+     - `test_integrate_run_parser_is_registered`
+     - `test_integrate_run_dry_run_reports_execution_and_integration_branches`
+     - `test_integrate_run_apply_merges_execution_into_data_dir_integration_worktree`
+     - `test_integrate_run_conflict_writes_conflict_manifest_and_preserves_worktrees`
+     - `test_integrate_run_does_not_mutate_source_checkout`
+     - `test_cleanup_preserves_conflicted_worktree`
 
 ### P2 Work Breakdown - Per-Unit Or Per-Phase Worktrees
 
@@ -463,9 +714,10 @@ independent writer launch records, post-writer gates, and merge ownership.
 
 1. Design the unit execution state.
 
-   - Decide whether unit state lives in a new
-     `unit_sessions.v1.json`, in phase-session state, or in the existing
-     work-unit artifact plus run events.
+   - Use a new durable state file:
+     `<data-dir>/runs/<run-id>/unit_sessions.v1.json`.
+   - Do not overload `phase_sessions.v1.json` and do not mutate the prepared
+     work-unit artifact as execution state.
    - Required fields:
      `phase_id`, `unit_id`, branch, worktree root, base SHA, lease metadata,
      writer status, post-writer report path, scope-check path, merge state,
@@ -533,3 +785,7 @@ Candidate 6 P2 is complete when per-unit or per-phase worktrees use data-dir
 roots, durable unit state, post-writer reports, scope-gated merges, and conflict
 manifests without relying on source-checkout `.swarm-do/worktrees`.
 
+Candidate 6 DoD is test-backed by the named P0/P1 tests above. A writer should
+not mark P0 complete without passing the manifest migration tests, dirty
+destination tests, scope-check tests, safe-worktree evidence test, and legacy
+mutator guard tests.
