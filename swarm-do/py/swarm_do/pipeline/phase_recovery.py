@@ -41,6 +41,7 @@ from .phase_sessions import (
     phase_result_path,
     phase_status,
     release_retry_waiting,
+    repair_active_phase_lease,
     validate_phase_artifacts,
 )
 from .run_state import append_run_event, utc_now, validate_run_event
@@ -219,6 +220,18 @@ def reconcile_phase_sessions(
         if phase.get("status") in ACTIVE_STATUSES and launcher_result is None:
             active_action = _active_phase_decision(phase, now=current_time)
             if active_action.get("status") == "active":
+                repair = _active_lease_repair(
+                    phase,
+                    state=state,
+                    data_dir=base,
+                    now=current_time,
+                    action=active_action,
+                    dry_run=dry_run,
+                )
+                if repair is not None:
+                    active_action["lease_repair"] = repair
+                    if not dry_run and repair.get("applied"):
+                        state = load_phase_sessions(run_id, data_dir=base)
                 actions.append(active_action)
                 return _decision(run_id, base, "active", actions)
             active_action_details = dict(active_action)
@@ -936,6 +949,45 @@ def _active_action(
         payload["status"] = status
     if failure_kind is not None:
         payload["failure_kind"] = failure_kind
+    return payload
+
+
+def _active_lease_repair(
+    phase: Mapping[str, Any],
+    *,
+    state: Mapping[str, Any],
+    data_dir: Path,
+    now: datetime,
+    action: Mapping[str, Any],
+    dry_run: bool,
+) -> dict[str, Any] | None:
+    if action.get("action") != "active_preserved_child_alive" or not action.get("lease_expired"):
+        return None
+    lease_policy = state.get("lease_policy") if isinstance(state.get("lease_policy"), Mapping) else {}
+    ttl_seconds = int(lease_policy.get("running_ttl_seconds") or 14400)
+    old_expires_at = phase.get("lease_expires_at")
+    new_expires_at = _format_dt(now + timedelta(seconds=ttl_seconds))
+    payload = {
+        "applied": False,
+        "phase_id": phase.get("phase_id"),
+        "attempt": phase.get("attempt"),
+        "child_pid": phase.get("child_pid"),
+        "process_group_id": phase.get("process_group_id"),
+        "old_lease_expires_at": old_expires_at,
+        "new_lease_expires_at": new_expires_at,
+        "action": "active_preserved_child_alive",
+    }
+    if dry_run:
+        return payload
+    repaired = repair_active_phase_lease(
+        str(state["run_id"]),
+        str(phase["phase_id"]),
+        data_dir=data_dir,
+        now=now,
+        action="active_preserved_child_alive",
+    )
+    payload.update({key: repaired.get(key) for key in payload if key in repaired})
+    payload["applied"] = True
     return payload
 
 

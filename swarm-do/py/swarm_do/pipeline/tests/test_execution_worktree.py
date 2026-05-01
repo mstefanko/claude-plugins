@@ -13,6 +13,8 @@ from swarm_do.pipeline.execution_worktree import (
     adopt_run_worktree,
     cleanup_run_worktree,
     execution_branch_name,
+    integrate_run_worktree,
+    integration_branch_name,
     materialize_run_execution_worktree,
     resolve_run_execution_worktree,
     validate_run_execution_worktree_manifest,
@@ -483,6 +485,173 @@ class ExecutionWorktreeTests(unittest.TestCase):
             self.assertEqual(record["decision"], "block")
             self.assertEqual(record["matched_blocked_patterns"], ["docs/secret.md"])
 
+    def test_integrate_run_dry_run_reports_execution_and_integration_branches(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _git_root, project, data, prepared = _prepared_monorepo(root)
+            worktree = materialize_run_execution_worktree(
+                RUN_ID,
+                source_project_root=project,
+                data_dir=data,
+                prepared_plan=prepared,
+                sensitive_prefixes=[str(root / "home" / ".claude")],
+            )
+            (worktree.safe_project_root / "docs").mkdir()
+            (worktree.safe_project_root / "docs" / "new.md").write_text("safe\n", encoding="utf-8")
+
+            dry_run = integrate_run_worktree(RUN_ID, data_dir=data)
+
+            self.assertFalse(dry_run["applied"])
+            self.assertEqual(dry_run["execution_branch"], execution_branch_name(RUN_ID))
+            self.assertEqual(dry_run["integration_branch"], integration_branch_name(RUN_ID))
+            self.assertEqual(dry_run["changed_files"], ["docs/new.md"])
+            self.assertIn("scope_check", dry_run)
+            self.assertIn("git -C", dry_run["predicted_merge_command"])
+            self.assertFalse((data / "worktrees" / RUN_ID / "integration").exists())
+
+    def test_integrate_run_apply_blocks_dirty_execution_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _git_root, project, data, prepared = _prepared_monorepo(root)
+            worktree = materialize_run_execution_worktree(
+                RUN_ID,
+                source_project_root=project,
+                data_dir=data,
+                prepared_plan=prepared,
+                sensitive_prefixes=[str(root / "home" / ".claude")],
+            )
+            (worktree.safe_project_root / "docs").mkdir()
+            (worktree.safe_project_root / "docs" / "dirty.md").write_text("dirty\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(RunExecutionWorktreeAdoptionBlocked, "dirty paths") as raised:
+                integrate_run_worktree(RUN_ID, data_dir=data, apply=True)
+
+            self.assertIn(
+                {"path": "docs/dirty.md", "reason": "execution_worktree_dirty"},
+                raised.exception.payload["blocked_paths"],
+            )
+            self.assertFalse((data / "worktrees" / RUN_ID / "integration").exists())
+
+    def test_integrate_run_apply_merges_execution_into_data_dir_integration_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _git_root, project, data, prepared = _prepared_monorepo(root)
+            _clear_validation_commands(data, RUN_ID)
+            worktree = materialize_run_execution_worktree(
+                RUN_ID,
+                source_project_root=project,
+                data_dir=data,
+                prepared_plan=prepared,
+                sensitive_prefixes=[str(root / "home" / ".claude")],
+            )
+            (worktree.safe_project_root / "docs").mkdir()
+            (worktree.safe_project_root / "docs" / "integrated.md").write_text("integrated\n", encoding="utf-8")
+            _git(worktree.safe_project_root, "add", "docs/integrated.md")
+            _git(worktree.safe_project_root, "commit", "-q", "-m", "execution change")
+
+            applied = integrate_run_worktree(RUN_ID, data_dir=data, apply=True)
+
+            integration_project = Path(applied["integration_project_root"])
+            self.assertTrue(applied["applied"])
+            self.assertEqual(applied["status"], "integrated")
+            self.assertEqual((integration_project / "docs" / "integrated.md").read_text(encoding="utf-8"), "integrated\n")
+            self.assertFalse((project / "docs" / "integrated.md").exists())
+            manifest = json.loads(worktree.manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["integration_manifest_path"], applied["integration_manifest_path"])
+            adopt_dry_run = adopt_run_worktree(RUN_ID, data_dir=data)
+            self.assertEqual(adopt_dry_run["adoption_source"], "integration")
+            self.assertEqual(adopt_dry_run["changed_files"], ["docs/integrated.md"])
+            adopted = adopt_run_worktree(RUN_ID, data_dir=data, apply=True)
+            self.assertEqual(adopted["adoption_source"], "integration")
+            self.assertEqual((project / "docs" / "integrated.md").read_text(encoding="utf-8"), "integrated\n")
+            cleanup = cleanup_run_worktree(RUN_ID, data_dir=data, apply=True)
+            removed = {str(Path(path).resolve(strict=False)) for path in cleanup["removed"]}
+            self.assertIn(str(integration_project.parent.resolve(strict=False)), removed)
+            self.assertFalse(integration_project.parent.exists())
+
+    def test_integrate_run_conflict_writes_conflict_manifest_and_preserves_worktrees(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            git_root, project, data, prepared = _prepared_monorepo(root)
+            _clear_validation_commands(data, RUN_ID)
+            worktree = materialize_run_execution_worktree(
+                RUN_ID,
+                source_project_root=project,
+                data_dir=data,
+                prepared_plan=prepared,
+                sensitive_prefixes=[str(root / "home" / ".claude")],
+            )
+            (worktree.safe_project_root / "plan.md").write_text("execution edit\n", encoding="utf-8")
+            _git(worktree.safe_project_root, "add", "plan.md")
+            _git(worktree.safe_project_root, "commit", "-q", "-m", "execution edits plan")
+            seed = root / "seed-integration"
+            _git(git_root, "branch", integration_branch_name(RUN_ID), prepared["git_base_sha"])
+            _git(git_root, "worktree", "add", str(seed), integration_branch_name(RUN_ID))
+            (seed / "swarm-do" / "plan.md").write_text("integration edit\n", encoding="utf-8")
+            _git(seed, "add", "swarm-do/plan.md")
+            _git(seed, "commit", "-q", "-m", "integration edits plan")
+            _git(git_root, "worktree", "remove", str(seed))
+
+            result = integrate_run_worktree(RUN_ID, data_dir=data, apply=True)
+
+            self.assertEqual(result["status"], "conflicted")
+            conflict_path = Path(result["conflict_manifest_path"])
+            self.assertTrue(conflict_path.is_file())
+            conflict = json.loads(conflict_path.read_text(encoding="utf-8"))
+            self.assertIn("swarm-do/plan.md", conflict["conflicted_files"])
+            cleanup = cleanup_run_worktree(RUN_ID, data_dir=data)
+            self.assertFalse(cleanup["eligible"])
+            self.assertIn("conflicted", cleanup["preserved_reason"])
+            self.assertTrue(worktree.safe_git_root.exists())
+            self.assertTrue(Path(result["integration_git_worktree_root"]).exists())
+
+    def test_integrate_run_does_not_mutate_source_checkout(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            git_root, project, data, prepared = _prepared_monorepo(root)
+            _clear_validation_commands(data, RUN_ID)
+            source_head = _git(git_root, "rev-parse", "HEAD")
+            source_status = _git(git_root, "status", "--porcelain=v1")
+            worktree = materialize_run_execution_worktree(
+                RUN_ID,
+                source_project_root=project,
+                data_dir=data,
+                prepared_plan=prepared,
+                sensitive_prefixes=[str(root / "home" / ".claude")],
+            )
+            (worktree.safe_project_root / "docs").mkdir()
+            (worktree.safe_project_root / "docs" / "source-safe.md").write_text("not copied yet\n", encoding="utf-8")
+            _git(worktree.safe_project_root, "add", "docs/source-safe.md")
+            _git(worktree.safe_project_root, "commit", "-q", "-m", "execution source-safe")
+
+            integrate_run_worktree(RUN_ID, data_dir=data, apply=True)
+
+            self.assertEqual(_git(git_root, "rev-parse", "HEAD"), source_head)
+            self.assertEqual(_git(git_root, "status", "--porcelain=v1"), source_status)
+            self.assertFalse((project / "docs" / "source-safe.md").exists())
+
+    def test_cleanup_preserves_conflicted_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _git_root, project, data, prepared = _prepared_monorepo(root)
+            worktree = materialize_run_execution_worktree(
+                RUN_ID,
+                source_project_root=project,
+                data_dir=data,
+                prepared_plan=prepared,
+                sensitive_prefixes=[str(root / "home" / ".claude")],
+            )
+            manifest = json.loads(worktree.manifest_path.read_text(encoding="utf-8"))
+            manifest["adoption_state"] = "conflicted"
+            worktree.manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+            cleanup = cleanup_run_worktree(RUN_ID, data_dir=data)
+
+            self.assertFalse(cleanup["eligible"])
+            with self.assertRaisesRegex(RunExecutionWorktreeError, "conflicted"):
+                cleanup_run_worktree(RUN_ID, data_dir=data, apply=True)
+            self.assertTrue(worktree.safe_git_root.exists())
+
 
 def _prepared_monorepo(root: Path, *, run_id: str = RUN_ID, ignore_run_artifacts: bool = True) -> tuple[Path, Path, Path, dict]:
     git_root = root / "home" / ".claude" / "plugins" / "mstefanko-plugins"
@@ -560,6 +729,21 @@ def _add_prepared_blocked_file(data: Path, run_id: str, pattern: str) -> None:
     descriptor = payload["work_unit_artifacts"]["1"]
     artifact = descriptor["artifact"]
     artifact["work_units"][0]["blocked_files"] = [pattern]
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _clear_validation_commands(data: Path, run_id: str) -> None:
+    path = data / "runs" / run_id / "prepared_plan.v1.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    for descriptor in payload.get("work_unit_artifacts", {}).values():
+        if not isinstance(descriptor, dict):
+            continue
+        artifact = descriptor.get("artifact")
+        if not isinstance(artifact, dict):
+            continue
+        for unit in artifact.get("work_units") or []:
+            if isinstance(unit, dict):
+                unit["validation_commands"] = []
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 

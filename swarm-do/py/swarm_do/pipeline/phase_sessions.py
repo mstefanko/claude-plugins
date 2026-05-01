@@ -534,6 +534,58 @@ def refresh_phase(
         return {"refreshed": True, "phase": _phase_summary(phase), "state": state}
 
 
+def repair_active_phase_lease(
+    run_id: str,
+    phase_id: str,
+    *,
+    data_dir: Path | None = None,
+    now: datetime | None = None,
+    action: str = "active_preserved_child_alive",
+) -> dict[str, Any]:
+    if action != "active_preserved_child_alive":
+        raise PhaseSessionError(f"unsupported active lease repair action: {action}")
+    base = data_dir or resolve_data_dir()
+    current_time = (now or _utc_now_dt()).astimezone(UTC)
+    with locked_phase_sessions(run_id, data_dir=base):
+        state = load_phase_sessions(run_id, data_dir=base)
+        phase = _find_phase(state, phase_id)
+        if phase["status"] not in ACTIVE_STATUSES:
+            raise PhaseSessionError(f"phase {phase_id} is not active")
+        old_expires_at = phase.get("lease_expires_at")
+        ttl_seconds = int(state["lease_policy"]["running_ttl_seconds"])
+        new_expires_at = _format_dt(current_time + timedelta(seconds=ttl_seconds))
+        phase["lease_expires_at"] = new_expires_at
+        _touch_and_write(base, run_id, state)
+        details = {
+            "phase_id": phase.get("phase_id"),
+            "attempt": phase.get("attempt"),
+            "child_pid": phase.get("child_pid"),
+            "process_group_id": phase.get("process_group_id"),
+            "old_lease_expires_at": old_expires_at,
+            "new_lease_expires_at": new_expires_at,
+            "action": action,
+        }
+        _append_phase_event(
+            base,
+            run_id=run_id,
+            event_type="phase_session_active_preserved",
+            phase=phase,
+            details=details,
+        )
+        return {
+            "repaired": True,
+            "phase_id": phase.get("phase_id"),
+            "attempt": phase.get("attempt"),
+            "child_pid": phase.get("child_pid"),
+            "process_group_id": phase.get("process_group_id"),
+            "old_lease_expires_at": old_expires_at,
+            "new_lease_expires_at": new_expires_at,
+            "action": action,
+            "phase": _phase_summary(phase),
+            "state": state,
+        }
+
+
 def reap_expired_phases(run_id: str, *, data_dir: Path | None = None) -> dict[str, Any]:
     base = data_dir or resolve_data_dir()
     reaped: list[dict[str, Any]] = []
@@ -2087,6 +2139,7 @@ __all__ = [
     "record_phase_result",
     "record_launch_metadata",
     "release_retry_waiting",
+    "repair_active_phase_lease",
     "refresh_phase",
     "start_phase",
     "validate_phase_artifacts",

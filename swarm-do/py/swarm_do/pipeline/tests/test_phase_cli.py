@@ -10,7 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from swarm_do.pipeline.cli import _phase_evidence_payload, cmd_phases, cmd_worktrees
+from swarm_do.pipeline.cli import _build_parser, _phase_evidence_payload, cmd_phases, cmd_worktrees
 from swarm_do.pipeline.phase_pump import pump_phases
 from swarm_do.pipeline.phase_sessions import init_phase_sessions
 from swarm_do.pipeline.tests.phase_session_fixtures import make_prepared_run
@@ -133,6 +133,25 @@ class PhaseCliEvidenceTests(unittest.TestCase):
 
 
 class WorktreeLegacyGuardTests(unittest.TestCase):
+    def test_integrate_run_parser_is_registered(self) -> None:
+        args = _build_parser().parse_args(
+            [
+                "worktrees",
+                "integrate-run",
+                "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "--data-dir",
+                "/tmp/swarm-data",
+                "--apply",
+                "--json",
+            ]
+        )
+
+        self.assertEqual(args.worktrees_command, "integrate-run")
+        self.assertEqual(args.run_id, "01ARZ3NDEKTSV4RRFFQ69G5FAV")
+        self.assertEqual(args.data_dir, "/tmp/swarm-data")
+        self.assertTrue(args.apply)
+        self.assertIs(args.func, cmd_worktrees)
+
     def test_legacy_worktree_mutators_refuse_sensitive_repo_without_override(self) -> None:
         commands = [
             _worktree_args("ensure-integration"),

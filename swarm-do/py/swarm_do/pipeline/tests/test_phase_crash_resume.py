@@ -8,7 +8,8 @@ from pathlib import Path
 from unittest import mock
 
 from swarm_do.pipeline.phase_recovery import reconcile_phase_sessions
-from swarm_do.pipeline.phase_sessions import phase_session_path
+from swarm_do.pipeline.phase_attempts import summarize_phase_attempts
+from swarm_do.pipeline.phase_sessions import archive_phase_session_evidence, phase_session_path
 from swarm_do.pipeline.tests.phase_crash_fixtures import (
     CRASH_NOW,
     EXPIRED_LEASE,
@@ -139,7 +140,31 @@ class PhaseCrashResumeMatrixTests(unittest.TestCase):
             self.assertEqual(result["status"], "active")
             self.assertEqual(result["actions"][0]["action"], "active_preserved_child_alive")
             self.assertTrue(result["actions"][0]["lease_expired"])
-            self.assertEqual(load_state(data, run_id)["phases"][0]["attempt_history"], [])
+            repair = result["actions"][0]["lease_repair"]
+            self.assertTrue(repair["applied"])
+            self.assertEqual(repair["old_lease_expires_at"], EXPIRED_LEASE)
+            state = load_state(data, run_id)
+            self.assertEqual(state["phases"][0]["attempt_history"], [])
+            self.assertEqual(state["phases"][0]["lease_expires_at"], repair["new_lease_expires_at"])
+            events = (data / "telemetry" / "run_events.jsonl").read_text(encoding="utf-8").splitlines()
+            active_events = [json.loads(line) for line in events if json.loads(line)["event_type"] == "phase_session_active_preserved"]
+            self.assertEqual(len(active_events), 1)
+            self.assertEqual(active_events[0]["details"]["action"], "active_preserved_child_alive")
+
+    def test_expired_same_host_live_child_dry_run_reports_repair_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id, _phase = prepared_active_attempt(Path(td), phase_count=1)
+            patch_phase(data, run_id, {"lease_host": socket.gethostname(), "child_pid": 12345, "lease_expires_at": EXPIRED_LEASE})
+            before = phase_session_path(run_id, data_dir=data).read_text(encoding="utf-8")
+
+            with mock.patch("swarm_do.pipeline.phase_recovery._pid_alive", return_value=True):
+                result = reconcile_phase_sessions(run_id, data_dir=data, repo_root=repo, now=CRASH_NOW, dry_run=True)
+
+            self.assertEqual(result["status"], "active")
+            self.assertFalse(result["actions"][0]["lease_repair"]["applied"])
+            self.assertEqual(phase_session_path(run_id, data_dir=data).read_text(encoding="utf-8"), before)
+            events = (data / "telemetry" / "run_events.jsonl").read_text(encoding="utf-8").splitlines()
+            self.assertFalse(any(json.loads(line)["event_type"] == "phase_session_active_preserved" for line in events))
 
     def test_same_host_live_child_unknown_process_group_preserves_active(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -164,6 +189,30 @@ class PhaseCrashResumeMatrixTests(unittest.TestCase):
             self.assertEqual(result["status"], "active")
             self.assertEqual(result["actions"][0]["action"], "active_preserved_child_unknown")
             self.assertEqual(load_state(data, run_id)["phases"][0]["attempt_history"], [])
+
+    def test_same_host_live_child_changed_process_group_recovers_as_dead_child(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id, _phase = prepared_active_attempt(Path(td), phase_count=1)
+            patch_phase(
+                data,
+                run_id,
+                {
+                    "lease_host": socket.gethostname(),
+                    "child_pid": 12345,
+                    "process_group_id": 999,
+                    "lease_expires_at": EXPIRED_LEASE,
+                },
+            )
+
+            with mock.patch("swarm_do.pipeline.phase_recovery._pid_alive", return_value=True), mock.patch(
+                "swarm_do.pipeline.phase_recovery._process_group_matches",
+                return_value=False,
+            ):
+                result = reconcile_phase_sessions(run_id, data_dir=data, repo_root=repo, now=CRASH_NOW)
+
+            self.assertEqual(result["status"], "retry_waiting")
+            self.assertEqual(result["actions"][0]["active_attempt_action"], "child_dead")
+            self.assertEqual(load_state(data, run_id)["phases"][0]["last_failure_kind"], "child_process_dead_no_artifacts")
 
     def test_expired_same_host_unknown_child_liveness_recovers_by_lease(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -276,6 +325,36 @@ class PhaseCrashResumeMatrixTests(unittest.TestCase):
             self.assertEqual(first["phases"][0]["status"], "complete")
             self.assertEqual(len(first["phases"][0]["attempt_history"]), 1)
             self.assertEqual(len(second["phases"][0]["attempt_history"]), 1)
+
+    def test_phase_archive_preserves_recovery_and_attempt_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id, phase = prepared_active_attempt(Path(td), phase_count=1)
+            write_result(data, run_id, phase, status="complete")
+            reconcile_phase_sessions(run_id, data_dir=data, repo_root=repo, now=CRASH_NOW)
+
+            archived = archive_phase_session_evidence(run_id, data_dir=data, label="p1")
+            archive_dir = Path(archived["archive_dir"])
+
+            self.assertTrue((archive_dir / "phase_sessions.v1.json").is_file())
+            self.assertTrue((archive_dir / "phase_results" / "1" / "attempt-1.result.json").is_file())
+            self.assertTrue((archive_dir / "phase_handoffs" / "1" / "attempt-1.handoff.json").is_file())
+            self.assertTrue((archive_dir / "phase_recovery" / "1" / "attempt-1.recovery.md").is_file())
+            self.assertTrue((archive_dir / "phase_launches" / "1" / "attempt-1" / "evidence.json").is_file())
+
+    def test_phase_attempt_summary_include_archived_explains_old_attempts(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id, phase = prepared_active_attempt(Path(td), phase_count=1)
+            write_result(data, run_id, phase, status="complete")
+            reconcile_phase_sessions(run_id, data_dir=data, repo_root=repo, now=CRASH_NOW)
+            archive_phase_session_evidence(run_id, data_dir=data, label="p1")
+
+            summary = summarize_phase_attempts(run_id, data_dir=data, include_archived=True)
+
+            archived_rows = [row for row in summary["attempts"]["rows"] if row.get("archived")]
+            self.assertEqual(len(archived_rows), 1)
+            self.assertEqual(archived_rows[0]["archive"], ".archived-p1")
+            self.assertTrue(archived_rows[0]["evidence_path"].endswith("evidence.json"))
+            self.assertTrue(archived_rows[0]["recovery_context_path"].endswith("attempt-1.recovery.md"))
 
 
 if __name__ == "__main__":

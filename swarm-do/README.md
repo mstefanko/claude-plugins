@@ -118,6 +118,8 @@ phase-session state:
 bin/swarm phases status <run-id>
 bin/swarm phases init <run-id>
 bin/swarm phases recover <run-id> --json --dry-run
+bin/swarm phases recover <run-id>
+bin/swarm phases status <run-id> --attempts --include-archived
 bin/swarm phases pump <run-id> --launcher manual --max-phases 1
 bin/swarm phases pump <run-id> --launcher claude-print --max-phases all --init
 bin/swarm do --prepared <run-id> --phase-sessions auto
@@ -129,6 +131,12 @@ new child. The foreground pump and `do --prepared ... --phase-sessions auto`
 run the same reconciliation before claiming work, so rerunning them after an
 interruption adopts valid artifacts, preserves abandoned-attempt evidence, and
 does not retry blocked or input-gated phases.
+
+For an interrupted durable run, use `phases status`, then `phases recover
+--dry-run` to inspect the reconciliation, `phases recover` to apply it,
+`phases status --attempts --include-archived` to inspect old attempts, and
+finally `phases pump` or `do --prepared ... --phase-sessions auto` to continue.
+`resume` is read-only and does not mutate phase-session state.
 
 `manual` is the always-available launcher and prints the rendered dispatcher
 prompt plus the follow-up result command. `fake-test` is for deterministic unit
@@ -462,6 +470,7 @@ bin/swarm worktrees ensure-integration --run-id <run-id> [--repo <repo>] [--base
 bin/swarm worktrees add-unit --run-id <run-id> --unit-id <unit-id> [--repo <repo>] [--base-ref <ref>] [--allow-source-worktree] [--json]
 bin/swarm worktrees merge --integration-branch <branch> --unit-branch <branch> [--repo <repo>] [--allow-source-worktree] [--json]
 bin/swarm worktrees adopt-run <run-id> [--apply] [--json]
+bin/swarm worktrees integrate-run <run-id> [--apply] [--json]
 bin/swarm worktrees cleanup-run <run-id> [--apply] [--json]
 ```
 

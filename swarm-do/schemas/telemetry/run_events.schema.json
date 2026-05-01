@@ -47,6 +47,7 @@
         "phase_session_claimed",
         "phase_session_started",
         "phase_session_refreshed",
+        "phase_session_active_preserved",
         "phase_session_completed",
         "phase_session_failed",
         "phase_session_blocked",

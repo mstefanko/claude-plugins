@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
 from .paths import REPO_ROOT
-from .run_state import _atomic_json_write, utc_now
+from .run_state import _atomic_json_write, append_run_event, utc_now, validate_run_event
 
 
 class RunExecutionWorktreeError(RuntimeError):
@@ -114,6 +114,10 @@ def execution_branch_name(run_id: str) -> str:
     return f"swarm/{_safe_ref_segment(run_id)}/execution"
 
 
+def integration_branch_name(run_id: str) -> str:
+    return f"swarm/{_safe_ref_segment(run_id)}/integration"
+
+
 def resolve_run_execution_worktree(
     run_id: str,
     *,
@@ -207,37 +211,22 @@ def materialize_run_execution_worktree(
 def adopt_run_worktree(run_id: str, *, data_dir: Path, apply: bool = False) -> dict[str, Any]:
     manifest_path = Path(data_dir) / "worktrees" / run_id / "manifest.json"
     manifest = _require_manifest(manifest_path)
-    safe_project = Path(str(manifest["safe_project_root"]))
+    adoption_source = _adoption_source(manifest)
+    safe_project = adoption_source["project_root"]
     source_project = Path(str(manifest["source_project_root"]))
     copied_rels = {
         str(item.get("relative_path"))
         for item in manifest.get("copied_artifacts") or []
         if isinstance(item, Mapping) and isinstance(item.get("relative_path"), str)
     }
-    changes = _status_changes(safe_project, project_subdir=str(manifest.get("project_subdir") or ""))
-    operations: list[dict[str, Any]] = []
-    blocked: list[dict[str, str]] = []
-    for change in changes:
-        rel = change["path"]
-        block_reason = _adoption_block_reason(rel, copied_rels=copied_rels)
-        if block_reason is not None:
-            blocked.append({"path": rel, "reason": block_reason})
-            continue
-        safe_path = safe_project / rel
-        destination = source_project / rel
-        action = "delete" if change["status"].strip().startswith("D") or not safe_path.exists() else "copy"
-        operations.append(
-            {
-                "action": action,
-                "path": rel,
-                "source_path": str(safe_path),
-                "destination_path": str(destination),
-            }
-        )
-    for operation in operations:
-        block_reason = _destination_block_reason(manifest, operation)
-        if block_reason is not None:
-            blocked.append({"path": str(operation["path"]), "reason": block_reason})
+    changes = _adoption_changes(manifest, adoption_source=adoption_source)
+    operations, blocked = _copyback_plan(
+        manifest,
+        source_project=safe_project,
+        destination_project=source_project,
+        changes=changes,
+        copied_rels=copied_rels,
+    )
     prepared = _read_prepared_artifact(run_id, data_dir=Path(data_dir))
     scope_check = build_run_worktree_scope_check(
         prepared,
@@ -255,7 +244,9 @@ def adopt_run_worktree(run_id: str, *, data_dir: Path, apply: bool = False) -> d
         "manifest_path": str(manifest_path),
         "source_project_root": str(source_project),
         "safe_project_root": str(safe_project),
+        "adoption_source": adoption_source["kind"],
         "run_execution_branch": manifest.get("branch"),
+        "integration_branch": adoption_source.get("integration_branch"),
         "base_sha": manifest.get("base_sha"),
         "adoption_state": manifest.get("adoption_state"),
         "changed_files": [change["path"] for change in changes],
@@ -303,11 +294,183 @@ def adopt_run_worktree(run_id: str, *, data_dir: Path, apply: bool = False) -> d
     return payload
 
 
+def integrate_run_worktree(run_id: str, *, data_dir: Path, apply: bool = False) -> dict[str, Any]:
+    base = Path(data_dir)
+    manifest_path = base / "worktrees" / run_id / "manifest.json"
+    manifest = _require_manifest(manifest_path)
+    prepared = _read_prepared_artifact(run_id, data_dir=base)
+    source_git = Path(str(manifest["source_git_root"]))
+    source_project = Path(str(manifest["source_project_root"]))
+    execution_project = Path(str(manifest["safe_project_root"]))
+    project_subdir = str(manifest.get("project_subdir") or "")
+    execution_branch = str(manifest["branch"])
+    integration_branch = integration_branch_name(run_id)
+    integration_git = base / "worktrees" / run_id / "integration" / "repo"
+    integration_project = (integration_git / project_subdir).resolve(strict=False) if project_subdir else integration_git
+    integration_manifest_path = base / "worktrees" / run_id / "integration" / "manifest.json"
+    conflict_manifest_path = base / "worktrees" / run_id / "conflict.json"
+    branch_changed = _execution_branch_changes(manifest)
+    dirty_changed = _status_changes(execution_project, project_subdir=project_subdir)
+    changed = _dedupe_changes([*branch_changed, *dirty_changed])
+    copied_rels = {
+        str(item.get("relative_path"))
+        for item in manifest.get("copied_artifacts") or []
+        if isinstance(item, Mapping) and isinstance(item.get("relative_path"), str)
+    }
+    operations, blocked = _copyback_plan(
+        manifest,
+        source_project=integration_project,
+        destination_project=source_project,
+        changes=changed,
+        copied_rels=copied_rels,
+    )
+    scope_check = build_run_worktree_scope_check(
+        prepared,
+        changed_files=changed,
+        blocked_paths=blocked,
+        adoption_operations=operations,
+        source_project_root=source_project,
+        safe_project_root=integration_project,
+    )
+    blocked = _merge_blocked_paths(blocked, scope_check.get("blocked_paths"))
+    validation_commands = _validation_commands(prepared)
+    merge_command = [
+        "git",
+        "-C",
+        str(integration_git),
+        "merge",
+        "--no-ff",
+        execution_branch,
+        "-m",
+        f"Merge run execution {run_id}",
+    ]
+    payload: dict[str, Any] = {
+        "run_id": run_id,
+        "applied": False,
+        "status": "dry_run",
+        "manifest_path": str(manifest_path),
+        "source_git_root": str(source_git),
+        "source_project_root": str(source_project),
+        "source_branch": _current_branch(source_git),
+        "execution_branch": execution_branch,
+        "execution_project_root": str(execution_project),
+        "integration_branch": integration_branch,
+        "integration_git_worktree_root": str(integration_git),
+        "integration_project_root": str(integration_project),
+        "base_sha": manifest.get("base_sha"),
+        "changed_files": [change["path"] for change in changed],
+        "execution_worktree_dirty": [change["path"] for change in dirty_changed],
+        "scope_check": scope_check,
+        "blocked_paths": blocked,
+        "validation_commands": validation_commands,
+        "validation_results": [],
+        "predicted_merge_command": " ".join(merge_command),
+        "copyback_operations": operations,
+        "apply_command": f"bin/swarm worktrees integrate-run {run_id} --apply",
+    }
+    if not apply:
+        return payload
+    if dirty_changed:
+        dirty_blocks = [{"path": change["path"], "reason": "execution_worktree_dirty"} for change in dirty_changed]
+        payload["blocked_paths"] = _merge_blocked_paths(blocked, dirty_blocks)
+        payload["status"] = "blocked"
+        raise RunExecutionWorktreeAdoptionBlocked(
+            "integration requires committed execution-branch changes; dirty paths: "
+            + ", ".join(str(change["path"]) for change in dirty_changed),
+            payload,
+        )
+
+    _ensure_integration_worktree(
+        source_git,
+        integration_git=integration_git,
+        integration_branch=integration_branch,
+        base_sha=str(manifest["base_sha"]),
+    )
+    merge_result = _run_git(
+        integration_git,
+        "merge",
+        "--no-ff",
+        execution_branch,
+        "-m",
+        f"Merge run execution {run_id}",
+        check=False,
+    )
+    conflicted = _conflicted_files(integration_git)
+    if merge_result.returncode != 0 or conflicted:
+        conflict = _write_integration_conflict_manifest(
+            conflict_manifest_path,
+            run_id=run_id,
+            source_git=source_git,
+            integration_git=integration_git,
+            execution_branch=execution_branch,
+            integration_branch=integration_branch,
+            base_sha=str(manifest["base_sha"]),
+            merge_command=merge_command,
+            merge_result=merge_result,
+            conflicted_files=conflicted,
+        )
+        updated = dict(manifest)
+        updated["adoption_state"] = "conflicted"
+        updated["conflict_manifest_path"] = str(conflict_manifest_path)
+        updated["last_used_at"] = utc_now()
+        _write_manifest(manifest_path, updated)
+        _append_worktree_conflict_event(base, run_id=run_id, details=conflict)
+        payload.update(
+            {
+                "applied": True,
+                "status": "conflicted",
+                "adoption_state": "conflicted",
+                "conflict_manifest_path": str(conflict_manifest_path),
+                "conflicted_files": conflicted,
+                "merge_stdout": merge_result.stdout,
+                "merge_stderr": merge_result.stderr,
+            }
+        )
+        return payload
+
+    validation_results = _run_integration_validations(prepared, integration_project)
+    integration_manifest = {
+        "schema_version": 1,
+        "run_id": run_id,
+        "source_git_root": str(source_git),
+        "source_project_root": str(source_project),
+        "execution_branch": execution_branch,
+        "integration_branch": integration_branch,
+        "integration_git_worktree_root": str(integration_git),
+        "integration_project_root": str(integration_project),
+        "base_sha": manifest.get("base_sha"),
+        "head_sha": _git_stdout(integration_git, "rev-parse", "HEAD"),
+        "merge_command": merge_command,
+        "changed_files": [change["path"] for change in changed],
+        "scope_check": scope_check,
+        "blocked_paths": blocked,
+        "validation_results": validation_results,
+        "created_at": utc_now(),
+    }
+    _atomic_json_write(integration_manifest_path, integration_manifest)
+    updated = dict(manifest)
+    updated["integration_manifest_path"] = str(integration_manifest_path)
+    updated["conflict_manifest_path"] = None
+    updated["last_used_at"] = utc_now()
+    _write_manifest(manifest_path, updated)
+    payload.update(
+        {
+            "applied": True,
+            "status": "integrated",
+            "integration_manifest_path": str(integration_manifest_path),
+            "integration_head_sha": integration_manifest["head_sha"],
+            "validation_results": validation_results,
+        }
+    )
+    return payload
+
+
 def cleanup_run_worktree(run_id: str, *, data_dir: Path, apply: bool = False) -> dict[str, Any]:
     manifest_path = Path(data_dir) / "worktrees" / run_id / "manifest.json"
     manifest = _require_manifest(manifest_path)
     adoption_state = str(manifest.get("adoption_state") or "unadopted")
     safe_git = Path(str(manifest["safe_git_worktree_root"]))
+    integration_git = _integration_git_from_manifest(manifest)
     source_git = Path(str(manifest["source_git_root"]))
     eligible = adoption_state in {"adopted", "complete_no_changes"}
     removed: list[str] = []
@@ -316,10 +479,11 @@ def cleanup_run_worktree(run_id: str, *, data_dir: Path, apply: bool = False) ->
             f"run worktree is {adoption_state}; adopt or mark complete before cleanup"
         )
     if apply:
-        result = _run_git(source_git, "worktree", "remove", "--force", str(safe_git), check=False)
-        if result.returncode != 0 and safe_git.exists():
-            shutil.rmtree(safe_git)
-        removed.append(str(safe_git))
+        for worktree_root in _cleanup_worktree_roots(safe_git, integration_git):
+            result = _run_git(source_git, "worktree", "remove", "--force", str(worktree_root), check=False)
+            if result.returncode != 0 and worktree_root.exists():
+                shutil.rmtree(worktree_root)
+            removed.append(str(worktree_root))
         manifest_path.unlink(missing_ok=True)
         try:
             manifest_path.parent.rmdir()
@@ -332,12 +496,257 @@ def cleanup_run_worktree(run_id: str, *, data_dir: Path, apply: bool = False) ->
         "preserved_reason": None if eligible else f"worktree is {adoption_state}",
         "manifest_path": str(manifest_path),
         "safe_git_worktree_root": str(safe_git),
+        "integration_git_worktree_root": str(integration_git) if integration_git is not None else None,
         "source_git_root": str(source_git),
         "adoption_state": adoption_state,
-        "targets": [str(safe_git), str(manifest_path)],
+        "targets": [str(path) for path in _cleanup_worktree_roots(safe_git, integration_git)] + [str(manifest_path)],
         "removed": removed,
         "apply_command": f"bin/swarm worktrees cleanup-run {run_id} --apply",
     }
+
+
+def _adoption_source(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    integration_path = manifest.get("integration_manifest_path")
+    if isinstance(integration_path, str) and integration_path:
+        integration = _read_json_mapping(Path(integration_path))
+        if integration is not None and isinstance(integration.get("integration_project_root"), str):
+            return {
+                "kind": "integration",
+                "project_root": Path(str(integration["integration_project_root"])),
+                "git_root": Path(str(integration.get("integration_git_worktree_root") or integration["integration_project_root"])),
+                "integration_branch": integration.get("integration_branch"),
+                "head_sha": integration.get("head_sha"),
+            }
+    return {
+        "kind": "execution",
+        "project_root": Path(str(manifest["safe_project_root"])),
+        "git_root": Path(str(manifest["safe_git_worktree_root"])),
+        "integration_branch": None,
+        "head_sha": None,
+    }
+
+
+def _integration_git_from_manifest(manifest: Mapping[str, Any]) -> Path | None:
+    integration_path = manifest.get("integration_manifest_path")
+    if not isinstance(integration_path, str) or not integration_path:
+        return None
+    integration = _read_json_mapping(Path(integration_path))
+    if integration is None or not isinstance(integration.get("integration_git_worktree_root"), str):
+        return None
+    return Path(str(integration["integration_git_worktree_root"]))
+
+
+def _cleanup_worktree_roots(safe_git: Path, integration_git: Path | None) -> list[Path]:
+    roots = [safe_git]
+    if integration_git is not None and integration_git != safe_git:
+        roots.append(integration_git)
+    return roots
+
+
+def _adoption_changes(manifest: Mapping[str, Any], *, adoption_source: Mapping[str, Any]) -> list[dict[str, str]]:
+    project_subdir = str(manifest.get("project_subdir") or "")
+    if adoption_source.get("kind") == "integration":
+        head = str(adoption_source.get("head_sha") or "HEAD")
+        return _diff_changes(
+            Path(str(adoption_source["git_root"])),
+            str(manifest["base_sha"]),
+            head,
+            project_subdir=project_subdir,
+        )
+    return _status_changes(Path(str(adoption_source["project_root"])), project_subdir=project_subdir)
+
+
+def _execution_branch_changes(manifest: Mapping[str, Any]) -> list[dict[str, str]]:
+    source_git = Path(str(manifest["source_git_root"]))
+    project_subdir = str(manifest.get("project_subdir") or "")
+    return _diff_changes(
+        source_git,
+        str(manifest["base_sha"]),
+        str(manifest["branch"]),
+        project_subdir=project_subdir,
+    )
+
+
+def _dedupe_changes(changes: Iterable[Mapping[str, str]]) -> list[dict[str, str]]:
+    deduped: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for change in changes:
+        path = str(change.get("path") or "")
+        status = str(change.get("status") or "")
+        if not path:
+            continue
+        key = (status, path)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append({"status": status, "path": path})
+    return deduped
+
+
+def _copyback_plan(
+    manifest: Mapping[str, Any],
+    *,
+    source_project: Path,
+    destination_project: Path,
+    changes: Iterable[Mapping[str, str]],
+    copied_rels: set[str],
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    operations: list[dict[str, Any]] = []
+    blocked: list[dict[str, str]] = []
+    for change in changes:
+        rel = str(change.get("path") or "")
+        if not rel:
+            continue
+        block_reason = _adoption_block_reason(rel, copied_rels=copied_rels)
+        if block_reason is not None:
+            blocked.append({"path": rel, "reason": block_reason})
+            continue
+        source_path = source_project / rel
+        destination = destination_project / rel
+        action = "delete" if str(change.get("status") or "").strip().startswith("D") else "copy"
+        operations.append(
+            {
+                "action": action,
+                "path": rel,
+                "source_path": str(source_path),
+                "destination_path": str(destination),
+            }
+        )
+    for operation in operations:
+        block_reason = _destination_block_reason(manifest, operation)
+        if block_reason is not None:
+            blocked.append({"path": str(operation["path"]), "reason": block_reason})
+    return operations, blocked
+
+
+def _ensure_integration_worktree(
+    source_git: Path,
+    *,
+    integration_git: Path,
+    integration_branch: str,
+    base_sha: str,
+) -> None:
+    if integration_git.exists() and (integration_git / ".git").exists():
+        if _git_status_entries(integration_git, "."):
+            raise RunExecutionWorktreeError(f"integration worktree has uncommitted changes: {integration_git}")
+        return
+    if integration_git.exists() and any(integration_git.iterdir()):
+        raise RunExecutionWorktreeError(f"integration worktree path already exists without a git checkout: {integration_git}")
+    integration_git.parent.mkdir(parents=True, exist_ok=True)
+    if _branch_exists(source_git, integration_branch):
+        _git(source_git, "worktree", "add", str(integration_git), integration_branch)
+    else:
+        _git(source_git, "worktree", "add", "-b", integration_branch, str(integration_git), base_sha)
+
+
+def _write_integration_conflict_manifest(
+    path: Path,
+    *,
+    run_id: str,
+    source_git: Path,
+    integration_git: Path,
+    execution_branch: str,
+    integration_branch: str,
+    base_sha: str,
+    merge_command: list[str],
+    merge_result: subprocess.CompletedProcess[str],
+    conflicted_files: list[str],
+) -> dict[str, Any]:
+    conflict = {
+        "schema_version": 1,
+        "run_id": run_id,
+        "written_at": utc_now(),
+        "source_git_root": str(source_git),
+        "integration_git_worktree_root": str(integration_git),
+        "execution_branch": execution_branch,
+        "integration_branch": integration_branch,
+        "base_sha": base_sha,
+        "execution_head": _rev_parse_or_none(source_git, execution_branch),
+        "integration_head": _rev_parse_or_none(integration_git, "HEAD"),
+        "merge_command": merge_command,
+        "merge_returncode": merge_result.returncode,
+        "merge_stdout": merge_result.stdout,
+        "merge_stderr": merge_result.stderr,
+        "conflicted_files": conflicted_files,
+        "status_porcelain_z": _run_git(integration_git, "status", "--porcelain=v1", "-z", check=False).stdout,
+    }
+    _atomic_json_write(path, conflict)
+    return conflict
+
+
+def _append_worktree_conflict_event(data_dir: Path, *, run_id: str, details: Mapping[str, Any]) -> None:
+    row = {
+        "run_id": run_id,
+        "timestamp": utc_now(),
+        "event_type": "worktree_merge_conflict",
+        "bd_epic_id": None,
+        "phase_id": None,
+        "work_unit_id": None,
+        "child_bead_ids": None,
+        "reason": "merge-conflict",
+        "retry_count": None,
+        "handoff_count": None,
+        "integration_branch_head": None,
+        "details": dict(details),
+        "schema_ok": True,
+    }
+    validate_run_event(row, error_cls=RunExecutionWorktreeError)
+    append_run_event(data_dir, row)
+
+
+def _run_integration_validations(prepared: Mapping[str, Any], integration_project: Path) -> list[dict[str, Any]]:
+    from .post_writer import run_validation_commands
+
+    results: list[dict[str, Any]] = []
+    for unit in _prepared_units(prepared):
+        unit_id = str(unit.get("id") or "")
+        for result in run_validation_commands(unit, repo=integration_project, timeout_seconds=120):
+            row = dict(result)
+            row["work_unit_id"] = unit_id
+            results.append(row)
+    return results
+
+
+def _validation_commands(prepared: Mapping[str, Any]) -> list[str]:
+    commands: list[str] = []
+    seen: set[str] = set()
+    for unit in _prepared_units(prepared):
+        for command in unit.get("validation_commands") or []:
+            if not isinstance(command, str) or not command.strip() or command in seen:
+                continue
+            seen.add(command)
+            commands.append(command)
+    return commands
+
+
+def _prepared_units(prepared: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    units: list[Mapping[str, Any]] = []
+    descriptors = prepared.get("work_unit_artifacts") if isinstance(prepared.get("work_unit_artifacts"), Mapping) else {}
+    for descriptor in descriptors.values():
+        if not isinstance(descriptor, Mapping):
+            continue
+        artifact = descriptor.get("artifact") if isinstance(descriptor.get("artifact"), Mapping) else None
+        if artifact is None:
+            continue
+        for unit in artifact.get("work_units") or []:
+            if isinstance(unit, Mapping):
+                units.append(unit)
+    return units
+
+
+def _current_branch(repo: Path) -> str | None:
+    value = _run_git(repo, "branch", "--show-current", check=False).stdout.strip()
+    return value or None
+
+
+def _conflicted_files(repo: Path) -> list[str]:
+    result = _run_git(repo, "diff", "--name-only", "--diff-filter=U", check=False)
+    return [line for line in result.stdout.splitlines() if line]
+
+
+def _rev_parse_or_none(repo: Path, ref: str) -> str | None:
+    result = _run_git(repo, "rev-parse", ref, check=False)
+    return result.stdout.strip() if result.returncode == 0 else None
 
 
 def _assert_supported_git_checkout(source_project: Path) -> None:
@@ -538,6 +947,46 @@ def _status_changes(repo: Path, *, project_subdir: str = "") -> list[dict[str, s
             if path:
                 changes.append({"status": status, "path": path})
             continue
+        if path:
+            changes.append({"status": status, "path": path})
+    return changes
+
+
+def _diff_changes(repo: Path, base_ref: str, head_ref: str, *, project_subdir: str = "") -> list[dict[str, str]]:
+    pathspec = project_subdir.strip("/") or "."
+    output = _run_git(
+        repo,
+        "diff",
+        "--name-status",
+        "-z",
+        base_ref,
+        head_ref,
+        "--",
+        pathspec,
+        check=True,
+    ).stdout
+    fields = [field for field in output.split("\0") if field]
+    changes: list[dict[str, str]] = []
+    index = 0
+    while index < len(fields):
+        status = fields[index]
+        index += 1
+        if _is_rename_status(status) or _is_copy_status(status):
+            if index + 1 >= len(fields):
+                break
+            original = _project_relative_status_path(fields[index], project_subdir=project_subdir)
+            index += 1
+            path = _project_relative_status_path(fields[index], project_subdir=project_subdir) if index < len(fields) else ""
+            index += 1
+            if original:
+                changes.append({"status": "D", "path": original})
+            if path:
+                changes.append({"status": status, "path": path})
+            continue
+        if index >= len(fields):
+            break
+        path = _project_relative_status_path(fields[index], project_subdir=project_subdir)
+        index += 1
         if path:
             changes.append({"status": status, "path": path})
     return changes
@@ -967,6 +1416,8 @@ __all__ = [
     "build_run_worktree_scope_check",
     "cleanup_run_worktree",
     "execution_branch_name",
+    "integrate_run_worktree",
+    "integration_branch_name",
     "materialize_run_execution_worktree",
     "resolve_run_execution_worktree",
     "validate_run_execution_worktree_manifest",

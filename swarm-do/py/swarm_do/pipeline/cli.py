@@ -2060,6 +2060,14 @@ def cmd_worktrees(args: argparse.Namespace) -> int:
                 data_dir=Path(args.data_dir) if args.data_dir else resolve_data_dir(),
                 apply=bool(args.apply),
             )
+        elif args.worktrees_command == "integrate-run":
+            from .execution_worktree import integrate_run_worktree
+
+            payload = integrate_run_worktree(
+                args.run_id,
+                data_dir=Path(args.data_dir) if args.data_dir else resolve_data_dir(),
+                apply=bool(args.apply),
+            )
         elif args.worktrees_command == "names":
             repo = Path(args.repo)
             payload = {
@@ -2108,6 +2116,8 @@ def cmd_worktrees(args: argparse.Namespace) -> int:
                 print(json.dumps(payload, indent=2, sort_keys=True))
             elif args.worktrees_command == "adopt-run":
                 print(_format_worktree_adopt(payload))
+            elif args.worktrees_command == "integrate-run":
+                print(_format_worktree_integrate(payload))
         print(f"swarm: worktrees {args.worktrees_command}: {exc}", file=sys.stderr)
         return 1
 
@@ -2116,6 +2126,8 @@ def cmd_worktrees(args: argparse.Namespace) -> int:
     else:
         if args.worktrees_command == "adopt-run":
             print(_format_worktree_adopt(payload))
+        elif args.worktrees_command == "integrate-run":
+            print(_format_worktree_integrate(payload))
         elif args.worktrees_command == "cleanup-run":
             print(_format_worktree_cleanup(payload))
         else:
@@ -2166,6 +2178,42 @@ def _format_worktree_adopt(payload: Mapping[str, Any]) -> str:
         for item in blocked:
             if isinstance(item, Mapping):
                 lines.append(f"    - {item.get('path')}: {item.get('reason')}")
+    if not payload.get("applied"):
+        lines.append(f"  apply: {payload.get('apply_command')}")
+    return "\n".join(lines)
+
+
+def _format_worktree_integrate(payload: Mapping[str, Any]) -> str:
+    action = str(payload.get("status") or ("applied" if payload.get("applied") else "dry-run"))
+    lines = [f"worktrees integrate-run: {payload.get('run_id')} {action}"]
+    lines.append(f"  source_branch: {payload.get('source_branch')}")
+    lines.append(f"  execution_branch: {payload.get('execution_branch')}")
+    lines.append(f"  integration_branch: {payload.get('integration_branch')}")
+    lines.append(f"  integration_project_root: {payload.get('integration_project_root')}")
+    lines.append(f"  changed_files: {len(payload.get('changed_files') or [])}")
+    scope_check = payload.get("scope_check") if isinstance(payload.get("scope_check"), Mapping) else {}
+    decisions = scope_check.get("decisions") if isinstance(scope_check.get("decisions"), Mapping) else {}
+    if decisions:
+        lines.append(
+            "  scope_check: "
+            f"allow={decisions.get('allow', 0)} warn={decisions.get('warn', 0)} block={decisions.get('block', 0)}"
+        )
+    if payload.get("validation_commands"):
+        lines.append(f"  validation_commands: {len(payload.get('validation_commands') or [])}")
+        for command in payload.get("validation_commands") or []:
+            lines.append(f"    - {command}")
+    if payload.get("integration_manifest_path"):
+        lines.append(f"  integration_manifest_path: {payload.get('integration_manifest_path')}")
+    if payload.get("conflict_manifest_path"):
+        lines.append(f"  conflict_manifest_path: {payload.get('conflict_manifest_path')}")
+    blocked = payload.get("blocked_paths") or []
+    if blocked:
+        lines.append(f"  blocked_paths: {len(blocked)}")
+        for item in blocked:
+            if isinstance(item, Mapping):
+                lines.append(f"    - {item.get('path')}: {item.get('reason')}")
+    if payload.get("predicted_merge_command"):
+        lines.append(f"  merge: {payload.get('predicted_merge_command')}")
     if not payload.get("applied"):
         lines.append(f"  apply: {payload.get('apply_command')}")
     return "\n".join(lines)
@@ -2579,6 +2627,12 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_worktrees)
     p = worktrees_sub.add_parser("adopt-run")
+    p.add_argument("run_id")
+    p.add_argument("--data-dir")
+    p.add_argument("--apply", action="store_true")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_worktrees)
+    p = worktrees_sub.add_parser("integrate-run")
     p.add_argument("run_id")
     p.add_argument("--data-dir")
     p.add_argument("--apply", action="store_true")
