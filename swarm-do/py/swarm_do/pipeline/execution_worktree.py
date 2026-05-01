@@ -16,6 +16,14 @@ from typing import Any, Callable, Iterable, Mapping
 
 from .paths import REPO_ROOT
 from .run_state import _atomic_json_write, append_run_event, utc_now, validate_run_event
+from .unit_sessions import (
+    find_unit_session,
+    load_unit_sessions,
+    replace_unit_session,
+    unit_session_template,
+    unit_sessions_path,
+    write_unit_sessions,
+)
 
 
 class RunExecutionWorktreeError(RuntimeError):
@@ -116,6 +124,22 @@ def execution_branch_name(run_id: str) -> str:
 
 def integration_branch_name(run_id: str) -> str:
     return f"swarm/{_safe_ref_segment(run_id)}/integration"
+
+
+def unit_execution_branch_name(run_id: str, phase_id: str, unit_id: str) -> str:
+    return f"swarm/{_safe_ref_segment(run_id)}/{_safe_ref_segment(phase_id)}/{_safe_ref_segment(unit_id)}"
+
+
+def unit_execution_worktree_root(data_dir: Path, run_id: str, phase_id: str, unit_id: str) -> Path:
+    return (
+        Path(data_dir)
+        / "worktrees"
+        / run_id
+        / "units"
+        / _safe_ref_segment(phase_id)
+        / _safe_ref_segment(unit_id)
+        / "repo"
+    )
 
 
 def resolve_run_execution_worktree(
@@ -465,6 +489,292 @@ def integrate_run_worktree(run_id: str, *, data_dir: Path, apply: bool = False) 
     return payload
 
 
+def initialize_unit_sessions(run_id: str, *, data_dir: Path) -> dict[str, Any]:
+    base = Path(data_dir)
+    manifest_path = base / "worktrees" / run_id / "manifest.json"
+    manifest = _require_manifest(manifest_path)
+    prepared = _read_prepared_artifact(run_id, data_dir=base)
+    return _ensure_unit_sessions(run_id, data_dir=base, manifest=manifest, prepared=prepared)
+
+
+def materialize_unit_execution_worktree(
+    run_id: str,
+    phase_id: str,
+    unit_id: str,
+    *,
+    data_dir: Path,
+    base: str = "execution",
+) -> dict[str, Any]:
+    data = Path(data_dir)
+    manifest_path = data / "worktrees" / run_id / "manifest.json"
+    manifest = _require_manifest(manifest_path)
+    prepared = _read_prepared_artifact(run_id, data_dir=data)
+    source_git = Path(str(manifest["source_git_root"]))
+    source_project = Path(str(manifest["source_project_root"]))
+    project_subdir = str(manifest.get("project_subdir") or "")
+    base_ref = _unit_worktree_base_ref(manifest, base=base)
+    base_sha = _git_stdout(source_git, "rev-parse", base_ref)
+    branch = unit_execution_branch_name(run_id, phase_id, unit_id)
+    unit_git = unit_execution_worktree_root(data, run_id, phase_id, unit_id).resolve(strict=False)
+    unit_project = (unit_git / project_subdir).resolve(strict=False) if project_subdir else unit_git
+
+    state = _ensure_unit_sessions(
+        run_id,
+        data_dir=data,
+        manifest=manifest,
+        prepared=prepared,
+        base_ref=base_ref,
+        base_sha=base_sha,
+    )
+    find_unit_session(state, phase_id, unit_id)
+    _ensure_unit_worktree(source_git, unit_git=unit_git, branch=branch, base_ref=base_ref)
+    copy_specs = _artifact_copy_specs(
+        run_id,
+        data_dir=data,
+        source_project_root=source_project,
+        prepared_plan=prepared,
+    )
+    resolved = ResolvedExecutionWorktree(
+        run_id=run_id,
+        source_git_root=source_git,
+        source_project_root=source_project,
+        safe_git_root=unit_git,
+        safe_project_root=unit_project,
+        project_subdir=project_subdir,
+        branch=branch,
+        base_sha=base_sha,
+        base_ref=base_ref,
+        manifest_path=unit_git.parent / "manifest.json",
+        copy_specs=copy_specs,
+    )
+    copied = _copy_required_artifacts(resolved)
+    state = load_unit_sessions(run_id, data_dir=data)
+    unit = find_unit_session(state, phase_id, unit_id)
+    unit.update(
+        {
+            "branch": branch,
+            "worktree_root": str(unit_git),
+            "project_root": str(unit_project),
+            "base_sha": base_sha,
+            "base_ref": base_ref,
+            "updated_at": utc_now(),
+        }
+    )
+    state = write_unit_sessions(
+        replace_unit_session(state, phase_id, unit_id, unit),
+        data_dir=data,
+    )
+    return {
+        "run_id": run_id,
+        "phase_id": phase_id,
+        "unit_id": unit_id,
+        "branch": branch,
+        "worktree_root": str(unit_git),
+        "project_root": str(unit_project),
+        "base_ref": base_ref,
+        "base_sha": base_sha,
+        "copied_artifacts": [artifact.to_dict() for artifact in copied],
+        "unit_sessions_path": str(unit_sessions_path(run_id, data_dir=data)),
+        "unit_sessions_unit_count": len(state.get("units") or []),
+    }
+
+
+def record_unit_post_writer_report(
+    run_id: str,
+    phase_id: str,
+    unit_id: str,
+    *,
+    data_dir: Path,
+    report_path: Path,
+) -> dict[str, Any]:
+    data = Path(data_dir)
+    state = load_unit_sessions(run_id, data_dir=data)
+    unit = find_unit_session(state, phase_id, unit_id)
+    report = _read_json_mapping(Path(report_path)) or {}
+    gate = report.get("gate") if isinstance(report.get("gate"), Mapping) else {}
+    gate_status = str(gate.get("status") or "unknown")
+    writer_status = "approved" if gate_status == "passed" else "blocked"
+    merge_state = "ready" if writer_status == "approved" else "blocked"
+    attempt = max(1, int(unit.get("attempt") or 0))
+    history = [dict(item) for item in unit.get("attempt_history") or [] if isinstance(item, Mapping)]
+    history_row = {
+        "attempt": attempt,
+        "post_writer_report_path": str(Path(report_path)),
+        "writer_status": writer_status,
+        "gate_status": gate_status,
+        "changed_files": report.get("changed_files") if isinstance(report.get("changed_files"), list) else [],
+        "recorded_at": utc_now(),
+    }
+    if not history or history[-1].get("post_writer_report_path") != history_row["post_writer_report_path"]:
+        history.append(history_row)
+    unit.update(
+        {
+            "attempt": attempt,
+            "writer_status": writer_status,
+            "post_writer_report_path": str(Path(report_path)),
+            "merge_state": merge_state,
+            "attempt_history": history,
+            "updated_at": utc_now(),
+            "completed_at": utc_now(),
+        }
+    )
+    state = write_unit_sessions(replace_unit_session(state, phase_id, unit_id, unit), data_dir=data)
+    return find_unit_session(state, phase_id, unit_id)
+
+
+def merge_unit_execution_worktree(
+    run_id: str,
+    phase_id: str,
+    unit_id: str,
+    *,
+    data_dir: Path,
+    apply: bool = False,
+) -> dict[str, Any]:
+    data = Path(data_dir)
+    manifest_path = data / "worktrees" / run_id / "manifest.json"
+    manifest = _require_manifest(manifest_path)
+    source_git = Path(str(manifest["source_git_root"]))
+    project_subdir = str(manifest.get("project_subdir") or "")
+    integration_branch = integration_branch_name(run_id)
+    integration_git = data / "worktrees" / run_id / "integration" / "repo"
+    integration_project = (integration_git / project_subdir).resolve(strict=False) if project_subdir else integration_git
+    conflict_manifest_path = (
+        data
+        / "worktrees"
+        / run_id
+        / "units"
+        / _safe_ref_segment(phase_id)
+        / _safe_ref_segment(unit_id)
+        / "conflict.json"
+    )
+    state = load_unit_sessions(run_id, data_dir=data)
+    unit = find_unit_session(state, phase_id, unit_id)
+    unit_branch = str(unit["branch"])
+    unit_git = Path(str(unit["worktree_root"]))
+    merge_command = [
+        "git",
+        "-C",
+        str(integration_git),
+        "merge",
+        "--no-ff",
+        unit_branch,
+        "-m",
+        f"Merge work unit {unit_id}",
+    ]
+    payload: dict[str, Any] = {
+        "run_id": run_id,
+        "phase_id": phase_id,
+        "unit_id": unit_id,
+        "applied": False,
+        "status": "dry_run",
+        "unit_branch": unit_branch,
+        "unit_worktree_root": str(unit_git),
+        "integration_branch": integration_branch,
+        "integration_git_worktree_root": str(integration_git),
+        "integration_project_root": str(integration_project),
+        "predicted_merge_command": " ".join(merge_command),
+        "unit_sessions_path": str(unit_sessions_path(run_id, data_dir=data)),
+    }
+    if not apply:
+        return payload
+    if unit.get("writer_status") != "approved":
+        unit["merge_state"] = "blocked"
+        unit["updated_at"] = utc_now()
+        write_unit_sessions(replace_unit_session(state, phase_id, unit_id, unit), data_dir=data)
+        payload["status"] = "blocked"
+        raise RunExecutionWorktreeAdoptionBlocked(
+            f"unit {unit_id} has not passed the post-writer gate",
+            payload,
+        )
+    if _git_status_entries(unit_git, "."):
+        payload["status"] = "blocked"
+        raise RunExecutionWorktreeAdoptionBlocked(
+            f"unit worktree has uncommitted changes: {unit_git}",
+            payload,
+        )
+
+    _ensure_integration_worktree(
+        source_git,
+        integration_git=integration_git,
+        integration_branch=integration_branch,
+        base_sha=str(manifest["base_sha"]),
+    )
+    merge_result = _run_git(
+        integration_git,
+        "merge",
+        "--no-ff",
+        unit_branch,
+        "-m",
+        f"Merge work unit {unit_id}",
+        check=False,
+    )
+    conflicted = _conflicted_files(integration_git)
+    if merge_result.returncode != 0 or conflicted:
+        conflict = _write_unit_conflict_manifest(
+            conflict_manifest_path,
+            run_id=run_id,
+            phase_id=phase_id,
+            unit_id=unit_id,
+            source_git=source_git,
+            integration_git=integration_git,
+            unit_branch=unit_branch,
+            integration_branch=integration_branch,
+            base_sha=str(manifest["base_sha"]),
+            merge_command=merge_command,
+            merge_result=merge_result,
+            conflicted_files=conflicted,
+        )
+        unit.update(
+            {
+                "merge_state": "conflicted",
+                "merge_target_branch": integration_branch,
+                "conflict_manifest_path": str(conflict_manifest_path),
+                "cleanup_state": "preserved",
+                "updated_at": utc_now(),
+            }
+        )
+        write_unit_sessions(replace_unit_session(state, phase_id, unit_id, unit), data_dir=data)
+        _append_unit_worktree_conflict_event(
+            data,
+            run_id=run_id,
+            phase_id=phase_id,
+            unit_id=unit_id,
+            details=conflict,
+        )
+        payload.update(
+            {
+                "applied": True,
+                "status": "conflicted",
+                "conflict_manifest_path": str(conflict_manifest_path),
+                "conflicted_files": conflicted,
+                "merge_stdout": merge_result.stdout,
+                "merge_stderr": merge_result.stderr,
+            }
+        )
+        return payload
+
+    unit.update(
+        {
+            "merge_state": "merged",
+            "merge_target_branch": integration_branch,
+            "conflict_manifest_path": None,
+            "cleanup_state": "cleanup_eligible",
+            "updated_at": utc_now(),
+            "completed_at": utc_now(),
+        }
+    )
+    state = write_unit_sessions(replace_unit_session(state, phase_id, unit_id, unit), data_dir=data)
+    payload.update(
+        {
+            "applied": True,
+            "status": "merged",
+            "integration_head_sha": _git_stdout(integration_git, "rev-parse", "HEAD"),
+            "unit_session": find_unit_session(state, phase_id, unit_id),
+        }
+    )
+    return payload
+
+
 def cleanup_run_worktree(run_id: str, *, data_dir: Path, apply: bool = False) -> dict[str, Any]:
     manifest_path = Path(data_dir) / "worktrees" / run_id / "manifest.json"
     manifest = _require_manifest(manifest_path)
@@ -503,6 +813,83 @@ def cleanup_run_worktree(run_id: str, *, data_dir: Path, apply: bool = False) ->
         "removed": removed,
         "apply_command": f"bin/swarm worktrees cleanup-run {run_id} --apply",
     }
+
+
+def _unit_worktree_base_ref(manifest: Mapping[str, Any], *, base: str) -> str:
+    if base == "execution":
+        return str(manifest["branch"])
+    if base == "integration":
+        integration_path = manifest.get("integration_manifest_path")
+        if not isinstance(integration_path, str) or not integration_path:
+            raise RunExecutionWorktreeError("unit worktree base=integration requires an integration manifest")
+        integration = _read_json_mapping(Path(integration_path))
+        if integration is None or not isinstance(integration.get("integration_branch"), str):
+            raise RunExecutionWorktreeError(f"integration manifest is missing integration_branch: {integration_path}")
+        return str(integration["integration_branch"])
+    raise RunExecutionWorktreeError(f"unsupported unit worktree base: {base}")
+
+
+def _ensure_unit_worktree(source_git: Path, *, unit_git: Path, branch: str, base_ref: str) -> None:
+    if unit_git.exists() and (unit_git / ".git").exists():
+        if _git_stdout(unit_git, "branch", "--show-current") != branch:
+            raise RunExecutionWorktreeError(f"unit worktree branch mismatch: expected {branch} at {unit_git}")
+        return
+    if unit_git.exists() and any(unit_git.iterdir()):
+        raise RunExecutionWorktreeError(f"unit worktree path already exists without a git checkout: {unit_git}")
+    unit_git.parent.mkdir(parents=True, exist_ok=True)
+    if _branch_exists(source_git, branch):
+        _git(source_git, "worktree", "add", str(unit_git), branch)
+    else:
+        _git(source_git, "worktree", "add", "-b", branch, str(unit_git), base_ref)
+
+
+def _ensure_unit_sessions(
+    run_id: str,
+    *,
+    data_dir: Path,
+    manifest: Mapping[str, Any],
+    prepared: Mapping[str, Any],
+    base_ref: str | None = None,
+    base_sha: str | None = None,
+) -> dict[str, Any]:
+    if unit_sessions_path(run_id, data_dir=data_dir).is_file():
+        return load_unit_sessions(run_id, data_dir=data_dir)
+    now = utc_now()
+    source_git = Path(str(manifest["source_git_root"]))
+    project_subdir = str(manifest.get("project_subdir") or "")
+    resolved_base_ref = base_ref or str(manifest["branch"])
+    resolved_base_sha = base_sha or _git_stdout(source_git, "rev-parse", resolved_base_ref)
+    units: list[dict[str, Any]] = []
+    for phase_id, unit in _prepared_units_by_phase(prepared):
+        unit_id = str(unit.get("id") or "")
+        if not unit_id:
+            continue
+        branch = unit_execution_branch_name(run_id, phase_id, unit_id)
+        worktree_root = unit_execution_worktree_root(data_dir, run_id, phase_id, unit_id).resolve(strict=False)
+        project_root = (worktree_root / project_subdir).resolve(strict=False) if project_subdir else worktree_root
+        units.append(
+            unit_session_template(
+                phase_id=phase_id,
+                unit_id=unit_id,
+                branch=branch,
+                worktree_root=worktree_root,
+                project_root=project_root,
+                base_sha=resolved_base_sha,
+                base_ref=resolved_base_ref,
+                now=now,
+            )
+        )
+    state = {
+        "schema_version": 1,
+        "run_id": run_id,
+        "prepared_artifact_path": str(Path(data_dir) / "runs" / run_id / "prepared_plan.v1.json"),
+        "source_run_worktree_manifest_path": str(Path(data_dir) / "worktrees" / run_id / "manifest.json"),
+        "created_at": now,
+        "updated_at": now,
+        "mode": "unit-worktrees",
+        "units": units,
+    }
+    return write_unit_sessions(state, data_dir=data_dir)
 
 
 def _adoption_source(manifest: Mapping[str, Any]) -> dict[str, Any]:
@@ -674,6 +1061,46 @@ def _write_integration_conflict_manifest(
     return conflict
 
 
+def _write_unit_conflict_manifest(
+    path: Path,
+    *,
+    run_id: str,
+    phase_id: str,
+    unit_id: str,
+    source_git: Path,
+    integration_git: Path,
+    unit_branch: str,
+    integration_branch: str,
+    base_sha: str,
+    merge_command: list[str],
+    merge_result: subprocess.CompletedProcess[str],
+    conflicted_files: list[str],
+) -> dict[str, Any]:
+    conflict = {
+        "schema_version": 1,
+        "run_id": run_id,
+        "phase_id": phase_id,
+        "unit_id": unit_id,
+        "written_at": utc_now(),
+        "source_git_root": str(source_git),
+        "integration_git_worktree_root": str(integration_git),
+        "unit_branch": unit_branch,
+        "integration_branch": integration_branch,
+        "base_sha": base_sha,
+        "unit_head": _rev_parse_or_none(source_git, unit_branch),
+        "integration_head": _rev_parse_or_none(integration_git, "HEAD"),
+        "merge_command": merge_command,
+        "merge_returncode": merge_result.returncode,
+        "merge_stdout": merge_result.stdout,
+        "merge_stderr": merge_result.stderr,
+        "conflicted_files": conflicted_files,
+        "status_porcelain_z": _run_git(integration_git, "status", "--porcelain=v1", "-z", check=False).stdout,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_json_write(path, conflict)
+    return conflict
+
+
 def _append_worktree_conflict_event(data_dir: Path, *, run_id: str, details: Mapping[str, Any]) -> None:
     row = {
         "run_id": run_id,
@@ -682,6 +1109,33 @@ def _append_worktree_conflict_event(data_dir: Path, *, run_id: str, details: Map
         "bd_epic_id": None,
         "phase_id": None,
         "work_unit_id": None,
+        "child_bead_ids": None,
+        "reason": "merge-conflict",
+        "retry_count": None,
+        "handoff_count": None,
+        "integration_branch_head": None,
+        "details": dict(details),
+        "schema_ok": True,
+    }
+    validate_run_event(row, error_cls=RunExecutionWorktreeError)
+    append_run_event(data_dir, row)
+
+
+def _append_unit_worktree_conflict_event(
+    data_dir: Path,
+    *,
+    run_id: str,
+    phase_id: str,
+    unit_id: str,
+    details: Mapping[str, Any],
+) -> None:
+    row = {
+        "run_id": run_id,
+        "timestamp": utc_now(),
+        "event_type": "worktree_merge_conflict",
+        "bd_epic_id": None,
+        "phase_id": phase_id,
+        "work_unit_id": unit_id,
         "child_bead_ids": None,
         "reason": "merge-conflict",
         "retry_count": None,
@@ -731,6 +1185,21 @@ def _prepared_units(prepared: Mapping[str, Any]) -> list[Mapping[str, Any]]:
         for unit in artifact.get("work_units") or []:
             if isinstance(unit, Mapping):
                 units.append(unit)
+    return units
+
+
+def _prepared_units_by_phase(prepared: Mapping[str, Any]) -> list[tuple[str, Mapping[str, Any]]]:
+    units: list[tuple[str, Mapping[str, Any]]] = []
+    descriptors = prepared.get("work_unit_artifacts") if isinstance(prepared.get("work_unit_artifacts"), Mapping) else {}
+    for phase_id, descriptor in descriptors.items():
+        if not isinstance(descriptor, Mapping):
+            continue
+        artifact = descriptor.get("artifact") if isinstance(descriptor.get("artifact"), Mapping) else None
+        if artifact is None:
+            continue
+        for unit in artifact.get("work_units") or []:
+            if isinstance(unit, Mapping):
+                units.append((str(phase_id), unit))
     return units
 
 
@@ -1416,9 +1885,15 @@ __all__ = [
     "build_run_worktree_scope_check",
     "cleanup_run_worktree",
     "execution_branch_name",
+    "initialize_unit_sessions",
     "integrate_run_worktree",
     "integration_branch_name",
+    "materialize_unit_execution_worktree",
+    "merge_unit_execution_worktree",
+    "record_unit_post_writer_report",
     "materialize_run_execution_worktree",
     "resolve_run_execution_worktree",
+    "unit_execution_branch_name",
+    "unit_execution_worktree_root",
     "validate_run_execution_worktree_manifest",
 ]

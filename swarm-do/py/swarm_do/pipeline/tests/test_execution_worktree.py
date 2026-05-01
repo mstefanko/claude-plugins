@@ -13,13 +13,20 @@ from swarm_do.pipeline.execution_worktree import (
     adopt_run_worktree,
     cleanup_run_worktree,
     execution_branch_name,
+    initialize_unit_sessions,
     integrate_run_worktree,
     integration_branch_name,
     materialize_run_execution_worktree,
+    materialize_unit_execution_worktree,
+    merge_unit_execution_worktree,
+    record_unit_post_writer_report,
     resolve_run_execution_worktree,
+    unit_execution_branch_name,
+    unit_execution_worktree_root,
     validate_run_execution_worktree_manifest,
 )
 from swarm_do.pipeline.prepare import accept_prepared, prepare_plan_run
+from swarm_do.pipeline.unit_sessions import load_unit_sessions
 
 
 RUN_ID = "01ARZ3NDEKTSV4RRFFQ69G5FAV"
@@ -652,6 +659,181 @@ class ExecutionWorktreeTests(unittest.TestCase):
                 cleanup_run_worktree(RUN_ID, data_dir=data, apply=True)
             self.assertTrue(worktree.safe_git_root.exists())
 
+    def test_unit_sessions_initialize_from_prepared_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _git_root, project, data, prepared = _prepared_monorepo(root)
+            worktree = materialize_run_execution_worktree(
+                RUN_ID,
+                source_project_root=project,
+                data_dir=data,
+                prepared_plan=prepared,
+                sensitive_prefixes=[str(root / "home" / ".claude")],
+            )
+            phase_id, unit_id = _first_unit(prepared)
+
+            state = initialize_unit_sessions(RUN_ID, data_dir=data)
+
+            self.assertEqual(state["run_id"], RUN_ID)
+            self.assertEqual(len(state["units"]), 1)
+            unit = state["units"][0]
+            self.assertEqual(unit["phase_id"], phase_id)
+            self.assertEqual(unit["unit_id"], unit_id)
+            self.assertEqual(unit["branch"], unit_execution_branch_name(RUN_ID, phase_id, unit_id))
+            self.assertEqual(unit["worktree_root"], str(unit_execution_worktree_root(data, RUN_ID, phase_id, unit_id).resolve(strict=False)))
+            self.assertNotIn(".swarm-do/worktrees", unit["worktree_root"])
+            self.assertIn("/home/.claude/", worktree.source_git_root.as_posix())
+            self.assertEqual(load_unit_sessions(RUN_ID, data_dir=data)["units"][0]["writer_status"], "pending")
+
+    def test_materialize_unit_worktree_uses_data_dir_root_and_copies_safe_context(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _git_root, project, data, prepared = _prepared_monorepo(root)
+            materialize_run_execution_worktree(
+                RUN_ID,
+                source_project_root=project,
+                data_dir=data,
+                prepared_plan=prepared,
+                sensitive_prefixes=[str(root / "home" / ".claude")],
+            )
+            phase_id, unit_id = _first_unit(prepared)
+
+            payload = materialize_unit_execution_worktree(RUN_ID, phase_id, unit_id, data_dir=data)
+
+            worktree_root = Path(payload["worktree_root"])
+            project_root = Path(payload["project_root"])
+            self.assertTrue(worktree_root.is_dir())
+            self.assertEqual(worktree_root, unit_execution_worktree_root(data, RUN_ID, phase_id, unit_id).resolve(strict=False))
+            self.assertNotIn(".swarm-do/worktrees", str(worktree_root))
+            copied_prepared = json.loads(
+                (project_root / "data" / "runs" / RUN_ID / "prepared_plan.v1.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(copied_prepared["repo_root"], str(project_root))
+            state_unit = load_unit_sessions(RUN_ID, data_dir=data)["units"][0]
+            self.assertEqual(state_unit["project_root"], str(project_root))
+
+    def test_materialize_unit_worktree_can_branch_from_integration_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _git_root, project, data, prepared = _prepared_monorepo(root)
+            _clear_validation_commands(data, RUN_ID)
+            worktree = materialize_run_execution_worktree(
+                RUN_ID,
+                source_project_root=project,
+                data_dir=data,
+                prepared_plan=prepared,
+                sensitive_prefixes=[str(root / "home" / ".claude")],
+            )
+            (worktree.safe_project_root / "docs").mkdir()
+            (worktree.safe_project_root / "docs" / "integrated-base.md").write_text("base\n", encoding="utf-8")
+            _git(worktree.safe_project_root, "add", "docs/integrated-base.md")
+            _git(worktree.safe_project_root, "commit", "-q", "-m", "execution base")
+            integrated = integrate_run_worktree(RUN_ID, data_dir=data, apply=True)
+            phase_id, unit_id = _first_unit(prepared)
+
+            payload = materialize_unit_execution_worktree(RUN_ID, phase_id, unit_id, data_dir=data, base="integration")
+
+            self.assertEqual(payload["base_ref"], integration_branch_name(RUN_ID))
+            self.assertEqual(payload["base_sha"], integrated["integration_head_sha"])
+            self.assertEqual((Path(payload["project_root"]) / "docs" / "integrated-base.md").read_text(encoding="utf-8"), "base\n")
+
+    def test_unit_merge_requires_post_writer_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _git_root, project, data, prepared = _prepared_monorepo(root)
+            materialize_run_execution_worktree(
+                RUN_ID,
+                source_project_root=project,
+                data_dir=data,
+                prepared_plan=prepared,
+                sensitive_prefixes=[str(root / "home" / ".claude")],
+            )
+            phase_id, unit_id = _first_unit(prepared)
+            materialize_unit_execution_worktree(RUN_ID, phase_id, unit_id, data_dir=data)
+
+            with self.assertRaisesRegex(RunExecutionWorktreeAdoptionBlocked, "post-writer gate"):
+                merge_unit_execution_worktree(RUN_ID, phase_id, unit_id, data_dir=data, apply=True)
+
+            state_unit = load_unit_sessions(RUN_ID, data_dir=data)["units"][0]
+            self.assertEqual(state_unit["merge_state"], "blocked")
+
+    def test_unit_post_writer_report_allows_merge_into_integration_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _git_root, project, data, prepared = _prepared_monorepo(root)
+            materialize_run_execution_worktree(
+                RUN_ID,
+                source_project_root=project,
+                data_dir=data,
+                prepared_plan=prepared,
+                sensitive_prefixes=[str(root / "home" / ".claude")],
+            )
+            phase_id, unit_id = _first_unit(prepared)
+            unit = materialize_unit_execution_worktree(RUN_ID, phase_id, unit_id, data_dir=data)
+            unit_project = Path(unit["project_root"])
+            (unit_project / "docs").mkdir()
+            (unit_project / "docs" / "unit.md").write_text("unit\n", encoding="utf-8")
+            _git(unit_project, "add", "docs/unit.md")
+            _git(unit_project, "commit", "-q", "-m", "unit change")
+            report_path = _write_unit_report(data, RUN_ID, unit_id, gate_status="passed", changed_files=["docs/unit.md"])
+
+            recorded = record_unit_post_writer_report(
+                RUN_ID,
+                phase_id,
+                unit_id,
+                data_dir=data,
+                report_path=report_path,
+            )
+            merged = merge_unit_execution_worktree(RUN_ID, phase_id, unit_id, data_dir=data, apply=True)
+
+            self.assertEqual(recorded["writer_status"], "approved")
+            self.assertEqual(merged["status"], "merged")
+            integration_project = Path(merged["integration_project_root"])
+            self.assertEqual((integration_project / "docs" / "unit.md").read_text(encoding="utf-8"), "unit\n")
+            self.assertFalse((project / "docs" / "unit.md").exists())
+            state_unit = load_unit_sessions(RUN_ID, data_dir=data)["units"][0]
+            self.assertEqual(state_unit["merge_state"], "merged")
+            self.assertEqual(state_unit["cleanup_state"], "cleanup_eligible")
+
+    def test_unit_merge_conflict_writes_unit_conflict_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            git_root, project, data, prepared = _prepared_monorepo(root)
+            materialize_run_execution_worktree(
+                RUN_ID,
+                source_project_root=project,
+                data_dir=data,
+                prepared_plan=prepared,
+                sensitive_prefixes=[str(root / "home" / ".claude")],
+            )
+            phase_id, unit_id = _first_unit(prepared)
+            unit = materialize_unit_execution_worktree(RUN_ID, phase_id, unit_id, data_dir=data)
+            unit_project = Path(unit["project_root"])
+            (unit_project / "plan.md").write_text("unit edit\n", encoding="utf-8")
+            _git(unit_project, "add", "plan.md")
+            _git(unit_project, "commit", "-q", "-m", "unit edits plan")
+            seed = root / "seed-unit-integration"
+            _git(git_root, "branch", integration_branch_name(RUN_ID), prepared["git_base_sha"])
+            _git(git_root, "worktree", "add", str(seed), integration_branch_name(RUN_ID))
+            (seed / "swarm-do" / "plan.md").write_text("integration edit\n", encoding="utf-8")
+            _git(seed, "add", "swarm-do/plan.md")
+            _git(seed, "commit", "-q", "-m", "integration edits plan")
+            _git(git_root, "worktree", "remove", str(seed))
+            report_path = _write_unit_report(data, RUN_ID, unit_id, gate_status="passed", changed_files=["plan.md"])
+            record_unit_post_writer_report(RUN_ID, phase_id, unit_id, data_dir=data, report_path=report_path)
+
+            result = merge_unit_execution_worktree(RUN_ID, phase_id, unit_id, data_dir=data, apply=True)
+
+            self.assertEqual(result["status"], "conflicted")
+            conflict_path = Path(result["conflict_manifest_path"])
+            self.assertTrue(conflict_path.is_file())
+            conflict = json.loads(conflict_path.read_text(encoding="utf-8"))
+            self.assertEqual(conflict["unit_id"], unit_id)
+            self.assertIn("swarm-do/plan.md", conflict["conflicted_files"])
+            state_unit = load_unit_sessions(RUN_ID, data_dir=data)["units"][0]
+            self.assertEqual(state_unit["merge_state"], "conflicted")
+            self.assertEqual(state_unit["conflict_manifest_path"], str(conflict_path))
+
 
 def _prepared_monorepo(root: Path, *, run_id: str = RUN_ID, ignore_run_artifacts: bool = True) -> tuple[Path, Path, Path, dict]:
     git_root = root / "home" / ".claude" / "plugins" / "mstefanko-plugins"
@@ -745,6 +927,32 @@ def _clear_validation_commands(data: Path, run_id: str) -> None:
             if isinstance(unit, dict):
                 unit["validation_commands"] = []
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _first_unit(prepared: dict) -> tuple[str, str]:
+    phase_id = next(iter(prepared["work_unit_artifacts"]))
+    artifact = prepared["work_unit_artifacts"][phase_id]["artifact"]
+    return str(phase_id), str(artifact["work_units"][0]["id"])
+
+
+def _write_unit_report(data: Path, run_id: str, unit_id: str, *, gate_status: str, changed_files: list[str]) -> Path:
+    path = data / "runs" / run_id / "unit_reports" / f"{unit_id}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "post_writer_report.v1",
+                "work_unit_id": unit_id,
+                "changed_files": changed_files,
+                "gate": {"status": gate_status, "failure_reasons": [] if gate_status == "passed" else ["fixture"]},
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return path
 
 
 def _init_seed_repo(repo: Path) -> None:

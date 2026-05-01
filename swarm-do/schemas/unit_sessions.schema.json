@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/07/schema#",
+  "$id": "https://mstefanko-plugins/swarm-do/unit_sessions.schema.json#v1",
+  "title": "swarm-do durable unit-session state",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "prepared_artifact_path",
+    "source_run_worktree_manifest_path",
+    "created_at",
+    "updated_at",
+    "mode",
+    "units"
+  ],
+  "properties": {
+    "schema_version": { "type": "integer", "enum": [1] },
+    "run_id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "prepared_artifact_path": { "type": "string", "minLength": 1 },
+    "source_run_worktree_manifest_path": { "type": "string", "minLength": 1 },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" },
+    "mode": { "type": "string", "enum": ["unit-worktrees"] },
+    "units": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "phase_id",
+          "unit_id",
+          "branch",
+          "worktree_root",
+          "project_root",
+          "base_sha",
+          "base_ref",
+          "lease_owner",
+          "lease_host",
+          "lease_pid",
+          "lease_command",
+          "lease_expires_at",
+          "attempt",
+          "writer_status",
+          "post_writer_report_path",
+          "scope_check_path",
+          "merge_state",
+          "merge_target_branch",
+          "conflict_manifest_path",
+          "attempt_history",
+          "cleanup_state",
+          "created_at",
+          "updated_at",
+          "completed_at"
+        ],
+        "properties": {
+          "phase_id": { "type": "string", "minLength": 1 },
+          "unit_id": { "type": "string", "minLength": 1 },
+          "branch": { "type": "string", "minLength": 1 },
+          "worktree_root": { "type": "string", "minLength": 1 },
+          "project_root": { "type": "string", "minLength": 1 },
+          "base_sha": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$"
+          },
+          "base_ref": { "type": "string", "minLength": 1 },
+          "lease_owner": { "type": ["string", "null"] },
+          "lease_host": { "type": ["string", "null"] },
+          "lease_pid": { "type": ["integer", "null"], "minimum": 0 },
+          "lease_command": { "type": ["string", "null"] },
+          "lease_expires_at": { "type": ["string", "null"], "format": "date-time" },
+          "attempt": { "type": "integer", "minimum": 0 },
+          "writer_status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "leased",
+              "running",
+              "succeeded",
+              "failed",
+              "blocked",
+              "approved"
+            ]
+          },
+          "post_writer_report_path": { "type": ["string", "null"] },
+          "scope_check_path": { "type": ["string", "null"] },
+          "merge_state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "ready",
+              "merged",
+              "conflicted",
+              "blocked"
+            ]
+          },
+          "merge_target_branch": { "type": ["string", "null"] },
+          "conflict_manifest_path": { "type": ["string", "null"] },
+          "attempt_history": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "cleanup_state": {
+            "type": "string",
+            "enum": [
+              "active",
+              "cleanup_eligible",
+              "preserved",
+              "cleaned"
+            ]
+          },
+          "created_at": { "type": "string", "format": "date-time" },
+          "updated_at": { "type": "string", "format": "date-time" },
+          "completed_at": { "type": ["string", "null"], "format": "date-time" }
+        }
+      }
+    }
+  }
+}
