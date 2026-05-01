@@ -103,6 +103,7 @@ class RunExecutionWorktree:
     manifest_path: Path
     copied_artifacts: tuple[CopiedArtifact, ...]
     adoption_state: str
+    source_dirty_ignored_paths: tuple[str, ...] = ()
 
     def to_metadata(self) -> dict[str, Any]:
         return {
@@ -116,6 +117,7 @@ class RunExecutionWorktree:
             "git_base_ref": self.base_ref,
             "run_worktree_manifest_path": str(self.manifest_path),
             "copied_ignored_artifacts": [artifact.to_dict() for artifact in self.copied_artifacts],
+            "source_dirty_ignored_paths": list(self.source_dirty_ignored_paths),
             "adoption_state": self.adoption_state,
         }
 
@@ -142,6 +144,7 @@ class ResolvedExecutionWorktree:
     base_ref: str
     manifest_path: Path
     copy_specs: tuple[ArtifactCopySpec, ...]
+    source_dirty_block_patterns: tuple[str, ...] = ()
 
 
 def execution_branch_name(run_id: str) -> str:
@@ -214,6 +217,7 @@ def resolve_run_execution_worktree(
         base_ref=base_ref,
         manifest_path=manifest_path,
         copy_specs=copy_specs,
+        source_dirty_block_patterns=_source_dirty_block_patterns(prepared_plan),
     )
 
 
@@ -232,7 +236,7 @@ def materialize_run_execution_worktree(
         prepared_plan=prepared_plan,
         sensitive_prefixes=sensitive_prefixes,
     )
-    _assert_clean_source_project(resolved)
+    source_dirty_ignored_paths = _assert_clean_source_project(resolved)
     existing_manifest = _load_manifest(resolved.manifest_path)
     if existing_manifest is not None:
         classification = _classify_existing_manifest(resolved, existing_manifest)
@@ -277,6 +281,7 @@ def materialize_run_execution_worktree(
         manifest_path=resolved.manifest_path,
         copied_artifacts=tuple(copied),
         adoption_state=str(manifest.get("adoption_state") or "unadopted"),
+        source_dirty_ignored_paths=tuple(source_dirty_ignored_paths),
     )
 
 
@@ -287,11 +292,7 @@ def adopt_run_worktree(run_id: str, *, data_dir: Path, apply: bool = False) -> d
     adoption_source = _adoption_source(manifest)
     safe_project = adoption_source["project_root"]
     source_project = Path(str(manifest["source_project_root"]))
-    copied_rels = {
-        str(item.get("relative_path"))
-        for item in manifest.get("copied_artifacts") or []
-        if isinstance(item, Mapping) and isinstance(item.get("relative_path"), str)
-    }
+    copied_rels = _copied_artifact_rels(manifest)
     changes = _adoption_changes(manifest, adoption_source=adoption_source)
     operations, blocked = _copyback_plan(
         manifest,
@@ -384,13 +385,13 @@ def integrate_run_worktree(run_id: str, *, data_dir: Path, apply: bool = False) 
     integration_manifest_path = base / "worktrees" / run_id / "integration" / "manifest.json"
     conflict_manifest_path = base / "worktrees" / run_id / "conflict.json"
     branch_changed = _execution_branch_changes(manifest)
-    dirty_changed = _status_changes(execution_project, project_subdir=project_subdir)
+    dirty_changed = _filter_source_overlay_changes(
+        _status_changes(execution_project, project_subdir=project_subdir),
+        manifest,
+        root=execution_project,
+    )
     changed = _dedupe_changes([*branch_changed, *dirty_changed])
-    copied_rels = {
-        str(item.get("relative_path"))
-        for item in manifest.get("copied_artifacts") or []
-        if isinstance(item, Mapping) and isinstance(item.get("relative_path"), str)
-    }
+    copied_rels = _copied_artifact_rels(manifest)
     operations, blocked = _copyback_plan(
         manifest,
         source_project=integration_project,
@@ -1024,7 +1025,12 @@ def run_worktree_status(run_id: str, *, data_dir: Path, include_units: bool = Fa
     unadopted_commits = _branch_commits_ahead(source_git, base_sha, branch)
     copied_rels = _copied_artifact_rels(manifest)
     raw_dirty_entries = _git_status_entries(safe_git, ".") if (safe_git / ".git").exists() else []
-    dirty_entries, ignored_artifact_paths = _filter_run_artifact_status_entries(raw_dirty_entries, copied_rels=copied_rels)
+    dirty_entries, ignored_artifact_paths = _filter_run_artifact_status_entries(
+        raw_dirty_entries,
+        copied_rels=copied_rels,
+        root=safe_git,
+        source_overlay_shas=_copied_source_overlay_shas(manifest),
+    )
     units = _unit_worktree_statuses(run_id, data_dir=Path(data_dir), include_details=include_units)
     unit_dirty_count = sum(1 for item in units if item.get("dirty"))
     unit_conflict_count = sum(1 for item in units if item.get("conflict_manifest_present"))
@@ -1308,7 +1314,12 @@ def _adoption_changes(manifest: Mapping[str, Any], *, adoption_source: Mapping[s
             head,
             project_subdir=project_subdir,
         )
-    return _status_changes(Path(str(adoption_source["project_root"])), project_subdir=project_subdir)
+    project_root = Path(str(adoption_source["project_root"]))
+    return _filter_source_overlay_changes(
+        _status_changes(project_root, project_subdir=project_subdir),
+        manifest,
+        root=project_root,
+    )
 
 
 def _execution_branch_changes(manifest: Mapping[str, Any]) -> list[dict[str, str]]:
@@ -1662,6 +1673,19 @@ def _prepared_units(prepared: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     return units
 
 
+def _source_dirty_block_patterns(prepared: Mapping[str, Any]) -> tuple[str, ...]:
+    patterns: list[str] = []
+    for unit in _prepared_units(prepared):
+        for key in ("allowed_files", "files", "context_files"):
+            value = unit.get(key)
+            if not isinstance(value, list):
+                continue
+            for item in value:
+                if isinstance(item, str) and item.strip():
+                    patterns.append(item)
+    return tuple(dict.fromkeys(_normalize_scope_path(pattern) for pattern in patterns if pattern.strip()))
+
+
 def _prepared_units_by_phase(prepared: Mapping[str, Any]) -> list[tuple[str, Mapping[str, Any]]]:
     units: list[tuple[str, Mapping[str, Any]]] = []
     descriptors = prepared.get("work_unit_artifacts") if isinstance(prepared.get("work_unit_artifacts"), Mapping) else {}
@@ -1701,7 +1725,7 @@ def _assert_supported_git_checkout(source_project: Path) -> None:
         raise RunExecutionWorktreeError("safe-worktree launcher does not support sparse-checkout sources yet")
 
 
-def _assert_clean_source_project(resolved: ResolvedExecutionWorktree) -> None:
+def _assert_clean_source_project(resolved: ResolvedExecutionWorktree) -> tuple[str, ...]:
     scope = resolved.project_subdir or "."
     entries = _git_status_entries(
         resolved.source_git_root,
@@ -1709,17 +1733,84 @@ def _assert_clean_source_project(resolved: ResolvedExecutionWorktree) -> None:
     )
     allowed = {_git_relative_artifact_path(resolved, spec.relative_path) for spec in resolved.copy_specs}
     dirty: list[str] = []
+    ignored: list[str] = []
     for entry in entries:
         paths = [entry.get("path"), entry.get("original_path")]
         present_paths = [path for path in paths if isinstance(path, str) and path]
         if present_paths and all(path in allowed for path in present_paths):
             continue
-        dirty.append(_format_status_entry(entry))
+        if any(_source_dirty_path_overlaps_run_scope(resolved, path) for path in present_paths):
+            dirty.append(_format_project_status_entry(entry, project_subdir=resolved.project_subdir))
+        else:
+            ignored.append(_format_project_status_entry(entry, project_subdir=resolved.project_subdir))
     if dirty:
         raise RunExecutionWorktreeError(
-            "source checkout has relevant dirty files under the project subdir; "
+            "source checkout has dirty files that overlap this run's allowed/context file scope; "
             "commit/stash them before safe-worktree launch: " + ", ".join(dirty)
         )
+    return tuple(sorted(set(ignored)))
+
+
+def _format_project_status_entry(entry: Mapping[str, str], *, project_subdir: str) -> str:
+    path = _project_relative_status_path(entry.get("path") or "", project_subdir=project_subdir)
+    original = _project_relative_status_path(entry.get("original_path") or "", project_subdir=project_subdir)
+    if original:
+        return f"{original} -> {path}"
+    return path
+
+
+def _source_dirty_path_overlaps_run_scope(resolved: ResolvedExecutionWorktree, git_relative_path: str) -> bool:
+    patterns = resolved.source_dirty_block_patterns
+    if not patterns:
+        return False
+    variants = _source_dirty_path_variants(resolved, git_relative_path)
+    return any(
+        _path_matches_source_pattern(pattern, variant)
+        for pattern in patterns
+        for variant in variants
+    )
+
+
+def _source_dirty_path_variants(resolved: ResolvedExecutionWorktree, git_relative_path: str) -> tuple[str, ...]:
+    project_relative = _project_relative_status_path(
+        git_relative_path,
+        project_subdir=resolved.project_subdir,
+    )
+    return tuple(dict.fromkeys(path for path in (git_relative_path, project_relative) if path))
+
+
+def _path_matches_source_pattern(pattern: str, path: str) -> bool:
+    normalized_pattern = _normalize_scope_path(pattern)
+    normalized_path = _normalize_scope_path(path)
+    if not normalized_pattern or not normalized_path:
+        return False
+    if _glob_matches(normalized_pattern, normalized_path):
+        return True
+    parent = _source_scope_parent_dir(normalized_pattern)
+    if parent not in {"", "."} and (normalized_path == parent or normalized_path.startswith(parent + "/")):
+        return True
+    if any(char in normalized_pattern for char in "*?["):
+        return False
+    directory = normalized_pattern.rstrip("/")
+    if normalized_path == directory or normalized_path.startswith(directory + "/"):
+        return True
+    parent = Path(directory).parent.as_posix()
+    return parent not in {"", "."} and (normalized_path == parent or normalized_path.startswith(parent + "/"))
+
+
+def _source_scope_parent_dir(pattern: str) -> str:
+    parts = Path(pattern).parts
+    parent_parts: list[str] = []
+    for part in parts:
+        if any(char in part for char in "*?["):
+            break
+        parent_parts.append(part)
+    if not parent_parts:
+        return "."
+    candidate = Path(*parent_parts)
+    if any(char in pattern for char in "*?["):
+        return candidate.as_posix()
+    return candidate.parent.as_posix()
 
 
 def _create_run_worktree(resolved: ResolvedExecutionWorktree) -> None:
@@ -1860,7 +1951,12 @@ def _base_drift_payload(
         else []
     )
     copied_rels = _copied_artifact_rels(manifest)
-    dirty_entries, ignored_artifact_paths = _filter_run_artifact_status_entries(raw_dirty_entries, copied_rels=copied_rels)
+    dirty_entries, ignored_artifact_paths = _filter_run_artifact_status_entries(
+        raw_dirty_entries,
+        copied_rels=copied_rels,
+        root=resolved.safe_git_root,
+        source_overlay_shas=_copied_source_overlay_shas(manifest),
+    )
     unsafe_reasons: list[str] = []
     if adoption_state != "unadopted":
         unsafe_reasons.append("adoption_state")
@@ -1995,7 +2091,16 @@ def _artifact_copy_specs(
             "prepared_artifact",
             transform=_rebase_prepared_artifact,
         ),
-        ArtifactCopySpec(source_project_root / str(prepared_plan.get("prepared_plan_path")), Path(str(prepared_plan.get("prepared_plan_path"))), "prepared_plan"),
+        ArtifactCopySpec(
+            source_project_root / str(prepared_plan.get("source_plan_path")),
+            Path(str(prepared_plan.get("source_plan_path"))),
+            "source_plan",
+        ),
+        ArtifactCopySpec(
+            source_project_root / str(prepared_plan.get("prepared_plan_path")),
+            Path(str(prepared_plan.get("prepared_plan_path"))),
+            "prepared_plan",
+        ),
     ]
     inspect = prepared_plan.get("inspect_artifact")
     if isinstance(inspect, Mapping) and isinstance(inspect.get("path"), str):
@@ -2170,19 +2275,65 @@ def _copied_artifact_rels(manifest: Mapping[str, Any]) -> set[str]:
         Path(str(item.get("relative_path"))).as_posix()
         for item in manifest.get("copied_artifacts") or []
         if isinstance(item, Mapping) and isinstance(item.get("relative_path"), str)
+        and item.get("kind") != "source_plan"
     }
+
+
+def _copied_source_overlay_shas(manifest: Mapping[str, Any]) -> dict[str, str]:
+    overlays: dict[str, str] = {}
+    for item in manifest.get("copied_artifacts") or []:
+        if not isinstance(item, Mapping) or item.get("kind") != "source_plan":
+            continue
+        relative = item.get("relative_path")
+        sha = item.get("destination_sha256")
+        if not isinstance(relative, str) or not isinstance(sha, str):
+            continue
+        project_relative = Path(relative).as_posix()
+        overlays[project_relative] = sha
+        overlays[_source_git_relative_path(manifest, project_relative)] = sha
+    return overlays
+
+
+def _is_unchanged_source_overlay(root: Path, path: str, overlays: Mapping[str, str]) -> bool:
+    normalized = Path(path).as_posix()
+    expected = overlays.get(normalized)
+    if expected is None:
+        return False
+    candidate = root / normalized
+    return candidate.is_file() and _sha256_file(candidate) == expected
+
+
+def _filter_source_overlay_changes(
+    changes: Iterable[Mapping[str, str]],
+    manifest: Mapping[str, Any],
+    *,
+    root: Path,
+) -> list[dict[str, str]]:
+    overlays = _copied_source_overlay_shas(manifest)
+    return [
+        dict(change)
+        for change in changes
+        if not _is_unchanged_source_overlay(root, str(change.get("path") or ""), overlays)
+    ]
 
 
 def _filter_run_artifact_status_entries(
     entries: Iterable[Mapping[str, str]],
     *,
     copied_rels: set[str],
+    root: Path | None = None,
+    source_overlay_shas: Mapping[str, str] | None = None,
 ) -> tuple[list[dict[str, str]], list[str]]:
     kept: list[dict[str, str]] = []
     ignored: list[str] = []
     for entry in entries:
         paths = [entry.get("path"), entry.get("original_path")]
         present = [str(path) for path in paths if isinstance(path, str) and path]
+        if present and root is not None and all(
+            _is_unchanged_source_overlay(root, path, source_overlay_shas or {}) for path in present
+        ):
+            ignored.extend(Path(path).as_posix() for path in present)
+            continue
         if present and all(_is_run_artifact_path(path, copied_rels=copied_rels) for path in present):
             ignored.extend(Path(path).as_posix() for path in present)
             continue
@@ -2449,6 +2600,10 @@ def _dedupe_blocked_paths(items: Iterable[Mapping[str, str]]) -> list[dict[str, 
 def _glob_matches(pattern: str, path: str) -> bool:
     posix = Path(path).as_posix()
     return fnmatch.fnmatch(path, pattern) or fnmatch.fnmatch(posix, pattern)
+
+
+def _normalize_scope_path(path: str) -> str:
+    return Path(path.strip()).as_posix().lstrip("./")
 
 
 def _source_git_relative_path(manifest: Mapping[str, Any], project_relative_path: str) -> str:

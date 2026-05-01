@@ -113,12 +113,12 @@ class ExecutionWorktreeTests(unittest.TestCase):
             self.assertEqual(resolved.project_subdir, "")
             self.assertEqual(resolved.safe_project_root, resolved.safe_git_root)
 
-    def test_dirty_source_project_blocks_safe_worktree(self) -> None:
+    def test_dirty_source_project_scope_overlap_blocks_safe_worktree(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             _git_root, project, data, prepared = _prepared_monorepo(root)
             (project / "docs").mkdir()
-            (project / "docs" / "dirty.md").write_text("dirty\n", encoding="utf-8")
+            (project / "docs" / "new.md").write_text("dirty\n", encoding="utf-8")
 
             with self.assertRaises(RunExecutionWorktreeError) as raised:
                 materialize_run_execution_worktree(
@@ -129,7 +129,82 @@ class ExecutionWorktreeTests(unittest.TestCase):
                     sensitive_prefixes=[str(root / "home" / ".claude")],
                 )
 
-            self.assertIn("dirty.md", str(raised.exception))
+            self.assertIn("docs/new.md", str(raised.exception))
+
+    def test_dirty_source_project_sibling_blocks_safe_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _git_root, project, data, prepared = _prepared_monorepo(root)
+            (project / "docs").mkdir()
+            (project / "docs" / "helper.md").write_text("dirty\n", encoding="utf-8")
+
+            with self.assertRaises(RunExecutionWorktreeError) as raised:
+                materialize_run_execution_worktree(
+                    RUN_ID,
+                    source_project_root=project,
+                    data_dir=data,
+                    prepared_plan=prepared,
+                    sensitive_prefixes=[str(root / "home" / ".claude")],
+                )
+
+            self.assertIn("docs/helper.md", str(raised.exception))
+
+    def test_dirty_source_project_glob_parent_blocks_safe_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _git_root, project, data, prepared = _prepared_monorepo(root)
+            prepared = dict(prepared)
+            descriptor = next(iter(prepared["work_unit_artifacts"].values()))
+            descriptor["artifact"]["work_units"][0]["allowed_files"] = ["docs/*.md"]
+            (project / "docs").mkdir()
+            (project / "docs" / "helper.py").write_text("dirty\n", encoding="utf-8")
+
+            with self.assertRaises(RunExecutionWorktreeError) as raised:
+                materialize_run_execution_worktree(
+                    RUN_ID,
+                    source_project_root=project,
+                    data_dir=data,
+                    prepared_plan=prepared,
+                    sensitive_prefixes=[str(root / "home" / ".claude")],
+                )
+
+            self.assertIn("docs/helper.py", str(raised.exception))
+
+    def test_unrelated_dirty_markdown_does_not_block_safe_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _git_root, project, data, prepared = _prepared_monorepo(root)
+            (project / "planning").mkdir()
+            (project / "planning" / "notes.md").write_text("dirty\n", encoding="utf-8")
+
+            worktree = materialize_run_execution_worktree(
+                RUN_ID,
+                source_project_root=project,
+                data_dir=data,
+                prepared_plan=prepared,
+                sensitive_prefixes=[str(root / "home" / ".claude")],
+            )
+
+            self.assertTrue(worktree.safe_project_root.is_dir())
+            self.assertFalse((worktree.safe_project_root / "planning" / "notes.md").exists())
+            self.assertEqual(worktree.source_dirty_ignored_paths, ("planning/notes.md",))
+            self.assertEqual(worktree.to_metadata()["source_dirty_ignored_paths"], ["planning/notes.md"])
+
+    def test_dirty_source_plan_is_copied_into_safe_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _git_root, project, data, prepared = _prepared_monorepo(root, dirty_plan_before_prepare=True)
+
+            worktree = materialize_run_execution_worktree(
+                RUN_ID,
+                source_project_root=project,
+                data_dir=data,
+                prepared_plan=prepared,
+                sensitive_prefixes=[str(root / "home" / ".claude")],
+            )
+
+            copied_plan = (worktree.safe_project_root / "plan.md").read_text(encoding="utf-8")
+            self.assertIn("Dirty planning note", copied_plan)
 
     def test_unignored_copied_run_artifacts_do_not_dirty_block(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -1069,7 +1144,13 @@ class ExecutionWorktreeTests(unittest.TestCase):
             self.assertEqual(state_unit["conflict_manifest_path"], str(conflict_path))
 
 
-def _prepared_monorepo(root: Path, *, run_id: str = RUN_ID, ignore_run_artifacts: bool = True) -> tuple[Path, Path, Path, dict]:
+def _prepared_monorepo(
+    root: Path,
+    *,
+    run_id: str = RUN_ID,
+    ignore_run_artifacts: bool = True,
+    dirty_plan_before_prepare: bool = False,
+) -> tuple[Path, Path, Path, dict]:
     git_root = root / "home" / ".claude" / "plugins" / "mstefanko-plugins"
     project = git_root / "swarm-do"
     data = root / "data"
@@ -1095,6 +1176,9 @@ def _prepared_monorepo(root: Path, *, run_id: str = RUN_ID, ignore_run_artifacts
     )
     _git(git_root, "add", *add_paths)
     _git(git_root, "commit", "-q", "-m", "seed")
+    if dirty_plan_before_prepare:
+        with (project / "plan.md").open("a", encoding="utf-8") as handle:
+            handle.write("\nDirty planning note.\n")
     prepared = _prepare_existing_project(project, data, run_id)
     return git_root, project, data, prepared
 
