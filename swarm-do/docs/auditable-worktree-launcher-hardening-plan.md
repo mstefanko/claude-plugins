@@ -85,8 +85,9 @@ These decisions resolve the gaps that would otherwise block swarm execution.
      `sensitive_path_excerpt`
 
    On failed/no-artifact attempts, this kind should override
-   `writer_tool_denied_no_artifacts` when the transcript contains the canonical
-   source root or `/.claude/`. On otherwise successful attempts, record the same
+   `writer_tool_denied_no_artifacts` when the transcript contains a precise
+   canonical source root in inputs or tool results, or bare `/.claude/` in
+   path/command tool inputs. On otherwise successful attempts, record the same
    signal as a warning until a separate policy says success should be blocked.
 
 2. Worktree granularity: the Round 2 launcher fix uses one continuing
@@ -181,8 +182,9 @@ Regardless of the probe result:
 3. Add `canonical_path_leaked_in_tool_result` to `failure_taxonomy.py` with the
    category and retry policy declared above.
 4. Add a post-run transcript diagnostic tripwire that reports
-   `canonical_path_leaked_in_tool_result` when tool results contain the canonical
-   source root or `/.claude/`.
+   `canonical_path_leaked_in_tool_result` when inputs or tool results contain
+   precise canonical source roots, or when path/command tool inputs contain
+   bare `/.claude/` (including Bash `command` strings).
 
 The first tripwire can be post-run. True streaming fail-fast can follow later
 when the launcher moves from `--output-format json` to `stream-json`.
@@ -376,8 +378,9 @@ Add focused tests before or alongside the implementation:
 9. Prompt safety: prompt-visible content does not contain the canonical source
    project root or source git top-level.
 10. Transcript tripwire: the Round 2 or synthetic redacted transcript emits
-    `writer_tool_denied_no_artifacts`; adding a `/.claude/` tool-result excerpt
-    emits `canonical_path_leaked_in_tool_result`.
+    `writer_tool_denied_no_artifacts`; adding a precise source-root
+    tool-result excerpt or a bare `/.claude/` path/command input emits
+    `canonical_path_leaked_in_tool_result`.
 11. Diff recovery: edits made inside `<safe-worktree>/swarm-do` are detected
     relative to the project subdir and written to attempt evidence.
 12. Dirty source policy: relevant dirty tracked and untracked non-ignored files

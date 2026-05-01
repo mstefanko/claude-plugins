@@ -6,10 +6,38 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Iterator, Mapping
 
 
 MAX_EXCERPT_CHARS = 500
+_BARE_CLAUDE_PATTERN = "/.claude/"
+_PATTERN_SOURCE_BARE_CLAUDE = "bare_claude"
+_PATTERN_SOURCE_SOURCE_ROOT = "source_root"
+_FIELD_ROLE_PATH = "path"
+_FIELD_ROLE_COMMAND = "command"
+_FIELD_ROLE_CONTENT = "content"
+_FIELD_ROLE_OTHER = "other"
+# Tool input field-role map. Add new Claude Code tool field names here when
+# their payload shape changes, so unknown narrative fields stay unscanned.
+_PATH_FIELD_NAMES = frozenset({"file_path", "path", "notebook_path"})
+_TOOL_FILE_PATH_NAMES = frozenset({"file_path", "path"})
+_COMMAND_FIELD_NAMES = frozenset({"command"})
+_CONTENT_FIELD_NAMES = frozenset(
+    {"content", "old_string", "new_string", "pattern", "prompt"}
+)
+
+
+@dataclass(frozen=True)
+class _PatternEntry:
+    pattern: str
+    source: str
+
+
+@dataclass(frozen=True)
+class _PatternSets:
+    path_patterns: tuple[str, ...]
+    command_patterns: tuple[str, ...]
+    content_patterns: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -20,6 +48,7 @@ class ToolErrorDiagnostic:
     is_error: bool
     error_kind: str
     message_excerpt: str
+    field_path: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -29,6 +58,7 @@ class ToolErrorDiagnostic:
             "is_error": self.is_error,
             "error_kind": self.error_kind,
             "message_excerpt": self.message_excerpt,
+            "field_path": self.field_path,
         }
 
 
@@ -169,7 +199,7 @@ def parse_transcript(
     tool_errors: list[ToolErrorDiagnostic] = []
     canonical_hits: list[ToolErrorDiagnostic] = []
     parse_errors = 0
-    canonical_patterns = _canonical_patterns(sensitive_path_patterns)
+    pattern_sets = _coerce_pattern_sets(sensitive_path_patterns)
     try:
         with path.open("r", encoding="utf-8", errors="replace") as lines:
             for line in lines:
@@ -197,15 +227,20 @@ def parse_transcript(
                             "tool_name": block.get("name") if isinstance(block.get("name"), str) else None,
                             "file_path": file_path,
                         }
-                        if file_path and _contains_canonical_path(file_path, canonical_patterns):
+                        for field_path, field_value in _tool_input_fields(block.get("input")):
+                            field_role = _tool_input_field_role(field_path)
+                            role_patterns = _patterns_for_field_role(pattern_sets, field_role)
+                            if not role_patterns or not _contains_canonical_path(field_value, role_patterns):
+                                continue
                             canonical_hits.append(
                                 ToolErrorDiagnostic(
                                     tool_name=block.get("name") if isinstance(block.get("name"), str) else None,
                                     tool_use_id=tool_id,
-                                    file_path=file_path,
+                                    file_path=field_value if field_role == _FIELD_ROLE_PATH else None,
                                     is_error=False,
                                     error_kind="canonical_path_leaked",
-                                    message_excerpt=_excerpt(file_path),
+                                    message_excerpt=_excerpt(field_value),
+                                    field_path=field_path,
                                 )
                             )
                 elif role == "user":
@@ -217,7 +252,7 @@ def parse_transcript(
                         tool_id_value = block.get("tool_use_id")
                         tool_id = tool_id_value if isinstance(tool_id_value, str) else None
                         tool_use = tool_uses.get(tool_id or "", {})
-                        if _contains_canonical_path(content, canonical_patterns):
+                        if _contains_canonical_path(content, pattern_sets.content_patterns):
                             canonical_hits.append(
                                 ToolErrorDiagnostic(
                                     tool_name=_string_or_none(tool_use.get("tool_name")),
@@ -302,10 +337,36 @@ def _content_blocks(row: Mapping[str, Any]) -> list[Mapping[str, Any]]:
 
 
 def _tool_file_path(value: Any) -> str | None:
-    if not isinstance(value, Mapping):
-        return None
-    path = value.get("file_path") or value.get("path")
-    return path if isinstance(path, str) else None
+    for field_path, field_value in _tool_input_fields(value):
+        if _field_leaf_name(field_path) in _TOOL_FILE_PATH_NAMES:
+            return field_value
+    return None
+
+
+def _tool_input_fields(value: Any) -> Iterator[tuple[str, str]]:
+    if isinstance(value, str):
+        yield "", value
+        return
+    if isinstance(value, Mapping):
+        for key, child in value.items():
+            yield from _tool_input_fields_at(child, str(key))
+        return
+    if isinstance(value, list):
+        for index, child in enumerate(value):
+            yield from _tool_input_fields_at(child, f"[{index}]")
+
+
+def _tool_input_fields_at(value: Any, field_path: str) -> Iterator[tuple[str, str]]:
+    if isinstance(value, str):
+        yield field_path, value
+        return
+    if isinstance(value, Mapping):
+        for key, child in value.items():
+            yield from _tool_input_fields_at(child, f"{field_path}.{key}")
+        return
+    if isinstance(value, list):
+        for index, child in enumerate(value):
+            yield from _tool_input_fields_at(child, f"{field_path}[{index}]")
 
 
 def _flatten_content(value: Any) -> str:
@@ -334,28 +395,93 @@ def _last_error_summary(diagnostic: ToolErrorDiagnostic) -> str:
     return f"{tool} {diagnostic.error_kind}: {diagnostic.message_excerpt}"
 
 
-def _diagnostic_sensitive_patterns(command_metadata: Mapping[str, Any]) -> tuple[str, ...]:
+def _diagnostic_sensitive_patterns(command_metadata: Mapping[str, Any]) -> _PatternSets:
     values = []
     for key in ("source_project_root", "source_git_top_level", "real_repo_root"):
         value = command_metadata.get(key)
         if isinstance(value, str) and value:
             values.append(value)
-    values.append("/.claude/")
-    return tuple(dict.fromkeys(values))
+    values.append(_BARE_CLAUDE_PATTERN)
+    return _coerce_pattern_sets(tuple(dict.fromkeys(values)))
 
 
-def _canonical_patterns(patterns: Iterable[str]) -> tuple[str, ...]:
-    values: list[str] = []
+def _coerce_pattern_sets(patterns: Iterable[str] | _PatternSets) -> _PatternSets:
+    if isinstance(patterns, _PatternSets):
+        return patterns
+    entries = _canonical_patterns(patterns)
+    path_patterns = _pattern_values(entries)
+    content_patterns = _pattern_values(
+        entry for entry in entries if entry.source != _PATTERN_SOURCE_BARE_CLAUDE
+    )
+    return _PatternSets(
+        path_patterns=path_patterns,
+        command_patterns=path_patterns,
+        content_patterns=content_patterns,
+    )
+
+
+def _canonical_patterns(patterns: Iterable[str]) -> tuple[_PatternEntry, ...]:
+    values: list[_PatternEntry] = []
+    seen: set[tuple[str, str]] = set()
     for pattern in patterns:
         if not pattern:
             continue
+        source = _pattern_source(pattern)
         candidates = [pattern, *project_dir_candidates(pattern)]
         for candidate in candidates:
-            values.append(candidate)
-            escaped = _json_slash_escape(candidate)
-            if escaped != candidate:
-                values.append(escaped)
-    return tuple(dict.fromkeys(values))
+            for value in _pattern_variants(candidate):
+                key = (value, source)
+                if key in seen:
+                    continue
+                seen.add(key)
+                values.append(_PatternEntry(pattern=value, source=source))
+    return tuple(values)
+
+
+def _pattern_source(pattern: str) -> str:
+    return (
+        _PATTERN_SOURCE_BARE_CLAUDE
+        if pattern == _BARE_CLAUDE_PATTERN
+        else _PATTERN_SOURCE_SOURCE_ROOT
+    )
+
+
+def _pattern_variants(pattern: str) -> tuple[str, ...]:
+    values = [pattern]
+    escaped = _json_slash_escape(pattern)
+    if escaped != pattern:
+        values.append(escaped)
+    return tuple(values)
+
+
+def _pattern_values(entries: Iterable[_PatternEntry]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(entry.pattern for entry in entries if entry.pattern))
+
+
+def _patterns_for_field_role(pattern_sets: _PatternSets, role: str) -> tuple[str, ...]:
+    if role == _FIELD_ROLE_PATH:
+        return pattern_sets.path_patterns
+    if role == _FIELD_ROLE_COMMAND:
+        return pattern_sets.command_patterns
+    if role == _FIELD_ROLE_CONTENT:
+        return pattern_sets.content_patterns
+    return ()
+
+
+def _tool_input_field_role(field_path: str) -> str:
+    leaf = _field_leaf_name(field_path)
+    if leaf in _PATH_FIELD_NAMES:
+        return _FIELD_ROLE_PATH
+    if leaf in _COMMAND_FIELD_NAMES:
+        return _FIELD_ROLE_COMMAND
+    if leaf in _CONTENT_FIELD_NAMES:
+        return _FIELD_ROLE_CONTENT
+    return _FIELD_ROLE_OTHER
+
+
+def _field_leaf_name(field_path: str) -> str:
+    leaf = field_path.rsplit(".", 1)[-1]
+    return re.sub(r"\[\d+\]$", "", leaf)
 
 
 def _contains_canonical_path(text: str, patterns: tuple[str, ...]) -> bool:

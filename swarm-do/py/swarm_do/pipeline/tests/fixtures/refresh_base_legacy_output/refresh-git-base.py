@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 
 run_id = "01KQF2CF61YV7SYVREEWRE4GFB"
-repo = Path("/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/swarm-do")
+repo = Path("<repo-root>")
 plan_path = Path.home() / f".local/share/swarmdaddy/runs/{run_id}/prepared_plan.v1.json"
 backup = plan_path.with_suffix(".json.bak-before-git-base-refresh")
 

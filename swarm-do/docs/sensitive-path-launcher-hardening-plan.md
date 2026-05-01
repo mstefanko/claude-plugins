@@ -822,6 +822,9 @@ Steps:
    - `command.json` records safe cwd outside `~/.claude`.
    - If Option B was selected, `dispatcher.launcher.prompt.md` contains no
      source-tree `/.claude/` spelling.
+   - As of 2026-05-01, bare `/.claude/` transcript matching is enforced on
+     path and Bash command inputs only; precise source roots are still enforced
+     on both inputs and tool-result/content fields.
    - Claude can use Write/Edit against launcher-visible paths.
    - valid result and handoff artifacts are written.
    - the original Write-disabled fixture classifies as

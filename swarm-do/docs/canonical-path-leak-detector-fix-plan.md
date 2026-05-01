@@ -271,13 +271,14 @@ After Phase 1 the precise content-side patterns
 (`source_project_root`/`source_git_top_level`/`real_repo_root`) still match
 on real canonical paths inside tool results — by design. Three committed
 files hard-code the developer machine's `source_git_top_level`
-(`/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/swarm-do`),
+(`/Users/example/.dev-marketplaces/example-plugins/swarm-do`),
 which means a writer reading them in the safe-worktree would still trip the
 detector. Sanitize them so reading them post-fix is benign.
 
 ### Current Status
 
-`grep -rn "/Users/mstefanko" --include="*.py"` returns three locations:
+`grep -rn "/Users/<developer>" --include="*.py"` returned three locations
+before this fix:
 
 1. `py/swarm_do/pipeline/tests/test_claude_transcript_diagnostics.py:22` — the
    `test_encode_project_path_preserves_leading_dash_and_dot_as_dash` test
@@ -287,7 +288,7 @@ detector. Sanitize them so reading them post-fix is benign.
    later test uses the same literal as a `source` value passed into
    `parse_transcript`.
 3. `py/swarm_do/pipeline/tests/fixtures/refresh_base_legacy_output/refresh-git-base.py:8`
-   — a captured legacy helper hard-codes `Path("/Users/mstefanko/...")` as
+   — a captured legacy helper hard-codes `Path("/Users/<developer>/...")` as
    the repo root example.
 
 ### Implementation
@@ -308,7 +309,7 @@ detector. Sanitize them so reading them post-fix is benign.
    is checked in solely as a snapshot, ensure the snapshot does not need to
    be re-captured against the literal — verify by running the surrounding
    regen helper if any.
-4. Run a final `grep -rn "/Users/mstefanko"` over the repo to confirm no
+4. Run a final developer-home-path grep over the repo to confirm no
    committed file under `py/`, `docs/`, `schemas/`, or `bin/` retains the
    developer machine path.
 
@@ -317,13 +318,13 @@ detector. Sanitize them so reading them post-fix is benign.
 | File | Change |
 | --- | --- |
 | `py/swarm_do/pipeline/tests/test_claude_transcript_diagnostics.py` | Replace the two literal occurrences (lines 22 and 137) with the synthetic placeholder; update encoded-form assertion accordingly. |
-| `py/swarm_do/pipeline/tests/fixtures/refresh_base_legacy_output/refresh-git-base.py` | Replace the hard-coded `Path("/Users/mstefanko/...")` repo root with a placeholder that does not match any real `source_git_top_level`. |
+| `py/swarm_do/pipeline/tests/fixtures/refresh_base_legacy_output/refresh-git-base.py` | Replace the hard-coded developer-home repo root with a placeholder that does not match any real `source_git_top_level`. |
 
 ### Verification / Validation Commands
 
 ```bash
 cd swarm-do
-grep -rn "/Users/mstefanko" --include="*.py" --include="*.md" --include="*.json" --include="*.jsonl" .
+grep -rn "/Users/<developer>" --include="*.py" --include="*.md" --include="*.json" --include="*.jsonl" .
 # expected output: no committed files outside data/runs/.
 PYTHONPATH=py python3 -m unittest swarm_do.pipeline.tests.test_claude_transcript_diagnostics
 PYTHONPATH=py python3 -m unittest discover swarm_do.pipeline.tests
@@ -423,7 +424,7 @@ grep -n "/.claude/" docs/auditable-worktree-launcher-hardening-plan.md
 - All Phase 1 unit tests above pass; all phases pre-existing in the
   pipeline tests suite continue to pass.
 - `swarm-do/bin/swarm permissions check` still reports `OK`.
-- `grep -rn "/Users/mstefanko" --include="*.py" --include="*.md"
+- `grep -rn "/Users/<developer>" --include="*.py" --include="*.md"
   --include="*.json" --include="*.jsonl" .` returns no committed match
   outside `data/runs/`.
 - A re-prepared ECC run gets through phase 0 without

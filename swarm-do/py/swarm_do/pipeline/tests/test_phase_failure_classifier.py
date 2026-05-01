@@ -171,6 +171,101 @@ class PhaseFailureClassifierTests(unittest.TestCase):
             self.assertEqual(classification.details["tool_error_kind"], "canonical_path_leaked")
             self.assertIn(source_root, classification.details["sensitive_path_excerpt"])
 
+    def test_canonical_source_tool_result_content_becomes_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            projects = Path(td) / "projects"
+            cwd = "/tmp/swarm-do-launcher"
+            source_root = "/Users/test/.claude/plugins/marketplaces/example/swarm-do"
+            session_id = "session-canonical-result-leak"
+            transcript = projects / encode_project_path(cwd) / f"{session_id}.jsonl"
+            transcript.parent.mkdir(parents=True)
+            transcript.write_text(
+                json.dumps(
+                    {
+                        "message": {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "tool_result",
+                                    "tool_use_id": "toolu_1",
+                                    "is_error": False,
+                                    "content": f"observed repo at {source_root}",
+                                }
+                            ],
+                        }
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            classification = classify_launcher_failure(
+                {
+                    "status": "launched",
+                    "returncode": 0,
+                    "stdout": json.dumps({"type": "result", "session_id": session_id, "result": "", "num_turns": 4}),
+                    "stderr": "",
+                },
+                {"valid": False, "partial": False},
+                changed_files=[],
+                command_metadata={
+                    "argv": ["claude"],
+                    "launcher_cwd": cwd,
+                    "source_project_root": source_root,
+                },
+                projects_dir=projects,
+            )
+
+            self.assertEqual(classification.failure_kind, "canonical_path_leaked_in_tool_result")
+            self.assertEqual(classification.details["tool_error_kind"], "canonical_path_leaked")
+            self.assertIn(source_root, classification.details["sensitive_path_excerpt"])
+
+    def test_bash_command_canonical_path_input_becomes_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            projects = Path(td) / "projects"
+            cwd = "/tmp/swarm-do-launcher"
+            session_id = "session-bash-canonical-input"
+            command = "cat ~/.claude/projects/session.jsonl"
+            transcript = projects / encode_project_path(cwd) / f"{session_id}.jsonl"
+            transcript.parent.mkdir(parents=True)
+            transcript.write_text(
+                json.dumps(
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": [
+                                {
+                                    "type": "tool_use",
+                                    "id": "toolu_1",
+                                    "name": "Bash",
+                                    "input": {"command": command},
+                                }
+                            ],
+                        }
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            classification = classify_launcher_failure(
+                {
+                    "status": "launched",
+                    "returncode": 0,
+                    "stdout": json.dumps({"type": "result", "session_id": session_id, "result": "", "num_turns": 4}),
+                    "stderr": "",
+                },
+                {"valid": False, "partial": False},
+                changed_files=[],
+                command_metadata={"argv": ["claude"], "launcher_cwd": cwd},
+                projects_dir=projects,
+            )
+
+            self.assertEqual(classification.failure_kind, "canonical_path_leaked_in_tool_result")
+            self.assertEqual(classification.details["tool_name"], "Bash")
+            self.assertEqual(classification.details["tool_error_kind"], "canonical_path_leaked")
+            self.assertIn(command, classification.details["sensitive_path_excerpt"])
+
     def test_nonzero_returncode_remains_nonzero(self) -> None:
         classification = classify_launcher_failure(
             {"status": "launched", "returncode": 1, "stdout": "", "stderr": "boom"},
