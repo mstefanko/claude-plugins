@@ -717,7 +717,7 @@ class TestPipelineBoardModel(EnvTestCase):
                 "L2 agent-analysis  agent-clarify",
                 "L3 agent-writer JOIN after: analysis + clarify",
                 "L4 agent-spec-review  swarm-review PROVIDER",
-                "L5 agent-docs OUTPUT  agent-review JOIN OUTPUT after: spec-review + provider-review",
+                "L5 agent-docs JOIN OUTPUT after: spec-review + provider-review  agent-review JOIN OUTPUT after: spec-review + provider-review",
             ],
         )
         self.assertEqual(
@@ -729,7 +729,7 @@ class TestPipelineBoardModel(EnvTestCase):
                 "4. agent-writer [agents] depends_on=analysis,clarify JOIN",
                 "5. agent-spec-review [agents] depends_on=writer",
                 "6. swarm-review [provider] depends_on=writer PROVIDER",
-                "7. agent-docs [output] depends_on=spec-review OUTPUT",
+                "7. agent-docs [output] depends_on=spec-review,provider-review JOIN OUTPUT",
                 "8. agent-review [output] depends_on=spec-review,provider-review JOIN OUTPUT",
             ],
         )
@@ -775,7 +775,7 @@ class TestPipelineBoardModel(EnvTestCase):
 
         self.assertIn("b0 (opus 4.7/xhigh)", rendered)
         self.assertIn("b1 (gpt 5.4/xhigh)", rendered)
-        self.assertIn("merge (gpt 5.4/high)", rendered)
+        self.assertIn("merge (opus 4.7/high)", rendered)
 
     def test_preset_profile_preview_keeps_unused_routes_visible(self) -> None:
         preset = load_preset(find_preset("claude-only").path)

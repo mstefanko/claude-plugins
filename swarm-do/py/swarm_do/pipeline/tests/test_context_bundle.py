@@ -110,8 +110,8 @@ class ContextBundleTests(unittest.TestCase):
 
             context = result["context"]
             prompt = Path(result["prompt_path"]).read_text(encoding="utf-8")
-            self.assertEqual(context["allowed_files"], [])
-            self.assertEqual(context["validation_commands"], [])
+            self.assertEqual(context["allowed_files"], ["docs/phase-1.md"])
+            self.assertEqual(context["validation_commands"], ["python3 -m unittest py.swarm_do.pipeline.tests.test_phase_sessions"])
             self.assertIn("work_units_informational_phase_session", context["warnings"])
             self.assertIn("## Informational Decomposition", prompt)
             self.assertIn("Phase sessions execute this whole phase", prompt)

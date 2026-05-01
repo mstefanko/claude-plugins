@@ -38,6 +38,6 @@ stages:
     agents:
       - role: agent-review
   - id: docs
-    depends_on: [spec-review]
+    depends_on: [spec-review, provider-review]
     agents:
       - role: agent-docs

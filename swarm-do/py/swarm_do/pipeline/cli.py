@@ -37,7 +37,7 @@ from .registry import (
     sha256_file,
 )
 from .rollout import format_status, history_lines, load_state, mark_dogfood, set_field
-from .validation import schema_lint_pipeline, schema_lint_work_units, validate_preset_and_pipeline
+from .validation import schema_lint_pipeline, schema_lint_work_units, validate_preset_and_pipeline, validate_preset_mapping
 from .phase_autopilot_policy import ResolvedPolicyUpdate, expand_profile
 
 
@@ -99,10 +99,153 @@ def cmd_preset_show(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_preset_resolve(args: argparse.Namespace) -> int:
+    item = find_preset(args.name)
+    try:
+        if item is None:
+            pipeline_item = find_pipeline(args.name)
+            if pipeline_item is None:
+                print(f"swarm: preset resolve: preset not found: {args.name}", file=sys.stderr)
+                return 1
+            preset = {
+                "name": args.name,
+                "pipeline": args.name,
+                "origin": "stock",
+                "budget": {
+                    "max_agents_per_run": 20,
+                    "max_estimated_cost_usd": 5.0,
+                    "max_wall_clock_seconds": 1800,
+                },
+            }
+            preset_origin = "synthetic-stock"
+            preset_path = pipeline_item.path
+        else:
+            preset = load_preset(item.path)
+            preset_origin = item.origin
+            preset_path = item.path
+        resolved = resolve_preset_graph(preset)
+        result, pipeline = validate_preset_mapping(preset, args.name, include_budget=False)
+    except Exception as exc:
+        print(f"swarm: preset resolve: {exc}", file=sys.stderr)
+        return 1
+    payload = {
+        "preset_name": args.name,
+        "preset_origin": preset_origin,
+        "preset_path": str(preset_path),
+        "graph_source": resolved.source,
+        "graph_source_name": resolved.source_name,
+        "graph_source_hash": resolved.source_hash,
+        "lineage_name": resolved.lineage_name,
+        "lineage_hash": resolved.lineage_hash,
+        "warnings": list(dict.fromkeys([*resolved.warnings, *result.warnings])),
+        "validation": {
+            "ok": result.ok,
+            "errors": list(result.errors),
+            "warnings": list(dict.fromkeys(result.warnings)),
+        },
+        "role_routes": _resolved_role_routes(pipeline, args.name, preset),
+        "synthesize_merges": _synthesize_merge_routes(pipeline, args.name, preset),
+        "graph": resolved.graph,
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(f"{args.name} ({preset_origin})")
+        print(f"graph: {resolved.source}" + (f" {resolved.source_name}" if resolved.source_name else ""))
+        if resolved.lineage_name:
+            print(f"lineage: {resolved.lineage_name} {resolved.lineage_hash or ''}".rstrip())
+        for warning in payload["warnings"]:
+            print(f"warning: {warning}", file=sys.stderr)
+        for error in result.errors:
+            print(f"error: {error}", file=sys.stderr)
+        print("routes:")
+        for route in payload["role_routes"]:
+            route_value = route.get("route") if isinstance(route, Mapping) else None
+            backend = route_value.get("backend") if isinstance(route_value, Mapping) else "error"
+            model = route_value.get("model") if isinstance(route_value, Mapping) else route.get("error")
+            print(f"  {route.get('stage_id')} {route.get('kind')} {route.get('role')}: {backend} {model}")
+        print("graph:")
+        print("\n".join(graph_lines(resolved.graph)))
+    return 0 if result.ok else 1
+
+
 def cmd_preset_clear(args: argparse.Namespace) -> int:
     _ensure_current_file().write_text("", encoding="utf-8")
     print("cleared active preset; routing falls back to backends.toml")
     return 0
+
+
+def _agent_override(agent: Mapping[str, Any]) -> Mapping[str, Any] | str | None:
+    override = agent.get("route")
+    if override is None and {"backend", "model", "effort"} <= set(agent.keys()):
+        override = agent
+    return override
+
+
+def _resolved_role_routes(
+    pipeline: Mapping[str, Any],
+    preset_name: str | None,
+    preset: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    from .resolver import BackendResolver
+
+    resolver = BackendResolver(preset_name=preset_name, preset_data=preset)
+    rows: list[dict[str, Any]] = []
+    for stage in pipeline.get("stages") or []:
+        if not isinstance(stage, Mapping):
+            continue
+        stage_id = str(stage.get("id") or "<unknown>")
+        for idx, agent in enumerate(stage.get("agents") or []):
+            if not isinstance(agent, Mapping) or not isinstance(agent.get("role"), str):
+                continue
+            rows.append(_route_row(resolver, stage_id, "agent", agent["role"], _agent_override(agent), index=idx))
+        fan = stage.get("fan_out")
+        if isinstance(fan, Mapping) and isinstance(fan.get("role"), str):
+            role = str(fan["role"])
+            if fan.get("variant") == "models" and isinstance(fan.get("routes"), list):
+                for idx, route in enumerate(fan["routes"]):
+                    rows.append(_route_row(resolver, stage_id, "fan_out.models", role, route, index=idx))
+            else:
+                rows.append(_route_row(resolver, stage_id, f"fan_out.{fan.get('variant')}", role, None))
+        merge = stage.get("merge")
+        if isinstance(merge, Mapping) and isinstance(merge.get("agent"), str):
+            rows.append(_route_row(resolver, stage_id, f"merge.{merge.get('strategy')}", str(merge["agent"]), None))
+    return rows
+
+
+def _route_row(
+    resolver: Any,
+    stage_id: str,
+    kind: str,
+    role: str,
+    override: Mapping[str, Any] | str | None,
+    *,
+    index: int | None = None,
+) -> dict[str, Any]:
+    row: dict[str, Any] = {"stage_id": stage_id, "kind": kind, "role": role}
+    if index is not None:
+        row["index"] = index
+    try:
+        row["route"] = resolver.resolve(role, "hard", override=override).as_dict()
+    except Exception as exc:
+        row["error"] = str(exc)
+    return row
+
+
+def _synthesize_merge_routes(
+    pipeline: Mapping[str, Any],
+    preset_name: str | None,
+    preset: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    rows = [
+        row
+        for row in _resolved_role_routes(pipeline, preset_name, preset)
+        if isinstance(row.get("kind"), str) and str(row["kind"]).startswith("merge.synthesize")
+    ]
+    for row in rows:
+        route = row.get("route")
+        row["claude_backed"] = isinstance(route, Mapping) and route.get("backend") == "claude"
+    return rows
 
 
 def cmd_preset_list(args: argparse.Namespace) -> int:
@@ -457,6 +600,7 @@ def cmd_prepare(args: argparse.Namespace) -> int:
             result = PreparedArtifactWriter().refresh_base(
                 prepare_args[1],
                 to_sha=getattr(args, "to_sha", None),
+                to_head=bool(getattr(args, "to_head", False)),
                 phase_id=getattr(args, "phase", None),
                 dry_run=bool(getattr(args, "dry_run", False)),
                 operator_id=getattr(args, "operator_id", None),
@@ -598,6 +742,7 @@ def _cmd_do_prepare_continue(args: argparse.Namespace) -> int:
         accept_prepared,
         auto_continue_decision,
         prepare_plan_run,
+        record_prepare_continue_decision,
     )
 
     result: Any | None = None
@@ -611,6 +756,12 @@ def _cmd_do_prepare_continue(args: argparse.Namespace) -> int:
         decision = auto_continue_decision(
             result.payload,
             work_unit_errors=result.work_unit_errors,
+        )
+        record_prepare_continue_decision(
+            result.run_id,
+            allowed=decision.allowed,
+            reasons=decision.reasons,
+            bd_epic_id=getattr(args, "bd_epic_id", None) or getattr(result, "bd_epic_id", None),
         )
         if not decision.allowed:
             payload = result.to_dict()
@@ -673,14 +824,22 @@ def _dispatch_prepared(
         StalePreparedArtifactError,
         verify_prepared_for_dispatch,
     )
+    from .run_preflight import RunPreflightError
 
     try:
         result = verify_prepared_for_dispatch(prepared_ref)
+        preflight = _dispatch_preflight(args, result)
         payload = _prepared_dispatch_payload(args, result)
+        payload["preflight"] = preflight.as_dict()
         if _phase_sessions_mode(args) == "auto":
             return _dispatch_with_phase_sessions(args, payload)
         _print_prepared_dispatch(args, payload)
         return 0
+    except RunPreflightError as exc:
+        if args.json:
+            print(json.dumps({"error": "run_preflight_failed", "preflight": exc.report.as_dict()}, indent=2, sort_keys=True))
+        print(f"{error_prefix}: {exc}", file=sys.stderr)
+        return 2
     except StalePreparedArtifactError as exc:
         print(f"{error_prefix}: {exc}", file=sys.stderr)
         return 3
@@ -703,6 +862,50 @@ def _prepared_dispatch_payload(args: argparse.Namespace, result: Any) -> dict[st
         )
         payload["active_run_path"] = str(state_path)
     return payload
+
+
+def _dispatch_preflight(args: argparse.Namespace, result: Any):
+    from .run_preflight import record_run_preflight_completed, run_preflight
+
+    graph = _active_graph_source_summary()
+    launchers = ("claude-print",) if _phase_sessions_mode(args) == "auto" else ()
+    report = run_preflight(
+        run_id=result.run_id,
+        target_repo=getattr(result, "repo_root", None),
+        data_dir=resolve_data_dir(),
+        preset=graph.get("preset"),
+        graph_source=graph.get("graph_source"),
+        graph_source_name=graph.get("graph_source_name"),
+        launchers=launchers,
+        require_provider_tier="version",
+        git_base_sha=getattr(result, "git_base_sha", None),
+    )
+    record_run_preflight_completed(
+        run_id=result.run_id,
+        report=report,
+        data_dir=resolve_data_dir(),
+        bd_epic_id=getattr(args, "bd_epic_id", None) or getattr(result, "bd_epic_id", None),
+    )
+    report.raise_or_continue()
+    return report
+
+
+def _active_graph_source_summary() -> dict[str, str | None]:
+    from .resolver import active_preset_name, load_preset_by_name
+
+    preset_name = active_preset_name()
+    if preset_name is None:
+        preset = {"name": "default-fallback", "pipeline": "default", "budget": {}}
+        preset_label = "default"
+    else:
+        preset, _path = load_preset_by_name(preset_name)
+        preset_label = preset_name
+    resolved = resolve_preset_graph(preset)
+    return {
+        "preset": preset_label,
+        "graph_source": resolved.source,
+        "graph_source_name": resolved.source_name,
+    }
 
 
 def _phase_sessions_mode(args: argparse.Namespace) -> str:
@@ -961,10 +1164,14 @@ def cmd_providers_doctor(args: argparse.Namespace) -> int:
         preset_name=args.preset,
         run_mco=args.mco,
         run_review=args.review,
+        backend_tier=args.backend_tier,
         mco_timeout_seconds=args.mco_timeout_seconds,
     )
     if report.review_selection is not None:
-        write_review_doctor_cache(report.as_dict())
+        try:
+            write_review_doctor_cache(report.as_dict())
+        except OSError as exc:
+            print(f"warning: provider doctor cache not written: {exc}", file=sys.stderr)
     if args.json:
         print(json.dumps(report.as_dict(), indent=2, sort_keys=True))
     else:
@@ -1297,7 +1504,30 @@ def cmd_sessions(args: argparse.Namespace) -> int:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
         print(format_doctor_report(report))
-    return 0 if all(item.get("eligible") for item in report.get("launchers", []) if item.get("name") in {"manual", "fake-test"}) else 1
+    requested = [args.launcher] if getattr(args, "launcher", None) else ["manual", "fake-test", "claude-print"]
+    by_name = {
+        item.get("name"): item
+        for item in report.get("launchers", [])
+        if isinstance(item, Mapping)
+    }
+    return 0 if all(bool(by_name.get(name, {}).get("eligible")) for name in requested) else 1
+
+
+def cmd_beads(args: argparse.Namespace) -> int:
+    from .beads_health import beads_where
+
+    if args.beads_command != "check":
+        print("swarm: beads: missing command", file=sys.stderr)
+        return 1
+    result = beads_where(Path(args.repo))
+    payload = result.as_dict()
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(f"beads: {payload['status']} {payload['summary']}")
+        if payload.get("rig"):
+            print(f"rig: {payload['rig']}")
+    return 0 if result.ok else 1
 
 
 def cmd_context(args: argparse.Namespace) -> int:
@@ -2182,6 +2412,7 @@ def cmd_worktrees(args: argparse.Namespace) -> int:
             payload = run_worktree_status(
                 args.run_id,
                 data_dir=Path(args.data_dir) if args.data_dir else resolve_data_dir(),
+                include_units=bool(getattr(args, "units", False)),
             )
         elif args.worktrees_command == "reset":
             from .execution_worktree import reset_run_worktree
@@ -2208,6 +2439,27 @@ def cmd_worktrees(args: argparse.Namespace) -> int:
                 args.run_id,
                 data_dir=Path(args.data_dir) if args.data_dir else resolve_data_dir(),
                 apply=bool(args.apply),
+            )
+        elif args.worktrees_command == "record-post-writer":
+            from .execution_worktree import record_unit_post_writer_report
+
+            payload = record_unit_post_writer_report(
+                args.run_id,
+                args.phase,
+                args.unit,
+                data_dir=Path(args.data_dir) if args.data_dir else resolve_data_dir(),
+                report_path=Path(args.report_path),
+            )
+        elif args.worktrees_command == "record-spec-review":
+            from .execution_worktree import record_unit_spec_review_verdict
+
+            payload = record_unit_spec_review_verdict(
+                args.run_id,
+                args.phase,
+                args.unit,
+                data_dir=Path(args.data_dir) if args.data_dir else resolve_data_dir(),
+                verdict=args.verdict,
+                report_path=Path(args.report_path) if args.report_path else None,
             )
         elif args.worktrees_command == "names":
             repo = Path(args.repo)
@@ -2387,6 +2639,8 @@ def _format_worktree_status(payload: Mapping[str, Any]) -> str:
         lines.append(f"  branch: {payload.get('branch')}")
     if payload.get("manifest_base_sha") or payload.get("source_base_sha"):
         lines.append(f"  base: manifest={payload.get('manifest_base_sha')} source={payload.get('source_base_sha')}")
+    if payload.get("base_drift_safe"):
+        lines.append("  base_drift: safe_rebuild_available")
     if payload.get("adoption_state"):
         lines.append(f"  adoption_state: {payload.get('adoption_state')}")
     commits = payload.get("unadopted_commits") or []
@@ -2401,6 +2655,24 @@ def _format_worktree_status(payload: Mapping[str, Any]) -> str:
             lines.append(f"    - {path}")
     if payload.get("recommended_command"):
         lines.append(f"  next: {payload.get('recommended_command')}")
+    if payload.get("unit_drift"):
+        lines.append(
+            "  unit_drift: "
+            f"dirty={payload.get('unit_dirty_count') or 0} "
+            f"conflicted={payload.get('unit_conflict_count') or 0} "
+            f"ready_unmerged={payload.get('unit_unmerged_ready_count') or 0}"
+        )
+    for unit in payload.get("units") or []:
+        if isinstance(unit, Mapping):
+            lines.append(
+                "  unit: "
+                f"{unit.get('phase_id')}/{unit.get('unit_id')} "
+                f"merge={unit.get('merge_state')} "
+                f"post_writer={unit.get('post_writer_status')} "
+                f"spec_review={unit.get('spec_review_status')} "
+                f"dirty={unit.get('dirty_file_count') or 0} "
+                f"ahead={unit.get('branch_ahead_count') or 0}"
+            )
     return "\n".join(lines)
 
 
@@ -2412,6 +2684,12 @@ def _format_worktree_reset(payload: Mapping[str, Any]) -> str:
         lines.append(f"  archived_branch: {payload.get('archived_branch')}")
     if payload.get("safe_git_worktree_root"):
         lines.append(f"  removed: {payload.get('safe_git_worktree_root')}")
+    for path in payload.get("removed_unit_worktrees") or []:
+        lines.append(f"  removed_unit: {path}")
+    for branch in payload.get("archived_unit_branches") or []:
+        lines.append(f"  archived_unit_branch: {branch}")
+    for branch in payload.get("deleted_unit_branches") or []:
+        lines.append(f"  deleted_unit_branch: {branch}")
     return "\n".join(lines)
 
 
@@ -2440,6 +2718,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p = preset_sub.add_parser("clear"); p.set_defaults(func=cmd_preset_clear)
     p = preset_sub.add_parser("list"); p.set_defaults(func=cmd_preset_list)
     p = preset_sub.add_parser("show"); p.add_argument("name"); p.set_defaults(func=cmd_preset_show)
+    p = preset_sub.add_parser("resolve"); p.add_argument("name"); p.add_argument("--json", action="store_true"); p.set_defaults(func=cmd_preset_resolve)
     p = preset_sub.add_parser("save"); p.add_argument("name"); p.add_argument("--from", dest="source", required=True); p.set_defaults(func=cmd_preset_save)
     p = preset_sub.add_parser("diff"); p.add_argument("name"); p.set_defaults(func=cmd_preset_diff)
     p = preset_sub.add_parser("rename"); p.add_argument("old_name"); p.add_argument("new_name"); p.set_defaults(func=cmd_preset_rename)
@@ -2472,6 +2751,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--preset", default="current", help="preset to inspect; default is the active preset, falling back to default pipeline")
     p.add_argument("--mco", action="store_true", help="also run mco doctor --json")
     p.add_argument("--review", action="store_true", help="run internal swarm-review provider shim diagnostics")
+    p.add_argument("--backend-tier", choices=["path", "version", "handshake"], default="path")
     p.add_argument("--mco-timeout-seconds", type=int, default=30)
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_providers_doctor)
@@ -2598,7 +2878,15 @@ def _build_parser() -> argparse.ArgumentParser:
     p = sessions_sub.add_parser("doctor")
     p.add_argument("--json", action="store_true")
     p.add_argument("--live", action="store_true")
+    p.add_argument("--launcher", choices=["manual", "fake-test", "claude-print", "interactive"])
     p.set_defaults(func=cmd_sessions)
+
+    beads = sub.add_parser("beads")
+    beads_sub = beads.add_subparsers(dest="beads_command")
+    p = beads_sub.add_parser("check")
+    p.add_argument("--repo", default=".")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_beads)
 
     context = sub.add_parser("context")
     context_sub = context.add_subparsers(dest="context_command")
@@ -2851,6 +3139,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p = worktrees_sub.add_parser("status")
     p.add_argument("run_id")
     p.add_argument("--data-dir")
+    p.add_argument("--units", action="store_true", help="include per-unit worktree details")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_worktrees)
     p = worktrees_sub.add_parser("reset")
@@ -2866,6 +3155,23 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("run_id")
     p.add_argument("--data-dir")
     p.add_argument("--apply", action="store_true")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_worktrees)
+    p = worktrees_sub.add_parser("record-post-writer")
+    p.add_argument("run_id")
+    p.add_argument("--phase", required=True)
+    p.add_argument("--unit", required=True)
+    p.add_argument("--report-path", required=True)
+    p.add_argument("--data-dir")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_worktrees)
+    p = worktrees_sub.add_parser("record-spec-review")
+    p.add_argument("run_id")
+    p.add_argument("--phase", required=True)
+    p.add_argument("--unit", required=True)
+    p.add_argument("--verdict", required=True, choices=["approved", "rejected", "skipped"])
+    p.add_argument("--report-path")
+    p.add_argument("--data-dir")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_worktrees)
     p = worktrees_sub.add_parser("cleanup-run")

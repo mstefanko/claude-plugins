@@ -25,6 +25,11 @@ from swarm_do.pipeline.run_state import active_run_path, load_active_run
 RUN_ID = "01ARZ3NDEKTSV4RRFFQ69G5FAV"
 
 
+class _PassingPreflight:
+    def as_dict(self) -> dict:
+        return {"ok": True, "blocker_ids": [], "warning_ids": []}
+
+
 def _read_run_events(data_dir: Path) -> list[dict]:
     path = data_dir / "telemetry" / "run_events.jsonl"
     if not path.is_file():
@@ -37,8 +42,11 @@ class CommandProfileTests(unittest.TestCase):
         self._old_data = os.environ.get("CLAUDE_PLUGIN_DATA")
         self.td = tempfile.TemporaryDirectory()
         os.environ["CLAUDE_PLUGIN_DATA"] = self.td.name
+        self._preflight_patcher = mock.patch("swarm_do.pipeline.cli._dispatch_preflight", return_value=_PassingPreflight())
+        self._preflight_patcher.start()
 
     def tearDown(self) -> None:
+        self._preflight_patcher.stop()
         self.td.cleanup()
         if self._old_data is None:
             os.environ.pop("CLAUDE_PLUGIN_DATA", None)

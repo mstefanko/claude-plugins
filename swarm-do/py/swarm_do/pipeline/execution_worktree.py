@@ -10,15 +10,23 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping
+from typing import Any, Callable, Iterable, Iterator, Mapping
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - POSIX-only lock primitive.
+    fcntl = None  # type: ignore[assignment]
 
 from .paths import REPO_ROOT
 from .run_state import _atomic_json_write, append_run_event, utc_now, validate_run_event
 from .unit_sessions import (
     find_unit_session,
     load_unit_sessions,
+    locked_unit_sessions,
     replace_unit_session,
     unit_session_template,
     unit_sessions_path,
@@ -591,22 +599,23 @@ def materialize_unit_execution_worktree(
         copy_specs=copy_specs,
     )
     copied = _copy_required_artifacts(resolved)
-    state = load_unit_sessions(run_id, data_dir=data)
-    unit = find_unit_session(state, phase_id, unit_id)
-    unit.update(
-        {
-            "branch": branch,
-            "worktree_root": str(unit_git),
-            "project_root": str(unit_project),
-            "base_sha": base_sha,
-            "base_ref": base_ref,
-            "updated_at": utc_now(),
-        }
-    )
-    state = write_unit_sessions(
-        replace_unit_session(state, phase_id, unit_id, unit),
-        data_dir=data,
-    )
+    with locked_unit_sessions(run_id, data_dir=data):
+        state = load_unit_sessions(run_id, data_dir=data)
+        unit = find_unit_session(state, phase_id, unit_id)
+        unit.update(
+            {
+                "branch": branch,
+                "worktree_root": str(unit_git),
+                "project_root": str(unit_project),
+                "base_sha": base_sha,
+                "base_ref": base_ref,
+                "updated_at": utc_now(),
+            }
+        )
+        state = write_unit_sessions(
+            replace_unit_session(state, phase_id, unit_id, unit),
+            data_dir=data,
+        )
     return {
         "run_id": run_id,
         "phase_id": phase_id,
@@ -632,38 +641,94 @@ def record_unit_post_writer_report(
 ) -> dict[str, Any]:
     _assert_valid_run_id(run_id)
     data = Path(data_dir)
-    state = load_unit_sessions(run_id, data_dir=data)
-    unit = find_unit_session(state, phase_id, unit_id)
     report = _read_json_mapping(Path(report_path)) or {}
+    _validate_post_writer_report_binding(report, run_id=run_id, phase_id=phase_id, unit_id=unit_id)
     gate = report.get("gate") if isinstance(report.get("gate"), Mapping) else {}
     gate_status = str(gate.get("status") or "unknown")
-    writer_status = "approved" if gate_status == "passed" else "blocked"
-    merge_state = "ready" if writer_status == "approved" else "blocked"
-    attempt = max(1, int(unit.get("attempt") or 0))
-    history = [dict(item) for item in unit.get("attempt_history") or [] if isinstance(item, Mapping)]
-    history_row = {
-        "attempt": attempt,
-        "post_writer_report_path": str(Path(report_path)),
-        "writer_status": writer_status,
-        "gate_status": gate_status,
-        "changed_files": report.get("changed_files") if isinstance(report.get("changed_files"), list) else [],
-        "recorded_at": utc_now(),
-    }
-    if not history or history[-1].get("post_writer_report_path") != history_row["post_writer_report_path"]:
-        history.append(history_row)
-    unit.update(
-        {
+    post_writer_status = "passed" if gate_status == "passed" else "failed"
+    gate_reasons = [str(item) for item in gate.get("failure_reasons") or [] if isinstance(item, str)]
+    with locked_unit_sessions(run_id, data_dir=data):
+        state = load_unit_sessions(run_id, data_dir=data)
+        unit = find_unit_session(state, phase_id, unit_id)
+        report_base_sha = report.get("base_sha")
+        if isinstance(report_base_sha, str) and report_base_sha and report_base_sha != unit.get("base_sha"):
+            raise RunExecutionWorktreeError(
+                f"post-writer report base_sha {report_base_sha} does not match unit base_sha {unit.get('base_sha')}"
+            )
+        unit_git = Path(str(unit["worktree_root"]))
+        unit_head = _rev_parse_or_none(unit_git, "HEAD")
+        attempt = max(1, int(unit.get("attempt") or 0))
+        recorded_at = utc_now()
+        history = [dict(item) for item in unit.get("attempt_history") or [] if isinstance(item, Mapping)]
+        history_row = {
             "attempt": attempt,
-            "writer_status": writer_status,
             "post_writer_report_path": str(Path(report_path)),
-            "merge_state": merge_state,
-            "attempt_history": history,
-            "updated_at": utc_now(),
-            "completed_at": utc_now(),
+            "writer_status": "approved" if post_writer_status == "passed" else "blocked",
+            "post_writer_status": post_writer_status,
+            "gate_status": gate_status,
+            "changed_files": report.get("changed_files") if isinstance(report.get("changed_files"), list) else [],
+            "recorded_at": recorded_at,
         }
-    )
-    state = write_unit_sessions(replace_unit_session(state, phase_id, unit_id, unit), data_dir=data)
-    return find_unit_session(state, phase_id, unit_id)
+        if not history or history[-1].get("post_writer_report_path") != history_row["post_writer_report_path"]:
+            history.append(history_row)
+        unit.update(
+            {
+                "attempt": attempt,
+                "writer_status": "approved" if post_writer_status == "passed" else "blocked",
+                "post_writer_status": post_writer_status,
+                "post_writer_gate_reasons": gate_reasons,
+                "post_writer_report_path": str(Path(report_path)),
+                "post_writer_report_sha256": _sha256_file(Path(report_path)),
+                "post_writer_unit_head_sha": unit_head,
+                "post_writer_base_sha": unit.get("base_sha"),
+                "merge_state": _unit_merge_state_after_gates(unit, post_writer_status=post_writer_status),
+                "attempt_history": history,
+                "updated_at": recorded_at,
+                "completed_at": recorded_at if post_writer_status == "passed" else unit.get("completed_at"),
+            }
+        )
+        state = write_unit_sessions(replace_unit_session(state, phase_id, unit_id, unit), data_dir=data)
+        return find_unit_session(state, phase_id, unit_id)
+
+
+def record_unit_spec_review_verdict(
+    run_id: str,
+    phase_id: str,
+    unit_id: str,
+    *,
+    data_dir: Path,
+    verdict: str,
+    report_path: Path | None = None,
+) -> dict[str, Any]:
+    _assert_valid_run_id(run_id)
+    if verdict not in {"approved", "rejected", "skipped"}:
+        raise RunExecutionWorktreeError("spec-review verdict must be approved, rejected, or skipped")
+    if verdict in {"approved", "rejected"} and report_path is None:
+        raise RunExecutionWorktreeError("approved/rejected spec-review verdicts require a report_path")
+    report: Mapping[str, Any] = {}
+    if report_path is not None:
+        report = _read_json_mapping(Path(report_path)) or {}
+        _validate_spec_review_binding(report, run_id=run_id, phase_id=phase_id, unit_id=unit_id)
+    data = Path(data_dir)
+    with locked_unit_sessions(run_id, data_dir=data):
+        state = load_unit_sessions(run_id, data_dir=data)
+        unit = find_unit_session(state, phase_id, unit_id)
+        unit_git = Path(str(unit["worktree_root"]))
+        unit_head = _rev_parse_or_none(unit_git, "HEAD")
+        recorded_at = utc_now()
+        unit.update(
+            {
+                "spec_review_status": verdict,
+                "spec_review_report_path": str(Path(report_path)) if report_path is not None else None,
+                "spec_review_report_sha256": _sha256_file(Path(report_path)) if report_path is not None else None,
+                "spec_review_unit_head_sha": unit_head,
+                "spec_review_recorded_at": recorded_at,
+                "merge_state": _unit_merge_state_after_gates(unit, spec_review_status=verdict),
+                "updated_at": recorded_at,
+            }
+        )
+        state = write_unit_sessions(replace_unit_session(state, phase_id, unit_id, unit), data_dir=data)
+        return find_unit_session(state, phase_id, unit_id)
 
 
 def merge_unit_execution_worktree(
@@ -714,6 +779,9 @@ def merge_unit_execution_worktree(
         "status": "dry_run",
         "unit_branch": unit_branch,
         "unit_worktree_root": str(unit_git),
+        "post_writer_status": unit.get("post_writer_status"),
+        "spec_review_status": unit.get("spec_review_status"),
+        "merge_state": unit.get("merge_state"),
         "integration_branch": integration_branch,
         "integration_git_worktree_root": str(integration_git),
         "integration_project_root": str(integration_project),
@@ -722,10 +790,25 @@ def merge_unit_execution_worktree(
     }
     if not apply:
         return payload
-    if unit.get("writer_status") != "approved":
-        unit["merge_state"] = "blocked"
+
+    with locked_unit_sessions(run_id, data_dir=data):
+        state = load_unit_sessions(run_id, data_dir=data)
+        unit = find_unit_session(state, phase_id, unit_id)
+        unit_branch = str(unit["branch"])
+        unit_git = Path(str(unit["worktree_root"]))
+        blocker = _unit_merge_gate_blocker(unit_git, unit)
+        if blocker is not None:
+            unit["merge_state"] = "blocked"
+            unit["updated_at"] = utc_now()
+            write_unit_sessions(replace_unit_session(state, phase_id, unit_id, unit), data_dir=data)
+            payload["status"] = "blocked"
+            raise RunExecutionWorktreeAdoptionBlocked(blocker, payload)
+        unit["merge_state"] = "ready"
+        unit["merge_target_branch"] = integration_branch
         unit["updated_at"] = utc_now()
         write_unit_sessions(replace_unit_session(state, phase_id, unit_id, unit), data_dir=data)
+
+    if unit.get("post_writer_status") != "passed":
         payload["status"] = "blocked"
         raise RunExecutionWorktreeAdoptionBlocked(
             f"unit {unit_id} has not passed the post-writer gate",
@@ -738,21 +821,22 @@ def merge_unit_execution_worktree(
             payload,
         )
 
-    _ensure_integration_worktree(
-        source_git,
-        integration_git=integration_git,
-        integration_branch=integration_branch,
-        base_sha=str(manifest["base_sha"]),
-    )
-    merge_result = _run_git(
-        integration_git,
-        "merge",
-        "--no-ff",
-        unit_branch,
-        "-m",
-        f"Merge work unit {unit_id}",
-        check=False,
-    )
+    with locked_integration_merge(run_id, data_dir=data):
+        _ensure_integration_worktree(
+            source_git,
+            integration_git=integration_git,
+            integration_branch=integration_branch,
+            base_sha=str(manifest["base_sha"]),
+        )
+        merge_result = _run_git(
+            integration_git,
+            "merge",
+            "--no-ff",
+            unit_branch,
+            "-m",
+            f"Merge work unit {unit_id}",
+            check=False,
+        )
     conflicted = _conflicted_files(integration_git)
     if merge_result.returncode != 0 or conflicted:
         conflict = _write_unit_conflict_manifest(
@@ -769,16 +853,19 @@ def merge_unit_execution_worktree(
             merge_result=merge_result,
             conflicted_files=conflicted,
         )
-        unit.update(
-            {
-                "merge_state": "conflicted",
-                "merge_target_branch": integration_branch,
-                "conflict_manifest_path": str(conflict_manifest_path),
-                "cleanup_state": "preserved",
-                "updated_at": utc_now(),
-            }
-        )
-        write_unit_sessions(replace_unit_session(state, phase_id, unit_id, unit), data_dir=data)
+        with locked_unit_sessions(run_id, data_dir=data):
+            state = load_unit_sessions(run_id, data_dir=data)
+            unit = find_unit_session(state, phase_id, unit_id)
+            unit.update(
+                {
+                    "merge_state": "conflicted",
+                    "merge_target_branch": integration_branch,
+                    "conflict_manifest_path": str(conflict_manifest_path),
+                    "cleanup_state": "preserved",
+                    "updated_at": utc_now(),
+                }
+            )
+            write_unit_sessions(replace_unit_session(state, phase_id, unit_id, unit), data_dir=data)
         _append_unit_worktree_conflict_event(
             data,
             run_id=run_id,
@@ -798,17 +885,20 @@ def merge_unit_execution_worktree(
         )
         return payload
 
-    unit.update(
-        {
-            "merge_state": "merged",
-            "merge_target_branch": integration_branch,
-            "conflict_manifest_path": None,
-            "cleanup_state": "cleanup_eligible",
-            "updated_at": utc_now(),
-            "completed_at": utc_now(),
-        }
-    )
-    state = write_unit_sessions(replace_unit_session(state, phase_id, unit_id, unit), data_dir=data)
+    with locked_unit_sessions(run_id, data_dir=data):
+        state = load_unit_sessions(run_id, data_dir=data)
+        unit = find_unit_session(state, phase_id, unit_id)
+        unit.update(
+            {
+                "merge_state": "merged",
+                "merge_target_branch": integration_branch,
+                "conflict_manifest_path": None,
+                "cleanup_state": "cleanup_eligible",
+                "updated_at": utc_now(),
+                "completed_at": utc_now(),
+            }
+        )
+        state = write_unit_sessions(replace_unit_session(state, phase_id, unit_id, unit), data_dir=data)
     payload.update(
         {
             "applied": True,
@@ -861,7 +951,7 @@ def cleanup_run_worktree(run_id: str, *, data_dir: Path, apply: bool = False) ->
     }
 
 
-def run_worktree_status(run_id: str, *, data_dir: Path) -> dict[str, Any]:
+def run_worktree_status(run_id: str, *, data_dir: Path, include_units: bool = False) -> dict[str, Any]:
     _assert_valid_run_id(run_id)
     manifest_path = Path(data_dir) / "worktrees" / run_id / "manifest.json"
     if not manifest_path.is_file():
@@ -879,7 +969,14 @@ def run_worktree_status(run_id: str, *, data_dir: Path) -> dict[str, Any]:
     base_ref = str(manifest.get("base_ref") or "HEAD")
     source_base_sha = _rev_parse_or_none(source_git, base_ref)
     unadopted_commits = _branch_commits_ahead(source_git, base_sha, branch)
-    dirty_entries = _git_status_entries(safe_git, ".") if (safe_git / ".git").exists() else []
+    copied_rels = _copied_artifact_rels(manifest)
+    raw_dirty_entries = _git_status_entries(safe_git, ".") if (safe_git / ".git").exists() else []
+    dirty_entries, ignored_artifact_paths = _filter_run_artifact_status_entries(raw_dirty_entries, copied_rels=copied_rels)
+    units = _unit_worktree_statuses(run_id, data_dir=Path(data_dir), include_details=include_units)
+    unit_dirty_count = sum(1 for item in units if item.get("dirty"))
+    unit_conflict_count = sum(1 for item in units if item.get("conflict_manifest_present"))
+    unit_unmerged_ready_count = sum(1 for item in units if item.get("merge_state") == "ready")
+    unit_drift = unit_dirty_count + unit_conflict_count + unit_unmerged_ready_count > 0
     drift = []
     if source_base_sha is not None and source_base_sha != base_sha:
         drift.append("base_sha")
@@ -887,6 +984,8 @@ def run_worktree_status(run_id: str, *, data_dir: Path) -> dict[str, Any]:
         drift.append("unadopted_commits")
     if dirty_entries:
         drift.append("dirty_worktree")
+    if unit_drift:
+        drift.append("unit_drift")
     return {
         "run_id": run_id,
         "status": "drift" if drift else "ok",
@@ -899,9 +998,16 @@ def run_worktree_status(run_id: str, *, data_dir: Path) -> dict[str, Any]:
         "manifest_base_sha": base_sha,
         "source_base_sha": source_base_sha,
         "base_drift": source_base_sha is not None and source_base_sha != base_sha,
+        "base_drift_safe": bool(source_base_sha is not None and source_base_sha != base_sha and not unadopted_commits and not dirty_entries),
         "unadopted_commits": unadopted_commits,
         "dirty_paths": [_format_status_entry(entry) for entry in dirty_entries],
+        "copied_artifact_paths": ignored_artifact_paths,
         "dirty_file_count": len(dirty_entries),
+        "unit_drift": unit_drift,
+        "unit_dirty_count": unit_dirty_count,
+        "unit_conflict_count": unit_conflict_count,
+        "unit_unmerged_ready_count": unit_unmerged_ready_count,
+        "units": units if include_units else [],
         "adoption_state": str(manifest.get("adoption_state") or "unadopted"),
         "drift": drift,
         "recommended_command": f"bin/swarm worktrees reset {run_id} --discard" if drift else None,
@@ -925,7 +1031,7 @@ def reset_run_worktree(
     safe_git = Path(str(manifest["safe_git_worktree_root"]))
     branch = str(manifest["branch"])
     base_sha = str(manifest["base_sha"])
-    status = run_worktree_status(run_id, data_dir=data_dir)
+    status = run_worktree_status(run_id, data_dir=data_dir, include_units=True)
     unsafe_reasons = []
     if status.get("unadopted_commits"):
         unsafe_reasons.append("unadopted_commits")
@@ -933,6 +1039,12 @@ def reset_run_worktree(
         unsafe_reasons.append("dirty_worktree")
     if status.get("adoption_state") != "unadopted":
         unsafe_reasons.append("adoption_state")
+    if status.get("unit_dirty_count"):
+        unsafe_reasons.append("unit_dirty_worktree")
+    if status.get("unit_conflict_count"):
+        unsafe_reasons.append("unit_conflict")
+    if status.get("unit_unmerged_ready_count"):
+        unsafe_reasons.append("unit_ready_unmerged")
     if unsafe_reasons and not force:
         payload = {
             **status,
@@ -944,6 +1056,29 @@ def reset_run_worktree(
             "run worktree reset would discard or hide unadopted work; pass --force or archive the branch",
             payload,
         )
+
+    removed_unit_worktrees: list[str] = []
+    archived_unit_branches: list[str] = []
+    deleted_unit_branches: list[str] = []
+    if force:
+        for unit in status.get("units") or []:
+            if not isinstance(unit, Mapping):
+                continue
+            unit_root_value = unit.get("worktree_root")
+            unit_branch = unit.get("branch")
+            if isinstance(unit_root_value, str) and unit_root_value:
+                unit_root = Path(unit_root_value)
+                if unit_root.exists():
+                    _remove_run_worktree_checkout(source_git, unit_root)
+                    removed_unit_worktrees.append(str(unit_root))
+            if isinstance(unit_branch, str) and unit_branch and _branch_exists(source_git, unit_branch):
+                if archive_branch:
+                    archived = _archived_unit_branch_name(unit_branch)
+                    _git(source_git, "branch", "-m", unit_branch, archived)
+                    archived_unit_branches.append(archived)
+                else:
+                    _git(source_git, "branch", "-D", unit_branch)
+                    deleted_unit_branches.append(unit_branch)
 
     _remove_run_worktree_checkout(source_git, safe_git)
     archived_branch: str | None = None
@@ -964,6 +1099,9 @@ def reset_run_worktree(
         "discarded": discard,
         "archived_branch": archived_branch,
         "deleted_branch": branch if discard else None,
+        "archived_unit_branches": archived_unit_branches,
+        "deleted_unit_branches": deleted_unit_branches,
+        "removed_unit_worktrees": removed_unit_worktrees,
         "manifest_path": str(manifest_path),
         "safe_git_worktree_root": str(safe_git),
         "base_sha": base_sha,
@@ -1009,8 +1147,29 @@ def _ensure_unit_sessions(
     base_ref: str | None = None,
     base_sha: str | None = None,
 ) -> dict[str, Any]:
-    if unit_sessions_path(run_id, data_dir=data_dir).is_file():
-        return load_unit_sessions(run_id, data_dir=data_dir)
+    with locked_unit_sessions(run_id, data_dir=data_dir):
+        if unit_sessions_path(run_id, data_dir=data_dir).is_file():
+            return load_unit_sessions(run_id, data_dir=data_dir)
+        state = _new_unit_sessions_state(
+            run_id,
+            data_dir=data_dir,
+            manifest=manifest,
+            prepared=prepared,
+            base_ref=base_ref,
+            base_sha=base_sha,
+        )
+        return write_unit_sessions(state, data_dir=data_dir)
+
+
+def _new_unit_sessions_state(
+    run_id: str,
+    *,
+    data_dir: Path,
+    manifest: Mapping[str, Any],
+    prepared: Mapping[str, Any],
+    base_ref: str | None = None,
+    base_sha: str | None = None,
+) -> dict[str, Any]:
     now = utc_now()
     source_git = Path(str(manifest["source_git_root"]))
     project_subdir = str(manifest.get("project_subdir") or "")
@@ -1036,7 +1195,7 @@ def _ensure_unit_sessions(
                 now=now,
             )
         )
-    state = {
+    return {
         "schema_version": 1,
         "run_id": run_id,
         "prepared_artifact_path": str(Path(data_dir) / "runs" / run_id / "prepared_plan.v1.json"),
@@ -1046,7 +1205,6 @@ def _ensure_unit_sessions(
         "mode": "unit-worktrees",
         "units": units,
     }
-    return write_unit_sessions(state, data_dir=data_dir)
 
 
 def _adoption_source(manifest: Mapping[str, Any]) -> dict[str, Any]:
@@ -1181,6 +1339,112 @@ def _ensure_integration_worktree(
         _git(source_git, "worktree", "add", str(integration_git), integration_branch)
     else:
         _git(source_git, "worktree", "add", "-b", integration_branch, str(integration_git), base_sha)
+
+
+@contextmanager
+def locked_integration_merge(
+    run_id: str,
+    *,
+    data_dir: Path,
+    timeout_seconds: float = 60.0,
+) -> Iterator[None]:
+    if fcntl is None:
+        raise RunExecutionWorktreeError("integration merge locks require POSIX fcntl.flock")
+    lock_path = Path(data_dir) / "runs" / run_id / "integration-merge.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+", encoding="utf-8") as handle:
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError as exc:
+                if time.monotonic() >= deadline:
+                    raise RunExecutionWorktreeError(f"timed out waiting for integration merge lock: {lock_path}") from exc
+                time.sleep(0.05)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _validate_post_writer_report_binding(
+    report: Mapping[str, Any],
+    *,
+    run_id: str,
+    phase_id: str,
+    unit_id: str,
+) -> None:
+    if report.get("schema_version") != "post_writer_report.v1":
+        raise RunExecutionWorktreeError("post-writer report schema_version must be post_writer_report.v1")
+    _validate_optional_identity(report, run_id=run_id, phase_id=phase_id, unit_id=unit_id, label="post-writer report")
+    if report.get("work_unit_id") != unit_id:
+        raise RunExecutionWorktreeError(
+            f"post-writer report work_unit_id {report.get('work_unit_id')!r} does not match {unit_id!r}"
+        )
+
+
+def _validate_spec_review_binding(
+    report: Mapping[str, Any],
+    *,
+    run_id: str,
+    phase_id: str,
+    unit_id: str,
+) -> None:
+    _validate_optional_identity(report, run_id=run_id, phase_id=phase_id, unit_id=unit_id, label="spec-review report")
+
+
+def _validate_optional_identity(
+    report: Mapping[str, Any],
+    *,
+    run_id: str,
+    phase_id: str,
+    unit_id: str,
+    label: str,
+) -> None:
+    for key, expected in (("run_id", run_id), ("phase_id", phase_id), ("unit_id", unit_id), ("work_unit_id", unit_id)):
+        value = report.get(key)
+        if isinstance(value, str) and value and value != expected:
+            raise RunExecutionWorktreeError(f"{label} {key} {value!r} does not match {expected!r}")
+
+
+def _unit_merge_state_after_gates(
+    unit: Mapping[str, Any],
+    *,
+    post_writer_status: str | None = None,
+    spec_review_status: str | None = None,
+) -> str:
+    existing = unit.get("merge_state")
+    if existing in {"merged", "conflicted"}:
+        return str(existing)
+    post = post_writer_status or str(unit.get("post_writer_status") or "pending")
+    spec = spec_review_status or str(unit.get("spec_review_status") or "pending")
+    if post == "failed" or spec == "rejected":
+        return "blocked"
+    if post == "passed" and spec in {"approved", "skipped"}:
+        return "ready"
+    return "pending"
+
+
+def _unit_merge_gate_blocker(unit_git: Path, unit: Mapping[str, Any]) -> str | None:
+    unit_id = str(unit.get("unit_id") or "<unknown>")
+    if unit.get("post_writer_status") != "passed":
+        return f"unit {unit_id} has not passed the post-writer gate"
+    spec_status = unit.get("spec_review_status")
+    if spec_status not in {"approved", "skipped"}:
+        return f"unit {unit_id} has not passed the spec-review gate"
+    current_head = _rev_parse_or_none(unit_git, "HEAD")
+    if current_head is None:
+        return f"unit {unit_id} branch HEAD cannot be resolved"
+    post_head = unit.get("post_writer_unit_head_sha")
+    if isinstance(post_head, str) and post_head and post_head != current_head:
+        return f"unit {unit_id} post-writer report is stale for current branch HEAD"
+    if spec_status == "approved" and not unit.get("spec_review_report_sha256"):
+        return f"unit {unit_id} approved spec-review report is missing"
+    spec_head = unit.get("spec_review_unit_head_sha")
+    if isinstance(spec_head, str) and spec_head and spec_head != current_head:
+        return f"unit {unit_id} spec-review report is stale for current branch HEAD"
+    return None
 
 
 def _write_integration_conflict_manifest(
@@ -1535,11 +1799,13 @@ def _base_drift_payload(
     recorded_base = str(manifest.get("base_sha") or "")
     adoption_state = str(manifest.get("adoption_state") or "unadopted")
     unadopted_commits = _branch_commits_ahead(resolved.source_git_root, recorded_base, branch)
-    dirty_entries = (
+    raw_dirty_entries = (
         _git_status_entries(resolved.safe_git_root, ".")
         if (resolved.safe_git_root / ".git").exists()
         else []
     )
+    copied_rels = _copied_artifact_rels(manifest)
+    dirty_entries, ignored_artifact_paths = _filter_run_artifact_status_entries(raw_dirty_entries, copied_rels=copied_rels)
     unsafe_reasons: list[str] = []
     if adoption_state != "unadopted":
         unsafe_reasons.append("adoption_state")
@@ -1558,6 +1824,7 @@ def _base_drift_payload(
         "adoption_state": adoption_state,
         "unadopted_commits": unadopted_commits,
         "dirty_paths": [_format_status_entry(entry) for entry in dirty_entries],
+        "copied_artifact_paths": ignored_artifact_paths,
         "safe_to_rebuild": not unsafe_reasons,
         "unsafe_reasons": unsafe_reasons,
         "recommended_command": f"bin/swarm worktrees reset {resolved.run_id} --discard --force",
@@ -1650,6 +1917,11 @@ def _append_worktree_reset_event(data_dir: Path, *, run_id: str, details: Mappin
 def _archived_execution_branch_name(run_id: str) -> str:
     stamp = utc_now().replace(":", "").replace(".", "-")
     return f"{execution_branch_name(run_id)}.archived-{stamp}"
+
+
+def _archived_unit_branch_name(branch: str) -> str:
+    stamp = utc_now().replace(":", "").replace(".", "-")
+    return f"{branch}.archived-{stamp}"
 
 
 def _artifact_copy_specs(
@@ -1822,12 +2094,94 @@ def _project_relative_status_path(path: str, *, project_subdir: str) -> str:
 
 
 def _adoption_block_reason(path: str, *, copied_rels: set[str]) -> str | None:
+    if _is_run_artifact_path(path, copied_rels=copied_rels):
+        return "run_artifact"
     rel = Path(path)
     if rel.is_absolute() or any(part == ".." for part in rel.parts):
         return "path_escape"
-    if path in copied_rels or path.startswith("data/runs/"):
-        return "run_artifact"
     return None
+
+
+def _is_run_artifact_path(path: str, *, copied_rels: set[str]) -> bool:
+    rel = Path(path)
+    if rel.is_absolute() or any(part == ".." for part in rel.parts):
+        return False
+    normalized = rel.as_posix()
+    return normalized in copied_rels or normalized.startswith("data/runs/")
+
+
+def _copied_artifact_rels(manifest: Mapping[str, Any]) -> set[str]:
+    return {
+        Path(str(item.get("relative_path"))).as_posix()
+        for item in manifest.get("copied_artifacts") or []
+        if isinstance(item, Mapping) and isinstance(item.get("relative_path"), str)
+    }
+
+
+def _filter_run_artifact_status_entries(
+    entries: Iterable[Mapping[str, str]],
+    *,
+    copied_rels: set[str],
+) -> tuple[list[dict[str, str]], list[str]]:
+    kept: list[dict[str, str]] = []
+    ignored: list[str] = []
+    for entry in entries:
+        paths = [entry.get("path"), entry.get("original_path")]
+        present = [str(path) for path in paths if isinstance(path, str) and path]
+        if present and all(_is_run_artifact_path(path, copied_rels=copied_rels) for path in present):
+            ignored.extend(Path(path).as_posix() for path in present)
+            continue
+        kept.append(dict(entry))
+    return kept, sorted(set(ignored))
+
+
+def _unit_worktree_statuses(run_id: str, *, data_dir: Path, include_details: bool) -> list[dict[str, Any]]:
+    state_path = unit_sessions_path(run_id, data_dir=data_dir)
+    if not state_path.is_file():
+        return []
+    try:
+        state = load_unit_sessions(run_id, data_dir=data_dir)
+    except Exception:
+        return [
+            {
+                "run_id": run_id,
+                "status": "unit_sessions_unreadable",
+                "dirty": False,
+                "conflict_manifest_present": False,
+                "merge_state": "unknown",
+            }
+        ]
+    units: list[dict[str, Any]] = []
+    for unit in state.get("units") or []:
+        if not isinstance(unit, Mapping):
+            continue
+        root = Path(str(unit.get("worktree_root") or ""))
+        dirty_entries = _git_status_entries(root, ".") if (root / ".git").exists() else []
+        branch = str(unit.get("branch") or "")
+        base_sha = str(unit.get("base_sha") or "")
+        ahead = _branch_commits_ahead(root, base_sha, branch) if branch and base_sha and (root / ".git").exists() else []
+        conflict_path = unit.get("conflict_manifest_path")
+        conflict_present = isinstance(conflict_path, str) and bool(conflict_path) and Path(conflict_path).is_file()
+        row = {
+            "phase_id": unit.get("phase_id"),
+            "unit_id": unit.get("unit_id"),
+            "branch": branch,
+            "worktree_root": str(root) if str(root) else None,
+            "project_root": unit.get("project_root"),
+            "merge_state": unit.get("merge_state"),
+            "post_writer_status": unit.get("post_writer_status"),
+            "spec_review_status": unit.get("spec_review_status"),
+            "dirty": bool(dirty_entries),
+            "dirty_file_count": len(dirty_entries),
+            "branch_ahead_count": len(ahead),
+            "conflict_manifest_present": conflict_present,
+        }
+        if include_details:
+            row["dirty_paths"] = [_format_status_entry(entry) for entry in dirty_entries]
+            row["unmerged_commits"] = ahead
+            row["conflict_manifest_path"] = conflict_path if isinstance(conflict_path, str) else None
+        units.append(row)
+    return units
 
 
 def _destination_block_reason(manifest: Mapping[str, Any], operation: Mapping[str, Any]) -> str | None:
@@ -2209,6 +2563,7 @@ __all__ = [
     "materialize_unit_execution_worktree",
     "merge_unit_execution_worktree",
     "record_unit_post_writer_report",
+    "record_unit_spec_review_verdict",
     "materialize_run_execution_worktree",
     "reset_run_worktree",
     "resolve_run_execution_worktree",

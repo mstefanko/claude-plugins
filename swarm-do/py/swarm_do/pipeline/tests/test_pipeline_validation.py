@@ -117,8 +117,8 @@ class PipelineValidationTests(unittest.TestCase):
                 ["analysis", "clarify"],
                 ["writer"],
                 ["provider-review", "spec-review"],
-                ["codex-review", "docs"],
-                ["review"],
+                ["codex-review"],
+                ["docs", "review"],
             ],
         )
         review = next(stage for stage in pipeline["stages"] if stage["id"] == "review")
@@ -812,7 +812,7 @@ max_wall_clock_seconds = 1800
                 else:
                     os.environ["CLAUDE_PLUGIN_DATA"] = old
 
-    def test_synthesize_merge_agent_can_route_to_codex(self) -> None:
+    def test_synthesize_merge_agent_cannot_route_to_codex(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             data = Path(td)
             (data / "presets").mkdir()
@@ -836,7 +836,8 @@ max_wall_clock_seconds = 1800
             os.environ["CLAUDE_PLUGIN_DATA"] = td
             try:
                 result, *_ = validate_preset_and_pipeline("codex-merge")
-                self.assertTrue(result.ok, result.errors)
+                self.assertFalse(result.ok)
+                self.assertTrue(any("synthesize merge agent agent-review" in e for e in result.errors))
             finally:
                 if old is None:
                     os.environ.pop("CLAUDE_PLUGIN_DATA", None)

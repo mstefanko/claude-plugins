@@ -52,7 +52,7 @@ ACTIVE_PRESET="$(cat "${CLAUDE_PLUGIN_DATA}/current-preset.txt" 2>/dev/null || t
 if [[ -n "$ACTIVE_PRESET" ]]; then
   "$SWARM" preset dry-run "$ACTIVE_PRESET" <plan-path>
 else
-  "$SWARM" pipeline lint default
+  "$SWARM" preset resolve default --json
 fi
 ```
 
@@ -96,7 +96,7 @@ Deterministic helpers own parsing YAML, validating schemas, resolving backend ro
 Use the helpers:
 
 ```bash
-"$SWARM" pipeline show default
+"$SWARM" preset resolve default --json
 "$SWARM_BIN_DIR/swarm-validate" <preset-name> --plan <plan-path>
 "$SWARM" work-units batches <work-units.json> --parallelism <n> --state-json-file <unit-state.json> --json
 "$SWARM" worktrees names --run-id <run-id> --unit-id <unit-id> --json
@@ -125,7 +125,7 @@ but stay within the selected output-only profile:
 "$SWARM" review <optional-existing-path>
 ```
 
-Then load `bin/swarm pipeline show <profile>` and dispatch only that graph.
+Then load `bin/swarm preset resolve <profile> --json` and dispatch only that graph.
 Create child issues and synthesize merge issues exactly as the selected
 pipeline declares them. Close with the command file's final note contract on
 the parent issue:
@@ -264,7 +264,7 @@ writer/spec-review contain only the unit title, goal, allowed/blocked files,
 dependency notes, acceptance criteria, validation commands, and relevant
 context pointers.
 
-1. Load the active pipeline via `bin/swarm pipeline show <name>` and follow its topological layers.
+1. Load the active graph via `bin/swarm preset resolve <name> --json` and follow its topological layers.
 2. For each layer, dispatch every stage in the layer in parallel.
 3. For normal `agents` stages, create one beads issue per agent with the stage ID, role, upstream stage issues, full phase text, and verification checklist. If the agent has `lens: <lens-id>`, resolve that lens through `py/swarm_do/pipeline/catalog.py`, load the mapped `roles/<role>/variants/<name>.md` file, and include it as an additive overlay after the normal role prompt. Only singular `lens` is valid; do not stack or invent `lenses`.
 4. For `fan_out` stages, create `fan_out.count` sibling issues assigned to `fan_out.role`. For `variant: prompt_variants`, load the corresponding file from `roles/<role>/variants/<name>.md` and include it as an additive overlay. For `variant: models`, use the resolved route for each branch.

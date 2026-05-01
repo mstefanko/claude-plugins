@@ -165,6 +165,25 @@ class AutoContinueDecision:
 
 
 @dataclass(frozen=True)
+class VerifiedPreparedRun:
+    """Pure verification result for accepted prepared artifacts.
+
+    This object is intentionally side-effect free. Event-emitting wrappers
+    convert it into the narrower dispatch result shape.
+    """
+
+    run_id: str
+    artifact_path: Path
+    repo_root: Path
+    payload: Mapping[str, Any]
+    work_unit_artifacts: Mapping[str, Mapping[str, Any]]
+    inspect_artifact: Mapping[str, Any]
+    git_base_ref: str
+    git_base_sha: str
+    verified_at: str
+
+
+@dataclass(frozen=True)
 class PreparedDispatchResult:
     """Accepted prepared artifact verified for pure dispatch consumption."""
 
@@ -174,7 +193,9 @@ class PreparedDispatchResult:
     artifact_path: str
     source_plan_path: str
     prepared_plan_path: str
+    prepared_plan_sha: str
     inspect_artifact_path: str
+    repo_root: str
     git_base_ref: str
     git_base_sha: str
     phase_map: tuple[dict[str, Any], ...]
@@ -196,7 +217,9 @@ class PreparedDispatchResult:
             "artifact_path": self.artifact_path,
             "source_plan_path": self.source_plan_path,
             "prepared_plan_path": self.prepared_plan_path,
+            "prepared_plan_sha": self.prepared_plan_sha,
             "inspect_artifact_path": self.inspect_artifact_path,
+            "repo_root": self.repo_root,
             "git_base_ref": self.git_base_ref,
             "git_base_sha": self.git_base_sha,
             "phase_count": len(self.phase_map),
@@ -215,6 +238,7 @@ class PreparedDispatchResult:
             "prepared_artifact_path": self.artifact_path,
             "prepared_plan_path": self.prepared_plan_path,
             "prepared_inspect_path": self.inspect_artifact_path,
+            "prepared_plan_sha": self.prepared_plan_sha,
             "phase_map": list(self.phase_map),
             "review_findings": list(self.review_findings),
             "work_unit_artifacts": self.work_unit_artifacts,
@@ -361,6 +385,27 @@ def record_prepare_continue_failed(
         bd_epic_id=bd_epic_id,
         details={"failure_type": failure_type, "message": message},
         reason=message,
+    )
+
+
+def record_prepare_continue_decision(
+    run_id: str,
+    *,
+    allowed: bool,
+    reasons: Iterable[str] = (),
+    data_dir: Path | None = None,
+    bd_epic_id: str | None = None,
+) -> Path:
+    """Append a validated auto-continue decision event."""
+
+    normalized_reasons = [str(reason) for reason in reasons if str(reason)]
+    return _append_prepare_event(
+        data_dir,
+        run_id=run_id,
+        event_type="prepare_continue_decision",
+        bd_epic_id=bd_epic_id,
+        details={"allowed": bool(allowed), "reasons": normalized_reasons},
+        reason=", ".join(normalized_reasons) if normalized_reasons else None,
     )
 
 
@@ -680,7 +725,8 @@ def prepare_plan_run(
     prepared_text = canonical_plan_text(phases)
     source_sha = _sha256_file(source_abs)
     prepared_sha = _sha256_bytes(prepared_text.encode("utf-8"))
-    git_base_sha = _git_head_sha(root, "HEAD") or ("0" * 40)
+    resolved_git_base_sha = _git_head_sha(root, "HEAD")
+    git_base_sha = resolved_git_base_sha or ("0" * 40)
     now = utc_now()
 
     phase_entries: list[dict[str, Any]] = []
@@ -722,7 +768,19 @@ def prepare_plan_run(
         )
         previous_phase_id = phase.phase_id
 
-    lint_findings = (*base_lint_findings, *validate_phase_dependencies(phase_entries))
+    env_findings: tuple[dict[str, Any], ...] = ()
+    if resolved_git_base_sha is None:
+        env_findings = (
+            {
+                "code": "git_base_sha_unavailable",
+                "severity": "blocking",
+                "phase_id": None,
+                "location": "git:HEAD",
+                "message": "Cannot resolve HEAD to a git commit; prepared artifact is not dispatchable.",
+            },
+        )
+
+    lint_findings = (*base_lint_findings, *env_findings, *validate_phase_dependencies(phase_entries))
     if emit_events:
         _append_prepare_event(
             base_data,
@@ -1134,6 +1192,71 @@ def _auto_continue_phase_body(text: str) -> str:
     return text.strip()
 
 
+def verify_prepared_run(
+    run_id: str,
+    *,
+    data_dir: Path | None = None,
+    repo_root: Path | None = None,
+    require_status: str = STATUS_ACCEPTED,
+) -> VerifiedPreparedRun:
+    """Purely load and verify one prepared run by id."""
+
+    payload = load_prepared_artifact(run_id, data_dir=data_dir, repo_root=repo_root)
+    return verify_prepared_payload(
+        payload,
+        artifact_path=_artifact_path(run_id=run_id, data_dir=data_dir),
+        repo_root=repo_root,
+        require_status=require_status,
+    )
+
+
+def verify_prepared_payload(
+    payload: Mapping[str, Any],
+    *,
+    artifact_path: Path | None = None,
+    repo_root: Path | None = None,
+    require_status: str = STATUS_ACCEPTED,
+) -> VerifiedPreparedRun:
+    """Purely verify the dispatchability contract for a prepared payload.
+
+    The verifier loads and validates sidecars but intentionally does not write
+    telemetry. Wrappers decide whether verification should become an event.
+    """
+
+    if not isinstance(payload, Mapping):
+        raise ValueError("prepared artifact must be a mapping")
+    snapshot = dict(payload)
+    _validate_against_schema(snapshot)
+    current = snapshot["status"]
+    if require_status is not None and current != require_status:
+        raise InvalidPreparedTransition(
+            f"prepared verification requires status {require_status!r}; got {current!r}"
+        )
+    if snapshot.get("git_base_sha") == "0" * 40:
+        raise ValueError("prepared dispatch: git_base_sha is an unresolved zero placeholder")
+    root = _validated_dispatch_repo_root(snapshot, repo_root=repo_root)
+    _round_trip_paths(snapshot, repo_root=root)
+    drift = check_stale(snapshot, repo_root=root)
+    if drift is not None:
+        raise StalePreparedArtifactError(
+            f"prepared artifact is stale: {', '.join(drift.reasons)}",
+            drift.reasons,
+        )
+    work_unit_artifacts = _verify_dispatch_sidecars(snapshot, repo_root=root)
+    inspect_artifact = _load_dispatch_inspect_artifact(snapshot, repo_root=root)
+    return VerifiedPreparedRun(
+        run_id=str(snapshot["run_id"]),
+        artifact_path=Path(artifact_path) if artifact_path is not None else Path(),
+        repo_root=root,
+        payload=snapshot,
+        work_unit_artifacts=work_unit_artifacts,
+        inspect_artifact=inspect_artifact,
+        git_base_ref=str(snapshot["git_base_ref"]),
+        git_base_sha=str(snapshot["git_base_sha"]),
+        verified_at=utc_now(),
+    )
+
+
 def verify_prepared_for_dispatch(
     prepared: str | os.PathLike[str],
     *,
@@ -1142,42 +1265,51 @@ def verify_prepared_for_dispatch(
 ) -> PreparedDispatchResult:
     """Load an accepted prepared artifact and fail closed before dispatch.
 
-    Phase 5 keeps ``/swarmdaddy:do --prepared`` as pure consumption:
-    no prepare, no decompose, and no preset ``decompose.mode`` lookup. This
-    helper re-runs the Phase 1 schema/trust checks, stale checks, sidecar hash
-    checks, and work-unit linting before a dispatcher can create Beads children.
+    This is the event-emitting wrapper around :func:`verify_prepared_payload`.
     """
 
     payload, artifact_path = _load_prepared_reference(
         prepared, data_dir=data_dir, repo_root=repo_root
     )
-    current = payload["status"]
-    if current != STATUS_ACCEPTED:
-        raise InvalidPreparedTransition(
-            f"prepared dispatch requires status {STATUS_ACCEPTED!r}; got {current!r}"
+    try:
+        verified = verify_prepared_payload(
+            payload,
+            artifact_path=artifact_path,
+            repo_root=repo_root,
+            require_status=STATUS_ACCEPTED,
         )
-    root = _validated_dispatch_repo_root(payload, repo_root=repo_root)
-    _round_trip_paths(payload, repo_root=root)
-    drift = check_stale(payload, repo_root=root)
-    if drift is not None:
+    except StalePreparedArtifactError as exc:
         _append_prepare_event(
             _event_data_dir_for_artifact(artifact_path, data_dir),
             run_id=payload["run_id"],
             event_type="prepare_stale_rejected",
             details={
-                "stale_reasons": list(drift.reasons),
-                "status": current,
+                "stale_reasons": list(exc.reasons),
+                "status": payload.get("status"),
                 "artifact_path": str(artifact_path),
                 "dispatch": True,
             },
-            reason=", ".join(drift.reasons),
+            reason=", ".join(exc.reasons),
         )
         raise StalePreparedArtifactError(
-            f"prepared dispatch: prepared artifact is stale: {', '.join(drift.reasons)}",
-            drift.reasons,
-        )
-
-    work_unit_artifacts = _verify_dispatch_sidecars(payload, repo_root=root)
+            f"prepared dispatch: prepared artifact is stale: {', '.join(exc.reasons)}",
+            exc.reasons,
+        ) from exc
+    payload = verified.payload
+    work_unit_artifacts = dict(verified.work_unit_artifacts)
+    _append_prepare_event(
+        _event_data_dir_for_artifact(artifact_path, data_dir),
+        run_id=payload["run_id"],
+        event_type="prepare_contract_snapshot",
+        bd_epic_id=payload.get("bd_epic_id") if isinstance(payload.get("bd_epic_id"), str) else None,
+        details={
+            "artifact_path": str(artifact_path),
+            "git_base_ref": payload["git_base_ref"],
+            "git_base_sha": payload["git_base_sha"],
+            "phase_count": len(payload["phase_map"]),
+            "work_unit_artifact_count": len(work_unit_artifacts),
+        },
+    )
     _append_prepare_event(
         _event_data_dir_for_artifact(artifact_path, data_dir),
         run_id=payload["run_id"],
@@ -1197,7 +1329,9 @@ def verify_prepared_for_dispatch(
         artifact_path=str(artifact_path),
         source_plan_path=payload["source_plan_path"],
         prepared_plan_path=payload["prepared_plan_path"],
+        prepared_plan_sha=payload["prepared_plan_sha"],
         inspect_artifact_path=payload["inspect_artifact"]["path"],
+        repo_root=str(verified.repo_root),
         git_base_ref=payload["git_base_ref"],
         git_base_sha=payload["git_base_sha"],
         phase_map=tuple(dict(item) for item in payload["phase_map"]),
@@ -1280,6 +1414,7 @@ def _verify_dispatch_sidecars(
         )
 
     verified: dict[str, dict[str, Any]] = {}
+    run_git_base_sha = str(payload.get("git_base_sha") or "")
     for phase_id, descriptor in descriptors.items():
         sidecar_path = _verify_hashed_sidecar(
             descriptor,
@@ -1291,6 +1426,13 @@ def _verify_dispatch_sidecars(
         embedded = descriptor.get("artifact")
         if embedded is not None and embedded != artifact:
             raise ValueError(_artifact_sidecar_mismatch_message(phase_id, embedded, artifact))
+        artifact_git_base_sha = artifact.get("git_base_sha")
+        if artifact_git_base_sha != run_git_base_sha:
+            raise ValueError(
+                "prepared dispatch: "
+                f"work_unit_artifacts[{phase_id}].artifact.git_base_sha "
+                f"{artifact_git_base_sha!r} does not match run git_base_sha {run_git_base_sha!r}"
+            )
         _validate_dispatch_work_units(
             artifact,
             repo_root=repo_root,
@@ -1302,6 +1444,18 @@ def _verify_dispatch_sidecars(
             "artifact": artifact,
         }
     return verified
+
+
+def _load_dispatch_inspect_artifact(payload: Mapping[str, Any], *, repo_root: Path) -> dict[str, Any]:
+    prepared_rel = canonicalize(payload["prepared_plan_path"], repo_root=repo_root)
+    run_dir = (repo_root / prepared_rel).parent.resolve(strict=False)
+    inspect_path = _verify_hashed_sidecar(
+        payload["inspect_artifact"],
+        label="inspect_artifact",
+        run_dir=run_dir,
+        repo_root=repo_root,
+    )
+    return _read_json_object(inspect_path, label="inspect_artifact")
 
 
 def _artifact_sidecar_mismatch_message(phase_id: str, embedded: Any, sidecar: Any) -> str:
@@ -2154,6 +2308,7 @@ __all__ = [
     "STATUS_STALE",
     "StalePreparedArtifactError",
     "StaleReason",
+    "VerifiedPreparedRun",
     "WORK_UNITS_SCHEMA_VERSION",
     "accept_prepared",
     "canonicalize",
@@ -2163,11 +2318,14 @@ __all__ = [
     "mark_ready_for_acceptance",
     "prepare_plan_run",
     "prepared_acceptance_summary",
+    "record_prepare_continue_decision",
     "record_prepare_continue_failed",
     "reject_prepared",
     "run_plan_review_loop",
     "validate_plan_review_finding",
     "validate_plan_review_findings",
     "verify_prepared_for_dispatch",
+    "verify_prepared_payload",
+    "verify_prepared_run",
     "write_prepared_artifact",
 ]

@@ -551,6 +551,7 @@ bin/swarm preset list
 bin/swarm preset load <name>
 bin/swarm preset clear
 bin/swarm preset show <name>
+bin/swarm preset resolve <name> [--json]
 bin/swarm preset save <new-name> --from <current|preset-name>
 bin/swarm preset diff <name>
 bin/swarm preset rename <old-name> <new-name>
@@ -566,6 +567,7 @@ bin/swarm prepare refresh-base <run-id> [--to-head | --to-sha <sha>] [--phase <i
 bin/swarm do <plan-path> --prepare --continue [--phase-sessions auto] [--json]
 bin/swarm do --prepared <run-id-or-artifact-path> [--phase-sessions auto] [--json]
 bin/swarm plan prepare <plan-path> [--dry-run] [--write] [--json]
+bin/swarm beads check [--repo <path>] [--json]
 
 bin/swarm pipeline list
 bin/swarm pipeline show <name>
@@ -575,12 +577,13 @@ bin/swarm pipeline set <name>
 bin/swarm pipeline diff <name>
 bin/swarm pipeline drift <name>
 
-bin/swarm providers doctor [--preset <name|current>] [--review] [--mco] [--mco-timeout-seconds N] [--json]
+bin/swarm providers doctor [--preset <name|current>] [--backend-tier path|version|handshake] [--review] [--mco] [--mco-timeout-seconds N] [--json]
 bin/swarm providers evidence <provider-findings.json>
 bin/swarm providers calibrate-consensus <samples.json> [--output <report.json>] [--json]
 bin/swarm permissions check [--role <role>] [--scope repo|user] [--path <settings.json>]
 bin/swarm permissions install [--dry-run] [--scope repo|user] [--path <settings.json>]
 bin/swarm selftest [--plan <path>] [--preset <name|current>] [--json] [--strict]
+bin/swarm sessions doctor [--launcher manual|fake-test|claude-print|interactive] [--json]
 
 bin/swarm status
 bin/swarm rollout show [--json]
@@ -645,6 +648,12 @@ bin/swarm worktrees reset <run-id> (--discard | --archive-branch) [--force] [--j
 bin/swarm worktrees integrate-run <run-id> [--apply] [--json]
 bin/swarm worktrees cleanup-run <run-id> [--apply] [--json]
 ```
+
+Run-start dispatch uses a Python-owned preflight gate before it writes
+`active-run.json`: Beads rig discovery via `bd where`, provider backend
+readiness, launcher eligibility for phase-session runs, active-run conflicts,
+and zero git-base defense. Use `bin/swarm preset resolve <name> --json` when
+you need the preset-aware graph that dispatch will actually follow.
 
 `cleanup-run` removes only adopted or no-change run worktrees; unadopted,
 preserved, and conflicted worktrees stay in place for inspection.

@@ -21,6 +21,7 @@ from swarm_do.pipeline.execution_worktree import (
     materialize_unit_execution_worktree,
     merge_unit_execution_worktree,
     record_unit_post_writer_report,
+    record_unit_spec_review_verdict,
     reset_run_worktree,
     resolve_run_execution_worktree,
     run_worktree_status,
@@ -945,6 +946,7 @@ class ExecutionWorktreeTests(unittest.TestCase):
                 data_dir=data,
                 report_path=report_path,
             )
+            record_unit_spec_review_verdict(RUN_ID, phase_id, unit_id, data_dir=data, verdict="skipped")
             merged = merge_unit_execution_worktree(RUN_ID, phase_id, unit_id, data_dir=data, apply=True)
 
             self.assertEqual(recorded["writer_status"], "approved")
@@ -982,6 +984,7 @@ class ExecutionWorktreeTests(unittest.TestCase):
             _git(git_root, "worktree", "remove", str(seed))
             report_path = _write_unit_report(data, RUN_ID, unit_id, gate_status="passed", changed_files=["plan.md"])
             record_unit_post_writer_report(RUN_ID, phase_id, unit_id, data_dir=data, report_path=report_path)
+            record_unit_spec_review_verdict(RUN_ID, phase_id, unit_id, data_dir=data, verdict="skipped")
 
             result = merge_unit_execution_worktree(RUN_ID, phase_id, unit_id, data_dir=data, apply=True)
 

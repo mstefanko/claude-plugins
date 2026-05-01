@@ -68,6 +68,17 @@ def resolve_preset_graph(preset: Mapping[str, Any]) -> ResolvedGraph:
                 item = find_pipeline(lineage_name)
                 if item is None or item.origin != "stock":
                     warnings.append(f"inline graph upstream stock pipeline is missing: {lineage_name}")
+                elif lineage_hash:
+                    try:
+                        upstream = load_pipeline(item.path)
+                        upstream_hash = canonical_graph_hash(upstream)
+                        if upstream_hash != lineage_hash:
+                            warnings.append(
+                                f"inline graph upstream stock pipeline drifted: {lineage_name} "
+                                f"{lineage_hash} -> {upstream_hash}"
+                            )
+                    except Exception as exc:
+                        warnings.append(f"inline graph upstream stock pipeline cannot be loaded: {lineage_name}: {exc}")
         return ResolvedGraph(
             graph=graph,
             source="inline-snapshot",

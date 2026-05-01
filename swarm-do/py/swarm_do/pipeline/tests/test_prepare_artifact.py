@@ -577,6 +577,7 @@ class PrepareTelemetryEventTests(unittest.TestCase):
             tmp = Path(td)
             repo = tmp / "repo"
             repo.mkdir()
+            _git_init_repo(repo)
             (repo / "README.md").write_text("# Test\n", encoding="utf-8")
             (repo / "plan.md").write_text(
                 "### Phase 1: Docs (complexity: simple, kind: docs)\n\n"

@@ -16,20 +16,50 @@ class _IsolatedDataDir:
     def __init__(self) -> None:
         self.tmp: tempfile.TemporaryDirectory | None = None
         self._old: str | None = None
+        self._beads_patch = None
 
     def __enter__(self) -> Path:
         self.tmp = tempfile.TemporaryDirectory()
         self._old = os.environ.get("CLAUDE_PLUGIN_DATA")
         os.environ["CLAUDE_PLUGIN_DATA"] = self.tmp.name
+        self._beads_patch = mock.patch("swarm_do.pipeline.beads_health.beads_where", side_effect=_fake_beads_where)
+        self._beads_patch.start()
         return Path(self.tmp.name)
 
     def __exit__(self, exc_type, exc, tb) -> None:
+        if self._beads_patch is not None:
+            self._beads_patch.stop()
         if self._old is None:
             os.environ.pop("CLAUDE_PLUGIN_DATA", None)
         else:
             os.environ["CLAUDE_PLUGIN_DATA"] = self._old
         if self.tmp is not None:
             self.tmp.cleanup()
+
+
+class _FakeBeads:
+    def __init__(self, target_repo: Path, ok: bool):
+        self.ok = ok
+        self.target_repo = str(target_repo)
+        self.rig = str(target_repo / ".beads") if ok else None
+        self.summary = "Beads rig detected" if ok else "no Beads rig detected in target repo"
+        self.remediation = None if ok else "run /swarmdaddy:init-beads in the target repo before launching a swarm run"
+
+    def as_dict(self) -> dict:
+        return {
+            "ok": self.ok,
+            "status": "pass" if self.ok else "fail",
+            "target_repo": self.target_repo,
+            "rig": self.rig,
+            "summary": self.summary,
+            "remediation": self.remediation,
+            "details": {},
+        }
+
+
+def _fake_beads_where(target_repo: Path):
+    repo = Path(target_repo)
+    return _FakeBeads(repo, (repo / ".beads").is_dir())
 
 
 def _make_target_repo(root: Path, with_beads: bool = True) -> Path:

@@ -122,6 +122,7 @@ class PreparedArtifactWriter:
         run_id: str,
         *,
         to_sha: str | None = None,
+        to_head: bool = False,
         phase_id: str | None = None,
         dry_run: bool = False,
         operator_id: str | None = None,
@@ -138,21 +139,29 @@ class PreparedArtifactWriter:
         from .prepare import (
             _artifact_path,
             _resolve_repo_root,
-            _verify_dispatch_sidecars,
             canonicalize,
-            check_stale,
+            verify_prepared_payload,
         )
 
         payload = self.load(run_id)
         root = _resolve_repo_root(payload, repo_root=self.repo_root).resolve(strict=False)
-        target_sha = _resolve_target_sha(root, payload, to_sha=to_sha)
+        previous_sha = str(payload["git_base_sha"])
+        if phase_id is not None and to_sha is None and not to_head:
+            target_sha = previous_sha
+        else:
+            target_sha = _resolve_target_sha(root, payload, to_sha=to_sha)
         if not _GIT_SHA_RE.match(target_sha):
             raise ValueError(f"target git sha must be a 40-char hex digest: {target_sha}")
+        if phase_id is not None and target_sha != previous_sha:
+            raise ValueError(
+                "phase-scoped refresh-base cannot change top-level git_base_sha; "
+                "use whole-run `swarm prepare refresh-base <run-id>` to move the base"
+            )
 
         updated = copy.deepcopy(payload)
-        previous_sha = str(payload["git_base_sha"])
         selected = _selected_phase_ids(updated, phase_id=phase_id)
-        updated["git_base_sha"] = target_sha
+        if phase_id is None:
+            updated["git_base_sha"] = target_sha
 
         staged: dict[Path, bytes] = {}
         events: list[dict[str, Any]] = []
@@ -192,7 +201,7 @@ class PreparedArtifactWriter:
             )
 
         inspect_descriptor = updated.get("inspect_artifact")
-        if isinstance(inspect_descriptor, dict) and isinstance(inspect_descriptor.get("path"), str):
+        if phase_id is None and isinstance(inspect_descriptor, dict) and isinstance(inspect_descriptor.get("path"), str):
             inspect_path = (root / canonicalize(inspect_descriptor["path"], repo_root=root)).resolve(strict=False)
             if inspect_path.is_file():
                 inspect_payload = json.loads(inspect_path.read_text(encoding="utf-8"))
@@ -226,10 +235,7 @@ class PreparedArtifactWriter:
             )
 
         if not changed:
-            _verify_dispatch_sidecars(updated, repo_root=root)
-            drift = check_stale(updated, repo_root=root)
-            if drift is not None:
-                raise ValueError(f"prepared artifact is stale after refresh-base: {', '.join(drift.reasons)}")
+            verify_prepared_payload(updated, artifact_path=artifact_path, repo_root=root)
             return RefreshBaseResult(
                 run_id=run_id,
                 target_git_base_sha=target_sha,
@@ -277,7 +283,7 @@ class PreparedArtifactWriter:
         repo_root: Path,
         fail_at: str | None,
     ) -> list[Path]:
-        from .prepare import _verify_dispatch_sidecars, check_stale
+        from .prepare import verify_prepared_payload
 
         stamp = _operation_stamp()
         normalized_staged = {Path(path).resolve(strict=False): body for path, body in staged.items()}
@@ -310,10 +316,7 @@ class PreparedArtifactWriter:
 
             if fail_at == "verify":
                 raise ValueError("injected refresh-base verify failure")
-            _verify_dispatch_sidecars(updated_payload, repo_root=repo_root)
-            drift = check_stale(updated_payload, repo_root=repo_root)
-            if drift is not None:
-                raise ValueError(f"prepared artifact is stale after refresh-base: {', '.join(drift.reasons)}")
+            verify_prepared_payload(updated_payload, repo_root=repo_root)
             return [backups[path] for path in paths]
         except Exception:
             for path in reversed(committed):

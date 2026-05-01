@@ -116,6 +116,18 @@ def _probe_worktree(run_id: str, data_dir: Path, repo_root: Path | None) -> list
     status = run_worktree_status(run_id, data_dir=data_dir)
     if status.get("status") in {"ok", "not_found"}:
         return []
+    if status.get("base_drift_safe") and not any(
+        status.get(key) for key in ("unadopted_commits", "dirty_paths", "identity_mismatch")
+    ):
+        return [
+            {
+                "id": "worktree_base_drift_safe",
+                "severity": "info",
+                "detail": ", ".join(status.get("drift") or []) or "worktree base drift can be rebuilt",
+                "recommended_command": status.get("recommended_command") or f"bin/swarm worktrees status {run_id}",
+                "worktree": status,
+            }
+        ]
     return [
         {
             "id": "worktree_drift",
@@ -128,14 +140,14 @@ def _probe_worktree(run_id: str, data_dir: Path, repo_root: Path | None) -> list
 
 
 def _probe_prepared_dispatch(run_id: str, data_dir: Path, repo_root: Path | None) -> list[dict[str, Any]]:
-    from .prepare import _resolve_repo_root, _verify_dispatch_sidecars, check_stale, load_prepared_artifact
+    from .prepare import StalePreparedArtifactError, load_prepared_artifact, verify_prepared_payload
 
     payload = load_prepared_artifact(run_id, data_dir=data_dir, repo_root=repo_root)
-    root = _resolve_repo_root(payload, repo_root=repo_root)
     findings: list[dict[str, Any]] = []
-    drift = check_stale(payload, repo_root=root)
-    if drift is not None:
-        reasons = list(drift.reasons)
+    try:
+        verify_prepared_payload(payload, repo_root=repo_root)
+    except StalePreparedArtifactError as exc:
+        reasons = list(exc.reasons)
         command = (
             f"bin/swarm prepare refresh-base {run_id}"
             if reasons == ["git_base_sha"]
@@ -150,8 +162,6 @@ def _probe_prepared_dispatch(run_id: str, data_dir: Path, repo_root: Path | None
                 "stale_reasons": reasons,
             }
         )
-    try:
-        _verify_dispatch_sidecars(payload, repo_root=root)
     except Exception as exc:
         findings.append(
             {

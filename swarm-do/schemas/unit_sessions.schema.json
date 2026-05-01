@@ -45,7 +45,17 @@
           "lease_expires_at",
           "attempt",
           "writer_status",
+          "post_writer_status",
+          "post_writer_gate_reasons",
           "post_writer_report_path",
+          "post_writer_report_sha256",
+          "post_writer_unit_head_sha",
+          "post_writer_base_sha",
+          "spec_review_status",
+          "spec_review_report_path",
+          "spec_review_report_sha256",
+          "spec_review_unit_head_sha",
+          "spec_review_recorded_at",
           "scope_check_path",
           "merge_state",
           "merge_target_branch",
@@ -86,6 +96,40 @@
             ]
           },
           "post_writer_report_path": { "type": ["string", "null"] },
+          "post_writer_status": {
+            "type": "string",
+            "enum": ["pending", "passed", "failed"]
+          },
+          "post_writer_gate_reasons": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "post_writer_report_sha256": {
+            "type": ["string", "null"],
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "post_writer_unit_head_sha": {
+            "type": ["string", "null"],
+            "pattern": "^[0-9a-f]{40}$"
+          },
+          "post_writer_base_sha": {
+            "type": ["string", "null"],
+            "pattern": "^[0-9a-f]{40}$"
+          },
+          "spec_review_status": {
+            "type": "string",
+            "enum": ["pending", "approved", "rejected", "skipped"]
+          },
+          "spec_review_report_path": { "type": ["string", "null"] },
+          "spec_review_report_sha256": {
+            "type": ["string", "null"],
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "spec_review_unit_head_sha": {
+            "type": ["string", "null"],
+            "pattern": "^[0-9a-f]{40}$"
+          },
+          "spec_review_recorded_at": { "type": ["string", "null"], "format": "date-time" },
           "scope_check_path": { "type": ["string", "null"] },
           "merge_state": {
             "type": "string",

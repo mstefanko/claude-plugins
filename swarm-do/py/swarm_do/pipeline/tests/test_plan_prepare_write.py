@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,11 +10,26 @@ from pathlib import Path
 from swarm_do.pipeline.prepare import STATUS_READY, load_prepared_artifact, prepare_plan_run, validate_phase_dependencies
 
 
+def _init_repo(root: Path) -> None:
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "T",
+        "GIT_AUTHOR_EMAIL": "t@example.com",
+        "GIT_COMMITTER_NAME": "T",
+        "GIT_COMMITTER_EMAIL": "t@example.com",
+    }
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=str(root), check=True, env=env)
+    (root / "seed").write_text("seed\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=str(root), check=True, env=env)
+    subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=str(root), check=True, env=env)
+
+
 class PlanPrepareWriteTests(unittest.TestCase):
     def test_prepare_run_writes_ready_artifact_with_work_units_for_every_phase(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td) / "repo"
             root.mkdir()
+            _init_repo(root)
             plan = root / "plan.md"
             plan.write_text(
                 "### Phase 1: Parser (complexity: moderate, kind: feature)\n\n"
@@ -49,6 +66,7 @@ class PlanPrepareWriteTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td) / "repo"
             root.mkdir()
+            _init_repo(root)
             (root / "plan.md").write_text(
                 "### Phase 1: Docs (complexity: simple, kind: docs)\n\n"
                 "### File Targets\n\n- `README.md`\n\n"

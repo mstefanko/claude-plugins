@@ -11,7 +11,7 @@ from .paths import REPO_ROOT, resolve_data_dir
 from .phase_decisions import render_shared_decisions_markdown, shared_decisions_path
 from .phase_sessions import load_phase_sessions, phase_session_path
 from .plan import parse_plan_from_text
-from .prepare import STATUS_ACCEPTED, check_stale, load_prepared_artifact
+from .prepare import verify_prepared_payload, verify_prepared_run
 from .run_state import _atomic_json_write, append_run_event, utc_now, validate_run_event
 
 
@@ -48,13 +48,9 @@ def render_context_bundle(
         raise ValueError("max_prompt_bytes must be at least 500")
 
     base = data_dir or resolve_data_dir()
-    prepared = load_prepared_artifact(run_id, data_dir=base, repo_root=repo_root)
-    if prepared.get("status") != STATUS_ACCEPTED:
-        raise ValueError(f"context render requires accepted prepared artifact; got {prepared.get('status')!r}")
-    root = _prepared_repo_root(prepared, repo_root=repo_root)
-    drift = check_stale(prepared, repo_root=root)
-    if drift is not None:
-        raise ValueError(f"prepared artifact is stale: {', '.join(drift.reasons)}")
+    verified = _verify_prepared_for_context(run_id, data_dir=base, repo_root=repo_root)
+    prepared = verified.payload
+    root = verified.repo_root
 
     phase_meta = _phase_meta(prepared, phase_id)
     phase_index = int(phase_meta["phase_index"])
@@ -98,18 +94,11 @@ def render_context_bundle(
     )
     _write_text_if_changed(phase_summary_path, _phase_summary_markdown(phase_meta, sidecar, unit))
 
-    if phase_session_mode:
-        allowed_files: list[str] = []
-        blocked_files: list[str] = []
-        context_files: list[str] = []
-        acceptance_criteria: list[str] = []
-        validation_commands: list[str] = []
-    else:
-        allowed_files = _strings((unit or {}).get("allowed_files") or (unit or {}).get("files")) or _unit_union(sidecar, "allowed_files", "files")
-        blocked_files = _strings((unit or {}).get("blocked_files")) or _unit_union(sidecar, "blocked_files")
-        context_files = _strings((unit or {}).get("context_files")) or _unit_union(sidecar, "context_files")
-        acceptance_criteria = _strings((unit or {}).get("acceptance_criteria")) or _unit_union(sidecar, "acceptance_criteria")
-        validation_commands = _strings((unit or {}).get("validation_commands")) or _unit_union(sidecar, "validation_commands")
+    allowed_files = _strings((unit or {}).get("allowed_files") or (unit or {}).get("files")) or _unit_union(sidecar, "allowed_files", "files")
+    blocked_files = _strings((unit or {}).get("blocked_files")) or _unit_union(sidecar, "blocked_files")
+    context_files = _strings((unit or {}).get("context_files")) or _unit_union(sidecar, "context_files")
+    acceptance_criteria = _strings((unit or {}).get("acceptance_criteria")) or _unit_union(sidecar, "acceptance_criteria")
+    validation_commands = _strings((unit or {}).get("validation_commands")) or _unit_union(sidecar, "validation_commands")
     informational_work_units = _informational_work_units(sidecar) if phase_session_mode else []
 
     source_artifact_path = base / "runs" / run_id / "prepared_plan.v1.json"
@@ -215,6 +204,17 @@ def render_context_bundle(
     }
 
 
+def _verify_prepared_for_context(run_id: str, *, data_dir: Path, repo_root: Path | None):
+    if repo_root is not None:
+        copied_artifact = Path(repo_root) / "data" / "runs" / run_id / "prepared_plan.v1.json"
+        if copied_artifact.is_file():
+            payload = json.loads(copied_artifact.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("copied prepared artifact must be a JSON object")
+            return verify_prepared_payload(payload, artifact_path=copied_artifact, repo_root=repo_root)
+    return verify_prepared_run(run_id, data_dir=data_dir, repo_root=repo_root)
+
+
 def _phase_meta(prepared: Mapping[str, Any], phase_id: str) -> dict[str, Any]:
     for idx, phase in enumerate(prepared.get("phase_map") or []):
         if isinstance(phase, Mapping) and phase.get("phase_id") == phase_id:
@@ -293,29 +293,72 @@ def _dependency_phase_ids(
 
 def _prior_handoffs(base: Path, run_id: str, phase_ids: list[str]) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
+    state_by_phase: dict[str, Mapping[str, Any]] = {}
+    try:
+        state = load_phase_sessions(run_id, data_dir=base)
+        state_by_phase = {
+            str(phase.get("phase_id")): phase
+            for phase in state.get("phases") or []
+            if isinstance(phase, Mapping) and isinstance(phase.get("phase_id"), str)
+        }
+    except Exception:
+        state_by_phase = {}
     for prior_phase_id in phase_ids:
+        state_phase = state_by_phase.get(prior_phase_id)
+        if state_phase is not None:
+            handoff_path = _state_handoff_path(state_phase, base=base, run_id=run_id)
+            if handoff_path is not None:
+                loaded = _load_handoff_record(
+                    handoff_path,
+                    run_id=run_id,
+                    phase_id=prior_phase_id,
+                    attempt=int(state_phase.get("attempt") or 0),
+                )
+                if loaded is not None:
+                    results.append(loaded)
+                    continue
         handoff_dir = base / "runs" / run_id / "phase_handoffs" / prior_phase_id
         candidates = sorted(handoff_dir.glob("attempt-*.handoff.json"), key=_handoff_attempt)
-        if not candidates:
-            continue
-        path = candidates[-1]
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(payload, dict) or payload.get("status") != "complete":
-            continue
-        results.append(
-            {
-                "phase_id": prior_phase_id,
-                "path": _display_path(path),
-                "sha": _sha256_file(path),
-                "summary": str(payload.get("summary") or ""),
-                "decisions": _strings(payload.get("decisions")),
-                "next_phase_context": _strings(payload.get("next_phase_context")),
-            }
-        )
+        for path in reversed(candidates):
+            loaded = _load_handoff_record(path, run_id=run_id, phase_id=prior_phase_id, attempt=_handoff_attempt(path))
+            if loaded is not None:
+                results.append(loaded)
+                break
     return results
+
+
+def _state_handoff_path(phase: Mapping[str, Any], *, base: Path, run_id: str) -> Path | None:
+    value = phase.get("handoff_path")
+    if not isinstance(value, str) or not value:
+        return None
+    path = Path(value)
+    if path.is_absolute():
+        return path if path.is_file() else None
+    candidates = [REPO_ROOT / path, base / path, base / "runs" / run_id / path]
+    return next((candidate for candidate in candidates if candidate.is_file()), candidates[0])
+
+
+def _load_handoff_record(path: Path, *, run_id: str, phase_id: str, attempt: int) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict) or payload.get("status") != "complete":
+        return None
+    if payload.get("run_id") not in {None, run_id}:
+        return None
+    if payload.get("phase_id") not in {None, phase_id}:
+        return None
+    if payload.get("phase_attempt") not in {None, attempt}:
+        return None
+    return {
+        "phase_id": phase_id,
+        "path": _display_path(path),
+        "sha": _sha256_file(path),
+        "summary": str(payload.get("summary") or ""),
+        "decisions": _strings(payload.get("decisions")),
+        "next_phase_context": _strings(payload.get("next_phase_context")),
+    }
 
 
 def _recovery_context(base_run_id: str, phase_id: str, *, data_dir: Path) -> tuple[Path | None, str | None, str | None]:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 import re
 import subprocess
 import time
@@ -37,6 +38,7 @@ def build_post_writer_report(
     changed_files = changed_files_since(repo_path, resolved_base_ref)
     diff_stat = diff_stat_since(repo_path, resolved_base_ref)
     blocked_violations = unit_blocked_file_violations(unit, changed_files)
+    out_of_scope_files = unit_out_of_scope_violations(unit, changed_files)
     validation_results = (
         run_validation_commands(unit, repo=repo_path, timeout_seconds=validation_timeout_seconds)
         if run_validation
@@ -52,16 +54,20 @@ def build_post_writer_report(
         max_handoffs=max_handoffs,
         telemetry_tool_call_count=telemetry_tool_call_count,
     )
-    gate = _gate_status(blocked_violations, validation_results, budget)
+    gate = _gate_status(blocked_violations, out_of_scope_files, validation_results, budget)
     return {
         "schema_version": SCHEMA_VERSION,
+        "run_id": artifact.get("run_id") if isinstance(artifact.get("run_id"), str) else None,
+        "phase_id": artifact.get("phase_id") if isinstance(artifact.get("phase_id"), str) else None,
         "work_unit_id": unit_id,
         "base_ref": resolved_base_ref,
+        "base_sha": _rev_parse_or_none(repo_path, resolved_base_ref),
         "unit_contract": _unit_contract(unit),
         "acceptance_matrix": _acceptance_matrix(unit, test_summary),
         "changed_files": changed_files,
         "diff_stat": diff_stat,
         "blocked_file_violations": blocked_violations,
+        "out_of_scope_files": out_of_scope_files,
         "validation_results": validation_results,
         "test_summary": test_summary,
         "budget_status": budget,
@@ -87,6 +93,7 @@ def format_post_writer_report(report: Mapping[str, Any]) -> str:
             f"deletions={diff_stat.get('deletions', 0)}"
         ),
         f"  blocked_file_violations: {len(report.get('blocked_file_violations') or [])}",
+        f"  out_of_scope_files: {len(report.get('out_of_scope_files') or [])}",
         (
             "  validation: "
             f"{test_summary.get('passed', 0)}/{test_summary.get('total', 0)} passed "
@@ -166,6 +173,18 @@ def summarize_validation_results(results: list[Mapping[str, Any]], *, skipped: b
     }
 
 
+def unit_out_of_scope_violations(unit: Mapping[str, Any], changed_files: list[str]) -> list[str]:
+    allowed = _str_list(unit.get("allowed_files", unit.get("files")))
+    if not allowed:
+        return sorted(set(changed_files))
+    out_of_scope: list[str] = []
+    for changed in changed_files:
+        path = Path(changed).as_posix()
+        if not any(fnmatch.fnmatch(changed, pattern) or fnmatch.fnmatch(path, pattern) for pattern in allowed):
+            out_of_scope.append(changed)
+    return sorted(set(out_of_scope))
+
+
 def _find_unit(artifact: Mapping[str, Any], unit_id: str) -> Mapping[str, Any]:
     units = artifact.get("work_units")
     if not isinstance(units, list):
@@ -221,12 +240,15 @@ def _acceptance_matrix(unit: Mapping[str, Any], test_summary: Mapping[str, Any])
 
 def _gate_status(
     blocked_file_violations: list[str],
+    out_of_scope_files: list[str],
     validation_results: list[Mapping[str, Any]],
     budget_status: Mapping[str, Any],
 ) -> dict[str, Any]:
     reasons: list[str] = []
     if blocked_file_violations:
         reasons.append("blocked_file_violation")
+    if out_of_scope_files:
+        reasons.append("unit_out_of_scope")
     if any(result.get("timed_out") is True for result in validation_results):
         reasons.append("validation_timeout")
     if any(result.get("exit_code") != 0 for result in validation_results):
@@ -235,6 +257,13 @@ def _gate_status(
         reason = budget_status.get("failure_reason")
         reasons.append(str(reason or "budget_status_failed"))
     return {"status": "failed" if reasons else "passed", "failure_reasons": sorted(set(reasons))}
+
+
+def _rev_parse_or_none(repo: Path, ref: str) -> str | None:
+    try:
+        return _git_stdout(repo, "rev-parse", ref).strip()
+    except Exception:
+        return None
 
 
 def _str_list(value: Any) -> list[str]:

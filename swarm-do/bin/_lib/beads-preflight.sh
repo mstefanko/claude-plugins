@@ -14,14 +14,17 @@
 
 bd_preflight_or_die() {
   local caller="${1:-swarm}"
+  local lib_dir swarm_bin payload rig
+  lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  swarm_bin="$(cd "$lib_dir/.." && pwd)/swarm"
 
-  if ! command -v bd >/dev/null 2>&1; then
-    printf '%s: bd CLI not on PATH\n' "$caller" >&2
+  if [[ ! -x "$swarm_bin" ]]; then
+    printf '%s: bin/swarm not found next to beads preflight helper\n' "$caller" >&2
     exit 1
   fi
 
-  local rig
-  rig="$(bd where 2>/dev/null || true)"
+  payload="$("$swarm_bin" beads check --json 2>/dev/null || true)"
+  rig="$(python3 -c 'import json,sys; p=json.load(sys.stdin); print(p.get("rig") or "")' <<<"$payload" 2>/dev/null || true)"
   if [[ -z "$rig" ]]; then
     printf 'No Beads rig detected in this repo. Run /swarmdaddy:init-beads (or /swarmdaddy:quickstart for guided first-run setup) first.\n' >&2
     exit 1

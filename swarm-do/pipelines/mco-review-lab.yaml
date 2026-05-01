@@ -39,6 +39,6 @@ stages:
     agents:
       - role: agent-review
   - id: docs
-    depends_on: [spec-review]
+    depends_on: [spec-review, mco-review]
     agents:
       - role: agent-docs

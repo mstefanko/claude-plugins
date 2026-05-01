@@ -20,7 +20,7 @@ except ImportError:  # pragma: no cover - v1 is POSIX-only by design.
     fcntl = None  # type: ignore[assignment]
 
 from .paths import REPO_ROOT, resolve_data_dir
-from .prepare import STATUS_ACCEPTED, StalePreparedArtifactError, check_stale, load_prepared_artifact
+from .prepare import StalePreparedArtifactError, verify_prepared_run
 from .failure_taxonomy import failure_kind_details
 from .phase_autopilot_policy import (
     ResolvedPolicyUpdate,
@@ -1229,18 +1229,12 @@ def _load_accepted_prepared(
     data_dir: Path,
     repo_root: Path | None,
 ) -> dict[str, Any]:
-    prepared = load_prepared_artifact(run_id, data_dir=data_dir, repo_root=repo_root)
-    if prepared.get("status") != STATUS_ACCEPTED:
-        raise PhaseSessionError(f"phase sessions require accepted prepared artifact; got {prepared.get('status')!r}")
-    root = _prepared_repo_root(prepared, repo_root=repo_root)
-    drift = check_stale(prepared, repo_root=root)
-    if drift is not None:
-        raise StalePreparedArtifactError(
-            f"prepared artifact is stale: {', '.join(drift.reasons)}",
-            drift.reasons,
-        )
-    _verify_sidecar_hashes(prepared, repo_root=root)
-    return prepared
+    try:
+        return dict(verify_prepared_run(run_id, data_dir=data_dir, repo_root=repo_root).payload)
+    except StalePreparedArtifactError:
+        raise
+    except Exception as exc:
+        raise PhaseSessionError(str(exc)) from exc
 
 
 def _prepared_repo_root(prepared: Mapping[str, Any], *, repo_root: Path | None) -> Path:

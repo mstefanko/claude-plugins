@@ -197,7 +197,7 @@ _SMART_FRIEND_ROUTES: dict[str, dict[str, Any]] = {
 
 _COMPETITIVE_ROUTES: dict[str, dict[str, Any]] = {
     "roles.agent-analysis": {"backend": "claude", "model": "claude-opus-4-7", "effort": "xhigh"},
-    "roles.agent-writer-judge": {"backend": "codex", "model": "gpt-5.4", "effort": "high"},
+    "roles.agent-writer-judge": {"backend": "claude", "model": "claude-opus-4-7", "effort": "high"},
 }
 
 _RESEARCH_ROUTES: dict[str, dict[str, Any]] = {
@@ -284,7 +284,7 @@ def _graph_default() -> dict[str, Any]:
             {"id": "spec-review", "depends_on": ["writer"], "agents": [{"role": "agent-spec-review"}]},
             _provider_stage_default("provider-review", ["writer"]),
             {"id": "review", "depends_on": ["spec-review", "provider-review"], "agents": [{"role": "agent-review"}]},
-            {"id": "docs", "depends_on": ["spec-review"], "agents": [{"role": "agent-docs"}]},
+            {"id": "docs", "depends_on": ["spec-review", "provider-review"], "agents": [{"role": "agent-docs"}]},
         ],
     }
 
@@ -332,7 +332,7 @@ def _graph_hybrid_review() -> dict[str, Any]:
                 "depends_on": ["spec-review", "provider-review", "codex-review"],
                 "agents": [{"role": "agent-review"}],
             },
-            {"id": "docs", "depends_on": ["spec-review"], "agents": [{"role": "agent-docs"}]},
+            {"id": "docs", "depends_on": ["spec-review", "provider-review", "codex-review"], "agents": [{"role": "agent-docs"}]},
         ],
     }
 
@@ -362,7 +362,7 @@ def _graph_ultra_plan() -> dict[str, Any]:
             {"id": "spec-review", "depends_on": ["writer"], "agents": [{"role": "agent-spec-review"}]},
             _provider_stage_default("provider-review", ["writer"]),
             {"id": "review", "depends_on": ["spec-review", "provider-review"], "agents": [{"role": "agent-review"}]},
-            {"id": "docs", "depends_on": ["spec-review"], "agents": [{"role": "agent-docs"}]},
+            {"id": "docs", "depends_on": ["spec-review", "provider-review"], "agents": [{"role": "agent-docs"}]},
         ],
     }
 
@@ -388,7 +388,7 @@ def _graph_repair_loop() -> dict[str, Any]:
             {"id": "spec-review", "depends_on": ["revise-writer"], "agents": [{"role": "agent-spec-review"}]},
             _provider_stage_default("provider-review", ["revise-writer"]),
             {"id": "review", "depends_on": ["spec-review", "provider-review"], "agents": [{"role": "agent-review"}]},
-            {"id": "docs", "depends_on": ["spec-review"], "agents": [{"role": "agent-docs"}]},
+            {"id": "docs", "depends_on": ["spec-review", "provider-review"], "agents": [{"role": "agent-docs"}]},
         ],
     }
 
@@ -416,7 +416,7 @@ def _graph_smart_friend() -> dict[str, Any]:
             {"id": "spec-review", "depends_on": ["writer"], "agents": [{"role": "agent-spec-review"}]},
             _provider_stage_default("provider-review", ["writer"]),
             {"id": "review", "depends_on": ["spec-review", "provider-review"], "agents": [{"role": "agent-review"}]},
-            {"id": "docs", "depends_on": ["spec-review"], "agents": [{"role": "agent-docs"}]},
+            {"id": "docs", "depends_on": ["spec-review", "provider-review"], "agents": [{"role": "agent-docs"}]},
         ],
     }
 

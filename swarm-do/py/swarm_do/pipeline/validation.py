@@ -944,27 +944,35 @@ def route_resolution_errors(
             override = agent.get("route")
             if override is None and {"backend", "model", "effort"} <= set(agent.keys()):
                 override = agent
-            if override is None:
-                continue
             try:
-                resolver.resolve(role, override=override)
+                resolver.resolve(role, "hard", override=override)
             except Exception as exc:
                 errors.append(f"route resolution failed for stage {stage_id} role {role}: {exc}")
 
         fan = stage.get("fan_out")
-        if not isinstance(fan, Mapping) or fan.get("variant") != "models":
-            continue
-        role = fan.get("role")
-        if not isinstance(role, str):
-            continue
-        routes = fan.get("routes")
-        if not isinstance(routes, list):
-            continue
-        for idx, route in enumerate(routes):
+        if isinstance(fan, Mapping):
+            role = fan.get("role")
+            if isinstance(role, str):
+                if fan.get("variant") == "models":
+                    routes = fan.get("routes")
+                    if isinstance(routes, list):
+                        for idx, route in enumerate(routes):
+                            try:
+                                resolver.resolve(role, "hard", override=route)
+                            except Exception as exc:
+                                errors.append(f"route resolution failed for stage {stage_id} fan_out.routes[{idx}]: {exc}")
+                else:
+                    try:
+                        resolver.resolve(role, "hard")
+                    except Exception as exc:
+                        errors.append(f"route resolution failed for stage {stage_id} fan_out role {role}: {exc}")
+        merge = stage.get("merge")
+        if isinstance(merge, Mapping) and isinstance(merge.get("agent"), str):
+            role = str(merge["agent"])
             try:
-                resolver.resolve(role, override=route)
+                resolver.resolve(role, "hard")
             except Exception as exc:
-                errors.append(f"route resolution failed for stage {stage_id} fan_out.routes[{idx}]: {exc}")
+                errors.append(f"route resolution failed for stage {stage_id} merge agent {role}: {exc}")
     return errors
 
 
@@ -980,11 +988,6 @@ def invariant_errors(
             errors.append("invariant: orchestrator must resolve to a Claude backend")
     except Exception as exc:
         errors.append(f"invariant: orchestrator route resolution failed: {exc}")
-    try:
-        if not resolver.is_claude_backed("agent-code-synthesizer", "hard"):
-            errors.append("invariant: agent-code-synthesizer must resolve to a Claude backend")
-    except Exception as exc:
-        errors.append(f"invariant: synthesizer route resolution failed: {exc}")
     for stage in pipeline.get("stages") or []:
         stage_id = stage.get("id", "<unknown>")
         for agent_entry in stage.get("agents") or []:
@@ -1001,4 +1004,14 @@ def invariant_errors(
                     errors.append(f"invariant: stage {stage_id} role {role} must resolve to a Claude backend")
             except Exception as exc:
                 errors.append(f"invariant: stage {stage_id} role {role} route resolution failed: {exc}")
+        merge = stage.get("merge")
+        if isinstance(merge, Mapping) and merge.get("strategy") == "synthesize":
+            role = merge.get("agent")
+            if not isinstance(role, str):
+                continue
+            try:
+                if not resolver.is_claude_backed(role, "hard"):
+                    errors.append(f"invariant: stage {stage_id} synthesize merge agent {role} must resolve to a Claude backend")
+            except Exception as exc:
+                errors.append(f"invariant: stage {stage_id} synthesize merge agent {role} route resolution failed: {exc}")
     return errors

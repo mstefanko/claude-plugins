@@ -204,21 +204,83 @@ def _review_stage_request(pipeline: Mapping[str, Any]) -> tuple[str | None, tupl
 def _local_backend_checks(
     backends: tuple[str, ...],
     which: Callable[[str], str | None],
+    *,
+    tier: str = "path",
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    timeout_seconds: int = 10,
 ) -> list[ProviderCheck]:
     checks: list[ProviderCheck] = []
+    if tier not in {"path", "version", "handshake"}:
+        raise ValueError("backend readiness tier must be path, version, or handshake")
     for backend in backends:
         executable = {"claude": "claude", "codex": "codex"}.get(backend)
         if executable is None:
             checks.append(ProviderCheck(f"backend:{backend}", "warning", "no local executable check is registered"))
             continue
         path = which(executable)
-        if path:
-            checks.append(ProviderCheck(f"backend:{backend}", "ok", f"{executable} found", {"path": path}))
-        else:
+        if not path:
             checks.append(ProviderCheck(f"backend:{backend}", "error", f"{executable} not found on PATH"))
+            continue
+        if tier == "path":
+            checks.append(ProviderCheck(f"backend:{backend}", "ok", f"{executable} found", {"path": path, "tier": tier}))
+            continue
+        version = _backend_version_check(executable, path, runner=runner, timeout_seconds=timeout_seconds)
+        if version.status == "ok" and tier == "handshake":
+            version = ProviderCheck(
+                version.name,
+                version.status,
+                version.detail + "; handshake tier uses version probe until live auth checks are explicit",
+                {**dict(version.data or {}), "tier": tier, "handshake": "version-only"},
+            )
+        checks.append(version)
     if not checks:
         checks.append(ProviderCheck("backend", "warning", "no pipeline backends were resolved"))
     return checks
+
+
+def _backend_version_check(
+    executable: str,
+    path: str,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]],
+    timeout_seconds: int,
+) -> ProviderCheck:
+    try:
+        completed = runner(
+            [executable, "--version"],
+            text=True,
+            capture_output=True,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired:
+        return ProviderCheck(
+            f"backend:{executable}",
+            "error",
+            f"{executable} --version timed out after {timeout_seconds}s",
+            {"path": path, "tier": "version"},
+        )
+    except OSError as exc:
+        return ProviderCheck(
+            f"backend:{executable}",
+            "error",
+            f"{executable} --version failed to start: {exc}",
+            {"path": path, "tier": "version"},
+        )
+    stdout = (completed.stdout or "").strip()
+    stderr = (completed.stderr or "").strip()
+    if completed.returncode != 0:
+        return ProviderCheck(
+            f"backend:{executable}",
+            "error",
+            f"{executable} --version failed with exit code {completed.returncode}",
+            {"path": path, "tier": "version", "stdout": stdout, "stderr": stderr},
+        )
+    return ProviderCheck(
+        f"backend:{executable}",
+        "ok",
+        f"{executable} version probe completed",
+        {"path": path, "tier": "version", "stdout": stdout},
+    )
 
 
 def _mco_check(
@@ -312,6 +374,7 @@ def provider_doctor(
     preset_name: str | None = "current",
     run_mco: bool = False,
     run_review: bool = False,
+    backend_tier: str = "path",
     mco_timeout_seconds: int = 30,
     which: Callable[[str], str | None] = shutil.which,
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
@@ -331,7 +394,7 @@ def provider_doctor(
             required_providers = _required_stage_providers(pipeline)
             required_mco_providers = _required_mco_providers(pipeline)
             review_required = "swarm-review" in required_providers
-            checks.extend(_local_backend_checks(required, which))
+            checks.extend(_local_backend_checks(required, which, tier=backend_tier, runner=runner))
             if run_review or review_required:
                 selection, explicit, max_parallel = _review_stage_request(pipeline)
                 resolver = ReviewProviderResolver(

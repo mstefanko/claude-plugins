@@ -163,27 +163,24 @@ def _check_data_dir_resolvable() -> CheckResult:
 
 
 def _check_beads_rig_present(target_repo: Path) -> CheckResult:
-    beads_dir = target_repo / ".beads"
-    config = beads_dir / "config.json"
-    if not beads_dir.is_dir():
+    from .beads_health import beads_where
+
+    result = beads_where(target_repo)
+    if not result.ok:
         return CheckResult(
             "beads-rig-present",
             "hard",
             "fail",
-            "no .beads/ directory in target repo",
-            {"target_repo": str(target_repo), "beads_dir": str(beads_dir)},
-            "run `swarmdaddy:init-beads` in the target repo before launching a swarm run",
+            result.summary,
+            result.as_dict(),
+            result.remediation,
         )
     return CheckResult(
         "beads-rig-present",
         "hard",
         "pass",
         "beads rig detected in target repo",
-        {
-            "target_repo": str(target_repo),
-            "beads_dir": ".beads",
-            "config_present": config.is_file(),
-        },
+        result.as_dict(),
     )
 
 
