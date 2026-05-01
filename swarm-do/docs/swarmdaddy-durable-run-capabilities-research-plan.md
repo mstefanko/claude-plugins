@@ -6,6 +6,7 @@ Related plan: `docs/sensitive-path-launcher-hardening-plan.md`
 Related investigation: `docs/investigations/2026-04-30-sensitive-path-write-block.md`
 Related implementation: `docs/swarmdaddy-durable-run-candidates-1-2-implementation-plan.md`
 Related implementation: `docs/swarmdaddy-durable-run-candidates-3-4-implementation-plan.md`
+Related implementation: `docs/swarmdaddy-durable-run-candidates-5-6-implementation-plan.md`
 
 ## Goal
 

@@ -54,8 +54,6 @@ def main(argv: list[str] | None = None) -> int:
             [
                 claude,
                 "-p",
-                "--name",
-                f"swarmdaddy-{run_id}-1",
                 "--output-format",
                 "json",
                 "--permission-mode",

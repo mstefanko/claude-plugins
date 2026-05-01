@@ -602,8 +602,6 @@ def _run_claude_print_phase(
         "--disable-slash-commands",
         "--settings",
         str(writer_settings_path),
-        "--name",
-        str(phase.get("session_name") or f"swarmdaddy-{run_id}-{phase_id}"),
         "--output-format",
         "json",
         "--permission-mode",
