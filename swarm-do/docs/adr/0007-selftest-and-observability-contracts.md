@@ -1,6 +1,7 @@
 # ADR 0007: Selftest, Security-Audit, and Activity-Observation Output Contracts
 
-- Status: Accepted (Phase 0 baseline; runtime emitters land in later phases)
+- Status: Accepted (Phase 0 baseline; selftest runtime has landed, security audit
+  and activity-observation work continue from these contracts)
 - Date: 2026-04-30
 - Deciders: SwarmDaddy maintainers
 - Supersedes: none
@@ -15,8 +16,9 @@ machine-readable surfaces:
    existing inventory commands.
 2. `bin/swarm security audit --json` — a static permissions/hook scanner over
    the SwarmDaddy plugin and the active target repo.
-3. The `activity-observation` row added to the run-events stream — sanitized
-   per-tool-call telemetry written by Claude Code hooks.
+3. The `activity-observation` row written to `observations.jsonl` — sanitized
+   tool/subprocess telemetry derived from backend output, with optional
+   hook-sourced rows later.
 
 We need the output shapes locked before the runtime code lands so consumers
 (TUI, dogfood reports, dashboards, CI gates) can be built against fixtures and
@@ -99,11 +101,15 @@ Per-surface specifics:
   with secret-shaped substrings replaced by `REDACTED` markers.
   `redaction_applied` is required per finding; downstream consumers MAY drop
   any finding with `redaction_applied=true` from public dashboards.
-- **Activity observation** — `input_summary` and `output_summary` are bounded
-  synopses (≤256 chars) that must not contain raw prompts, raw command output,
-  environment variables, or secrets. `file_paths` are repo-relative only.
-  When `${CLAUDE_PLUGIN_DATA}/active-run.json` is missing or invalid, the hook
-  MUST no-op rather than emit a placeholder row.
+- **Activity observation** — rows are written to `observations.jsonl` using
+  `schemas/telemetry/observations.v2.schema.json`. Backend-output extraction
+  stores aggregate activity under `details` (`tool_category_counts`,
+  `repeated_read_histogram`, first edit/test positions, output-byte summaries,
+  token usage, and marker counts). Optional hook rows must still avoid raw
+  prompts, raw command output, environment variables, and secrets. `file_paths`
+  are repo-relative only when present. When
+  `${CLAUDE_PLUGIN_DATA}/active-run.json` is missing or invalid, a hook MUST
+  no-op rather than emit a placeholder row.
 
 ### Command inventory remains the source of truth
 
@@ -134,6 +140,7 @@ The Phase 1 `selftest` aggregates these; it does not replace them.
 
 ## Rollback
 
-Until any of Phases 1, 3, or 4 actually ship runtime code, this ADR can be
-withdrawn by deleting the fixtures and this file. Once a runtime emitter
-lands, supersede via a follow-up ADR rather than withdrawal.
+Until any of Phases 3 or 4 actually ship runtime code, the unimplemented
+surface contracts can be withdrawn by deleting the relevant fixture and
+superseding this ADR. Once a runtime emitter lands for a surface, supersede via
+a follow-up ADR rather than withdrawal.
