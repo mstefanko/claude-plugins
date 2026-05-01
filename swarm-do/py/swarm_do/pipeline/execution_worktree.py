@@ -1813,6 +1813,12 @@ def _source_scope_parent_dir(pattern: str) -> str:
     return candidate.parent.as_posix()
 
 
+_DISPATCHER_POLICY_WORKTREE_RELPATHS: tuple[str, ...] = (
+    ".claude/settings.local.json",
+    ".claude/settings.local.json.bak",
+)
+
+
 def _create_run_worktree(resolved: ResolvedExecutionWorktree) -> None:
     if resolved.safe_git_root.exists() and any(resolved.safe_git_root.iterdir()):
         raise RunExecutionWorktreeError(f"run worktree path already exists without a valid manifest: {resolved.safe_git_root}")
@@ -1820,6 +1826,35 @@ def _create_run_worktree(resolved: ResolvedExecutionWorktree) -> None:
         raise RunExecutionWorktreeError(f"run execution branch already exists without a valid manifest: {resolved.branch}")
     resolved.safe_git_root.parent.mkdir(parents=True, exist_ok=True)
     _git(resolved.source_git_root, "worktree", "add", "-b", resolved.branch, str(resolved.safe_git_root), resolved.base_sha)
+    _scrub_dispatcher_policy_files(resolved)
+
+
+def _scrub_dispatcher_policy_files(resolved: ResolvedExecutionWorktree) -> None:
+    # The source-tree .claude/settings.local.json is the dispatcher's coordinator
+    # minimum allowlist (Read + Bash(bd:*); deny Write/Edit/Glob/Grep). It must
+    # not follow into a writer worktree: Claude Code merges .claude/settings.local.json
+    # from the worker's cwd at launch and deny rules win, blocking the writer's Write
+    # tool even though --settings/--allowedTools grant it. Drop the file from the
+    # worktree checkout and flip skip-worktree on the index entry so the deletion is
+    # invisible to git status and adoption copyback does not propagate it back.
+    project_subdir = resolved.project_subdir.strip("/") if resolved.project_subdir else ""
+    for project_relative in _DISPATCHER_POLICY_WORKTREE_RELPATHS:
+        worktree_path = resolved.safe_project_root / project_relative
+        if not worktree_path.exists():
+            continue
+        index_path = f"{project_subdir}/{project_relative}" if project_subdir else project_relative
+        _run_git(
+            resolved.safe_git_root,
+            "update-index",
+            "--skip-worktree",
+            "--",
+            index_path,
+            check=False,
+        )
+        try:
+            worktree_path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def _copy_required_artifacts(resolved: ResolvedExecutionWorktree) -> list[CopiedArtifact]:

@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any, Mapping
 from unittest import mock
 
 from swarm_do.pipeline.execution_worktree import (
@@ -75,6 +76,57 @@ class ExecutionWorktreeTests(unittest.TestCase):
             self.assertEqual(manifest["source_git_root"], str(git_root.resolve(strict=False)))
             self.assertEqual(manifest["safe_project_root"], str(worktree.safe_project_root))
             self.assertGreaterEqual(len(manifest["copied_artifacts"]), 3)
+
+    def test_dispatcher_policy_settings_are_scrubbed_from_writer_worktree(self) -> None:
+        # The source-tree .claude/settings.local.json holds the dispatcher's coordinator
+        # minimum allowlist and must not follow into a writer worktree, where Claude Code
+        # would merge it on launch and override --allowedTools deny-wins.
+        deny_writer_policy = {
+            "permissions": {
+                "allow": ["Bash(bd:*)", "Read"],
+                "deny": ["Bash(rg:*)", "Edit", "Glob", "Grep", "Write"],
+            }
+        }
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            git_root, project, data, prepared = _prepared_monorepo(
+                root, dispatcher_policy=deny_writer_policy
+            )
+            source_policy = project / ".claude" / "settings.local.json"
+            self.assertTrue(source_policy.is_file(), "fixture must seed source policy file")
+
+            worktree = materialize_run_execution_worktree(
+                RUN_ID,
+                source_project_root=project,
+                data_dir=data,
+                prepared_plan=prepared,
+                sensitive_prefixes=[str(root / "home" / ".claude")],
+            )
+
+            for rel in (".claude/settings.local.json", ".claude/settings.local.json.bak"):
+                self.assertFalse(
+                    (worktree.safe_project_root / rel).exists(),
+                    f"{rel} must be removed from writer worktree",
+                )
+
+            status_lines = subprocess.run(
+                ["git", "status", "--porcelain", "--", "swarm-do/.claude/"],
+                cwd=worktree.safe_git_root,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.splitlines()
+            self.assertEqual(
+                [line for line in status_lines if line.strip()],
+                [],
+                "skip-worktree must hide the scrub from git status",
+            )
+
+            self.assertEqual(
+                json.loads(source_policy.read_text(encoding="utf-8")),
+                deny_writer_policy,
+                "scrub must not mutate source-tree dispatcher policy",
+            )
 
     def test_artifact_copy_rejects_symlinked_source(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -1150,6 +1202,7 @@ def _prepared_monorepo(
     run_id: str = RUN_ID,
     ignore_run_artifacts: bool = True,
     dirty_plan_before_prepare: bool = False,
+    dispatcher_policy: Mapping[str, Any] | None = None,
 ) -> tuple[Path, Path, Path, dict]:
     git_root = root / "home" / ".claude" / "plugins" / "mstefanko-plugins"
     project = git_root / "swarm-do"
@@ -1161,6 +1214,18 @@ def _prepared_monorepo(
     if ignore_run_artifacts:
         (project / ".gitignore").write_text("data/runs/\n", encoding="utf-8")
         add_paths.append("swarm-do/.gitignore")
+    if dispatcher_policy is not None:
+        claude_dir = project / ".claude"
+        claude_dir.mkdir(parents=True, exist_ok=True)
+        (claude_dir / "settings.local.json").write_text(
+            json.dumps(dispatcher_policy, indent=2) + "\n", encoding="utf-8"
+        )
+        (claude_dir / "settings.local.json.bak").write_text(
+            json.dumps(dispatcher_policy, indent=2) + "\n", encoding="utf-8"
+        )
+        add_paths.extend(
+            ["swarm-do/.claude/settings.local.json", "swarm-do/.claude/settings.local.json.bak"]
+        )
     (project / "plan.md").write_text(
         (
             "### Phase 1: Tiny\n\n"
