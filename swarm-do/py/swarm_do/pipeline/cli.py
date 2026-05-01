@@ -2040,6 +2040,9 @@ def cmd_worktrees(args: argparse.Namespace) -> int:
         unit_worktree_path,
     )
 
+    if _legacy_worktree_sensitive_repo_refused(args):
+        return 1
+
     try:
         if args.worktrees_command == "adopt-run":
             from .execution_worktree import adopt_run_worktree
@@ -2099,6 +2102,12 @@ def cmd_worktrees(args: argparse.Namespace) -> int:
             )
         return 2
     except Exception as exc:
+        payload = getattr(exc, "payload", None)
+        if isinstance(payload, Mapping):
+            if args.json:
+                print(json.dumps(payload, indent=2, sort_keys=True))
+            elif args.worktrees_command == "adopt-run":
+                print(_format_worktree_adopt(payload))
         print(f"swarm: worktrees {args.worktrees_command}: {exc}", file=sys.stderr)
         return 1
 
@@ -2116,12 +2125,38 @@ def cmd_worktrees(args: argparse.Namespace) -> int:
     return 0
 
 
+def _legacy_worktree_sensitive_repo_refused(args: argparse.Namespace) -> bool:
+    if args.worktrees_command not in {"ensure-integration", "add-unit", "merge"}:
+        return False
+    if bool(getattr(args, "allow_source_worktree", False)):
+        return False
+    from .execution_workspace import is_sensitive_path
+
+    repo = Path(args.repo).resolve(strict=False)
+    if not is_sensitive_path(repo):
+        return False
+    print(
+        "swarm: worktrees: legacy source-checkout worktrees are disabled for sensitive repos",
+        file=sys.stderr,
+    )
+    return True
+
+
 def _format_worktree_adopt(payload: Mapping[str, Any]) -> str:
     action = "applied" if payload.get("applied") else "dry-run"
     lines = [f"worktrees adopt-run: {payload.get('run_id')} {action}"]
     lines.append(f"  safe_project_root: {payload.get('safe_project_root')}")
     lines.append(f"  source_project_root: {payload.get('source_project_root')}")
     lines.append(f"  changed_files: {len(payload.get('changed_files') or [])}")
+    scope_check = payload.get("scope_check") if isinstance(payload.get("scope_check"), Mapping) else {}
+    decisions = scope_check.get("decisions") if isinstance(scope_check.get("decisions"), Mapping) else {}
+    if decisions:
+        lines.append(
+            "  scope_check: "
+            f"allow={decisions.get('allow', 0)} warn={decisions.get('warn', 0)} block={decisions.get('block', 0)}"
+        )
+    if payload.get("scope_check_path"):
+        lines.append(f"  scope_check_path: {payload.get('scope_check_path')}")
     for operation in payload.get("copyback_operations") or []:
         if isinstance(operation, Mapping):
             lines.append(f"    - {operation.get('action')} {operation.get('path')} -> {operation.get('destination_path')}")
@@ -2525,6 +2560,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--repo", default=".")
     p.add_argument("--run-id", required=True)
     p.add_argument("--base-ref", default="HEAD")
+    p.add_argument("--allow-source-worktree", action="store_true")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_worktrees)
     p = worktrees_sub.add_parser("add-unit")
@@ -2532,12 +2568,14 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--run-id", required=True)
     p.add_argument("--unit-id", required=True)
     p.add_argument("--base-ref", default="HEAD")
+    p.add_argument("--allow-source-worktree", action="store_true")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_worktrees)
     p = worktrees_sub.add_parser("merge")
     p.add_argument("--repo", default=".")
     p.add_argument("--integration-branch", required=True)
     p.add_argument("--unit-branch", required=True)
+    p.add_argument("--allow-source-worktree", action="store_true")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_worktrees)
     p = worktrees_sub.add_parser("adopt-run")

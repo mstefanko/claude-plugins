@@ -8,12 +8,14 @@ import unittest
 from pathlib import Path
 
 from swarm_do.pipeline.execution_worktree import (
+    RunExecutionWorktreeAdoptionBlocked,
     RunExecutionWorktreeError,
     adopt_run_worktree,
     cleanup_run_worktree,
     execution_branch_name,
     materialize_run_execution_worktree,
     resolve_run_execution_worktree,
+    validate_run_execution_worktree_manifest,
 )
 from swarm_do.pipeline.prepare import accept_prepared, prepare_plan_run
 
@@ -269,6 +271,218 @@ class ExecutionWorktreeTests(unittest.TestCase):
                 cleanup_run_worktree(RUN_ID, data_dir=data, apply=True)
             self.assertTrue(worktree.safe_git_root.exists())
 
+    def test_manifest_schema_requires_roots_branch_base_and_artifacts(self) -> None:
+        with self.assertRaisesRegex(RunExecutionWorktreeError, "missing required property"):
+            validate_run_execution_worktree_manifest({"schema_version": 1, "run_id": RUN_ID})
+
+    def test_manifest_schema_rejects_unknown_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _git_root, project, data, prepared = _prepared_monorepo(root)
+            worktree = materialize_run_execution_worktree(
+                RUN_ID,
+                source_project_root=project,
+                data_dir=data,
+                prepared_plan=prepared,
+                sensitive_prefixes=[str(root / "home" / ".claude")],
+            )
+            payload = json.loads(worktree.manifest_path.read_text(encoding="utf-8"))
+            payload["surprise"] = True
+            worktree.manifest_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(RunExecutionWorktreeError, "unexpected property 'surprise'"):
+                adopt_run_worktree(RUN_ID, data_dir=data)
+
+    def test_legacy_completed_manifest_migrates_to_complete_no_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _git_root, project, data, prepared = _prepared_monorepo(root)
+            worktree = materialize_run_execution_worktree(
+                RUN_ID,
+                source_project_root=project,
+                data_dir=data,
+                prepared_plan=prepared,
+                sensitive_prefixes=[str(root / "home" / ".claude")],
+            )
+            payload = json.loads(worktree.manifest_path.read_text(encoding="utf-8"))
+            payload["adoption_state"] = "completed"
+            payload.pop("scope_check_path", None)
+            worktree.manifest_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+            dry_run = cleanup_run_worktree(RUN_ID, data_dir=data)
+
+            self.assertTrue(dry_run["eligible"])
+            self.assertEqual(dry_run["adoption_state"], "complete_no_changes")
+
+    def test_cleanup_accepts_complete_no_changes_after_legacy_migration(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _git_root, project, data, prepared = _prepared_monorepo(root)
+            worktree = materialize_run_execution_worktree(
+                RUN_ID,
+                source_project_root=project,
+                data_dir=data,
+                prepared_plan=prepared,
+                sensitive_prefixes=[str(root / "home" / ".claude")],
+            )
+            payload = json.loads(worktree.manifest_path.read_text(encoding="utf-8"))
+            payload["adoption_state"] = "completed"
+            worktree.manifest_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+            cleanup = cleanup_run_worktree(RUN_ID, data_dir=data, apply=True)
+
+            self.assertTrue(cleanup["applied"])
+            self.assertFalse(worktree.safe_git_root.exists())
+
+    def test_adopt_apply_blocks_dirty_destination(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _git_root, project, data, prepared = _prepared_monorepo(root)
+            worktree = materialize_run_execution_worktree(
+                RUN_ID,
+                source_project_root=project,
+                data_dir=data,
+                prepared_plan=prepared,
+                sensitive_prefixes=[str(root / "home" / ".claude")],
+            )
+            (worktree.safe_project_root / "docs").mkdir()
+            (worktree.safe_project_root / "docs" / "new.md").write_text("safe\n", encoding="utf-8")
+            (project / "docs").mkdir()
+            (project / "docs" / "new.md").write_text("dirty\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(RunExecutionWorktreeAdoptionBlocked, "destination_dirty") as raised:
+                adopt_run_worktree(RUN_ID, data_dir=data, apply=True)
+
+            self.assertIn({"path": "docs/new.md", "reason": "destination_dirty"}, raised.exception.payload["blocked_paths"])
+
+    def test_adopt_apply_blocks_destination_changed_since_base(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            git_root, project, data, prepared = _prepared_monorepo(root)
+            worktree = materialize_run_execution_worktree(
+                RUN_ID,
+                source_project_root=project,
+                data_dir=data,
+                prepared_plan=prepared,
+                sensitive_prefixes=[str(root / "home" / ".claude")],
+            )
+            (worktree.safe_project_root / "plan.md").write_text("safe edit\n", encoding="utf-8")
+            (project / "plan.md").write_text("source edit\n", encoding="utf-8")
+            _git(git_root, "add", "swarm-do/plan.md")
+            _git(git_root, "commit", "-q", "-m", "source changed after base")
+
+            with self.assertRaisesRegex(RunExecutionWorktreeAdoptionBlocked, "destination_changed_since_base") as raised:
+                adopt_run_worktree(RUN_ID, data_dir=data, apply=True)
+
+            self.assertIn(
+                {"path": "plan.md", "reason": "destination_changed_since_base"},
+                raised.exception.payload["blocked_paths"],
+            )
+
+    def test_adopt_apply_blocks_delete_directory_operation(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _git_root, project, data, prepared = _prepared_monorepo(root)
+            worktree = materialize_run_execution_worktree(
+                RUN_ID,
+                source_project_root=project,
+                data_dir=data,
+                prepared_plan=prepared,
+                sensitive_prefixes=[str(root / "home" / ".claude")],
+            )
+            (worktree.safe_project_root / "docs").mkdir()
+            (worktree.safe_project_root / "docs" / "delete-dir").write_text("tracked in safe branch\n", encoding="utf-8")
+            _git(worktree.safe_project_root, "add", "docs/delete-dir")
+            _git(worktree.safe_project_root, "commit", "-q", "-m", "safe tracked file")
+            (worktree.safe_project_root / "docs" / "delete-dir").unlink()
+            (project / "docs" / "delete-dir").mkdir(parents=True)
+            (project / "docs" / "delete-dir" / "child.txt").write_text("do not remove recursively\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(RunExecutionWorktreeAdoptionBlocked, "delete_directory") as raised:
+                adopt_run_worktree(RUN_ID, data_dir=data, apply=True)
+
+            self.assertIn({"path": "docs/delete-dir", "reason": "delete_directory"}, raised.exception.payload["blocked_paths"])
+
+    def test_adopt_dry_run_returns_scope_check_without_writing_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _git_root, project, data, prepared = _prepared_monorepo(root)
+            worktree = materialize_run_execution_worktree(
+                RUN_ID,
+                source_project_root=project,
+                data_dir=data,
+                prepared_plan=prepared,
+                sensitive_prefixes=[str(root / "home" / ".claude")],
+            )
+            (worktree.safe_project_root / "docs").mkdir()
+            (worktree.safe_project_root / "docs" / "new.md").write_text("safe\n", encoding="utf-8")
+
+            dry_run = adopt_run_worktree(RUN_ID, data_dir=data)
+
+            self.assertIn("scope_check", dry_run)
+            self.assertFalse((data / "worktrees" / RUN_ID / "scope-check.json").exists())
+
+    def test_adopt_apply_writes_scope_check_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _git_root, project, data, prepared = _prepared_monorepo(root)
+            worktree = materialize_run_execution_worktree(
+                RUN_ID,
+                source_project_root=project,
+                data_dir=data,
+                prepared_plan=prepared,
+                sensitive_prefixes=[str(root / "home" / ".claude")],
+            )
+            (worktree.safe_project_root / "docs").mkdir()
+            (worktree.safe_project_root / "docs" / "new.md").write_text("safe\n", encoding="utf-8")
+
+            applied = adopt_run_worktree(RUN_ID, data_dir=data, apply=True)
+
+            scope_path = Path(applied["scope_check_path"])
+            self.assertTrue(scope_path.is_file())
+            manifest = json.loads(worktree.manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["scope_check_path"], str(scope_path))
+
+    def test_adopt_apply_marks_complete_no_changes_when_no_operations(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _git_root, project, data, prepared = _prepared_monorepo(root)
+            worktree = materialize_run_execution_worktree(
+                RUN_ID,
+                source_project_root=project,
+                data_dir=data,
+                prepared_plan=prepared,
+                sensitive_prefixes=[str(root / "home" / ".claude")],
+            )
+
+            applied = adopt_run_worktree(RUN_ID, data_dir=data, apply=True)
+
+            self.assertEqual(applied["adoption_state"], "complete_no_changes")
+            manifest = json.loads(worktree.manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["adoption_state"], "complete_no_changes")
+
+    def test_scope_check_blocks_explicit_blocked_files(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _git_root, project, data, prepared = _prepared_monorepo(root)
+            _add_prepared_blocked_file(data, RUN_ID, "docs/secret.md")
+            worktree = materialize_run_execution_worktree(
+                RUN_ID,
+                source_project_root=project,
+                data_dir=data,
+                prepared_plan=prepared,
+                sensitive_prefixes=[str(root / "home" / ".claude")],
+            )
+            (worktree.safe_project_root / "docs").mkdir()
+            (worktree.safe_project_root / "docs" / "secret.md").write_text("secret\n", encoding="utf-8")
+
+            dry_run = adopt_run_worktree(RUN_ID, data_dir=data)
+
+            self.assertIn({"path": "docs/secret.md", "reason": "blocked_files"}, dry_run["blocked_paths"])
+            record = dry_run["scope_check"]["changed_files"][0]
+            self.assertEqual(record["decision"], "block")
+            self.assertEqual(record["matched_blocked_patterns"], ["docs/secret.md"])
+
 
 def _prepared_monorepo(root: Path, *, run_id: str = RUN_ID, ignore_run_artifacts: bool = True) -> tuple[Path, Path, Path, dict]:
     git_root = root / "home" / ".claude" / "plugins" / "mstefanko-plugins"
@@ -338,6 +552,15 @@ def _prepare_existing_project(project: Path, data: Path, run_id: str) -> dict:
         raise AssertionError(result.to_dict())
     accept_prepared(run_id, repo_root=project, data_dir=data)
     return json.loads((data / "runs" / run_id / "prepared_plan.v1.json").read_text(encoding="utf-8"))
+
+
+def _add_prepared_blocked_file(data: Path, run_id: str, pattern: str) -> None:
+    path = data / "runs" / run_id / "prepared_plan.v1.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    descriptor = payload["work_unit_artifacts"]["1"]
+    artifact = descriptor["artifact"]
+    artifact["work_units"][0]["blocked_files"] = [pattern]
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def _init_seed_repo(repo: Path) -> None:

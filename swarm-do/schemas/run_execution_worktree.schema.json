@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/07/schema#",
+  "$id": "https://mstefanko-plugins/swarm-do/run_execution_worktree.schema.json#v1",
+  "title": "swarm-do run execution worktree manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "source_git_root",
+    "source_project_root",
+    "safe_git_worktree_root",
+    "safe_project_root",
+    "project_subdir",
+    "branch",
+    "base_sha",
+    "base_ref",
+    "copied_artifacts",
+    "adoption_state",
+    "created_at",
+    "last_used_at"
+  ],
+  "properties": {
+    "schema_version": { "type": "integer", "enum": [1] },
+    "run_id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "source_git_root": { "type": "string", "minLength": 1 },
+    "source_project_root": { "type": "string", "minLength": 1 },
+    "safe_git_worktree_root": { "type": "string", "minLength": 1 },
+    "safe_project_root": { "type": "string", "minLength": 1 },
+    "project_subdir": { "type": "string" },
+    "branch": { "type": "string", "minLength": 1 },
+    "base_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "base_ref": { "type": "string", "minLength": 1 },
+    "copied_artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source_path",
+          "destination_path",
+          "relative_path",
+          "source_sha256",
+          "destination_sha256",
+          "kind",
+          "transformed"
+        ],
+        "properties": {
+          "source_path": { "type": "string", "minLength": 1 },
+          "destination_path": { "type": "string", "minLength": 1 },
+          "relative_path": { "type": "string", "minLength": 1 },
+          "source_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "destination_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "kind": { "type": "string", "minLength": 1 },
+          "transformed": { "type": "boolean" }
+        }
+      }
+    },
+    "adoption_state": {
+      "type": "string",
+      "enum": [
+        "unadopted",
+        "adopted",
+        "complete_no_changes",
+        "preserved",
+        "conflicted"
+      ]
+    },
+    "adopted_at": { "type": ["string", "null"], "format": "date-time" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "last_used_at": { "type": "string", "format": "date-time" },
+    "scope_check_path": { "type": ["string", "null"] },
+    "conflict_manifest_path": { "type": ["string", "null"] },
+    "integration_manifest_path": { "type": ["string", "null"] }
+  }
+}

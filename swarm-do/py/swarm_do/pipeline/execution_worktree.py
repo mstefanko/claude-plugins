@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import fnmatch
 import json
 import os
 import re
@@ -13,11 +14,23 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
+from .paths import REPO_ROOT
 from .run_state import _atomic_json_write, utc_now
 
 
 class RunExecutionWorktreeError(RuntimeError):
     """Raised when a run execution worktree cannot be prepared or adopted."""
+
+
+class RunExecutionWorktreeAdoptionBlocked(RunExecutionWorktreeError):
+    """Raised when copyback is explicitly blocked by adoption safety checks."""
+
+    def __init__(self, message: str, payload: Mapping[str, Any]):
+        super().__init__(message)
+        self.payload = dict(payload)
+
+
+RUN_EXECUTION_WORKTREE_SCHEMA_PATH = REPO_ROOT / "schemas" / "run_execution_worktree.schema.json"
 
 
 @dataclass(frozen=True)
@@ -174,7 +187,7 @@ def materialize_run_execution_worktree(
         _create_run_worktree(resolved)
     copied = _copy_required_artifacts(resolved)
     manifest = _manifest_payload(resolved, copied, previous=existing_manifest)
-    _atomic_json_write(resolved.manifest_path, manifest)
+    _write_manifest(resolved.manifest_path, manifest)
     return RunExecutionWorktree(
         run_id=run_id,
         source_git_root=resolved.source_git_root,
@@ -221,17 +234,53 @@ def adopt_run_worktree(run_id: str, *, data_dir: Path, apply: bool = False) -> d
                 "destination_path": str(destination),
             }
         )
+    for operation in operations:
+        block_reason = _destination_block_reason(manifest, operation)
+        if block_reason is not None:
+            blocked.append({"path": str(operation["path"]), "reason": block_reason})
+    prepared = _read_prepared_artifact(run_id, data_dir=Path(data_dir))
+    scope_check = build_run_worktree_scope_check(
+        prepared,
+        changed_files=changes,
+        blocked_paths=blocked,
+        adoption_operations=operations,
+        source_project_root=source_project,
+        safe_project_root=safe_project,
+    )
+    blocked = _merge_blocked_paths(blocked, scope_check.get("blocked_paths"))
+    scope_check_path = Path(data_dir) / "worktrees" / run_id / "scope-check.json"
+    payload = {
+        "run_id": run_id,
+        "applied": False,
+        "manifest_path": str(manifest_path),
+        "source_project_root": str(source_project),
+        "safe_project_root": str(safe_project),
+        "run_execution_branch": manifest.get("branch"),
+        "base_sha": manifest.get("base_sha"),
+        "adoption_state": manifest.get("adoption_state"),
+        "changed_files": [change["path"] for change in changes],
+        "blocked_paths": blocked,
+        "scope_check": scope_check,
+        "scope_check_path": str(scope_check_path),
+        "copyback_operations": operations,
+        "applied_operations": [],
+        "apply_command": f"bin/swarm worktrees adopt-run {run_id} --apply",
+    }
     if apply and blocked:
-        raise RunExecutionWorktreeError("adoption has blocked paths: " + ", ".join(item["path"] for item in blocked))
+        raise RunExecutionWorktreeAdoptionBlocked(
+            "adoption has blocked paths: " + ", ".join(f"{item['path']} ({item['reason']})" for item in blocked),
+            payload,
+        )
     applied_operations: list[dict[str, Any]] = []
     if apply:
+        _write_scope_check(scope_check_path, scope_check)
         for operation in operations:
             src = Path(str(operation["source_path"]))
             dst = Path(str(operation["destination_path"]))
             if operation["action"] == "delete":
                 if dst.is_dir():
-                    shutil.rmtree(dst)
-                elif dst.exists():
+                    raise RunExecutionWorktreeError(f"refusing to delete directory during run adoption: {dst}")
+                if dst.exists():
                     dst.unlink()
             else:
                 if not src.is_file():
@@ -240,24 +289,18 @@ def adopt_run_worktree(run_id: str, *, data_dir: Path, apply: bool = False) -> d
                 shutil.copy2(src, dst)
             applied_operations.append(operation)
         manifest = dict(manifest)
-        manifest["adoption_state"] = "adopted"
-        manifest["adopted_at"] = utc_now()
+        manifest["adoption_state"] = "adopted" if operations else "complete_no_changes"
+        if operations:
+            manifest["adopted_at"] = utc_now()
+        else:
+            manifest.setdefault("adopted_at", None)
+        manifest["scope_check_path"] = str(scope_check_path)
         manifest["last_used_at"] = utc_now()
-        _atomic_json_write(manifest_path, manifest)
-    return {
-        "run_id": run_id,
-        "applied": apply,
-        "manifest_path": str(manifest_path),
-        "source_project_root": str(source_project),
-        "safe_project_root": str(safe_project),
-        "run_execution_branch": manifest.get("branch"),
-        "base_sha": manifest.get("base_sha"),
-        "changed_files": [change["path"] for change in changes],
-        "blocked_paths": blocked,
-        "copyback_operations": operations,
-        "applied_operations": applied_operations,
-        "apply_command": f"bin/swarm worktrees adopt-run {run_id} --apply",
-    }
+        _write_manifest(manifest_path, manifest)
+        payload["applied"] = True
+        payload["adoption_state"] = manifest["adoption_state"]
+        payload["applied_operations"] = applied_operations
+    return payload
 
 
 def cleanup_run_worktree(run_id: str, *, data_dir: Path, apply: bool = False) -> dict[str, Any]:
@@ -266,7 +309,7 @@ def cleanup_run_worktree(run_id: str, *, data_dir: Path, apply: bool = False) ->
     adoption_state = str(manifest.get("adoption_state") or "unadopted")
     safe_git = Path(str(manifest["safe_git_worktree_root"]))
     source_git = Path(str(manifest["source_git_root"]))
-    eligible = adoption_state in {"adopted", "completed"}
+    eligible = adoption_state in {"adopted", "complete_no_changes"}
     removed: list[str] = []
     if apply and not eligible:
         raise RunExecutionWorktreeError(
@@ -290,6 +333,7 @@ def cleanup_run_worktree(run_id: str, *, data_dir: Path, apply: bool = False) ->
         "manifest_path": str(manifest_path),
         "safe_git_worktree_root": str(safe_git),
         "source_git_root": str(source_git),
+        "adoption_state": adoption_state,
         "targets": [str(safe_git), str(manifest_path)],
         "removed": removed,
         "apply_command": f"bin/swarm worktrees cleanup-run {run_id} --apply",
@@ -377,6 +421,10 @@ def _manifest_payload(
         if isinstance(previous, Mapping) and isinstance(previous.get("adoption_state"), str)
         else "unadopted"
     )
+    adopted_at = previous.get("adopted_at") if isinstance(previous, Mapping) and "adopted_at" in previous else None
+    scope_check_path = previous.get("scope_check_path") if isinstance(previous, Mapping) else None
+    conflict_manifest_path = previous.get("conflict_manifest_path") if isinstance(previous, Mapping) else None
+    integration_manifest_path = previous.get("integration_manifest_path") if isinstance(previous, Mapping) else None
     return {
         "schema_version": 1,
         "run_id": resolved.run_id,
@@ -390,8 +438,12 @@ def _manifest_payload(
         "base_ref": resolved.base_ref,
         "copied_artifacts": [artifact.to_dict() for artifact in copied],
         "adoption_state": adoption_state,
+        "adopted_at": adopted_at,
         "created_at": created_at,
         "last_used_at": utc_now(),
+        "scope_check_path": scope_check_path if isinstance(scope_check_path, str) else None,
+        "conflict_manifest_path": conflict_manifest_path if isinstance(conflict_manifest_path, str) else None,
+        "integration_manifest_path": integration_manifest_path if isinstance(integration_manifest_path, str) else None,
     }
 
 
@@ -551,6 +603,223 @@ def _adoption_block_reason(path: str, *, copied_rels: set[str]) -> str | None:
     return None
 
 
+def _destination_block_reason(manifest: Mapping[str, Any], operation: Mapping[str, Any]) -> str | None:
+    rel = str(operation.get("path") or "")
+    destination = Path(str(operation.get("destination_path") or ""))
+    if operation.get("action") == "delete" and destination.is_dir():
+        return "delete_directory"
+    source_git = Path(str(manifest["source_git_root"]))
+    git_rel = _source_git_relative_path(manifest, rel)
+    if _git_status_entries(source_git, git_rel):
+        return "destination_dirty"
+    changed = _run_git(
+        source_git,
+        "diff",
+        "--name-only",
+        str(manifest["base_sha"]),
+        "HEAD",
+        "--",
+        git_rel,
+        check=True,
+    ).stdout.strip()
+    if changed:
+        return "destination_changed_since_base"
+    return None
+
+
+def build_run_worktree_scope_check(
+    prepared_artifact: Mapping[str, Any],
+    *,
+    changed_files: Iterable[Mapping[str, str]],
+    blocked_paths: Iterable[Mapping[str, str]],
+    adoption_operations: Iterable[Mapping[str, Any]],
+    source_project_root: Path,
+    safe_project_root: Path,
+) -> dict[str, Any]:
+    units = _scope_units(prepared_artifact, source_project_root=source_project_root)
+    basic_blocks = {str(item.get("path")): str(item.get("reason")) for item in blocked_paths if isinstance(item, Mapping)}
+    records: list[dict[str, Any]] = []
+    warnings: list[dict[str, str]] = []
+    blocked: list[dict[str, str]] = [dict(item) for item in blocked_paths if isinstance(item, Mapping)]
+    decisions = {"allow": 0, "warn": 0, "block": 0}
+    for change in changed_files:
+        if not isinstance(change, Mapping):
+            continue
+        path = str(change.get("path") or "")
+        status = str(change.get("status") or "")
+        matched_allowed: list[str] = []
+        matched_blocked: list[str] = []
+        phase_ids: list[str] = []
+        work_unit_ids: list[str] = []
+        for unit in units:
+            allowed = [pattern for pattern in unit["allowed_files"] if _glob_matches(pattern, path)]
+            blocked_matches = [pattern for pattern in unit["blocked_files"] if _glob_matches(pattern, path)]
+            if allowed or blocked_matches:
+                phase_ids.append(unit["phase_id"])
+                work_unit_ids.append(unit["work_unit_id"])
+                matched_allowed.extend(allowed)
+                matched_blocked.extend(blocked_matches)
+        decision = "allow"
+        reason = None
+        if basic_blocks.get(path):
+            decision = "block"
+            reason = basic_blocks[path]
+        elif matched_blocked:
+            decision = "block"
+            reason = "blocked_files"
+            blocked.append({"path": path, "reason": reason})
+        elif not matched_allowed:
+            decision = "warn"
+            reason = "outside_allowed_files"
+            warnings.append({"path": path, "reason": reason})
+        decisions[decision] += 1
+        records.append(
+            {
+                "path": path,
+                "status": status,
+                "matching_phase_ids": sorted(set(phase_ids)),
+                "matching_work_unit_ids": sorted(set(work_unit_ids)),
+                "matched_allowed_patterns": sorted(set(matched_allowed)),
+                "matched_blocked_patterns": sorted(set(matched_blocked)),
+                "decision": decision,
+                "reason": reason,
+            }
+        )
+    return {
+        "schema_version": 1,
+        "run_id": str(prepared_artifact.get("run_id") or ""),
+        "generated_at": utc_now(),
+        "source_project_root": str(source_project_root),
+        "safe_project_root": str(safe_project_root),
+        "changed_files": records,
+        "blocked_paths": _dedupe_blocked_paths(blocked),
+        "warnings": _dedupe_blocked_paths(warnings),
+        "copyback_operations": [dict(item) for item in adoption_operations if isinstance(item, Mapping)],
+        "decisions": decisions,
+        "enforcement": {
+            "blocks": ["path_escape", "data/runs/**", "blocked_files"],
+            "warnings": ["outside_allowed_files"],
+        },
+    }
+
+
+def validate_run_execution_worktree_manifest(payload: Mapping[str, Any]) -> None:
+    from swarm_do.telemetry.schemas import validate_value
+
+    schema = json.loads(RUN_EXECUTION_WORKTREE_SCHEMA_PATH.read_text(encoding="utf-8"))
+    errors = validate_value(dict(payload), schema)
+    if errors:
+        raise RunExecutionWorktreeError("run execution worktree manifest schema validation failed: " + "; ".join(errors))
+
+
+def _normalize_run_worktree_manifest(raw: Mapping[str, Any]) -> tuple[dict[str, Any], bool]:
+    manifest = dict(raw)
+    changed = False
+    if manifest.get("adoption_state") is None:
+        manifest["adoption_state"] = "unadopted"
+        changed = True
+    elif manifest.get("adoption_state") == "completed":
+        manifest["adoption_state"] = "complete_no_changes"
+        changed = True
+    for key in ("scope_check_path", "conflict_manifest_path", "integration_manifest_path"):
+        if key not in manifest:
+            manifest[key] = None
+            changed = True
+    return manifest, changed
+
+
+def _write_manifest(path: Path, manifest: Mapping[str, Any]) -> None:
+    normalized, _changed = _normalize_run_worktree_manifest(manifest)
+    validate_run_execution_worktree_manifest(normalized)
+    _atomic_json_write(path, normalized)
+
+
+def _write_scope_check(path: Path, scope_check: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_json_write(path, dict(scope_check))
+
+
+def _read_prepared_artifact(run_id: str, *, data_dir: Path) -> dict[str, Any]:
+    path = data_dir / "runs" / run_id / "prepared_plan.v1.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"run_id": run_id}
+    return payload if isinstance(payload, dict) else {"run_id": run_id}
+
+
+def _scope_units(prepared_artifact: Mapping[str, Any], *, source_project_root: Path) -> list[dict[str, Any]]:
+    units: list[dict[str, Any]] = []
+    descriptors = prepared_artifact.get("work_unit_artifacts") if isinstance(prepared_artifact.get("work_unit_artifacts"), Mapping) else {}
+    for phase_id, descriptor in descriptors.items():
+        if not isinstance(descriptor, Mapping):
+            continue
+        artifact = descriptor.get("artifact") if isinstance(descriptor.get("artifact"), Mapping) else None
+        if artifact is None and isinstance(descriptor.get("path"), str):
+            artifact = _read_json_mapping(source_project_root / str(descriptor["path"]))
+        if artifact is None:
+            continue
+        for unit in artifact.get("work_units") or []:
+            if not isinstance(unit, Mapping):
+                continue
+            work_unit_id = str(unit.get("id") or f"{phase_id}:unit")
+            allowed = unit.get("allowed_files", unit.get("files"))
+            blocked = unit.get("blocked_files")
+            units.append(
+                {
+                    "phase_id": str(phase_id),
+                    "work_unit_id": work_unit_id,
+                    "allowed_files": [str(item) for item in allowed or [] if isinstance(item, str)],
+                    "blocked_files": [str(item) for item in blocked or [] if isinstance(item, str)],
+                }
+            )
+    return units
+
+
+def _read_json_mapping(path: Path) -> dict[str, Any] | None:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _merge_blocked_paths(
+    existing: Iterable[Mapping[str, str]],
+    additional: Any,
+) -> list[dict[str, str]]:
+    values: list[dict[str, str]] = [dict(item) for item in existing if isinstance(item, Mapping)]
+    if isinstance(additional, list):
+        values.extend(dict(item) for item in additional if isinstance(item, Mapping))
+    return _dedupe_blocked_paths(values)
+
+
+def _dedupe_blocked_paths(items: Iterable[Mapping[str, str]]) -> list[dict[str, str]]:
+    out: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in items:
+        path = str(item.get("path") or "")
+        reason = str(item.get("reason") or "")
+        if not path or not reason:
+            continue
+        key = (path, reason)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"path": path, "reason": reason})
+    return out
+
+
+def _glob_matches(pattern: str, path: str) -> bool:
+    posix = Path(path).as_posix()
+    return fnmatch.fnmatch(path, pattern) or fnmatch.fnmatch(posix, pattern)
+
+
+def _source_git_relative_path(manifest: Mapping[str, Any], project_relative_path: str) -> str:
+    project_subdir = str(manifest.get("project_subdir") or "").strip("/")
+    return str(Path(project_subdir) / project_relative_path) if project_subdir else project_relative_path
+
+
 def _git_relative_artifact_path(resolved: ResolvedExecutionWorktree, rel: Path) -> str:
     return str((Path(resolved.project_subdir) / rel) if resolved.project_subdir else rel)
 
@@ -561,7 +830,9 @@ def _load_manifest(path: Path) -> dict[str, Any] | None:
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
         raise RunExecutionWorktreeError(f"run worktree manifest must be an object: {path}")
-    return value
+    manifest, _changed = _normalize_run_worktree_manifest(value)
+    validate_run_execution_worktree_manifest(manifest)
+    return manifest
 
 
 def _require_manifest(path: Path) -> dict[str, Any]:
@@ -690,10 +961,13 @@ def _atomic_write_bytes(destination: Path, data: bytes) -> None:
 
 __all__ = [
     "RunExecutionWorktree",
+    "RunExecutionWorktreeAdoptionBlocked",
     "RunExecutionWorktreeError",
     "adopt_run_worktree",
+    "build_run_worktree_scope_check",
     "cleanup_run_worktree",
     "execution_branch_name",
     "materialize_run_execution_worktree",
     "resolve_run_execution_worktree",
+    "validate_run_execution_worktree_manifest",
 ]

@@ -215,11 +215,13 @@ def reconcile_phase_sessions(
             actions.append(action)
             return _decision(run_id, base, terminal_status if terminal_status != "failed" else "failed_nonretryable", actions)
 
+        active_action_details: dict[str, Any] | None = None
         if phase.get("status") in ACTIVE_STATUSES and launcher_result is None:
             active_action = _active_phase_decision(phase, now=current_time)
             if active_action.get("status") == "active":
                 actions.append(active_action)
                 return _decision(run_id, base, "active", actions)
+            active_action_details = dict(active_action)
             failure_kind = str(active_action.get("failure_kind") or "active_attempt_abandoned")
         elif phase.get("status") == STATUS_FAILED:
             failure_kind = str(phase.get("last_failure_kind") or "failed_nonretryable")
@@ -257,6 +259,9 @@ def reconcile_phase_sessions(
             retry_after_seconds=None,
             dry_run=dry_run,
         )
+        if active_action_details is not None:
+            action["active_attempt_action"] = active_action_details.get("action")
+            action["active_attempt_details"] = active_action_details
         actions.append(action)
         if not dry_run and action.get("action") in {"retry_scheduled", "retry_ready"}:
             state = load_phase_sessions(run_id, data_dir=base)
@@ -788,42 +793,150 @@ def _same_failure_count(phase: Mapping[str, Any], failure_kind: str, *, include_
 
 def _active_phase_decision(phase: Mapping[str, Any], *, now: datetime) -> dict[str, Any]:
     expires = parse_phase_datetime(phase.get("lease_expires_at"))
-    if expires is not None and expires <= now:
-        return {
-            "phase_id": phase.get("phase_id"),
-            "attempt": phase.get("attempt"),
-            "action": "lease_expired",
-            "failure_kind": "lease_expired_no_artifacts",
-        }
-    if phase.get("lease_host") == socket.gethostname() and _child_death_proven(phase):
-        return {
-            "phase_id": phase.get("phase_id"),
-            "attempt": phase.get("attempt"),
-            "action": "child_dead",
-            "failure_kind": "child_process_dead_no_artifacts",
-        }
-    return {
+    lease_expired = expires is not None and expires <= now
+    current_host = socket.gethostname()
+    lease_host = phase.get("lease_host")
+    child_pid = phase.get("child_pid")
+    has_child_pid = isinstance(child_pid, int) and child_pid > 0
+    same_host = lease_host == current_host
+
+    if same_host and has_child_pid:
+        alive = _pid_alive(child_pid)
+        if alive is False:
+            return _active_action(
+                phase,
+                "child_dead",
+                now=now,
+                failure_kind="child_process_dead_no_artifacts",
+                child_alive=alive,
+                process_group_matches=None,
+            )
+        if alive is True:
+            expected_pgid = phase.get("process_group_id")
+            group_matches = None
+            if isinstance(expected_pgid, int) and expected_pgid > 0:
+                group_matches = _process_group_matches(child_pid, expected_pgid)
+                if group_matches is False:
+                    return _active_action(
+                        phase,
+                        "child_dead",
+                        now=now,
+                        failure_kind="child_process_dead_no_artifacts",
+                        child_alive=alive,
+                        process_group_matches=group_matches,
+                    )
+                if group_matches is None:
+                    return _active_action(
+                        phase,
+                        "active_preserved_child_unknown",
+                        now=now,
+                        status="active",
+                        child_alive=alive,
+                        process_group_matches=group_matches,
+                    )
+            return _active_action(
+                phase,
+                "active_preserved_child_alive",
+                now=now,
+                status="active",
+                child_alive=alive,
+                process_group_matches=group_matches,
+            )
+        if lease_expired:
+            return _active_action(
+                phase,
+                "lease_expired",
+                now=now,
+                failure_kind="lease_expired_no_artifacts",
+                child_alive=alive,
+                process_group_matches=None,
+            )
+        return _active_action(
+            phase,
+            "active_preserved_child_unknown",
+            now=now,
+            status="active",
+            child_alive=alive,
+            process_group_matches=None,
+        )
+
+    if has_child_pid and not same_host:
+        if lease_expired:
+            return _active_action(
+                phase,
+                "lease_expired_cross_host",
+                now=now,
+                failure_kind="lease_expired_no_artifacts",
+                child_alive=None,
+                process_group_matches=None,
+            )
+        return _active_action(
+            phase,
+            "active_preserved_cross_host",
+            now=now,
+            status="active",
+            child_alive=None,
+            process_group_matches=None,
+        )
+
+    if lease_expired:
+        action = "lease_expired_cross_host" if lease_host and lease_host != current_host else "lease_expired"
+        return _active_action(
+            phase,
+            action,
+            now=now,
+            failure_kind="lease_expired_no_artifacts",
+            child_alive=None,
+            process_group_matches=None,
+        )
+    if lease_host and lease_host != current_host:
+        return _active_action(
+            phase,
+            "active_preserved_cross_host",
+            now=now,
+            status="active",
+            child_alive=None,
+            process_group_matches=None,
+        )
+    return _active_action(
+        phase,
+        "active_preserved_no_child_metadata",
+        now=now,
+        status="active",
+        child_alive=None,
+        process_group_matches=None,
+    )
+
+
+def _active_action(
+    phase: Mapping[str, Any],
+    action: str,
+    *,
+    now: datetime,
+    status: str | None = None,
+    failure_kind: str | None = None,
+    child_alive: bool | None,
+    process_group_matches: bool | None,
+) -> dict[str, Any]:
+    expires = parse_phase_datetime(phase.get("lease_expires_at"))
+    payload: dict[str, Any] = {
         "phase_id": phase.get("phase_id"),
         "attempt": phase.get("attempt"),
-        "action": "active_preserved",
-        "status": "active",
+        "action": action,
+        "lease_host": phase.get("lease_host"),
+        "current_host": socket.gethostname(),
+        "lease_expires_at": phase.get("lease_expires_at"),
+        "lease_expired": bool(expires is not None and expires <= now),
+        "child_pid": phase.get("child_pid"),
+        "process_group_id": phase.get("process_group_id"),
+        "child_alive": child_alive,
+        "process_group_matches": process_group_matches,
     }
-
-
-def _child_death_proven(phase: Mapping[str, Any]) -> bool:
-    pid = phase.get("child_pid")
-    if not isinstance(pid, int) or pid <= 0:
-        return False
-    alive = _pid_alive(pid)
-    if alive is False:
-        return True
-    if alive is True:
-        expected_pgid = phase.get("process_group_id")
-        if isinstance(expected_pgid, int) and expected_pgid > 0:
-            group_matches = _process_group_matches(pid, expected_pgid)
-            if group_matches is False:
-                return True
-    return False
+    if status is not None:
+        payload["status"] = status
+    if failure_kind is not None:
+        payload["failure_kind"] = failure_kind
+    return payload
 
 
 def _pid_alive(pid: int) -> bool | None:

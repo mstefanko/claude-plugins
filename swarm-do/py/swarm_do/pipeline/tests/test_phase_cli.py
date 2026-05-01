@@ -5,11 +5,12 @@ import io
 import json
 import tempfile
 import unittest
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
-from swarm_do.pipeline.cli import _phase_evidence_payload, cmd_phases
+from swarm_do.pipeline.cli import _phase_evidence_payload, cmd_phases, cmd_worktrees
 from swarm_do.pipeline.phase_pump import pump_phases
 from swarm_do.pipeline.phase_sessions import init_phase_sessions
 from swarm_do.pipeline.tests.phase_session_fixtures import make_prepared_run
@@ -129,6 +130,73 @@ class PhaseCliEvidenceTests(unittest.TestCase):
 
         self.assertEqual(invalid_code, 3)
         self.assertIn("unexpected property", invalid_payload["error"])
+
+
+class WorktreeLegacyGuardTests(unittest.TestCase):
+    def test_legacy_worktree_mutators_refuse_sensitive_repo_without_override(self) -> None:
+        commands = [
+            _worktree_args("ensure-integration"),
+            _worktree_args("add-unit"),
+            _worktree_args("merge"),
+        ]
+        for args in commands:
+            with self.subTest(command=args.worktrees_command):
+                err = io.StringIO()
+                with mock.patch("swarm_do.pipeline.execution_workspace.is_sensitive_path", return_value=True):
+                    with redirect_stderr(err):
+                        exit_code = cmd_worktrees(args)
+
+                self.assertEqual(exit_code, 1)
+                self.assertIn("legacy source-checkout worktrees are disabled for sensitive repos", err.getvalue())
+
+    def test_legacy_worktree_mutators_allow_sensitive_repo_with_explicit_override(self) -> None:
+        commands = [
+            (
+                _worktree_args("ensure-integration", allow_source_worktree=True),
+                "swarm_do.pipeline.worktrees.ensure_integration_branch",
+                "swarm/run/integration",
+            ),
+            (
+                _worktree_args("add-unit", allow_source_worktree=True),
+                "swarm_do.pipeline.worktrees.add_unit_worktree",
+                (Path("/tmp/unit"), "swarm/run/unit"),
+            ),
+            (
+                _worktree_args("merge", allow_source_worktree=True),
+                "swarm_do.pipeline.worktrees.merge_unit_branch",
+                SimpleNamespace(
+                    integration_branch="swarm/run/integration",
+                    unit_branch="swarm/run/unit",
+                    head_sha="abc123",
+                ),
+            ),
+        ]
+        for args, target, return_value in commands:
+            with self.subTest(command=args.worktrees_command):
+                out = io.StringIO()
+                with mock.patch("swarm_do.pipeline.execution_workspace.is_sensitive_path", return_value=True), mock.patch(
+                    target,
+                    return_value=return_value,
+                ):
+                    with redirect_stdout(out):
+                        exit_code = cmd_worktrees(args)
+
+                self.assertEqual(exit_code, 0)
+                self.assertTrue(out.getvalue().strip())
+
+
+def _worktree_args(command: str, *, allow_source_worktree: bool = False) -> argparse.Namespace:
+    return argparse.Namespace(
+        worktrees_command=command,
+        repo="/tmp/sensitive-repo",
+        run_id="01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        unit_id="unit-1",
+        base_ref="HEAD",
+        integration_branch="swarm/run/integration",
+        unit_branch="swarm/run/unit",
+        allow_source_worktree=allow_source_worktree,
+        json=True,
+    )
 
 
 if __name__ == "__main__":

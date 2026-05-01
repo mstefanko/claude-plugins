@@ -114,7 +114,13 @@ def build_attempt_evidence_manifest(
             "project_subdir": command.get("project_subdir") if isinstance(command.get("project_subdir"), str) else None,
             "run_execution_branch": _string_or_none(command.get("run_execution_branch")),
             "git_base_sha": _string_or_none(command.get("git_base_sha")),
+            "git_base_ref": _string_or_none(command.get("git_base_ref")),
             "run_worktree_manifest_path": _string_or_none(command.get("run_worktree_manifest_path")),
+            "copied_ignored_artifacts": (
+                command.get("copied_ignored_artifacts")
+                if isinstance(command.get("copied_ignored_artifacts"), list)
+                else None
+            ),
             "real_repo_root_recorded": isinstance(command.get("real_repo_root"), str),
         },
         "artifacts": {

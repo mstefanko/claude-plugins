@@ -112,7 +112,15 @@
         "project_subdir": { "type": ["string", "null"] },
         "run_execution_branch": { "type": ["string", "null"] },
         "git_base_sha": { "type": ["string", "null"] },
+        "git_base_ref": { "type": ["string", "null"] },
         "run_worktree_manifest_path": { "type": ["string", "null"] },
+        "copied_ignored_artifacts": {
+          "type": ["array", "null"],
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
         "real_repo_root_recorded": { "type": "boolean" }
       }
     },

@@ -118,6 +118,40 @@ class PhaseEvidenceTests(unittest.TestCase):
             self.assertEqual(manifest["failure"]["policy_inputs"]["failure_kind"], "lease_expired_no_artifacts")
             self.assertTrue(Path(manifest["recovery"]["recovery_context_path"]).is_file())
 
+    def test_safe_worktree_evidence_manifest_includes_git_base_ref_and_copied_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            claim_next_phase(run_id, data_dir=data, repo_root=repo, lease_owner="owner-1")
+            started = start_phase(run_id, "1", launcher="manual", lease_owner="owner-1", data_dir=data)
+            _write_command(
+                data,
+                run_id,
+                "1",
+                1,
+                {
+                    "execution_workspace_mode": "safe-worktree",
+                    "git_base_ref": "main",
+                    "git_base_sha": "0" * 40,
+                    "copied_ignored_artifacts": [
+                        {
+                            "relative_path": "data/runs/example/prepared_plan.v1.json",
+                            "kind": "prepared_artifact",
+                        }
+                    ],
+                },
+            )
+            result_path = _write_result(data, run_id, started["phase"], status="complete")
+
+            recorded = record_phase_result(run_id, "1", json_file=result_path, expected_status="complete", data_dir=data)
+
+            manifest = read_attempt_evidence_manifest(Path(recorded["phase"]["evidence_path"]))
+            self.assertEqual(manifest["workspace"]["git_base_ref"], "main")
+            self.assertEqual(
+                manifest["workspace"]["copied_ignored_artifacts"][0]["kind"],
+                "prepared_artifact",
+            )
+
 
 def _write_result(data: Path, run_id: str, phase: dict, *, status: str) -> Path:
     phase_id = phase["phase_id"]
@@ -173,6 +207,13 @@ def _write_result(data: Path, run_id: str, phase: dict, *, status: str) -> Path:
     handoff_path.write_text(json.dumps(handoff, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     result_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return result_path
+
+
+def _write_command(data: Path, run_id: str, phase_id: str, attempt: int, payload: dict) -> Path:
+    path = data / "runs" / run_id / "phase_launches" / phase_id / f"attempt-{attempt}" / "command.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
 
 
 if __name__ == "__main__":

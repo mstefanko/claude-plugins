@@ -458,10 +458,15 @@ bin/swarm work-units batches <artifact> [--parallelism <n>] [--state-json-file <
 bin/swarm work-units resume-point <artifact> [--state-json-file <path>] [--json]
 
 bin/swarm worktrees names --run-id <run-id> [--unit-id <unit-id>] [--repo <repo>] [--json]
-bin/swarm worktrees ensure-integration --run-id <run-id> [--repo <repo>] [--base-ref <ref>] [--json]
-bin/swarm worktrees add-unit --run-id <run-id> --unit-id <unit-id> [--repo <repo>] [--base-ref <ref>] [--json]
-bin/swarm worktrees merge --integration-branch <branch> --unit-branch <branch> [--repo <repo>] [--json]
+bin/swarm worktrees ensure-integration --run-id <run-id> [--repo <repo>] [--base-ref <ref>] [--allow-source-worktree] [--json]
+bin/swarm worktrees add-unit --run-id <run-id> --unit-id <unit-id> [--repo <repo>] [--base-ref <ref>] [--allow-source-worktree] [--json]
+bin/swarm worktrees merge --integration-branch <branch> --unit-branch <branch> [--repo <repo>] [--allow-source-worktree] [--json]
+bin/swarm worktrees adopt-run <run-id> [--apply] [--json]
+bin/swarm worktrees cleanup-run <run-id> [--apply] [--json]
 ```
+
+`cleanup-run` removes only adopted or no-change run worktrees; unadopted,
+preserved, and conflicted worktrees stay in place for inspection.
 
 `bin/swarm mode <name>` is a deprecated alias of `bin/swarm preset load <name>`.
 
