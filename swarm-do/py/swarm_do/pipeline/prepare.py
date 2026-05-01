@@ -1387,14 +1387,7 @@ def _verify_dispatch_sidecars(
     *,
     repo_root: Path,
 ) -> dict[str, dict[str, Any]]:
-    prepared_rel = canonicalize(payload["prepared_plan_path"], repo_root=repo_root)
-    run_dir = (repo_root / prepared_rel).parent.resolve(strict=False)
-    if run_dir.name != payload["run_id"]:
-        raise ValueError(
-            "prepared dispatch: prepared_plan_path run directory does not match run_id"
-        )
-    if not run_dir.is_dir():
-        raise ValueError(f"prepared dispatch: run directory missing: {run_dir}")
+    run_dir = _dispatch_run_dir(payload, repo_root=repo_root)
 
     _verify_hashed_sidecar(
         payload["inspect_artifact"],
@@ -1447,8 +1440,7 @@ def _verify_dispatch_sidecars(
 
 
 def _load_dispatch_inspect_artifact(payload: Mapping[str, Any], *, repo_root: Path) -> dict[str, Any]:
-    prepared_rel = canonicalize(payload["prepared_plan_path"], repo_root=repo_root)
-    run_dir = (repo_root / prepared_rel).parent.resolve(strict=False)
+    run_dir = _dispatch_run_dir(payload, repo_root=repo_root)
     inspect_path = _verify_hashed_sidecar(
         payload["inspect_artifact"],
         label="inspect_artifact",
@@ -1456,6 +1448,24 @@ def _load_dispatch_inspect_artifact(payload: Mapping[str, Any], *, repo_root: Pa
         repo_root=repo_root,
     )
     return _read_json_object(inspect_path, label="inspect_artifact")
+
+
+def _dispatch_run_dir(payload: Mapping[str, Any], *, repo_root: Path) -> Path:
+    prepared_rel = canonicalize(payload["prepared_plan_path"], repo_root=repo_root)
+    root = repo_root.resolve(strict=False)
+    prepared_path = (root / prepared_rel).resolve(strict=False)
+    if not prepared_path.is_relative_to(root):
+        raise ValueError("prepared dispatch: prepared_plan_path resolves outside repo root")
+    run_dir = prepared_path.parent.resolve(strict=False)
+    if not run_dir.is_relative_to(root):
+        raise ValueError("prepared dispatch: run directory resolves outside repo root")
+    if run_dir.name != payload["run_id"]:
+        raise ValueError(
+            "prepared dispatch: prepared_plan_path run directory does not match run_id"
+        )
+    if not run_dir.is_dir():
+        raise ValueError(f"prepared dispatch: run directory missing: {run_dir}")
+    return run_dir
 
 
 def _artifact_sidecar_mismatch_message(phase_id: str, embedded: Any, sidecar: Any) -> str:

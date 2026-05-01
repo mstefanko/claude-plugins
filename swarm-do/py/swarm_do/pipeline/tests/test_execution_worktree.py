@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from swarm_do.pipeline.execution_worktree import (
     RunExecutionWorktreeAdoptionBlocked,
@@ -30,7 +31,7 @@ from swarm_do.pipeline.execution_worktree import (
     validate_run_execution_worktree_manifest,
 )
 from swarm_do.pipeline.prepare import accept_prepared, prepare_plan_run
-from swarm_do.pipeline.unit_sessions import load_unit_sessions
+from swarm_do.pipeline.unit_sessions import load_unit_sessions, replace_unit_session, write_unit_sessions
 
 
 RUN_ID = "01ARZ3NDEKTSV4RRFFQ69G5FAV"
@@ -74,6 +75,26 @@ class ExecutionWorktreeTests(unittest.TestCase):
             self.assertEqual(manifest["source_git_root"], str(git_root.resolve(strict=False)))
             self.assertEqual(manifest["safe_project_root"], str(worktree.safe_project_root))
             self.assertGreaterEqual(len(manifest["copied_artifacts"]), 3)
+
+    def test_artifact_copy_rejects_symlinked_source(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _git_root, project, data, prepared = _prepared_monorepo(root)
+            descriptor = prepared["inspect_artifact"]
+            source = project / descriptor["path"]
+            target = source.with_name("inspect-target.json")
+            target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+            source.unlink()
+            source.symlink_to(target)
+
+            with self.assertRaisesRegex(RunExecutionWorktreeError, "symlink"):
+                materialize_run_execution_worktree(
+                    RUN_ID,
+                    source_project_root=project,
+                    data_dir=data,
+                    prepared_plan=prepared,
+                    sensitive_prefixes=[str(root / "home" / ".claude")],
+                )
 
     def test_top_level_project_mapping_uses_safe_git_root_as_project_root(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -957,6 +978,55 @@ class ExecutionWorktreeTests(unittest.TestCase):
             state_unit = load_unit_sessions(RUN_ID, data_dir=data)["units"][0]
             self.assertEqual(state_unit["merge_state"], "merged")
             self.assertEqual(state_unit["cleanup_state"], "cleanup_eligible")
+
+    def test_unit_merge_does_not_overwrite_already_merged_state(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _git_root, _project, data, prepared = _prepared_monorepo(root)
+            materialize_run_execution_worktree(
+                RUN_ID,
+                source_project_root=Path(prepared["repo_root"]),
+                data_dir=data,
+                prepared_plan=prepared,
+                sensitive_prefixes=[str(root / "home" / ".claude")],
+            )
+            phase_id, unit_id = _first_unit(prepared)
+            unit = materialize_unit_execution_worktree(RUN_ID, phase_id, unit_id, data_dir=data)
+            unit_project = Path(unit["project_root"])
+            (unit_project / "docs").mkdir()
+            (unit_project / "docs" / "unit.md").write_text("unit\n", encoding="utf-8")
+            _git(unit_project, "add", "docs/unit.md")
+            _git(unit_project, "commit", "-q", "-m", "unit change")
+            report_path = _write_unit_report(data, RUN_ID, unit_id, gate_status="passed", changed_files=["docs/unit.md"])
+            record_unit_post_writer_report(RUN_ID, phase_id, unit_id, data_dir=data, report_path=report_path)
+            record_unit_spec_review_verdict(RUN_ID, phase_id, unit_id, data_dir=data, verdict="skipped")
+
+            def mark_already_merged(_integration_git: Path) -> list[str]:
+                state = load_unit_sessions(RUN_ID, data_dir=data)
+                current = state["units"][0]
+                current.update(
+                    {
+                        "merge_state": "merged",
+                        "cleanup_state": "cleanup_eligible",
+                        "completed_at": "2026-04-29T00:00:00Z",
+                    }
+                )
+                write_unit_sessions(
+                    replace_unit_session(state, phase_id, unit_id, current),
+                    data_dir=data,
+                )
+                return []
+
+            with mock.patch(
+                "swarm_do.pipeline.execution_worktree._conflicted_files",
+                side_effect=mark_already_merged,
+            ):
+                result = merge_unit_execution_worktree(RUN_ID, phase_id, unit_id, data_dir=data, apply=True)
+
+            self.assertEqual(result["status"], "merged")
+            state_unit = load_unit_sessions(RUN_ID, data_dir=data)["units"][0]
+            self.assertEqual(state_unit["merge_state"], "merged")
+            self.assertEqual(state_unit["completed_at"], "2026-04-29T00:00:00Z")
 
     def test_unit_merge_conflict_writes_unit_conflict_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as td:

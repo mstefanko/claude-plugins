@@ -170,7 +170,7 @@ def record_run_preflight_completed(
         "timestamp": utc_now(),
         "event_type": "run_preflight_completed",
         "bd_epic_id": bd_epic_id,
-        "phase_id": "prepared-dispatch",
+        "phase_id": None,
         "work_unit_id": None,
         "child_bead_ids": None,
         "reason": None if report.ok else ", ".join(report.blocker_ids),

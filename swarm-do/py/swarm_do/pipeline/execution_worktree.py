@@ -8,6 +8,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 import time
@@ -822,6 +823,46 @@ def merge_unit_execution_worktree(
         )
 
     with locked_integration_merge(run_id, data_dir=data):
+        with locked_unit_sessions(run_id, data_dir=data):
+            state = load_unit_sessions(run_id, data_dir=data)
+            unit = find_unit_session(state, phase_id, unit_id)
+            current_merge_state = str(unit.get("merge_state") or "")
+            if current_merge_state != "ready":
+                payload.update(
+                    {
+                        "merge_state": current_merge_state,
+                        "unit_session": unit,
+                    }
+                )
+                if current_merge_state == "merged":
+                    payload.update({"applied": True, "status": "merged"})
+                    if integration_git.exists():
+                        payload["integration_head_sha"] = _git_stdout(integration_git, "rev-parse", "HEAD")
+                    return payload
+                payload["status"] = "blocked"
+                raise RunExecutionWorktreeAdoptionBlocked(
+                    f"unit {unit_id} merge_state changed before merge: {current_merge_state or 'unknown'}",
+                    payload,
+                )
+            unit_branch = str(unit["branch"])
+            unit_git = Path(str(unit["worktree_root"]))
+            merge_command = [
+                "git",
+                "-C",
+                str(integration_git),
+                "merge",
+                "--no-ff",
+                unit_branch,
+                "-m",
+                f"Merge work unit {unit_id}",
+            ]
+            payload.update(
+                {
+                    "unit_branch": unit_branch,
+                    "unit_worktree_root": str(unit_git),
+                    "predicted_merge_command": " ".join(merge_command),
+                }
+            )
         _ensure_integration_worktree(
             source_git,
             integration_git=integration_git,
@@ -888,6 +929,18 @@ def merge_unit_execution_worktree(
     with locked_unit_sessions(run_id, data_dir=data):
         state = load_unit_sessions(run_id, data_dir=data)
         unit = find_unit_session(state, phase_id, unit_id)
+        current_merge_state = str(unit.get("merge_state") or "")
+        if current_merge_state != "ready":
+            payload.update(
+                {
+                    "applied": True,
+                    "status": "merged" if current_merge_state == "merged" else current_merge_state,
+                    "merge_state": current_merge_state,
+                    "integration_head_sha": _git_stdout(integration_git, "rev-parse", "HEAD"),
+                    "unit_session": unit,
+                }
+            )
+            return payload
         unit.update(
             {
                 "merge_state": "merged",
@@ -1681,7 +1734,9 @@ def _create_run_worktree(resolved: ResolvedExecutionWorktree) -> None:
 def _copy_required_artifacts(resolved: ResolvedExecutionWorktree) -> list[CopiedArtifact]:
     copied: list[CopiedArtifact] = []
     for spec in _dedupe_copy_specs(resolved.copy_specs):
-        if not spec.source_path.is_file():
+        if not _is_regular_file_no_symlink(spec.source_path):
+            if spec.source_path.exists() or spec.source_path.is_symlink():
+                _raise_if_not_regular_file(spec.source_path)
             if spec.required:
                 raise RunExecutionWorktreeError(f"required run artifact is missing: {spec.source_path}")
             continue
@@ -2502,6 +2557,7 @@ def _assert_valid_run_id(run_id: str) -> None:
 
 
 def _sha256_file(path: Path) -> str:
+    _raise_if_not_regular_file(path)
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
@@ -2510,6 +2566,7 @@ def _sha256_file(path: Path) -> str:
 
 
 def _atomic_copy2(source: Path, destination: Path) -> None:
+    _raise_if_not_regular_file(source)
     temp_path: Path | None = None
     try:
         with source.open("rb") as src, tempfile.NamedTemporaryFile(
@@ -2527,6 +2584,25 @@ def _atomic_copy2(source: Path, destination: Path) -> None:
         if temp_path is not None:
             temp_path.unlink(missing_ok=True)
         raise
+
+
+def _is_regular_file_no_symlink(path: Path) -> bool:
+    try:
+        mode = path.stat(follow_symlinks=False).st_mode
+    except FileNotFoundError:
+        return False
+    return stat.S_ISREG(mode)
+
+
+def _raise_if_not_regular_file(path: Path) -> None:
+    try:
+        mode = path.stat(follow_symlinks=False).st_mode
+    except FileNotFoundError as exc:
+        raise RunExecutionWorktreeError(f"run artifact is missing: {path}") from exc
+    if stat.S_ISLNK(mode):
+        raise RunExecutionWorktreeError(f"run artifact must not be a symlink: {path}")
+    if not stat.S_ISREG(mode):
+        raise RunExecutionWorktreeError(f"run artifact must be a regular file: {path}")
 
 
 def _atomic_write_bytes(destination: Path, data: bytes) -> None:

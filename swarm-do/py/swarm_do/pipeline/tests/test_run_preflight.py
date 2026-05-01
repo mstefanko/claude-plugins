@@ -80,6 +80,7 @@ class RunPreflightTests(unittest.TestCase):
                 for line in (data / "telemetry" / "run_events.jsonl").read_text(encoding="utf-8").splitlines()
             ]
             self.assertEqual(events[-1]["event_type"], "run_preflight_completed")
+            self.assertIsNone(events[-1]["phase_id"])
             self.assertTrue(events[-1]["details"]["ok"])
 
     def test_preflight_blocks_zero_git_base_and_bad_launcher(self) -> None:
