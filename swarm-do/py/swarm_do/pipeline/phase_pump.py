@@ -14,6 +14,7 @@ from .context_bundle import render_context_bundle
 from .execution_workspace import ExecutionWorkspaceError, create_execution_workspace, is_sensitive_path
 from .paths import REPO_ROOT, resolve_data_dir
 from .phase_artifact_contract import phase_artifact_contract_markdown
+from .phase_doctor import run_phase_doctor
 from .phase_sessions import (
     PhaseSessionError,
     claim_next_phase,
@@ -50,6 +51,14 @@ RESULT_STATUS_FOR_COMMAND = {
     "blocked": "blocked",
     "needs_input": "needs_input",
 }
+_PREFLIGHT_BLOCKING_FINDING_IDS = frozenset(
+    {
+        "prepared_stale",
+        "prepared_dispatch_sidecars",
+        "probe_error",
+        "worktree_drift",
+    }
+)
 
 
 def pump_phases(
@@ -81,6 +90,10 @@ def pump_phases(
         init_phase_sessions(run_id, data_dir=base, policy_update=policy_update)
     elif _policy_update_has_values(policy_update):
         configure_retry_policy(run_id, policy_update, data_dir=base)
+
+    preflight = _phase_doctor_preflight(run_id, data_dir=base)
+    if preflight is not None:
+        return preflight
 
     retry_policy = load_phase_sessions(run_id, data_dir=base).get("retry_policy")
     resolved_max_budget_usd = max_budget_usd
@@ -264,6 +277,47 @@ def format_pump_result(result: Mapping[str, Any]) -> str:
 
 def _policy_update_has_values(policy_update: Any | None) -> bool:
     return bool(getattr(policy_update, "forced_overrides", None) or getattr(policy_update, "default_overrides", None))
+
+
+def _phase_doctor_preflight(run_id: str, *, data_dir: Path) -> dict[str, Any] | None:
+    try:
+        doctor = run_phase_doctor(run_id, data_dir=data_dir)
+    except Exception as exc:
+        doctor = {
+            "run_id": run_id,
+            "status": "findings",
+            "finding_count": 1,
+            "findings": [
+                {
+                    "id": "probe_error",
+                    "severity": "error",
+                    "probe": "run_phase_doctor",
+                    "detail": str(exc),
+                    "recommended_command": f"bin/swarm phases doctor {run_id} --json",
+                }
+            ],
+            "recommended_command": f"bin/swarm phases doctor {run_id} --json",
+        }
+    blocking = [
+        finding
+        for finding in doctor.get("findings") or []
+        if isinstance(finding, Mapping)
+        and finding.get("id") in _PREFLIGHT_BLOCKING_FINDING_IDS
+    ]
+    if not blocking:
+        return None
+    _append_pump_event(
+        data_dir,
+        run_id=run_id,
+        event_type="phase_pump_stopped",
+        details={"status": "preflight_failed", "doctor": doctor},
+    )
+    return {
+        "status": "preflight_failed",
+        "completed_phases": [],
+        "doctor": doctor,
+        "recommended_command": doctor.get("recommended_command"),
+    }
 
 
 def _handle_recovery_decision(

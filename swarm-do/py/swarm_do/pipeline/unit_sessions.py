@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -15,9 +16,12 @@ class UnitSessionError(RuntimeError):
 
 
 UNIT_SESSIONS_SCHEMA_PATH = REPO_ROOT / "schemas" / "unit_sessions.schema.json"
+_RUN_ID_RE = re.compile(r"^[0-9A-HJKMNP-TV-Z]{26}$")
 
 
 def unit_sessions_path(run_id: str, *, data_dir: Path) -> Path:
+    if _RUN_ID_RE.fullmatch(run_id) is None:
+        raise UnitSessionError(f"invalid run_id: {run_id!r}")
     return Path(data_dir) / "runs" / run_id / "unit_sessions.v1.json"
 
 

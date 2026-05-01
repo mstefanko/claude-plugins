@@ -22,9 +22,11 @@ from swarm_do.pipeline.phase_sessions import (
     phase_status,
     reap_expired_phases,
     record_phase_result,
+    reset_phase_session,
     start_phase,
 )
 from swarm_do.pipeline.phase_autopilot_policy import ResolvedPolicyUpdate
+from swarm_do.pipeline.phase_doctor import run_phase_doctor
 from swarm_do.pipeline.tests.phase_session_fixtures import make_prepared_run
 
 
@@ -131,6 +133,45 @@ class PhaseSessionTests(unittest.TestCase):
 
             self.assertEqual(status["status"], "failed")
             self.assertIn("phases status", status["recommended_command"])
+
+    def test_hard_reset_clears_dispatch_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            claim_next_phase(run_id, data_dir=data, repo_root=repo, lease_owner="owner-1")
+            started = start_phase(run_id, "1", launcher="manual", lease_owner="owner-1", data_dir=data)
+            result_path = _write_result(data, run_id, started["phase"], status="failed")
+            record_phase_result(run_id, "1", json_file=result_path, expected_status="failed", data_dir=data)
+
+            reset = reset_phase_session(run_id, "1", hard=True, data_dir=data)
+
+            phase = reset["phase"]
+            self.assertEqual(phase["status"], "pending")
+            self.assertEqual(phase["attempt"], 0)
+            self.assertIsNone(phase["result_path"])
+            self.assertIsNone(phase["handoff_path"])
+            self.assertIsNone(phase["last_failure_kind"])
+            self.assertEqual(phase["attempt_history"], [])
+            loaded = load_phase_sessions(run_id, data_dir=data)
+            self.assertEqual(loaded["phases"][0]["status"], "pending")
+
+    def test_doctor_isolates_probe_errors(self) -> None:
+        def broken_probe(run_id: str, data_dir: Path, repo_root: Path | None) -> list[dict]:
+            raise RuntimeError("boom")
+
+        def healthy_probe(run_id: str, data_dir: Path, repo_root: Path | None) -> list[dict]:
+            return [{"id": "healthy", "severity": "warning", "detail": "still ran"}]
+
+        with tempfile.TemporaryDirectory() as td:
+            report = run_phase_doctor(
+                "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                data_dir=Path(td),
+                probes=[broken_probe, healthy_probe],
+            )
+
+            ids = [item["id"] for item in report["findings"]]
+            self.assertIn("probe_error", ids)
+            self.assertIn("healthy", ids)
 
     def test_load_validates_hand_edited_state(self) -> None:
         with tempfile.TemporaryDirectory() as td:

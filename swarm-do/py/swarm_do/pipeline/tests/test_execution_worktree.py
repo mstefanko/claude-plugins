@@ -10,6 +10,7 @@ from pathlib import Path
 from swarm_do.pipeline.execution_worktree import (
     RunExecutionWorktreeAdoptionBlocked,
     RunExecutionWorktreeError,
+    RunExecutionWorktreeRebuildRequired,
     adopt_run_worktree,
     cleanup_run_worktree,
     execution_branch_name,
@@ -20,7 +21,9 @@ from swarm_do.pipeline.execution_worktree import (
     materialize_unit_execution_worktree,
     merge_unit_execution_worktree,
     record_unit_post_writer_report,
+    reset_run_worktree,
     resolve_run_execution_worktree,
+    run_worktree_status,
     unit_execution_branch_name,
     unit_execution_worktree_root,
     validate_run_execution_worktree_manifest,
@@ -178,6 +181,127 @@ class ExecutionWorktreeTests(unittest.TestCase):
 
             self.assertEqual(_git(git_root, "rev-parse", execution_branch_name(RUN_ID)), wrong_sha)
 
+    def test_clean_base_drift_rebuilds_run_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            git_root, project, data, prepared = _prepared_monorepo(root)
+            first = materialize_run_execution_worktree(
+                RUN_ID,
+                source_project_root=project,
+                data_dir=data,
+                prepared_plan=prepared,
+                sensitive_prefixes=[str(root / "home" / ".claude")],
+            )
+            old_safe_root = first.safe_git_root
+            (project / "after.txt").write_text("after\n", encoding="utf-8")
+            _git(git_root, "add", "swarm-do/after.txt")
+            _git(git_root, "commit", "-q", "-m", "advance source")
+            new_sha = _git(git_root, "rev-parse", "HEAD")
+            prepared = dict(prepared)
+            prepared["git_base_sha"] = new_sha
+
+            second = materialize_run_execution_worktree(
+                RUN_ID,
+                source_project_root=project,
+                data_dir=data,
+                prepared_plan=prepared,
+                sensitive_prefixes=[str(root / "home" / ".claude")],
+            )
+
+            self.assertEqual(second.base_sha, new_sha)
+            self.assertEqual(second.safe_git_root, old_safe_root)
+            manifest = json.loads(second.manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["base_sha"], new_sha)
+            events = _read_run_events(data)
+            self.assertIn("worktree_rebuilt", [event["event_type"] for event in events])
+
+    def test_base_drift_with_unadopted_commit_requires_input(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            git_root, project, data, prepared = _prepared_monorepo(root)
+            worktree = materialize_run_execution_worktree(
+                RUN_ID,
+                source_project_root=project,
+                data_dir=data,
+                prepared_plan=prepared,
+                sensitive_prefixes=[str(root / "home" / ".claude")],
+            )
+            (worktree.safe_project_root / "docs").mkdir()
+            (worktree.safe_project_root / "docs" / "writer.md").write_text("writer\n", encoding="utf-8")
+            _git(worktree.safe_project_root, "add", "docs/writer.md")
+            _git(worktree.safe_project_root, "commit", "-q", "-m", "writer work")
+            writer_sha = _git(worktree.safe_project_root, "rev-parse", "HEAD")
+            (project / "after.txt").write_text("after\n", encoding="utf-8")
+            _git(git_root, "add", "swarm-do/after.txt")
+            _git(git_root, "commit", "-q", "-m", "advance source")
+            prepared = dict(prepared)
+            prepared["git_base_sha"] = _git(git_root, "rev-parse", "HEAD")
+
+            with self.assertRaises(RunExecutionWorktreeRebuildRequired) as raised:
+                materialize_run_execution_worktree(
+                    RUN_ID,
+                    source_project_root=project,
+                    data_dir=data,
+                    prepared_plan=prepared,
+                    sensitive_prefixes=[str(root / "home" / ".claude")],
+                )
+
+            self.assertIn(writer_sha, raised.exception.unadopted_commits)
+            self.assertTrue(worktree.safe_git_root.exists())
+
+    def test_worktree_status_and_reset_archive_branch(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            git_root, project, data, prepared = _prepared_monorepo(root)
+            worktree = materialize_run_execution_worktree(
+                RUN_ID,
+                source_project_root=project,
+                data_dir=data,
+                prepared_plan=prepared,
+                sensitive_prefixes=[str(root / "home" / ".claude")],
+            )
+            (worktree.safe_project_root / "docs").mkdir()
+            (worktree.safe_project_root / "docs" / "writer.md").write_text("writer\n", encoding="utf-8")
+            _git(worktree.safe_project_root, "add", "docs/writer.md")
+            _git(worktree.safe_project_root, "commit", "-q", "-m", "writer work")
+
+            status = run_worktree_status(RUN_ID, data_dir=data)
+            self.assertEqual(status["status"], "drift")
+            self.assertEqual(len(status["unadopted_commits"]), 1)
+            with self.assertRaises(RunExecutionWorktreeRebuildRequired):
+                reset_run_worktree(RUN_ID, data_dir=data, archive_branch=True)
+
+            reset = reset_run_worktree(RUN_ID, data_dir=data, archive_branch=True, force=True)
+
+            self.assertTrue(reset["archived_branch"].startswith(execution_branch_name(RUN_ID) + ".archived-"))
+            self.assertFalse(worktree.safe_git_root.exists())
+            self.assertFalse(worktree.manifest_path.exists())
+            self.assertEqual(_git(git_root, "rev-parse", reset["archived_branch"]).strip(), status["unadopted_commits"][0])
+
+    def test_identity_mismatch_still_hard_aborts(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _git_root, project, data, prepared = _prepared_monorepo(root)
+            worktree = materialize_run_execution_worktree(
+                RUN_ID,
+                source_project_root=project,
+                data_dir=data,
+                prepared_plan=prepared,
+                sensitive_prefixes=[str(root / "home" / ".claude")],
+            )
+            payload = json.loads(worktree.manifest_path.read_text(encoding="utf-8"))
+            payload["run_id"] = "01BRZ3NDEKTSV4RRFFQ69G5FAV"
+            worktree.manifest_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(RunExecutionWorktreeError, "manifest does not match this run"):
+                materialize_run_execution_worktree(
+                    RUN_ID,
+                    source_project_root=project,
+                    data_dir=data,
+                    prepared_plan=prepared,
+                    sensitive_prefixes=[str(root / "home" / ".claude")],
+                )
+
     def test_concurrent_runs_use_distinct_worktrees_and_branches(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -301,6 +425,43 @@ class ExecutionWorktreeTests(unittest.TestCase):
 
             with self.assertRaisesRegex(RunExecutionWorktreeError, "unexpected property 'surprise'"):
                 adopt_run_worktree(RUN_ID, data_dir=data)
+
+    def test_malformed_manifest_raises_worktree_error(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _git_root, project, data, prepared = _prepared_monorepo(root)
+            worktree = materialize_run_execution_worktree(
+                RUN_ID,
+                source_project_root=project,
+                data_dir=data,
+                prepared_plan=prepared,
+                sensitive_prefixes=[str(root / "home" / ".claude")],
+            )
+            worktree.manifest_path.write_text("{not json\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(RunExecutionWorktreeError, "manifest is not valid JSON"):
+                adopt_run_worktree(RUN_ID, data_dir=data)
+
+    def test_run_worktree_public_apis_reject_invalid_run_id_token(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _git_root, project, data, prepared = _prepared_monorepo(root)
+
+            with self.assertRaisesRegex(RunExecutionWorktreeError, "invalid run_id"):
+                materialize_run_execution_worktree(
+                    "../not-a-run",
+                    source_project_root=project,
+                    data_dir=data,
+                    prepared_plan=prepared,
+                )
+            with self.assertRaisesRegex(RunExecutionWorktreeError, "invalid run_id"):
+                adopt_run_worktree("../not-a-run", data_dir=data)
+            with self.assertRaisesRegex(RunExecutionWorktreeError, "invalid run_id"):
+                integrate_run_worktree("../not-a-run", data_dir=data)
+            with self.assertRaisesRegex(RunExecutionWorktreeError, "invalid run_id"):
+                cleanup_run_worktree("../not-a-run", data_dir=data)
+            with self.assertRaisesRegex(RunExecutionWorktreeError, "invalid run_id"):
+                materialize_unit_execution_worktree("../not-a-run", "1", "unit-1", data_dir=data)
 
     def test_legacy_completed_manifest_migrates_to_complete_no_changes(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -903,6 +1064,13 @@ def _prepare_existing_project(project: Path, data: Path, run_id: str) -> dict:
         raise AssertionError(result.to_dict())
     accept_prepared(run_id, repo_root=project, data_dir=data)
     return json.loads((data / "runs" / run_id / "prepared_plan.v1.json").read_text(encoding="utf-8"))
+
+
+def _read_run_events(data: Path) -> list[dict]:
+    path = data / "telemetry" / "run_events.jsonl"
+    if not path.is_file():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def _add_prepared_blocked_file(data: Path, run_id: str, pattern: str) -> None:

@@ -38,7 +38,24 @@ class RunExecutionWorktreeAdoptionBlocked(RunExecutionWorktreeError):
         self.payload = dict(payload)
 
 
+class RunExecutionWorktreeRebuildRequired(RunExecutionWorktreeError):
+    """Raised when base drift exists but automatic rebuild would discard work."""
+
+    def __init__(self, message: str, payload: Mapping[str, Any]):
+        super().__init__(message)
+        self.payload = dict(payload)
+        self.unadopted_commits = tuple(str(item) for item in self.payload.get("unadopted_commits") or [])
+
+
 RUN_EXECUTION_WORKTREE_SCHEMA_PATH = REPO_ROOT / "schemas" / "run_execution_worktree.schema.json"
+_RUN_ID_RE = re.compile(r"^[0-9A-HJKMNP-TV-Z]{26}$")
+
+
+@dataclass(frozen=True)
+class ManifestDriftClassification:
+    kind: str
+    mismatched: tuple[str, ...] = ()
+    payload: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -150,6 +167,7 @@ def resolve_run_execution_worktree(
     prepared_plan: Mapping[str, Any],
     sensitive_prefixes: Iterable[str] = (),
 ) -> ResolvedExecutionWorktree:
+    _assert_valid_run_id(run_id)
     source_project = Path(source_project_root).expanduser().resolve(strict=False)
     source_git = Path(_git_stdout(source_project, "rev-parse", "--show-toplevel")).resolve(strict=False)
     prefix = _git_stdout(source_project, "rev-parse", "--show-prefix").strip()
@@ -208,10 +226,31 @@ def materialize_run_execution_worktree(
     _assert_clean_source_project(resolved)
     existing_manifest = _load_manifest(resolved.manifest_path)
     if existing_manifest is not None:
-        _validate_existing_manifest(resolved, existing_manifest)
-        if not resolved.safe_git_root.exists():
+        classification = _classify_existing_manifest(resolved, existing_manifest)
+        if classification.kind == "identity_mismatch":
+            raise RunExecutionWorktreeError(
+                "existing run worktree manifest does not match this run: "
+                + ", ".join(classification.mismatched)
+            )
+        if classification.kind == "base_drift_safe":
+            _rebuild_run_worktree_for_base_drift(
+                resolved,
+                existing_manifest,
+                data_dir=Path(data_dir),
+                details=dict(classification.payload or {}),
+            )
+            existing_manifest = None
+        elif classification.kind == "base_drift_unsafe":
+            payload = dict(classification.payload or {})
+            raise RunExecutionWorktreeRebuildRequired(
+                "run execution worktree requires explicit rebuild: " + str(payload.get("reason") or "base_drift"),
+                payload,
+            )
+        elif classification.kind != "match":
+            raise RunExecutionWorktreeError(f"unknown worktree manifest classification: {classification.kind}")
+        if existing_manifest is not None and not resolved.safe_git_root.exists():
             raise RunExecutionWorktreeError(f"run worktree manifest exists but checkout is missing: {resolved.safe_git_root}")
-    else:
+    if existing_manifest is None:
         _create_run_worktree(resolved)
     copied = _copy_required_artifacts(resolved)
     manifest = _manifest_payload(resolved, copied, previous=existing_manifest)
@@ -233,6 +272,7 @@ def materialize_run_execution_worktree(
 
 
 def adopt_run_worktree(run_id: str, *, data_dir: Path, apply: bool = False) -> dict[str, Any]:
+    _assert_valid_run_id(run_id)
     manifest_path = Path(data_dir) / "worktrees" / run_id / "manifest.json"
     manifest = _require_manifest(manifest_path)
     adoption_source = _adoption_source(manifest)
@@ -319,6 +359,7 @@ def adopt_run_worktree(run_id: str, *, data_dir: Path, apply: bool = False) -> d
 
 
 def integrate_run_worktree(run_id: str, *, data_dir: Path, apply: bool = False) -> dict[str, Any]:
+    _assert_valid_run_id(run_id)
     base = Path(data_dir)
     manifest_path = base / "worktrees" / run_id / "manifest.json"
     manifest = _require_manifest(manifest_path)
@@ -490,6 +531,7 @@ def integrate_run_worktree(run_id: str, *, data_dir: Path, apply: bool = False) 
 
 
 def initialize_unit_sessions(run_id: str, *, data_dir: Path) -> dict[str, Any]:
+    _assert_valid_run_id(run_id)
     base = Path(data_dir)
     manifest_path = base / "worktrees" / run_id / "manifest.json"
     manifest = _require_manifest(manifest_path)
@@ -505,6 +547,7 @@ def materialize_unit_execution_worktree(
     data_dir: Path,
     base: str = "execution",
 ) -> dict[str, Any]:
+    _assert_valid_run_id(run_id)
     data = Path(data_dir)
     manifest_path = data / "worktrees" / run_id / "manifest.json"
     manifest = _require_manifest(manifest_path)
@@ -587,6 +630,7 @@ def record_unit_post_writer_report(
     data_dir: Path,
     report_path: Path,
 ) -> dict[str, Any]:
+    _assert_valid_run_id(run_id)
     data = Path(data_dir)
     state = load_unit_sessions(run_id, data_dir=data)
     unit = find_unit_session(state, phase_id, unit_id)
@@ -630,6 +674,7 @@ def merge_unit_execution_worktree(
     data_dir: Path,
     apply: bool = False,
 ) -> dict[str, Any]:
+    _assert_valid_run_id(run_id)
     data = Path(data_dir)
     manifest_path = data / "worktrees" / run_id / "manifest.json"
     manifest = _require_manifest(manifest_path)
@@ -776,6 +821,7 @@ def merge_unit_execution_worktree(
 
 
 def cleanup_run_worktree(run_id: str, *, data_dir: Path, apply: bool = False) -> dict[str, Any]:
+    _assert_valid_run_id(run_id)
     manifest_path = Path(data_dir) / "worktrees" / run_id / "manifest.json"
     manifest = _require_manifest(manifest_path)
     adoption_state = str(manifest.get("adoption_state") or "unadopted")
@@ -813,6 +859,117 @@ def cleanup_run_worktree(run_id: str, *, data_dir: Path, apply: bool = False) ->
         "removed": removed,
         "apply_command": f"bin/swarm worktrees cleanup-run {run_id} --apply",
     }
+
+
+def run_worktree_status(run_id: str, *, data_dir: Path) -> dict[str, Any]:
+    _assert_valid_run_id(run_id)
+    manifest_path = Path(data_dir) / "worktrees" / run_id / "manifest.json"
+    if not manifest_path.is_file():
+        return {
+            "run_id": run_id,
+            "status": "not_found",
+            "manifest_path": str(manifest_path),
+            "recommended_command": None,
+        }
+    manifest = _require_manifest(manifest_path)
+    source_git = Path(str(manifest["source_git_root"]))
+    safe_git = Path(str(manifest["safe_git_worktree_root"]))
+    branch = str(manifest["branch"])
+    base_sha = str(manifest["base_sha"])
+    base_ref = str(manifest.get("base_ref") or "HEAD")
+    source_base_sha = _rev_parse_or_none(source_git, base_ref)
+    unadopted_commits = _branch_commits_ahead(source_git, base_sha, branch)
+    dirty_entries = _git_status_entries(safe_git, ".") if (safe_git / ".git").exists() else []
+    drift = []
+    if source_base_sha is not None and source_base_sha != base_sha:
+        drift.append("base_sha")
+    if unadopted_commits:
+        drift.append("unadopted_commits")
+    if dirty_entries:
+        drift.append("dirty_worktree")
+    return {
+        "run_id": run_id,
+        "status": "drift" if drift else "ok",
+        "manifest_path": str(manifest_path),
+        "source_git_root": str(source_git),
+        "safe_git_worktree_root": str(safe_git),
+        "safe_project_root": manifest.get("safe_project_root"),
+        "branch": branch,
+        "base_ref": base_ref,
+        "manifest_base_sha": base_sha,
+        "source_base_sha": source_base_sha,
+        "base_drift": source_base_sha is not None and source_base_sha != base_sha,
+        "unadopted_commits": unadopted_commits,
+        "dirty_paths": [_format_status_entry(entry) for entry in dirty_entries],
+        "dirty_file_count": len(dirty_entries),
+        "adoption_state": str(manifest.get("adoption_state") or "unadopted"),
+        "drift": drift,
+        "recommended_command": f"bin/swarm worktrees reset {run_id} --discard" if drift else None,
+    }
+
+
+def reset_run_worktree(
+    run_id: str,
+    *,
+    data_dir: Path,
+    discard: bool = False,
+    archive_branch: bool = False,
+    force: bool = False,
+) -> dict[str, Any]:
+    _assert_valid_run_id(run_id)
+    if discard == archive_branch:
+        raise RunExecutionWorktreeError("choose exactly one of discard or archive_branch")
+    manifest_path = Path(data_dir) / "worktrees" / run_id / "manifest.json"
+    manifest = _require_manifest(manifest_path)
+    source_git = Path(str(manifest["source_git_root"]))
+    safe_git = Path(str(manifest["safe_git_worktree_root"]))
+    branch = str(manifest["branch"])
+    base_sha = str(manifest["base_sha"])
+    status = run_worktree_status(run_id, data_dir=data_dir)
+    unsafe_reasons = []
+    if status.get("unadopted_commits"):
+        unsafe_reasons.append("unadopted_commits")
+    if status.get("dirty_paths"):
+        unsafe_reasons.append("dirty_worktree")
+    if status.get("adoption_state") != "unadopted":
+        unsafe_reasons.append("adoption_state")
+    if unsafe_reasons and not force:
+        payload = {
+            **status,
+            "safe_to_rebuild": False,
+            "unsafe_reasons": unsafe_reasons,
+            "recommended_command": f"bin/swarm worktrees reset {run_id} --archive-branch --force",
+        }
+        raise RunExecutionWorktreeRebuildRequired(
+            "run worktree reset would discard or hide unadopted work; pass --force or archive the branch",
+            payload,
+        )
+
+    _remove_run_worktree_checkout(source_git, safe_git)
+    archived_branch: str | None = None
+    if _branch_exists(source_git, branch):
+        if archive_branch:
+            archived_branch = _archived_execution_branch_name(run_id)
+            _git(source_git, "branch", "-m", branch, archived_branch)
+        else:
+            _git(source_git, "branch", "-D", branch)
+    manifest_path.unlink(missing_ok=True)
+    try:
+        manifest_path.parent.rmdir()
+    except OSError:
+        pass
+    payload = {
+        "run_id": run_id,
+        "status": "reset",
+        "discarded": discard,
+        "archived_branch": archived_branch,
+        "deleted_branch": branch if discard else None,
+        "manifest_path": str(manifest_path),
+        "safe_git_worktree_root": str(safe_git),
+        "base_sha": base_sha,
+    }
+    _append_worktree_reset_event(Path(data_dir), run_id=run_id, details=payload)
+    return payload
 
 
 def _unit_worktree_base_ref(manifest: Mapping[str, Any], *, base: str) -> str:
@@ -1326,21 +1483,173 @@ def _manifest_payload(
 
 
 def _validate_existing_manifest(resolved: ResolvedExecutionWorktree, manifest: Mapping[str, Any]) -> None:
-    expected = {
+    classification = _classify_existing_manifest(resolved, manifest)
+    if classification.kind != "match":
+        raise RunExecutionWorktreeError(
+            "existing run worktree manifest does not match this run/base: "
+            + ", ".join(classification.mismatched)
+        )
+
+
+def _classify_existing_manifest(
+    resolved: ResolvedExecutionWorktree,
+    manifest: Mapping[str, Any],
+) -> ManifestDriftClassification:
+    identity_expected = {
         "run_id": resolved.run_id,
         "source_git_root": str(resolved.source_git_root),
         "source_project_root": str(resolved.source_project_root),
         "safe_git_worktree_root": str(resolved.safe_git_root),
         "safe_project_root": str(resolved.safe_project_root),
         "project_subdir": resolved.project_subdir,
+    }
+    identity_mismatched = tuple(
+        key for key, expected_value in identity_expected.items() if manifest.get(key) != expected_value
+    )
+    if identity_mismatched:
+        return ManifestDriftClassification("identity_mismatch", mismatched=identity_mismatched)
+
+    drift_expected = {
         "branch": resolved.branch,
         "base_sha": resolved.base_sha,
     }
-    mismatched = [key for key, expected_value in expected.items() if manifest.get(key) != expected_value]
-    if mismatched:
-        raise RunExecutionWorktreeError(
-            "existing run worktree manifest does not match this run/base: " + ", ".join(mismatched)
-        )
+    drift_mismatched = tuple(
+        key for key, expected_value in drift_expected.items() if manifest.get(key) != expected_value
+    )
+    if not drift_mismatched:
+        return ManifestDriftClassification("match")
+
+    payload = _base_drift_payload(resolved, manifest, mismatched=drift_mismatched)
+    if payload["safe_to_rebuild"]:
+        return ManifestDriftClassification("base_drift_safe", mismatched=drift_mismatched, payload=payload)
+    return ManifestDriftClassification("base_drift_unsafe", mismatched=drift_mismatched, payload=payload)
+
+
+def _base_drift_payload(
+    resolved: ResolvedExecutionWorktree,
+    manifest: Mapping[str, Any],
+    *,
+    mismatched: tuple[str, ...],
+) -> dict[str, Any]:
+    branch = str(manifest.get("branch") or resolved.branch)
+    recorded_base = str(manifest.get("base_sha") or "")
+    adoption_state = str(manifest.get("adoption_state") or "unadopted")
+    unadopted_commits = _branch_commits_ahead(resolved.source_git_root, recorded_base, branch)
+    dirty_entries = (
+        _git_status_entries(resolved.safe_git_root, ".")
+        if (resolved.safe_git_root / ".git").exists()
+        else []
+    )
+    unsafe_reasons: list[str] = []
+    if adoption_state != "unadopted":
+        unsafe_reasons.append("adoption_state")
+    if unadopted_commits:
+        unsafe_reasons.append("unadopted_commits")
+    if dirty_entries:
+        unsafe_reasons.append("dirty_worktree")
+    return {
+        "run_id": resolved.run_id,
+        "reason": "base_drift",
+        "mismatched": list(mismatched),
+        "manifest_base_sha": recorded_base,
+        "resolved_base_sha": resolved.base_sha,
+        "manifest_branch": branch,
+        "resolved_branch": resolved.branch,
+        "adoption_state": adoption_state,
+        "unadopted_commits": unadopted_commits,
+        "dirty_paths": [_format_status_entry(entry) for entry in dirty_entries],
+        "safe_to_rebuild": not unsafe_reasons,
+        "unsafe_reasons": unsafe_reasons,
+        "recommended_command": f"bin/swarm worktrees reset {resolved.run_id} --discard --force",
+    }
+
+
+def _branch_commits_ahead(repo: Path, base_ref: str, branch: str) -> list[str]:
+    if not base_ref or not _branch_exists(repo, branch):
+        return []
+    result = _run_git(repo, "rev-list", f"{base_ref}..{branch}", check=False)
+    if result.returncode != 0:
+        return []
+    return [line for line in result.stdout.splitlines() if line]
+
+
+def _rebuild_run_worktree_for_base_drift(
+    resolved: ResolvedExecutionWorktree,
+    manifest: Mapping[str, Any],
+    *,
+    data_dir: Path,
+    details: Mapping[str, Any],
+) -> None:
+    _remove_run_worktree_checkout(resolved.source_git_root, resolved.safe_git_root)
+    branches = [str(manifest.get("branch") or resolved.branch), resolved.branch]
+    for branch in dict.fromkeys(branches):
+        if _branch_exists(resolved.source_git_root, branch):
+            _git(resolved.source_git_root, "branch", "-D", branch)
+    try:
+        resolved.manifest_path.unlink()
+    except FileNotFoundError:
+        pass
+    _append_worktree_rebuilt_event(
+        data_dir,
+        run_id=resolved.run_id,
+        details={
+            **dict(details),
+            "manifest_path": str(resolved.manifest_path),
+            "safe_git_worktree_root": str(resolved.safe_git_root),
+        },
+    )
+
+
+def _remove_run_worktree_checkout(source_git: Path, safe_git: Path) -> None:
+    if safe_git.exists():
+        result = _run_git(source_git, "worktree", "remove", "--force", str(safe_git), check=False)
+        if result.returncode != 0 and safe_git.exists():
+            shutil.rmtree(safe_git)
+
+
+def _append_worktree_rebuilt_event(data_dir: Path, *, run_id: str, details: Mapping[str, Any]) -> None:
+    row = {
+        "run_id": run_id,
+        "timestamp": utc_now(),
+        "event_type": "worktree_rebuilt",
+        "bd_epic_id": None,
+        "phase_id": None,
+        "work_unit_id": None,
+        "child_bead_ids": None,
+        "reason": "base_drift",
+        "retry_count": None,
+        "handoff_count": None,
+        "integration_branch_head": None,
+        "details": dict(details),
+        "schema_ok": True,
+    }
+    validate_run_event(row, error_cls=RunExecutionWorktreeError)
+    append_run_event(data_dir, row)
+
+
+def _append_worktree_reset_event(data_dir: Path, *, run_id: str, details: Mapping[str, Any]) -> None:
+    row = {
+        "run_id": run_id,
+        "timestamp": utc_now(),
+        "event_type": "worktree_reset",
+        "bd_epic_id": None,
+        "phase_id": None,
+        "work_unit_id": None,
+        "child_bead_ids": None,
+        "reason": "operator_reset",
+        "retry_count": None,
+        "handoff_count": None,
+        "integration_branch_head": None,
+        "details": dict(details),
+        "schema_ok": True,
+    }
+    validate_run_event(row, error_cls=RunExecutionWorktreeError)
+    append_run_event(data_dir, row)
+
+
+def _archived_execution_branch_name(run_id: str) -> str:
+    stamp = utc_now().replace(":", "").replace(".", "-")
+    return f"{execution_branch_name(run_id)}.archived-{stamp}"
 
 
 def _artifact_copy_specs(
@@ -1745,7 +2054,10 @@ def _git_relative_artifact_path(resolved: ResolvedExecutionWorktree, rel: Path) 
 def _load_manifest(path: Path) -> dict[str, Any] | None:
     if not path.is_file():
         return None
-    value = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RunExecutionWorktreeError(f"run worktree manifest is not valid JSON: {path}") from exc
     if not isinstance(value, dict):
         raise RunExecutionWorktreeError(f"run worktree manifest must be an object: {path}")
     manifest, _changed = _normalize_run_worktree_manifest(value)
@@ -1830,6 +2142,11 @@ def _safe_ref_segment(value: str) -> str:
     return safe
 
 
+def _assert_valid_run_id(run_id: str) -> None:
+    if _RUN_ID_RE.fullmatch(run_id) is None:
+        raise RunExecutionWorktreeError(f"invalid run_id: {run_id!r}")
+
+
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -1881,6 +2198,7 @@ __all__ = [
     "RunExecutionWorktree",
     "RunExecutionWorktreeAdoptionBlocked",
     "RunExecutionWorktreeError",
+    "RunExecutionWorktreeRebuildRequired",
     "adopt_run_worktree",
     "build_run_worktree_scope_check",
     "cleanup_run_worktree",
@@ -1892,7 +2210,9 @@ __all__ = [
     "merge_unit_execution_worktree",
     "record_unit_post_writer_report",
     "materialize_run_execution_worktree",
+    "reset_run_worktree",
     "resolve_run_execution_worktree",
+    "run_worktree_status",
     "unit_execution_branch_name",
     "unit_execution_worktree_root",
     "validate_run_execution_worktree_manifest",

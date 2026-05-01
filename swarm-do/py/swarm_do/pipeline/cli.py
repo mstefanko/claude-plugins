@@ -441,6 +441,33 @@ def cmd_prepare(args: argparse.Namespace) -> int:
     from .prepare import accept_prepared, prepare_plan_run, prepared_acceptance_summary, reject_prepared
 
     try:
+        prepare_args = list(getattr(args, "prepare_args", []) or [])
+        if not prepare_args and getattr(args, "plan_path", None):
+            prepare_args = [str(args.plan_path)]
+        if prepare_args and prepare_args[0] == "refresh-base":
+            if len(prepare_args) != 2:
+                print("swarm: prepare refresh-base: run_id is required", file=sys.stderr)
+                return 1
+            if getattr(args, "to_head", False) and getattr(args, "to_sha", None):
+                print("swarm: prepare refresh-base: choose only one of --to-head or --to-sha", file=sys.stderr)
+                return 1
+            from .prepared_artifact_writer import PreparedArtifactWriter
+
+            reason = "explicit-sha" if getattr(args, "to_sha", None) else "to-head"
+            result = PreparedArtifactWriter().refresh_base(
+                prepare_args[1],
+                to_sha=getattr(args, "to_sha", None),
+                phase_id=getattr(args, "phase", None),
+                dry_run=bool(getattr(args, "dry_run", False)),
+                operator_id=getattr(args, "operator_id", None),
+                reason=reason,
+            )
+            payload = result.to_dict()
+            if args.json:
+                print(json.dumps(payload, indent=2, sort_keys=True))
+            else:
+                print(_format_prepare_refresh_base(payload))
+            return 0
         if args.accept:
             summary = prepared_acceptance_summary(args.accept)
             try:
@@ -470,11 +497,15 @@ def cmd_prepare(args: argparse.Namespace) -> int:
                 print(f"prepared artifact rejected: {path}")
                 print("Status: REJECTED")
             return 0
-        if not args.plan_path:
+        plan_path = prepare_args[0] if prepare_args else None
+        if len(prepare_args) > 1:
+            print("swarm: prepare: only one plan_path may be supplied", file=sys.stderr)
+            return 1
+        if not plan_path:
             print("swarm: prepare: plan_path is required unless --accept or --reject is used", file=sys.stderr)
             return 1
         result = prepare_plan_run(
-            args.plan_path,
+            plan_path,
             dry_run=args.dry_run,
             write=not args.dry_run,
         )
@@ -486,6 +517,20 @@ def cmd_prepare(args: argparse.Namespace) -> int:
     except Exception as exc:
         print(f"swarm: prepare: {exc}", file=sys.stderr)
         return 1
+
+
+def _format_prepare_refresh_base(payload: Mapping[str, Any]) -> str:
+    status = "dry-run" if payload.get("dry_run") else ("changed" if payload.get("changed") else "unchanged")
+    lines = [
+        f"prepare refresh-base: {payload.get('run_id')} {status}",
+        f"  git_base_sha: {payload.get('previous_git_base_sha')} -> {payload.get('target_git_base_sha')}",
+        f"  phases: {', '.join(payload.get('phase_ids') or []) or '-'}",
+    ]
+    for path in payload.get("touched_paths") or []:
+        lines.append(f"  touched: {path}")
+    for path in payload.get("backups") or []:
+        lines.append(f"  backup: {path}")
+    return "\n".join(lines)
 
 
 def _print_prepare_result(result: Any) -> None:
@@ -1296,6 +1341,7 @@ def cmd_phases(args: argparse.Namespace) -> int:
         reap_expired_phases,
         record_phase_result,
         refresh_phase,
+        reset_phase_session,
         start_phase,
     )
 
@@ -1304,6 +1350,11 @@ def cmd_phases(args: argparse.Namespace) -> int:
         if command == "init":
             payload = init_phase_sessions(args.run_id, policy_update=policy_update_from_args_and_env(args))
             exit_code = 0
+        elif command == "doctor":
+            from .phase_doctor import run_phase_doctor
+
+            payload = run_phase_doctor(args.run_id)
+            exit_code = 0 if not any(item.get("severity") == "error" for item in payload.get("findings") or []) else 2
         elif command == "status":
             payload = phase_status(args.run_id)
             if args.cost or args.attempts or args.events or args.include_archived:
@@ -1346,6 +1397,47 @@ def cmd_phases(args: argparse.Namespace) -> int:
         elif command == "refresh":
             payload = refresh_phase(args.run_id, args.phase, lease_owner=args.lease_owner)
             exit_code = 0
+        elif command == "reset":
+            payload = reset_phase_session(args.run_id, args.phase, hard=args.hard)
+            exit_code = 0
+        elif command == "redo":
+            doctor = None
+            worktree_reset = None
+            phase_reset = None
+            if not args.no_doctor:
+                from .phase_doctor import run_phase_doctor
+
+                doctor = run_phase_doctor(args.run_id)
+            if args.rebuild_worktree:
+                from .execution_worktree import reset_run_worktree
+
+                worktree_reset = reset_run_worktree(
+                    args.run_id,
+                    data_dir=resolve_data_dir(),
+                    discard=not args.archive_branch,
+                    archive_branch=bool(args.archive_branch),
+                    force=bool(args.force),
+                )
+            if args.phase:
+                phase_reset = reset_phase_session(args.run_id, args.phase, hard=args.hard)
+            max_phases = None if args.max_phases == "all" else int(args.max_phases)
+            pump = pump_phases(
+                args.run_id,
+                launcher=args.launcher,
+                max_phases=max_phases,
+                init_if_missing=args.init,
+                max_budget_usd=_phase_attempt_budget_cli_value(args),
+                policy_update=policy_update_from_args_and_env(args),
+            )
+            payload = {
+                "run_id": args.run_id,
+                "doctor": doctor,
+                "worktree_reset": worktree_reset,
+                "phase_reset": phase_reset,
+                "pump": pump,
+                "status": phase_status(args.run_id),
+            }
+            exit_code = 0 if pump.get("status") in {"complete", "max_phases", "manual_waiting", "checkpoint"} else 2
         elif command == "reap":
             payload = reap_expired_phases(args.run_id)
             exit_code = 0
@@ -1427,6 +1519,10 @@ def cmd_phases(args: argparse.Namespace) -> int:
 
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))
+    elif args.phases_command == "doctor":
+        from .phase_doctor import format_phase_doctor
+
+        print(format_phase_doctor(payload))
     elif args.phases_command == "pump":
         print(format_pump_result(payload))
     elif args.phases_command == "status":
@@ -1441,9 +1537,37 @@ def cmd_phases(args: argparse.Namespace) -> int:
         print(_format_phase_archive(payload))
     elif args.phases_command == "evidence":
         print(_format_phase_evidence(payload))
+    elif args.phases_command == "redo":
+        print(_format_phase_redo(payload))
     else:
         print(json.dumps(payload, indent=2, sort_keys=True))
     return exit_code
+
+
+def _format_phase_redo(payload: Mapping[str, Any]) -> str:
+    lines = [f"phases redo: {payload.get('run_id')}"]
+    doctor = payload.get("doctor")
+    if isinstance(doctor, Mapping):
+        lines.append(f"  doctor: {doctor.get('status')} findings={doctor.get('finding_count')}")
+        if doctor.get("recommended_command"):
+            lines.append(f"  doctor_next: {doctor.get('recommended_command')}")
+    if payload.get("worktree_reset"):
+        lines.append("  worktree: reset")
+    if payload.get("phase_reset"):
+        phase_reset = payload["phase_reset"]
+        if isinstance(phase_reset, Mapping):
+            lines.append(f"  phase: reset {phase_reset.get('phase_id')}")
+    pump = payload.get("pump")
+    if isinstance(pump, Mapping):
+        lines.append("  " + _indent_block(format_pump_result(pump), prefix="  ").lstrip())
+    status = payload.get("status")
+    if isinstance(status, Mapping):
+        lines.append(f"  status: {status.get('status')}")
+    return "\n".join(lines)
+
+
+def _indent_block(text: str, *, prefix: str) -> str:
+    return "\n".join(prefix + line for line in text.splitlines())
 
 
 def _format_phase_status(payload: Mapping[str, Any]) -> str:
@@ -2052,6 +2176,23 @@ def cmd_worktrees(args: argparse.Namespace) -> int:
                 data_dir=Path(args.data_dir) if args.data_dir else resolve_data_dir(),
                 apply=bool(args.apply),
             )
+        elif args.worktrees_command == "status":
+            from .execution_worktree import run_worktree_status
+
+            payload = run_worktree_status(
+                args.run_id,
+                data_dir=Path(args.data_dir) if args.data_dir else resolve_data_dir(),
+            )
+        elif args.worktrees_command == "reset":
+            from .execution_worktree import reset_run_worktree
+
+            payload = reset_run_worktree(
+                args.run_id,
+                data_dir=Path(args.data_dir) if args.data_dir else resolve_data_dir(),
+                discard=bool(args.discard),
+                archive_branch=bool(args.archive_branch),
+                force=bool(args.force),
+            )
         elif args.worktrees_command == "cleanup-run":
             from .execution_worktree import cleanup_run_worktree
 
@@ -2118,6 +2259,8 @@ def cmd_worktrees(args: argparse.Namespace) -> int:
                 print(_format_worktree_adopt(payload))
             elif args.worktrees_command == "integrate-run":
                 print(_format_worktree_integrate(payload))
+            elif args.worktrees_command == "reset":
+                print(_format_worktree_status(payload))
         print(f"swarm: worktrees {args.worktrees_command}: {exc}", file=sys.stderr)
         return 1
 
@@ -2130,6 +2273,10 @@ def cmd_worktrees(args: argparse.Namespace) -> int:
             print(_format_worktree_integrate(payload))
         elif args.worktrees_command == "cleanup-run":
             print(_format_worktree_cleanup(payload))
+        elif args.worktrees_command == "status":
+            print(_format_worktree_status(payload))
+        elif args.worktrees_command == "reset":
+            print(_format_worktree_reset(payload))
         else:
             for key, value in payload.items():
                 if value is not None:
@@ -2229,6 +2376,42 @@ def _format_worktree_cleanup(payload: Mapping[str, Any]) -> str:
         lines.append(f"    - {target}")
     if not payload.get("applied"):
         lines.append(f"  apply: {payload.get('apply_command')}")
+    return "\n".join(lines)
+
+
+def _format_worktree_status(payload: Mapping[str, Any]) -> str:
+    lines = [f"worktrees status: {payload.get('run_id')} status={payload.get('status')}"]
+    if payload.get("manifest_path"):
+        lines.append(f"  manifest: {payload.get('manifest_path')}")
+    if payload.get("branch"):
+        lines.append(f"  branch: {payload.get('branch')}")
+    if payload.get("manifest_base_sha") or payload.get("source_base_sha"):
+        lines.append(f"  base: manifest={payload.get('manifest_base_sha')} source={payload.get('source_base_sha')}")
+    if payload.get("adoption_state"):
+        lines.append(f"  adoption_state: {payload.get('adoption_state')}")
+    commits = payload.get("unadopted_commits") or []
+    if commits:
+        lines.append(f"  unadopted_commits: {len(commits)}")
+        for sha in commits[:8]:
+            lines.append(f"    - {sha}")
+    dirty = payload.get("dirty_paths") or []
+    if dirty:
+        lines.append(f"  dirty_paths: {len(dirty)}")
+        for path in dirty[:12]:
+            lines.append(f"    - {path}")
+    if payload.get("recommended_command"):
+        lines.append(f"  next: {payload.get('recommended_command')}")
+    return "\n".join(lines)
+
+
+def _format_worktree_reset(payload: Mapping[str, Any]) -> str:
+    lines = [f"worktrees reset: {payload.get('run_id')} status={payload.get('status')}"]
+    if payload.get("deleted_branch"):
+        lines.append(f"  deleted_branch: {payload.get('deleted_branch')}")
+    if payload.get("archived_branch"):
+        lines.append(f"  archived_branch: {payload.get('archived_branch')}")
+    if payload.get("safe_git_worktree_root"):
+        lines.append(f"  removed: {payload.get('safe_git_worktree_root')}")
     return "\n".join(lines)
 
 
@@ -2361,7 +2544,11 @@ def _build_parser() -> argparse.ArgumentParser:
     do.set_defaults(func=cmd_do)
 
     prepare = sub.add_parser("prepare")
-    prepare.add_argument("plan_path", nargs="?", help="plan path to prepare")
+    prepare.add_argument(
+        "prepare_args",
+        nargs="*",
+        help="plan path to prepare, or `refresh-base RUN_ID`",
+    )
     prepare.add_argument("--dry-run", action="store_true")
     prepare.add_argument(
         "--auto-mechanical-fixes",
@@ -2372,6 +2559,10 @@ def _build_parser() -> argparse.ArgumentParser:
     prepare.add_argument("--reject", metavar="RUN_ID")
     prepare.add_argument("--accepted-by", default="human")
     prepare.add_argument("--reason", default="")
+    prepare.add_argument("--to-head", action="store_true", help="refresh-base: resolve the prepared base to the current git_base_ref")
+    prepare.add_argument("--to-sha", help="refresh-base: set the prepared base to an explicit commit sha")
+    prepare.add_argument("--phase", help="refresh-base: refresh one phase id instead of every phase")
+    prepare.add_argument("--operator-id", help="refresh-base: operator id to record in the audit event")
     prepare.add_argument("--json", action="store_true")
     prepare.set_defaults(func=cmd_prepare)
 
@@ -2427,6 +2618,10 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_phase_policy_flags(p)
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_phases)
+    p = phases_sub.add_parser("doctor")
+    p.add_argument("run_id")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_phases)
     p = phases_sub.add_parser("status")
     p.add_argument("run_id")
     p.add_argument("--cost", action="store_true")
@@ -2452,6 +2647,27 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("run_id")
     p.add_argument("--phase", required=True)
     p.add_argument("--lease-owner", required=True)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_phases)
+    p = phases_sub.add_parser("reset")
+    p.add_argument("run_id")
+    p.add_argument("--phase", required=True)
+    p.add_argument("--hard", action="store_true")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_phases)
+    p = phases_sub.add_parser("redo")
+    p.add_argument("run_id")
+    p.add_argument("--phase")
+    p.add_argument("--hard", action="store_true")
+    p.add_argument("--rebuild-worktree", action="store_true")
+    p.add_argument("--archive-branch", action="store_true")
+    p.add_argument("--force", action="store_true")
+    p.add_argument("--launcher", default="claude-print", choices=["manual", "fake-test", "claude-print"])
+    p.add_argument("--max-phases", default="1")
+    p.add_argument("--init", action="store_true")
+    p.add_argument("--no-doctor", action="store_true")
+    p.add_argument("--max-budget-usd", type=float)
+    _add_phase_policy_flags(p)
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_phases)
     for name in ("complete", "fail", "block", "needs-input"):
@@ -2630,6 +2846,20 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("run_id")
     p.add_argument("--data-dir")
     p.add_argument("--apply", action="store_true")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_worktrees)
+    p = worktrees_sub.add_parser("status")
+    p.add_argument("run_id")
+    p.add_argument("--data-dir")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_worktrees)
+    p = worktrees_sub.add_parser("reset")
+    p.add_argument("run_id")
+    p.add_argument("--data-dir")
+    mode = p.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--discard", action="store_true")
+    mode.add_argument("--archive-branch", action="store_true")
+    p.add_argument("--force", action="store_true")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_worktrees)
     p = worktrees_sub.add_parser("integrate-run")

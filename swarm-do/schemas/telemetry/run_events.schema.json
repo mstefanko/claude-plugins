@@ -43,6 +43,7 @@
         "prepare_stale_rejected",
         "prepare_continue_failed",
         "prepare_dispatch_started",
+        "prepared_dispatch_refreshed",
         "phase_session_initialized",
         "phase_session_claimed",
         "phase_session_started",
@@ -54,6 +55,7 @@
         "phase_session_needs_input",
         "phase_session_lease_expired",
         "phase_session_reconciled",
+        "phase_session_reset",
         "phase_attempt_abandoned",
         "phase_attempt_retry_scheduled",
         "phase_attempt_retry_ready",
@@ -67,6 +69,8 @@
         "phase_pump_started",
         "phase_pump_stopped",
         "phase_pump_launcher_ineligible",
+        "worktree_rebuilt",
+        "worktree_reset",
         "post_writer_report",
         "dogfood_check"
       ]

@@ -28,11 +28,11 @@ Three parallel agents reviewed this plan against the source code and against ind
 
 ### 0.2 Verdict on the strategic question
 
-**Foundation, not duct-tape — with one rotten beam.** The six-file state shape, two-root XDG/repo split, and JSON-Schema-validated event log are defensible for a single-operator local CLI. The rot is one missing seam — coupled-invariant ownership for embedded artifact ↔ sidecar ↔ descriptor.sha — and the §3.4 `PreparedArtifactWriter` retires it in ~1 week. Total scope of this plan as revised: ~3 weeks across `prepare.py`, `execution_worktree.py`, plus new `prepared_artifact_writer.py` and `phase_doctor.py`. `phase_pump.py` is not refactored.
+**Foundation, not duct-tape — with one rotten beam.** The six-file state shape, two-root XDG/repo split, and JSON-Schema-validated event log are defensible *enough to ship the recovery-UX work against without rewriting first* (the long-term destination is SQLite per §12, but the parent plan does not block on it and the §3.4 seam is pre-baked migration-friendly). The rot is one missing seam — coupled-invariant ownership for embedded artifact ↔ sidecar ↔ descriptor.sha — and the §3.4 `PreparedArtifactWriter` retires it in ~1 week. Total scope of this plan as revised: ~3 weeks across `prepare.py`, `execution_worktree.py`, plus new `prepared_artifact_writer.py` and `phase_doctor.py`. `phase_pump.py` is not refactored.
 
-### 0.3 Open architectural question — see §12
+### 0.3 State-storage decision — resolved in §12
 
-The two architectural agents disagreed on the bigger storage question (SQLite + pydantic vs. status quo JSON-files-with-validators). That decision is **out of scope for this plan** but tracked as a follow-on research epic in §12. We are not deferring this plan to wait on it.
+Two follow-on research memos (Opus + GPT) re-examined the SQLite-vs-JSON question and **converged on the same destination**: SQLite as the canonical run-state store, JSON files as deterministic exports, append-only logs as JSONL, git as observed reality. The destination is now chosen; the migration sequences after the recovery-UX work and is gated on a 1-week spike. **Nothing in §12 changes the §1–§11 work** — the parent plan does not block on it, and `PreparedArtifactWriter` (§3.4 Layer A) is the seam in either direction. See §12 for the merged recommendation, library stack, sequenced migration path, and stop/defer criteria.
 
 ---
 
@@ -149,6 +149,8 @@ swarm prepare refresh-base <run-id> [--to-head|--to-sha SHA] [--phase N] [--dry-
 
 `PreparedArtifactWriter` is the single seam any code mutating `git_base_sha` (or any other field shared between the embedded artifact and its sidecar) must go through — see §8.9 fence test. `prepare_plan_run` migrates onto it as part of this PR so there is exactly one writer of this triple in the codebase.
 
+**Shape it as a `RunStateStore` Protocol implementation** (`load() -> dict`, `begin() -> Txn`, `commit()`) per §12.5. The §1–§11 work ships against `JsonRunStateStore` (this Layer A); the future `SqliteRunStateStore` (§12.6) drops in without touching callers. This is the only §12 commitment that bleeds into the parent plan PR — costs nothing because the API was already shaped this way; locking the Protocol in turns an incidental seam into a deliberate one.
+
 The command must do — atomically and in this order — what `/tmp/refresh-git-base.py` did, **plus** the sidecar/sha steps the script omitted. For each affected phase:
 
 1. Resolve the target SHA (default `HEAD` of the source repo).
@@ -164,7 +166,7 @@ The command must do — atomically and in this order — what `/tmp/refresh-git-
 
 #### 3.4.0 Multi-file atomicity recipe (implementer guidance)
 
-POSIX `rename`/`os.replace` is atomic per file, not across files. The atomic-across-N-files contract that §3.4 promises must be implemented with explicit rollback because no filesystem primitive provides it. Do **not** reach for SQLite or filesystem snapshots for this — the recipe below is the right shape for the existing storage model:
+POSIX `rename`/`os.replace` is atomic per file, not across files. The atomic-across-N-files contract that §3.4 promises must be implemented with explicit rollback because no filesystem primitive provides it. **For this PR, do not reach for SQLite or filesystem snapshots** — the recipe below is the right shape for the JSON storage model that §1–§11 ships against. (§12 has chosen SQLite as the long-term destination; once §12.6 Step 1 lands, this entire recipe retires in favour of `BEGIN IMMEDIATE; … COMMIT;`. Until then, the recipe is the contract.)
 
 1. **Snapshot phase.** For every file the operation will touch, copy `path` → `path.bak-<op>-<utc-iso>` via `shutil.copy2`. If any snapshot fails, abort before mutating anything.
 2. **Stage phase.** Compute every new file body in memory. Write each to `path.tmp-<op>` (same directory, same filesystem so `os.replace` stays atomic). Compute SHAs against the staged bytes, not the eventual on-disk bytes (these match by construction, but the discipline matters).
@@ -452,39 +454,182 @@ The recovery-UX epic ships before the hardening epic — operators need the resc
 
 ---
 
-## 12. Open architectural question — deferred (needs more research)
+## 12. State-storage architecture decision — adopt SQLite, incrementally, post-recovery-UX
 
-**The two architectural agents disagreed on the bigger storage question.** This plan does not resolve it; we ship the §1–§11 work in parallel.
+**Decision (resolved):** SwarmDaddy's run-state moves to SQLite as the canonical store; JSON files become deterministic exports. The parent plan (§1–§11) does not block on this — it ships first. The migration follows, gated on a one-week spike before any default flips.
 
-### 12.1 The split
+Two follow-on research memos addressed §12 from different angles and converged on the same destination:
 
-- **Code-walk verdict (architecture-assessment-2026-05-01.md):** Foundation, not duct-tape. Status quo (six JSON files, two roots, atomic per-file writes, JSON-Schema-validated event log) is defensible for a single-operator local CLI. The one rotten beam is coupled-invariant ownership (`PreparedArtifactWriter` retires it in ~1 week). SQLite + event sourcing + state aggregate are each 4–8+ weeks for what a 200-LoC class buys in a week. Verdict: do not migrate.
-- **Research verdict (research-similar-systems-2026-05-01.md):** SQLite + pydantic v2 is the highest-leverage single adoption. Dagster's `SqliteRunStorage` (~800 LoC blueprint) and Prefect 2's local mode both target exactly this single-operator, no-daemon profile. Replaces 5+ JSON files, 4 hand-rolled validators, and the multi-file atomicity gap with one `BEGIN; ...; COMMIT;`. The 7-step incremental refactor path can run alongside this plan; the /tmp surgery pain dies at step 4. Verdict: migrate, incrementally.
+- [`section-12-sqlite-storage-research-2026-05-01.md`](./section-12-sqlite-storage-research-2026-05-01.md) — incremental seven-step path with trigger-gated promotion; `sqlite_utils` + `pydantic` v2 stack; two-database split.
+- [`swarmdaddy-state-storage-sqlite-recommendation-2026-05-01.md`](./swarmdaddy-state-storage-sqlite-recommendation-2026-05-01.md) — direction-now verdict; one per-run DB with JSON exports; stdlib `sqlite3` first; concrete WAL/SQLite-3.49.1 caveat.
 
-### 12.2 What the plan does about it
+Where they disagreed (timing-commitment, library aggressiveness, DB layout, WAL handling, first migration step) is resolved below by merging the strongest piece of each. See §12.10 for the divergence table.
 
-**Nothing — for now.** The §1–§11 work ships either way. `PreparedArtifactWriter` is required either way (it becomes the migration seam if we go to SQLite; it stays as the JSON owner if we don't). The §3.4.0 atomicity recipe is required either way (it's the contract regardless of storage).
+### 12.1 Verdict (single, decisive)
 
-The decision **is not blocking this plan**, and we are not deferring this plan to wait on it.
+**Choose the direction now. Run a one-week spike before flipping the first default.** `PreparedArtifactWriter` (§3.4 Layer A) ships in the recovery-UX PR with a deliberately migration-friendly API and serves as the storage seam either way. The migration is not pre-committed past the spike — the spike either proves the direction or kills it, and in either case the parent plan is unaffected.
 
-### 12.3 Follow-on research epic to file
+### 12.2 The model
 
-After this plan ships (target: ~3 weeks from acceptance), open:
+**DB is truth. JSON files are exports. Git is observed reality. Events are committed with state.**
 
-- `epic: SwarmDaddy state-storage architecture review (SQLite vs. status quo)` (P3, exploratory)
-  - child: `research: spike a sqlite-backed RunStateView covering the worktree manifest only` — the smallest proving ground per the research memo's step 2. Surface area: 1 file, 1 schema. Goal: measurable gain or no?
-  - child: `research: prototype pydantic v2 schemas for prepared_plan.v1.json + work_unit sidecars` — does schema-as-code reduce the validator footprint visibly, or just relocate it?
-  - child: `research: characterize the current bug-class distribution` — of the recovery-UX epic's bugs, which would have been impossible-by-construction under SQLite + WAL? Which would not? Cost the migration against the bugs-it-prevents, not against architectural elegance.
-  - child: `decision: SQLite migration go/no-go` — owners + criteria + sunset path for any decision.
+Adopt the framing verbatim. It is load-bearing — every design choice below falls out of it:
 
-The signal that informs this decision is the *post-Recovery-UX bug rate*. If the new Recovery-UX surface is enough, the migration is YAGNI. If we keep finding new flavors of cross-file drift the `PreparedArtifactWriter` doesn't cover, that's the case for SQLite.
+- A dispatch validator that compares two on-disk JSON files for equality (today's anti-pattern, the literal cause of Bug 2) becomes a query against a single source of truth.
+- The §3.4.0 multi-file atomicity recipe (snapshot → stage → commit → verify → rollback across N files) retires entirely. SQLite's `BEGIN IMMEDIATE; … COMMIT;` is the contract; ~150 LoC of failure-mode code stops existing.
+- An audit event written in the same transaction as the state mutation cannot be lost or duplicated by partial-crash interleaving. The current `append_run_event()`-racing-with-state-write hazard goes away.
+- A future fence test for "no module other than X writes Y" becomes "Y is a column owned by one DAO" — schema scope replaces grep.
 
-### 12.4 Reading list
+### 12.3 Storage layout
 
-For whoever picks up the §12 epic:
+One per-run SQLite database at:
 
-- [`swarmdaddy-state-storage-sqlite-recommendation-2026-05-01.md`](./swarmdaddy-state-storage-sqlite-recommendation-2026-05-01.md) — follow-up research + recommendation for the SQLite vs. JSON state-store question.
-- [`research-similar-systems-2026-05-01.md`](./research-similar-systems-2026-05-01.md) — full memo, ~2480 words.
-- [`architecture-assessment-2026-05-01.md`](./architecture-assessment-2026-05-01.md) — counter-position, file:line evidence.
-- Dagster `SqliteRunStorage` source (referenced by research memo) — the closest analog blueprint.
-- jj (jujutsu) operation log — the closest analog for "treat the manifest as a cache, reconcile from real state on every command."
+```text
+${CLAUDE_PLUGIN_DATA}/runs/<run-id>/state.sqlite
+```
+
+Repo-visible JSON files (`<repo>/data/runs/<id>/prepared.md`, `prepared_plan.v1.json`, `work_units/*.json`, `inspect/*.json`) continue to exist as **deterministic exports** computed from DB rows. A `snapshot_exporter` writes them with the existing atomic-replace helper, recomputes sha256, and records the export in an `artifact_exports` table (`path`, `kind`, `sha256`, `event_seq`). Workers, tests, and operator inspection see no shape change at the filesystem layer; what changes is the source of truth.
+
+The two-root boundary (`<repo>` vs `~/.local/share/`) is preserved by **export**, not by schema split. Git tracks exports, not state. This is simpler than splitting the schema across two databases, and it matches what git can actually validate (file bytes, not row equality).
+
+**What stays JSON forever** (do not migrate):
+
+- `run_events.jsonl` — append-only audit log; `tail -f` affordance and single-writer-multiple-reader discipline are exactly what JSONL is good at. The SQLite `events` table is the canonical record; the JSONL mirror keeps existing telemetry consumers unbroken.
+- `prepared.md` — markdown derivative; consumed by humans and agents.
+- `config.toml` and similar configuration files — out of scope.
+
+### 12.4 Library stack
+
+| Concern | Choice | Why |
+|---|---|---|
+| DB layer | **stdlib `sqlite3`** | No new dependency before the first useful invariant lands (a hard stop-criterion). `mem_prime.py` and `swarm-do/py/swarm_do/telemetry/` already use it; the team has the pattern. `sqlite_utils` is acceptable for ad-hoc operator queries (`tech-radar` precedent), but not the canonical store. |
+| Validation / row models | **`pydantic` v2** — gated on a Step-0.5 cold-start benchmark | Replaces ~6 hand-rolled JSON-Schema validator surfaces with one declarative model layer. Independently valuable — ship before SQLite if the spike stalls. **Fallback:** `attrs` + `cattrs` if pydantic adds more than ~50 ms to CLI cold start at typical workload. Decision is locked before any row model ships, not retrofitted afterward. |
+| Schema migrations | **`PRAGMA user_version` + explicit migration functions** | Defer Alembic until there is a second migration version. Overkill until then. |
+| Journal mode | **Rollback journal + `BEGIN IMMEDIATE`** initially | The current Python runtime ships SQLite `3.49.1`, which has a known WAL-reset bug affecting databases with multiple connections (fixed in `3.51.3` and certain backports). Single-operator local CLI with short-lived processes does not need WAL. Re-enable WAL when the runtime is verified ≥`3.51.3` or a backport is documented. |
+| Schema hygiene | **STRICT tables; `PRAGMA foreign_keys = ON` per connection; `json_valid()` CHECK on JSON payload columns; explicit `close()`** | STRICT (≥3.37) and `json_valid()` (≥3.38) are both available on the existing runtime. Do not rely on `with sqlite3.connect(...)` to close the connection — the context manager commits/rolls-back but leaves it open, which is the source of `ResourceWarning` test noise already present in this codebase. |
+| Hot paths | stdlib `sqlite3` directly | Bypass any DAO helper overhead where it matters. |
+
+The dependency budget for `swarm-do` is **one new package (`pydantic` v2)**. Anything beyond — `sqlite_utils`, `SQLAlchemy`, `Alembic`, `pluggy` — is either deferred (Alembic to Step 8) or rejected.
+
+### 12.5 The seam — pre-baked in the parent plan PR
+
+When `PreparedArtifactWriter` (§3.4 Layer A) is implemented, structure its public API so the storage backend can be swapped without touching callers:
+
+```python
+class RunStateStore(Protocol):
+    def load(self, run_id: str) -> RunState: ...
+    def begin(self) -> Txn: ...                  # context manager
+    # Txn has: update_prepared_plan(...), update_work_unit(...),
+    #          append_event(...), reset_phase(...), etc.
+```
+
+Two implementations:
+
+- `JsonRunStateStore` — wraps the §3.4.0 atomicity recipe; ships in the parent plan PR.
+- `SqliteRunStateStore` — built in §12.6 Step 0; selected by `SWARM_STATE_BACKEND=sqlite` for new runs only.
+
+This is the **only §12 work that bleeds into the parent plan PR.** It is not free, but the architecture-assessment's `PreparedArtifactWriter` sketch was already shaped this way; locking the protocol is the difference between "deliberate seam" and "incidental seam." Acceptance: a backend-swap test asserts that swapping `SqliteRunStateStore` for `JsonRunStateStore` does not change observable behavior across the existing dispatch + `check_stale` + reset suites.
+
+### 12.6 The incremental path (post-spike)
+
+Run after the parent plan ships. Each step is independently shippable and reversible. Rough effort: ~9 weeks total, ~4–5 weeks to the high-value cliff (end of Step 3).
+
+**Step 0 — One-week spike (the gate).** Build `RunStateStore` interface + `SqliteRunStateStore` minimal implementation + the prepared-plan + work-unit vertical slice for new runs. Feature-flag with `SWARM_STATE_BACKEND=sqlite`; default off. Acceptance gates (all four required to advance):
+
+1. `prepare refresh-base` becomes one DB transaction plus one deterministic-export pass.
+2. `check_stale()` returns `None` against post-refresh state on a SQLite-backed run.
+3. The exported `prepared_plan.v1.json` and sidecar JSON are **byte-identical** to what the JSON backend produces. (Without this, the migration creates more work than it retires — every test that asserts on artifact bytes is otherwise a fork.)
+4. No new dependency required for this step (stdlib only; pydantic gated separately at Step 5).
+
+If any gate fails, the migration stops here. `PreparedArtifactWriter` remains the JSON owner; revisit at a longer horizon. Cost of the dead-end: one focused week.
+
+**Step 1 — Prepared-plan + work-unit vertical slice flips on for new runs.** [~2 weeks] Promotes the spike from feature-flag to default. Bug 2's exact surface. `PreparedArtifactWriter` is now a façade over a single SQL transaction; the §3.4.0 multi-file atomicity recipe is dead code; the §8.9 fence test transforms from "no other module writes `git_base_sha`" (greppable contract) into "`git_base_sha` is a column owned by one DAO" (compile-time-ish contract — schema scope + module imports). The §3.5 Test 4 parametrized atomicity suite is replaced by a single "BEGIN/ROLLBACK on exception" test.
+
+> **Sequencing note (Opus vs GPT).** Opus orders the worktree manifest first ("smallest blast radius"). GPT orders the prepared-plan slice first ("where the bug lives"). This plan sides with GPT: the prepared-plan slice is what the migration is *paying for* — it retires the largest piece of failure-mode code. Migrating one trivial file (worktree manifest) first proves only that SQLite works; migrating the slice with real complexity first proves the migration *delivers*. The blast radius is bounded by the storage façade + opt-in flag, not by ordering.
+
+**Step 2 — Phase sessions.** [~1.5 weeks] `phase_sessions.v1.json` → `phase_sessions` table. `_reset_phase_to_pending`'s field-coverage problem (§8.8) becomes "every column with a default is reset to its default" — enumerated by the schema, not by hand. The next operator who adds a phase-state field cannot accidentally leave it out of reset.
+
+**Step 3 — Worktree manifest.** [~1 week] `manifest.json` → `worktrees` table. `_validate_existing_manifest` becomes a SELECT + CHECK; `_classify_manifest_drift` (§2 of this plan) operates on a row, not a dict. The two-root boundary is preserved because the worktree DB lives under user-machine state.
+
+**(High-value cliff. Steps 4–8 are nice-to-haves; ship when warranted by §12.9 triggers.)**
+
+**Step 4 — Inspect artifacts** [~0.5 week] *(skip if `inspect.v1.json` does not carry `git_base_sha` — verify per parent plan §3.4.2 Q2).*
+
+**Step 5 — pydantic v2 row models.** [~1.5 weeks] Independently valuable — ship before Step 1 if the Step-0.5 cold-start benchmark passes. Hand-rolled JSON-Schema validators retire across `check_stale`, `_verify_dispatch_sidecars`, the prepared-plan envelope, work-unit artifacts, the inspect artifact, and phase-session loading.
+
+**Step 6 — Events table + JSONL mirror.** [~0.5 week] State change and audit row commit in one transaction; JSONL continues as the operator-`tail -f` mirror. Closes the `append_run_event()`-vs-state-write race documented in the GPT memo.
+
+**Step 7 — `phases doctor` / `phases status` query consolidation.** [~1 week] Probes become SQL queries; the assemblers retire. Probe-error isolation (§6's acceptance criterion) is preserved by per-probe try/except harnesses around each query. Cold-start cost drops from "open and parse N JSON files" to "open one handle + run one query."
+
+**Step 8 — Schema migrations + `swarm rollout repair` / `swarm rollout abandon`.** [~1 week] `PRAGMA user_version` + a hand-rolled `schema_versions` table; defer Alembic until the second schema version. Add `swarm rollout repair` / `swarm rollout abandon` as transactional verbs over the new schema (modeled on `jj op restore` / `jj op abandon` from the research memo) — these are the verbs that retire the *next* class of `/tmp` script.
+
+### 12.7 What SQLite does NOT solve
+
+To prevent scope creep, the migration does not address:
+
+- **Worktree-vs-source git drift.** Bug 1's `_classify_manifest_drift` is application logic. SQLite stores the manifest row but cannot make `git rev-list` go away.
+- **The `/tmp` script habit.** Sanctioned recovery commands (§6, §7 of this plan) are the actual fix. SQLite makes ad-hoc surgery slightly more structured (transactions, schema, CHECK constraints) but does not retire the habit on its own.
+- **Self-referencing-hash anxiety.** That was a phantom problem (`prepared_plan_sha` hashes `prepared.md`, not the JSON envelope — see §3.4.1 row 2 strike).
+- **Recovery UX.** `phases doctor`, `phases redo`, the slash UI — all unchanged.
+- **Multi-writer concurrency.** The "single operator, local process" assumption stays. `busy_timeout = 5000` + `BEGIN IMMEDIATE` is the correctness contract; do not chase WAL or connection pools to "scale."
+- **Cross-DB transactional git ops.** `git worktree add` / branch deletion / checkout dirtiness are not transactional with the DB. The `worktrees` table is desired+observed state; every command still snapshots `git rev-parse` before deciding.
+
+### 12.8 Stop / defer criteria (hard)
+
+Stop the migration (or pause and re-evaluate) if any of these become true:
+
+- The DB backend ends up as "SQLite plus all the same JSON files as equal truth." That is strictly worse than today.
+- Export compatibility requires invasive launcher changes *before* any durability gain appears.
+- Locking complexity rises above the current `fcntl` lock + atomic JSON model before phase sessions move.
+- The migration requires SQLAlchemy / Alembic / pydantic before the first useful invariant lands. (pydantic v2 is gated by Step 0.5; SQLAlchemy/Alembic are out of scope.)
+- After 1–2 quarters of recovery-UX in operation, the bug rate shows zero new coupled-mutation drift after `PreparedArtifactWriter` ships. If the writer pattern alone retires the trap, SQLite is YAGNI; revisit at a longer horizon.
+
+### 12.9 Promotion triggers (soft, telemetry-driven)
+
+After ~3–6 months of recovery-UX in operation, promote §12 from "post-recovery-UX follow-on" to "P1 next-quarter work" if **any** of:
+
+- Two or more new bug reports describing coupled-mutation drift on fields *other than* `git_base_sha` (the pattern recurs despite `PreparedArtifactWriter`).
+- A second `PreparedArtifactWriter`-shaped class is proposed in a PR for a different invariant — the writer-per-coupling tax becomes visible.
+- `phases doctor` cold-start cost measurably exceeds budget (parse-N-JSON-files becomes a UX issue at ~10+ runs in the data dir).
+- A user-visible feature requires a cross-run query (e.g., "which runs are stuck on Phase 2 across the project?") that JSON-walking makes painful.
+- Test-suite parametrization for the §3.4.0 atomicity recipe has grown into a maintenance burden.
+
+If none of these fire after a quarter or two, hold at the spike's outcome. The seam (§12.5) was already pre-baked at zero marginal cost.
+
+### 12.10 Where the two memos diverged (and why this plan resolved each)
+
+| Question | Opus memo | GPT memo | This plan |
+|---|---|---|---|
+| When is the direction chosen? | After 1–2 quarters of trigger telemetry | Now | **Now**, with a one-week spike gate before Step 1 ships. Trigger telemetry then governs whether Steps 4–8 follow. |
+| DB layout | Two databases (repo-visible + user-machine) | One DB at user-machine root, exports at repo-visible | **One DB + JSON exports.** Simpler; preserves the two-root boundary by export rather than by schema split. |
+| Library stack | `sqlite_utils` + `pydantic` v2 from day one | stdlib `sqlite3`, no new deps until needed | **stdlib `sqlite3` for storage; `pydantic` v2 gated on cold-start benchmark.** New-dep budget is one package, not two. `sqlite_utils` is acceptable for ad-hoc operator queries, not for the canonical store. |
+| WAL vs rollback journal | Not addressed | Rollback journal initially; WAL gated on SQLite ≥`3.51.3` | **Rollback journal + `BEGIN IMMEDIATE`.** GPT's catch is concrete and load-bearing; adopt verbatim. |
+| First migration step | Worktree manifest (smallest blast radius) | Prepared-plan + work-unit slice (where the bug lives) | **Prepared-plan slice first.** The blast radius is bounded by the storage façade + opt-in flag; ordering by *where the migration pays off* prevents a "we built SQLite for one trivial file" outcome that would not justify Steps 2–8. |
+| Effort estimate | ~8.5 weeks total, ~4 weeks high-value cliff | ~4–5.5 weeks for durable migration | ~9 weeks total, ~4–5 weeks to high-value cliff (end of Step 3). |
+| Migration framework | Defer Alembic to Step 7 | No SQLAlchemy/Alembic | Defer Alembic to Step 8; `PRAGMA user_version` + functions until then. |
+
+### 12.11 Beads tickets to file (after parent plan ships)
+
+When the parent plan's recovery-UX epic closes, file:
+
+- `epic: SwarmDaddy state-storage SQLite migration` (P3 by default; promote to P1 on §12.9 trigger).
+  - child: `task: Step 0.5 — pydantic v2 cold-start benchmark and stack lock` (gates Step 5; ~30 minutes of measurement).
+  - child: `spike: Step 0 — RunStateStore facade + prepared-plan/work-unit vertical slice behind SWARM_STATE_BACKEND=sqlite (1 week)`.
+  - child: `feat: Step 1 — flip prepared-plan + work-unit storage to SQLite for new runs`.
+  - child: `feat: Step 2 — phase_sessions to SQLite`.
+  - child: `feat: Step 3 — worktree manifest to SQLite`.
+  - child: `feat: Step 4 — inspect artifacts to SQLite (skip-if-not-applicable)`.
+  - child: `feat: Step 5 — pydantic v2 row models`.
+  - child: `feat: Step 6 — events table with JSONL mirror`.
+  - child: `feat: Step 7 — phases doctor / phases status query consolidation`.
+  - child: `feat: Step 8 — schema migrations + swarm rollout repair / abandon verbs`.
+  - child: `feat: swarm state dump <run-id> --json` — operator surface for inspection; the replacement affordance for `cat prepared_plan.v1.json`.
+
+### 12.12 Reading list
+
+- [`section-12-sqlite-storage-research-2026-05-01.md`](./section-12-sqlite-storage-research-2026-05-01.md) — the trigger-gated incremental path; cost-value table; library trade-off matrix; counter-arguments and rebuttals.
+- [`swarmdaddy-state-storage-sqlite-recommendation-2026-05-01.md`](./swarmdaddy-state-storage-sqlite-recommendation-2026-05-01.md) — the direction-now verdict; the "DB is truth; JSON files are exports" framing; the SQLite 3.49.1 WAL caveat; the per-run DB layout; sample DDL.
+- [`swarmdaddy-recovery-ux-and-drift-hardening-analysis.md`](./swarmdaddy-recovery-ux-and-drift-hardening-analysis.md) — work-breakdown / acceptance criteria.
+- [`architecture-assessment-2026-05-01.md`](./architecture-assessment-2026-05-01.md) — code-walk verdict (file:line evidence).
+- [`research-similar-systems-2026-05-01.md`](./research-similar-systems-2026-05-01.md) — industry patterns (Temporal, Dagster, Bazel, Nix, dbt, jj).
+- Local SQLite precedents within this marketplace: `tech-radar/scripts/tech_radar/db.py` (`sqlite_utils` + WAL + FTS5 pattern), `swarm-do/py/swarm_do/telemetry/` (telemetry ledgers), `swarm-do/py/swarm_do/pipeline/mem_prime.py:6` (`import sqlite3`).

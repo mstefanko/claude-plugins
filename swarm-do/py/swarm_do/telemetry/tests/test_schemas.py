@@ -136,6 +136,10 @@ class ValidateRowTests(unittest.TestCase):
             "prepare_stale_rejected",
             "prepare_continue_failed",
             "prepare_dispatch_started",
+            "prepared_dispatch_refreshed",
+            "phase_session_reset",
+            "worktree_rebuilt",
+            "worktree_reset",
             "post_writer_report",
             "dogfood_check",
         ):

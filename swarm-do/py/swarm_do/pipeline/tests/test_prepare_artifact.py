@@ -42,7 +42,13 @@ from swarm_do.pipeline.prepare import (
     load_prepared_artifact,
     mark_ready_for_acceptance,
     reject_prepared,
+    verify_prepared_for_dispatch,
     write_prepared_artifact,
+)
+from swarm_do.pipeline.prepared_artifact_writer import (
+    PreparedArtifactWriter,
+    _dedupe_paths,
+    _replace_key_recursive,
 )
 
 
@@ -65,6 +71,21 @@ def _git_init_repo(repo_root: Path) -> str:
         cwd=str(repo_root), check=True, capture_output=True, text=True, env=env,
     )
     return out.stdout.strip()
+
+
+def _git_commit(repo_root: Path, paths: list[str], message: str) -> str:
+    env = {**os.environ, "GIT_AUTHOR_NAME": "T", "GIT_AUTHOR_EMAIL": "t@x",
+           "GIT_COMMITTER_NAME": "T", "GIT_COMMITTER_EMAIL": "t@x"}
+    subprocess.run(["git", "add", *paths], cwd=str(repo_root), check=True, env=env)
+    subprocess.run(["git", "commit", "-q", "-m", message], cwd=str(repo_root), check=True, env=env)
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=str(repo_root),
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    ).stdout.strip()
 
 
 def _make_repo(tmp_path: Path) -> tuple[Path, str, str, str]:
@@ -159,6 +180,22 @@ def _read_run_events(data_dir: Path) -> list[dict]:
         for line in path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
+
+
+def _replace_git_base(node: object, new_sha: str) -> int:
+    count = 0
+    if isinstance(node, dict):
+        for key, value in list(node.items()):
+            if key == "git_base_sha" and isinstance(value, str):
+                if value != new_sha:
+                    node[key] = new_sha
+                    count += 1
+            else:
+                count += _replace_git_base(value, new_sha)
+    elif isinstance(node, list):
+        for item in node:
+            count += _replace_git_base(item, new_sha)
+    return count
 
 
 def _assert_run_events_validate(test: unittest.TestCase, events: list[dict]) -> None:
@@ -688,6 +725,151 @@ class PrepareTelemetryEventTests(unittest.TestCase):
             ]
             self.assertEqual(len(stale_events), 1)
             self.assertIn("source_plan_sha", stale_events[0]["details"]["stale_reasons"])
+
+
+class PreparedArtifactWriterTests(unittest.TestCase):
+    def _prepared_run(self, td: Path) -> tuple[Path, Path, str]:
+        repo = td / "repo"
+        data = td / "data"
+        repo.mkdir()
+        data.mkdir()
+        _git_init_repo(repo)
+        (repo / ".gitignore").write_text("data/runs/\n", encoding="utf-8")
+        _git_commit(repo, [".gitignore"], "ignore run artifacts")
+        (repo / "README.md").write_text("# Test\n", encoding="utf-8")
+        (repo / "plan.md").write_text(
+            "### Phase 1: Docs (complexity: simple, kind: docs)\n\n"
+            "### File Targets\n\n"
+            "- `README.md`\n\n"
+            "### Acceptance Criteria\n\n"
+            "- README is updated.\n\n"
+            "### Verification Commands\n\n"
+            "```\ntrue\n```\n",
+            encoding="utf-8",
+        )
+        result = prepare.prepare_plan_run("plan.md", repo_root=repo, data_dir=data, run_id=RUN_ID)
+        self.assertEqual(result.status, STATUS_READY)
+        prepare.accept_prepared(RUN_ID, data_dir=data, repo_root=repo)
+        return repo, data, RUN_ID
+
+    def test_refresh_base_repairs_legacy_half_rewrite(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = self._prepared_run(Path(td))
+            (repo / "README.md").write_text("# Test\n\nupdated\n", encoding="utf-8")
+            head = _git_commit(repo, ["README.md"], "advance head")
+
+            artifact_path = data / "runs" / run_id / "prepared_plan.v1.json"
+            payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+            changed = _replace_git_base(payload, head)
+            self.assertGreater(changed, 0)
+            artifact_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "differing keys:.*git_base_sha") as raised:
+                verify_prepared_for_dispatch(run_id, data_dir=data, repo_root=repo)
+            self.assertIn("swarm prepare refresh-base", str(raised.exception))
+
+            result = PreparedArtifactWriter(data_dir=data, repo_root=repo).refresh_base(
+                run_id,
+                to_sha=head,
+                operator_id="test",
+            )
+
+            self.assertTrue(result.changed)
+            loaded = load_prepared_artifact(run_id, data_dir=data, repo_root=repo)
+            self.assertIsNone(check_stale(loaded, repo_root=repo))
+            verify_prepared_for_dispatch(run_id, data_dir=data, repo_root=repo)
+            events = _read_run_events(data)
+            self.assertIn("prepared_dispatch_refreshed", [event["event_type"] for event in events])
+            _assert_run_events_validate(self, events)
+
+    def test_refresh_base_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = self._prepared_run(Path(td))
+            head = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            writer = PreparedArtifactWriter(data_dir=data, repo_root=repo)
+
+            first = writer.refresh_base(run_id, to_sha=head)
+            second = writer.refresh_base(run_id, to_sha=head)
+
+            self.assertFalse(first.changed)
+            self.assertFalse(second.changed)
+
+    def test_prepare_cache_hit_restamps_git_base_sidecar(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = self._prepared_run(Path(td))
+            (repo / "README.md").write_text("# Test\n\nupdated\n", encoding="utf-8")
+            head = _git_commit(repo, ["README.md"], "advance head")
+
+            result = prepare.prepare_plan_run("plan.md", repo_root=repo, data_dir=data, run_id=run_id)
+
+            self.assertEqual(result.cache_hits, 1)
+            loaded = load_prepared_artifact(run_id, data_dir=data, repo_root=repo)
+            descriptor = next(iter(loaded["work_unit_artifacts"].values()))
+            sidecar_path = repo / descriptor["path"]
+            sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+            self.assertEqual(loaded["git_base_sha"], head)
+            self.assertEqual(descriptor["artifact"]["git_base_sha"], head)
+            self.assertEqual(sidecar["git_base_sha"], head)
+            self.assertEqual(descriptor["sha"], _sha256_file(sidecar_path))
+
+    def test_refresh_base_rolls_back_after_commit_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = self._prepared_run(Path(td))
+            (repo / "README.md").write_text("# Test\n\nupdated\n", encoding="utf-8")
+            head = _git_commit(repo, ["README.md"], "advance head")
+            artifact_path = data / "runs" / run_id / "prepared_plan.v1.json"
+            before_artifact = artifact_path.read_bytes()
+            payload = json.loads(before_artifact)
+            sidecar_path = repo / next(iter(payload["work_unit_artifacts"].values()))["path"]
+            before_sidecar = sidecar_path.read_bytes()
+
+            with self.assertRaisesRegex(OSError, "commit failure"):
+                PreparedArtifactWriter(data_dir=data, repo_root=repo).refresh_base(
+                    run_id,
+                    to_sha=head,
+                    fail_at="commit:1",
+                )
+
+            self.assertEqual(artifact_path.read_bytes(), before_artifact)
+            self.assertEqual(sidecar_path.read_bytes(), before_sidecar)
+
+    def test_resolve_target_sha_rejects_option_like_ref(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = self._prepared_run(Path(td))
+            artifact_path = data / "runs" / run_id / "prepared_plan.v1.json"
+            payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+            payload["git_base_ref"] = "--help"
+            artifact_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "option-like"):
+                PreparedArtifactWriter(data_dir=data, repo_root=repo).refresh_base(run_id)
+
+    def test_replace_key_recursive_has_depth_guard(self) -> None:
+        node: dict = {}
+        cursor = node
+        for _ in range(300):
+            child: dict = {}
+            cursor["child"] = child
+            cursor = child
+
+        with self.assertRaisesRegex(ValueError, "maximum JSON depth"):
+            _replace_key_recursive(node, key="git_base_sha", value="0" * 40)
+
+    def test_dedupe_paths_uses_existing_file_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            first = root / "first.json"
+            second = root / "second.json"
+            first.write_text("{}\n", encoding="utf-8")
+            os.link(first, second)
+
+            self.assertEqual(_dedupe_paths([first, second]), [first.resolve(strict=False)])
 
 
 class CliSubcommandTests(unittest.TestCase):

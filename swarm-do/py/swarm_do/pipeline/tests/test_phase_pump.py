@@ -60,6 +60,32 @@ class PhasePumpTests(unittest.TestCase):
             self.assertEqual(command["launcher"], "manual")
             self.assertEqual(command["prompt_delivery"], "manual")
 
+    def test_pump_stops_on_blocking_doctor_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            doctor = {
+                "run_id": run_id,
+                "status": "findings",
+                "finding_count": 1,
+                "findings": [
+                    {
+                        "id": "prepared_dispatch_sidecars",
+                        "severity": "error",
+                        "recommended_command": f"bin/swarm prepare refresh-base {run_id}",
+                    }
+                ],
+                "recommended_command": f"bin/swarm prepare refresh-base {run_id}",
+            }
+
+            with mock.patch("swarm_do.pipeline.phase_pump.run_phase_doctor", return_value=doctor):
+                result = pump_phases(run_id, launcher="fake-test", max_phases=1, data_dir=data)
+
+            self.assertEqual(result["status"], "preflight_failed")
+            self.assertEqual(result["doctor"], doctor)
+            status = phase_status(run_id, data_dir=data, repo_root=repo)
+            self.assertEqual(status["phases"][0]["status"], "pending")
+
     def test_claude_print_reports_ineligible_without_claiming_phase(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             repo, data, run_id = make_prepared_run(Path(td), phase_count=1)

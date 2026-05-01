@@ -641,6 +641,12 @@ def prepare_plan_run(
 
     from .decompose import synthesize_work_units
     from .plan import canonical_plan_text, lint_plan_text, new_run_id, parse_plan
+    from .prepared_artifact_writer import (
+        canonical_json_bytes,
+        prepared_plan_git_base_fields,
+        sha256_bytes,
+        stamp_work_unit_git_base,
+    )
     from .validation import schema_lint_work_units
 
     root = (Path(repo_root) if repo_root is not None else REPO_ROOT).resolve(strict=False)
@@ -745,25 +751,30 @@ def prepare_plan_run(
             except json.JSONDecodeError:
                 artifact = None
             if isinstance(artifact, dict):
+                stamp_work_unit_git_base(artifact, git_base_ref="HEAD", git_base_sha=git_base_sha)
                 lint = schema_lint_work_units(artifact, max_writer_tool_calls=40)
                 if not lint.errors:
+                    sidecar_bytes = canonical_json_bytes(artifact)
+                    if sidecar_abs.read_bytes() != sidecar_bytes:
+                        sidecar_abs.write_bytes(sidecar_bytes)
                     return phase_id, {
                         "path": str(sidecar_rel),
-                        "sha": _sha256_file(sidecar_abs),
+                        "sha": sha256_bytes(sidecar_bytes),
                         "artifact": artifact,
                     }, [], True
 
         artifact = synthesize_work_units(phase, plan_path=str(source_rel), bd_epic_id=bd_epic_id)
-        artifact["git_base_ref"] = "HEAD"
-        artifact["git_base_sha"] = git_base_sha
+        stamp_work_unit_git_base(artifact, git_base_ref="HEAD", git_base_sha=git_base_sha)
         lint = schema_lint_work_units(artifact, max_writer_tool_calls=40)
         errors = list(lint.errors)
+
+        sidecar_bytes = canonical_json_bytes(artifact)
         if write:
             sidecar_abs.parent.mkdir(parents=True, exist_ok=True)
-            sidecar_abs.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            sidecar_abs.write_bytes(sidecar_bytes)
             sidecar_sha = _sha256_file(sidecar_abs)
         else:
-            sidecar_sha = _sha256_bytes((json.dumps(artifact, sort_keys=True) + "\n").encode("utf-8"))
+            sidecar_sha = sha256_bytes(sidecar_bytes)
         return phase_id, {"path": str(sidecar_rel), "sha": sidecar_sha, "artifact": artifact}, errors, False
 
     work_unit_artifacts: dict[str, dict[str, Any]] = {}
@@ -809,8 +820,7 @@ def prepare_plan_run(
         "run_id": actual_run_id,
         "bd_epic_id": bd_epic_id,
         "repo_root": str(root.resolve(strict=False)),
-        "git_base_ref": "HEAD",
-        "git_base_sha": git_base_sha,
+        **prepared_plan_git_base_fields(git_base_ref="HEAD", git_base_sha=git_base_sha),
         "source_plan_path": str(source_rel),
         "source_plan_sha": source_sha,
         "prepared_plan_path": str(prepared_rel),
@@ -1280,10 +1290,7 @@ def _verify_dispatch_sidecars(
         artifact = _read_json_object(sidecar_path, label=f"work_unit_artifacts[{phase_id}]")
         embedded = descriptor.get("artifact")
         if embedded is not None and embedded != artifact:
-            raise ValueError(
-                f"prepared dispatch: work_unit_artifacts[{phase_id}].artifact "
-                "does not match sidecar"
-            )
+            raise ValueError(_artifact_sidecar_mismatch_message(phase_id, embedded, artifact))
         _validate_dispatch_work_units(
             artifact,
             repo_root=repo_root,
@@ -1295,6 +1302,52 @@ def _verify_dispatch_sidecars(
             "artifact": artifact,
         }
     return verified
+
+
+def _artifact_sidecar_mismatch_message(phase_id: str, embedded: Any, sidecar: Any) -> str:
+    differing = _differing_json_paths(embedded, sidecar)
+    keys = differing[:12]
+    lines = [
+        f"prepared dispatch: work_unit_artifacts[{phase_id}].artifact does not match sidecar",
+    ]
+    if keys:
+        lines.append(f"  differing keys: {keys}")
+    embedded_base = embedded.get("git_base_sha") if isinstance(embedded, Mapping) else None
+    sidecar_base = sidecar.get("git_base_sha") if isinstance(sidecar, Mapping) else None
+    if embedded_base != sidecar_base:
+        lines.append(f"  embedded.git_base_sha = {embedded_base!r}")
+        lines.append(f"  sidecar.git_base_sha = {sidecar_base!r}")
+    lines.append(f"  hint: run `swarm prepare refresh-base <run-id> --phase {phase_id}` to resync")
+    return "\n".join(lines)
+
+
+def _differing_json_paths(left: Any, right: Any, *, prefix: str = "") -> list[str]:
+    if type(left) is not type(right):
+        return [prefix or "$"]
+    if isinstance(left, Mapping) and isinstance(right, Mapping):
+        paths: list[str] = []
+        for key in sorted(set(left.keys()) | set(right.keys()), key=str):
+            child = f"{prefix}.{key}" if prefix else str(key)
+            if key not in left or key not in right:
+                paths.append(child)
+            else:
+                paths.extend(_differing_json_paths(left[key], right[key], prefix=child))
+            if len(paths) >= 12:
+                break
+        return paths
+    if isinstance(left, list) and isinstance(right, list):
+        paths = []
+        max_len = max(len(left), len(right))
+        for idx in range(max_len):
+            child = f"{prefix}[{idx}]" if prefix else f"[{idx}]"
+            if idx >= len(left) or idx >= len(right):
+                paths.append(child)
+            else:
+                paths.extend(_differing_json_paths(left[idx], right[idx], prefix=child))
+            if len(paths) >= 12:
+                break
+        return paths
+    return [] if left == right else [prefix or "$"]
 
 
 def _verify_hashed_sidecar(
@@ -1995,18 +2048,11 @@ class StaleReason:
 
 def _git_head_sha(repo_root: Path, ref: str) -> str | None:
     try:
-        result = subprocess.run(
-            ["git", "rev-parse", ref],
-            cwd=str(repo_root),
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-    except (FileNotFoundError, OSError):
+        from .prepared_artifact_writer import resolve_git_commit
+
+        return resolve_git_commit(repo_root, ref)
+    except (FileNotFoundError, OSError, ValueError):
         return None
-    if result.returncode != 0:
-        return None
-    return result.stdout.strip() or None
 
 
 def check_stale(

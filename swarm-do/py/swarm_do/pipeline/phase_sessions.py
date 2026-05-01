@@ -400,6 +400,46 @@ def read_phase_session_summary(run_id: str, *, data_dir: Path | None = None) -> 
     return phase_status(run_id, data_dir=data_dir)
 
 
+def reset_phase_session(
+    run_id: str,
+    phase_id: str,
+    *,
+    hard: bool = False,
+    data_dir: Path | None = None,
+) -> dict[str, Any]:
+    """Reset one phase to pending through the in-process state writer."""
+
+    base = data_dir or resolve_data_dir()
+    with locked_phase_sessions(run_id, data_dir=base):
+        state = load_phase_sessions(run_id, data_dir=base)
+        phase = _find_phase(state, phase_id)
+        before = _phase_summary(phase)
+        _reset_phase_to_pending(phase)
+        if hard:
+            _hard_reset_phase_to_pending(phase)
+        _touch_and_write(base, run_id, state)
+        _append_phase_event(
+            base,
+            run_id=run_id,
+            event_type="phase_session_reset",
+            phase=phase,
+            reason="hard_reset" if hard else "reset",
+            details={
+                "hard": hard,
+                "previous_status": (before or {}).get("status"),
+                "previous_attempt": (before or {}).get("attempt"),
+            },
+        )
+        return {
+            "run_id": run_id,
+            "phase_id": phase_id,
+            "hard": hard,
+            "before": before,
+            "phase": _phase_summary(phase),
+            "state_path": str(phase_session_path(run_id, data_dir=base)),
+        }
+
+
 def claim_next_phase(
     run_id: str,
     *,
@@ -1343,6 +1383,35 @@ def _reset_phase_to_pending(phase: dict[str, Any]) -> None:
     phase["evidence_path"] = None
 
 
+def _hard_reset_phase_to_pending(phase: dict[str, Any]) -> None:
+    clear_to_none = (
+        "child_pid",
+        "command_path",
+        "completed_at",
+        "expected_handoff_path",
+        "expected_result_path",
+        "handoff_path",
+        "last_failure_kind",
+        "last_launcher_error",
+        "launch_dir",
+        "launch_metadata_error",
+        "max_session_attempts",
+        "parent_pid",
+        "process_group_id",
+        "prompt_sha",
+        "recovery_context_path",
+        "result_path",
+        "retry_exhausted_at",
+        "session_name",
+        "started_at",
+    )
+    for key in clear_to_none:
+        if key in phase:
+            phase[key] = None
+    phase["attempt"] = 0
+    phase["attempt_history"] = []
+
+
 def _normalize_state(state: dict[str, Any]) -> None:
     retry_policy = state.get("retry_policy")
     state["retry_policy"] = _normalize_retry_policy(retry_policy)
@@ -2140,6 +2209,7 @@ __all__ = [
     "record_launch_metadata",
     "release_retry_waiting",
     "repair_active_phase_lease",
+    "reset_phase_session",
     "refresh_phase",
     "start_phase",
     "validate_phase_artifacts",

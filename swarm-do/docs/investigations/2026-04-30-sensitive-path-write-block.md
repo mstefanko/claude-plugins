@@ -304,7 +304,10 @@ Two commits landed: `3faaf44 Sensitive path` and `79b08e1 Fixing gaps`. Inspecti
 
 ## Round 2 re-pump evidence
 
-After resetting Phase 2 (`/tmp/reset-phase2.py`) and refreshing `git_base_sha` (`/tmp/refresh-git-base.py`), `phases pump` dispatched a fresh attempt. Result:
+After resetting Phase 2 and refreshing `git_base_sha` with the ad-hoc helpers
+that preceded the sanctioned recovery commands, `phases pump` dispatched a
+fresh attempt. New recoveries should use `bin/swarm phases reset --phase 2
+--hard` and `bin/swarm prepare refresh-base <run-id>` instead. Result:
 
 | Field | Value |
 |---|---|
@@ -450,11 +453,12 @@ If `probe.txt` lands → R2-1 alone solves it. If denied → check the model's B
 
 ## Helper artifacts created during the investigation
 
-These exist on disk and are useful for the next session:
+The recovery helpers from this investigation have been replaced by sanctioned
+commands:
 
-- `/tmp/reset-phase2.py` — resets Phase 2 of run `01KQF2CF61YV7SYVREEWRE4GFB` to dispatchable state. Backs up `phase_sessions.v1.json` to `phase_sessions.v1.json.bak-before-phase2-reset` first.
-- `/tmp/refresh-git-base.py` — updates all `git_base_sha` occurrences in the prepared plan to current HEAD. Backs up to `prepared_plan.v1.json.bak-before-git-base-refresh`. Use after committing fixes between attempts so the prepared plan's drift check passes.
-- `/tmp/swarm-perm-probe.sh`, `/tmp/swarm-perm-probe2.sh` — Round 1 sensitive-path probes (bypassPermissions / --dangerously-skip-permissions / --add-dir / cwd-via-symlink). Use these to re-confirm the underlying CLI behavior hasn't changed before assuming Round 1 conclusions still hold.
+- `bin/swarm phases reset 01KQF2CF61YV7SYVREEWRE4GFB --phase 2 --hard` resets Phase 2 to dispatchable state and records a `phase_session_reset` event.
+- `bin/swarm prepare refresh-base 01KQF2CF61YV7SYVREEWRE4GFB` refreshes the prepared base while keeping embedded work-unit artifacts, sidecars, and descriptor SHAs coherent.
+- `/tmp/swarm-perm-probe.sh`, `/tmp/swarm-perm-probe2.sh` remain probe-only references for Round 1 sensitive-path behavior (bypassPermissions / --dangerously-skip-permissions / --add-dir / cwd-via-symlink). Use these only to re-confirm the underlying CLI behavior; they are not recovery actions.
 
 ## Files / line numbers (Round 2 additions)
 
@@ -462,4 +466,3 @@ These exist on disk and are useful for the next session:
 - Subprocess invocation that needs the `PWD` env (R2-1 site): the `Popen`/`run` call in `phase_pump.py` after the argv assembly — find the spawn site near line 470+.
 - New failure_kind classifier (Round 1 fix shipped here): `swarm-do/py/swarm_do/pipeline/phase_recovery.py` — search for `writer_tool_denied_no_artifacts` to find both the emitter and the `_retry_stop_decision` mapping.
 - README leak surface: `swarm-do/README.md` ~line 700 (refers to `~/.claude/plugins/cache/.../swarmdaddy/`).
-
