@@ -163,6 +163,7 @@ Recovery should use this precedence for active phases with no valid artifacts:
 | --- | --- | --- |
 | Same host, child PID recorded, `_pid_alive(pid)` is `False` | `child_dead` | recover with `child_process_dead_no_artifacts` |
 | Same host, child alive, expected process group recorded and `_process_group_matches()` is `False` | `child_dead` | recover with `child_process_dead_no_artifacts` |
+| Same host, child alive, expected process group recorded and `_process_group_matches()` is `None` | `active_preserved_child_unknown` | preserve `active` |
 | Same host, child alive, no expected process group or process group matches | `active_preserved_child_alive` | preserve `active`, even if lease expired |
 | Same host, child liveness is `None`, lease unexpired | `active_preserved_child_unknown` | preserve `active` |
 | Same host, child liveness is `None`, lease expired | `lease_expired` | recover with `lease_expired_no_artifacts` |
@@ -173,6 +174,9 @@ Recovery should use this precedence for active phases with no valid artifacts:
 
 `None` from `_pid_alive()` or `_process_group_matches()` means inconclusive
 because of `PermissionError` or `OSError`; it is not proof of death.
+
+These action strings are recovery action details, not `failure_kind` values. Do
+not add them to `failure_taxonomy.py`.
 
 Do not add a new phase status. If implementation needs to record the
 expired-but-live case, use a run event detail and keep the phase status
@@ -237,6 +241,7 @@ expired-but-live case, use a run event detail and keep the phase status
    - `test_child_dead_partial_artifacts_uses_recovery_retry_or_gate`
    - `test_zero_returncode_no_artifacts_human_gates`
    - `test_expired_same_host_live_child_preserves_active`
+   - `test_same_host_live_child_unknown_process_group_preserves_active`
    - `test_expired_same_host_unknown_child_liveness_recovers_by_lease`
    - `test_expired_cross_host_active_lease_recovers_by_lease`
    - `test_unexpired_cross_host_active_lease_is_preserved`
@@ -246,13 +251,14 @@ expired-but-live case, use a run event detail and keep the phase status
    - `test_recovery_after_retry_decision_is_idempotent`
    - `test_recovery_after_artifact_adoption_is_idempotent`
 
-6. Tighten phase-status and resume output if needed.
+6. Keep read-only status and resume surfaces stable in P0.
 
-   - `phase_status()` should expose enough active-attempt liveness metadata for
-     operators to understand why recovery preserved active work.
-   - `resume.py` stays read-only but should include the existing recovery
-     command recommendation when a phase-session run is active, retry-waiting,
-     retry-exhausted, blocked, or drifted.
+   - Do not add new phase statuses.
+   - Do not mutate `resume.py` in P0.
+   - The liveness explanation lives in the `reconcile_phase_sessions()` action
+     payload under the frozen action strings above.
+   - Add operator-facing resume/status polish only in P1 if the P0 tests show
+     the existing surfaces are insufficient.
 
 7. Validate the matrix.
 
@@ -308,7 +314,10 @@ expired-but-live case, use a run event detail and keep the phase status
 
 2. Add support-bundle export if Candidate 2 needs it.
 
-   - Bundle manifest pointers, attempt evidence, recovery notes, and run events.
+   - Keep this out of Candidate 5 implementation. If support-bundle export
+     becomes necessary, implement it as a separate Candidate 2 follow-up.
+   - That follow-up should bundle manifest pointers, attempt evidence, recovery
+     notes, and run events.
    - Keep raw prompts, raw transcripts, and env values out unless an explicit
      local-only flag asks for them.
 
@@ -525,6 +534,9 @@ only after scope manifests and dirty-destination checks exist.
    - Use `git status --porcelain=v1 -z -- <path>` from the source git root and
      project-relative path. A non-empty result blocks that operation with
      `destination_dirty`.
+   - Use `git diff --name-only <base_sha> HEAD -- <path>` from the source git
+     root and project-relative path. A non-empty result blocks that operation
+     with `destination_changed_since_base`.
    - Also block when a delete operation targets a directory.
    - Include blocked destination paths in both JSON and text output.
    - Keep dry-run side-effect free.
@@ -610,6 +622,7 @@ only after scope manifests and dirty-destination checks exist.
    - `test_legacy_completed_manifest_migrates_to_complete_no_changes`
    - `test_cleanup_accepts_complete_no_changes_after_legacy_migration`
    - `test_adopt_apply_blocks_dirty_destination`
+   - `test_adopt_apply_blocks_destination_changed_since_base`
    - `test_adopt_apply_blocks_delete_directory_operation`
    - `test_adopt_dry_run_returns_scope_check_without_writing_manifest`
    - `test_adopt_apply_writes_scope_check_manifest`
@@ -687,7 +700,7 @@ only after scope manifests and dirty-destination checks exist.
 
 5. Add source adoption from integration.
 
-   - Copyback may remain the first source-adoption mechanism.
+   - Copyback remains the first source-adoption mechanism.
    - It must use the same dirty-destination guard as P0.
    - Later, a git merge into the user's source checkout can be offered only as a
      separate explicit command.
