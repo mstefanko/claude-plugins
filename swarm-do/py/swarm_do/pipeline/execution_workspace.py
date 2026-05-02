@@ -273,7 +273,7 @@ def _safe_launcher_workspace_base(data_dir: Path, *, sensitive_prefixes: tuple[s
             _assert_safe_launcher_parent(candidate, sensitive_prefixes=sensitive_prefixes)
         except ExecutionWorkspaceError:
             continue
-        return candidate
+        return candidate.expanduser().resolve(strict=False)
     raise ExecutionWorkspaceError("no non-sensitive launcher workspace directory is available")
 
 

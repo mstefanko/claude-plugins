@@ -7,10 +7,16 @@ import subprocess
 import tempfile
 import threading
 import time
+import unittest
 from pathlib import Path
 from unittest import mock
 
-import pytest
+try:
+    import pytest
+except ModuleNotFoundError as exc:
+    if exc.name == "pytest":
+        raise unittest.SkipTest("pytest required for pytest-style phase pump tests") from exc
+    raise
 
 from swarm_do.pipeline import phase_pump
 from swarm_do.pipeline.execution_workspace import is_sensitive_path

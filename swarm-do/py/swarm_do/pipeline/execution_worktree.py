@@ -2775,7 +2775,7 @@ def _safe_run_worktree_root(data_dir: Path, run_id: str, *, sensitive_prefixes: 
             _assert_not_sensitive(candidate, sensitive_prefixes=prefixes)
         except RunExecutionWorktreeError:
             continue
-        return candidate
+        return candidate.expanduser().resolve(strict=False)
     raise RunExecutionWorktreeError("no non-sensitive run execution worktree directory is available")
 
 
@@ -2788,7 +2788,7 @@ def _unique_paths(paths: Iterable[Path]) -> tuple[Path, ...]:
     seen: set[str] = set()
     out: list[Path] = []
     for path in paths:
-        key = str(Path(path).expanduser())
+        key = str(Path(path).expanduser().resolve(strict=False))
         if key in seen:
             continue
         seen.add(key)

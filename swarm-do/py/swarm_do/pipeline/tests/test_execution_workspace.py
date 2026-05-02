@@ -38,7 +38,7 @@ class ExecutionWorkspaceTests(unittest.TestCase):
 
             workspace = create_execution_workspace(repo, data_dir=data, sensitive_roots=[root / "home" / ".claude"])
 
-            expected = data / "launcher-workspaces" / repo_id_for_path(repo) / "repo"
+            expected = (data / "launcher-workspaces" / repo_id_for_path(repo)).resolve(strict=False) / "repo"
             self.assertEqual(workspace.mode, "safe-symlink")
             self.assertEqual(workspace.launcher_repo_root, expected)
             self.assertTrue(workspace.launcher_repo_root.is_symlink())
@@ -50,7 +50,7 @@ class ExecutionWorkspaceTests(unittest.TestCase):
             repo = root / "home" / ".claude" / "plugins" / "swarm-do"
             data = root / "data"
             repo.mkdir(parents=True)
-            symlink = data / "launcher-workspaces" / repo_id_for_path(repo) / "repo"
+            symlink = (data / "launcher-workspaces" / repo_id_for_path(repo) / "repo").resolve(strict=False)
             symlink.parent.mkdir(parents=True)
             symlink.symlink_to(repo, target_is_directory=True)
 
@@ -58,6 +58,24 @@ class ExecutionWorkspaceTests(unittest.TestCase):
 
             self.assertEqual(workspace.launcher_repo_root, symlink)
             self.assertEqual(workspace.mode, "safe-symlink")
+
+    def test_symlinked_data_dir_uses_canonical_launcher_spelling(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            real = root / "real"
+            alias = root / "alias"
+            real.mkdir()
+            alias.symlink_to(real, target_is_directory=True)
+            repo = real / "home" / ".claude" / "plugins" / "swarm-do"
+            data = alias / "data"
+            repo.mkdir(parents=True)
+            data.mkdir()
+
+            workspace = create_execution_workspace(repo, data_dir=data, sensitive_roots=[real / "home" / ".claude"])
+
+            self.assertEqual(workspace.mode, "safe-symlink")
+            self.assertTrue(str(workspace.launcher_repo_root).startswith(str((real / "data").resolve(strict=False))))
+            self.assertFalse(str(workspace.launcher_repo_root).startswith(str(data)))
 
     def test_existing_wrong_symlink_fails_loudly(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -106,7 +124,7 @@ class ExecutionWorkspaceTests(unittest.TestCase):
 
             self.assertEqual(workspace.mode, "safe-symlink")
             self.assertFalse(str(workspace.launcher_repo_root).startswith(str(data)))
-            self.assertTrue(str(workspace.launcher_repo_root).startswith(str(Path(td) / "xdg")))
+            self.assertTrue(str(workspace.launcher_repo_root).startswith(str((Path(td) / "xdg").resolve(strict=False))))
             self.assertEqual(workspace.launcher_repo_root.resolve(strict=False), repo.resolve(strict=False))
 
     def test_prompt_rewrite_and_assertion_for_option_b(self) -> None:

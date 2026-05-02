@@ -3,10 +3,16 @@ from __future__ import annotations
 import dataclasses
 import os
 import tempfile
+import unittest
 from pathlib import Path
 from unittest import mock
 
-import pytest
+try:
+    import pytest
+except ModuleNotFoundError as exc:
+    if exc.name == "pytest":
+        raise unittest.SkipTest("pytest required for pytest-style TUI tests") from exc
+    raise
 
 from swarm_do.tui import app as tui_app
 

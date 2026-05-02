@@ -3,13 +3,23 @@
 from __future__ import annotations
 
 import tempfile
+import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
+try:
+    import pytest
+except ModuleNotFoundError as exc:
+    if exc.name == "pytest":
+        raise unittest.SkipTest("pytest required for pytest-style property tests") from exc
+    raise
 
-hypothesis = pytest.importorskip("hypothesis")
-from hypothesis import HealthCheck, example, given, settings, strategies as st
+try:
+    from hypothesis import HealthCheck, example, given, settings, strategies as st
+except ModuleNotFoundError as exc:
+    if exc.name == "hypothesis":
+        raise unittest.SkipTest("hypothesis required for path-resolution property tests") from exc
+    raise
 
 from swarm_do.roles import cli as roles_cli
 

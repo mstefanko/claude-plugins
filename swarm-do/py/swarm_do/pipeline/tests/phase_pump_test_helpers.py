@@ -10,6 +10,8 @@ from pathlib import Path
 
 from swarm_do.pipeline.phase_sessions import phase_session_path
 
+# Shared pytest helpers only. Keep this filename free of the `test_` prefix.
+
 def _eligible_claude_report() -> dict:
     return {'launchers': [{'name': 'claude-print', 'eligible': True, 'hard_blockers': []}]}
 

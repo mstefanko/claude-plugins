@@ -4,6 +4,7 @@ import argparse
 import io
 import json
 import os
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -11,7 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from swarm_do.pipeline.cli import _build_parser, _phase_evidence_payload, cmd_phases, cmd_worktrees
+from swarm_do.pipeline.cli import _build_parser, _phase_evidence_payload, cmd_phases, cmd_test, cmd_worktrees
 from swarm_do.pipeline.operator_decisions import operator_decisions_path, record
 from swarm_do.pipeline.phase_pump import pump_phases
 from swarm_do.pipeline.phase_sessions import init_phase_sessions
@@ -209,6 +210,32 @@ class PhaseCliEvidenceTests(unittest.TestCase):
 
         self.assertEqual(invalid_code, 3)
         self.assertIn("unexpected property", invalid_payload["error"])
+
+
+class TestCommandRunnerTests(unittest.TestCase):
+    def _args(self, mode: str = "unit") -> argparse.Namespace:
+        return argparse.Namespace(mode=mode, k_expr=None, m_expr=None, coverage=False)
+
+    def test_pytest_runner_uses_current_python_and_keeps_literal_separator(self) -> None:
+        with mock.patch("importlib.util.find_spec", return_value=object()):
+            with mock.patch("subprocess.call", return_value=0) as call:
+                exit_code = cmd_test(self._args(), ["--", "-q", "--", "literal"])
+
+        self.assertEqual(exit_code, 0)
+        argv = call.call_args.args[0]
+        self.assertEqual(argv[:3], [sys.executable, "-m", "pytest"])
+        self.assertIn("-q", argv)
+        self.assertIn("--", argv)
+        self.assertEqual(argv[-2:], ["--", "literal"])
+
+    def test_pytest_runner_reports_install_hint_when_pytest_is_missing(self) -> None:
+        err = io.StringIO()
+
+        with mock.patch("importlib.util.find_spec", return_value=None), redirect_stderr(err):
+            exit_code = cmd_test(self._args(), [])
+
+        self.assertEqual(exit_code, 127)
+        self.assertIn("pip install -e '.[dev]'", err.getvalue())
 
 
 class WorktreeLegacyGuardTests(unittest.TestCase):

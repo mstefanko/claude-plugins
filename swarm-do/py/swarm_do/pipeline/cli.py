@@ -430,18 +430,28 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 def cmd_test(args: argparse.Namespace, extras: list[str]) -> int:
     """Dispatch to pytest and/or the bats shell layer."""
+    import importlib.util
     import subprocess
 
     repo_root = REPO_ROOT
-    passthrough = [item for item in extras if item != "--"]
+    passthrough = list(extras)
+    if passthrough[:1] == ["--"]:
+        passthrough = passthrough[1:]
     explicit_k = ["-k", args.k_expr] if args.k_expr else []
     explicit_m = ["-m", args.m_expr] if args.m_expr else []
     coverage_args = ["--cov=swarm_do", "--cov-report=term-missing"] if args.coverage else []
 
     def _run_pytest(default_marker: list[str]) -> int:
+        if importlib.util.find_spec("pytest") is None:
+            print(
+                "swarm test: `pytest` is not available for "
+                f"{sys.executable} (install with `{sys.executable} -m pip install -e '.[dev]'`)",
+                file=sys.stderr,
+            )
+            return 127
         marker = explicit_m if explicit_m else default_marker
         return subprocess.call(
-            ["pytest", *marker, *explicit_k, *coverage_args, *passthrough],
+            [sys.executable, "-m", "pytest", *marker, *explicit_k, *coverage_args, *passthrough],
             cwd=repo_root,
         )
 
@@ -452,7 +462,7 @@ def cmd_test(args: argparse.Namespace, extras: list[str]) -> int:
                 targets.append(str(path))
         targets.extend(str(path) for path in sorted((repo_root / "bin" / "_lib").glob("*.sh")))
         targets.extend(str(path) for path in sorted((repo_root / "hooks").glob("*.sh")))
-        return targets
+        return sorted(targets)
 
     def _run_shell() -> int:
         bats_dir = repo_root / "tests" / "shell"
