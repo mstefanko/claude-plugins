@@ -15,6 +15,19 @@ from .paths import resolve_data_dir
 SCHEMA_VERSION = 1
 
 
+class JsonRunEventSink:
+    """Path-bound adapter over the existing run-event owner functions."""
+
+    def __init__(self, *, data_dir: str | os.PathLike[str] | None = None) -> None:
+        self.data_dir = Path(data_dir) if data_dir is not None else resolve_data_dir()
+
+    def append(self, row: Mapping[str, Any]) -> Path:
+        return append_run_event(self.data_dir, row)
+
+    def validate(self, row: Mapping[str, Any]) -> None:
+        validate_run_event(row)
+
+
 def utc_now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 

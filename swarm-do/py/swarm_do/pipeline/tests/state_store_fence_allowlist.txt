@@ -1,0 +1,9 @@
+# path | protected filenames | justification
+py/swarm_do/pipeline/execution_worktree.py | manifest.json | owns run execution worktree manifests under data/worktrees/<run-id>/
+py/swarm_do/pipeline/phase_decisions.py | shared_decisions.v1.json | owns schema-versioned shared phase decisions
+py/swarm_do/pipeline/phase_evidence.py | evidence.json | owns schema-versioned per-attempt evidence manifests
+py/swarm_do/pipeline/phase_sessions.py | phase_sessions.v1.json | owns phase-session state and lock-coordinated mutation
+py/swarm_do/pipeline/prepare.py | prepared_plan.v1.json | owns initial prepared artifact creation and acceptance
+py/swarm_do/pipeline/prepared_artifact_writer.py | prepared_plan.v1.json | owns coordinated prepared artifact refresh mutations
+py/swarm_do/pipeline/run_state.py | active-run.json, run_events.jsonl | owns active run records and run-event appends
+py/swarm_do/pipeline/stage_sessions.py | stage_sessions.v1.json | owns stage-session state and lock-coordinated mutation

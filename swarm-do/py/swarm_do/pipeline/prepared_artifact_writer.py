@@ -22,30 +22,15 @@ import subprocess
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Protocol
+from typing import Any, Mapping
 
 from .paths import resolve_data_dir
 from .run_state import append_run_event, utc_now, validate_run_event
+from .state_store import RunStateStore, RunStateTxn
 
 
 _GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _MAX_REPLACE_DEPTH = 256
-
-
-class RunStateTxn(Protocol):
-    """Minimal transaction shape for future state-store backends."""
-
-    def __enter__(self) -> "RunStateTxn": ...
-
-    def __exit__(self, exc_type: object, exc: object, tb: object) -> bool | None: ...
-
-
-class RunStateStore(Protocol):
-    """Storage seam for run-state mutation backends."""
-
-    def load(self, run_id: str) -> dict[str, Any]: ...
-
-    def begin(self) -> AbstractContextManager[RunStateTxn]: ...
 
 
 @dataclass(frozen=True)
