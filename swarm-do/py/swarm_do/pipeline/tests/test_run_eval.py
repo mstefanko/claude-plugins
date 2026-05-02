@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import unittest
+import argparse
+import io
+from contextlib import redirect_stderr
 
+from swarm_do.pipeline.cli import cmd_eval
 from swarm_do.pipeline.paths import REPO_ROOT
 from swarm_do.pipeline.run_eval import EvalMismatch, first_mismatch, run_fixtures
 from swarm_do.pipeline.run_trace import build_trace_from_run_dir
@@ -24,6 +28,8 @@ class RunEvalTests(unittest.TestCase):
                 "needs-input",
                 "provider-review-partial-success",
                 "retryable-failure-then-success",
+                "streaming-legacy-fallback",
+                "streaming-malformed-raw",
                 "streaming-stage-adoption",
                 "worktree-drift",
             ],
@@ -55,6 +61,21 @@ class RunEvalTests(unittest.TestCase):
         self.assertEqual(mismatch.kind, "missing_required_artifact")
         self.assertEqual(mismatch.expected, "missing.json")
         self.assertEqual(mismatch.path, "missing.json")
+
+    def test_include_trace_requires_json(self) -> None:
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            code = cmd_eval(
+                argparse.Namespace(
+                    eval_command="run",
+                    fixture_dir=str(FIXTURES / "clean-single-phase"),
+                    json=False,
+                    include_trace=True,
+                )
+            )
+
+        self.assertEqual(code, 2)
+        self.assertIn("--include-trace requires --json", stderr.getvalue())
 
 
 if __name__ == "__main__":

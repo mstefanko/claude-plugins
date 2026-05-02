@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import json
+import argparse
+import io
+import tempfile
 import unittest
+from contextlib import redirect_stderr
 
+from swarm_do.pipeline.cli import cmd_trace
 from swarm_do.pipeline.paths import REPO_ROOT
 from swarm_do.pipeline.run_trace import build_trace_from_run_dir, trace_to_json
 
@@ -85,6 +90,23 @@ class RunTraceTests(unittest.TestCase):
         self.assertEqual(controller["pending_marker_count"], 0)
         self.assertEqual(controller["duplicate_marker_count"], 1)
         self.assertEqual(controller["ignored_frame_types"], {})
+
+    def test_trace_cli_returns_three_for_missing_run(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                code = cmd_trace(
+                    argparse.Namespace(
+                        trace_command="build",
+                        run_id="01J00000000000000000009999",
+                        data_dir=td,
+                        out=None,
+                        json=True,
+                    )
+                )
+
+        self.assertEqual(code, 3)
+        self.assertIn("run directory not found", stderr.getvalue())
 
 
 if __name__ == "__main__":

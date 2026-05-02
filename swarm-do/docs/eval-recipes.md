@@ -40,7 +40,8 @@ Create a directory under `tests/fixtures/run-traces/<name>/`:
 Use `required_artifacts` for hard presence checks, `expected_warnings` for
 intentional malformed artifacts, and `forbidden_warnings` for warnings that
 must never appear. Assertions may check `stage_controller.*` counters from
-`command.json`, but should not check launcher argv details.
+`command.json` and the streaming fallback/parse metadata in `stream_metadata`,
+but should not check launcher argv details.
 
 ### Dogfooding Against A Real Run
 

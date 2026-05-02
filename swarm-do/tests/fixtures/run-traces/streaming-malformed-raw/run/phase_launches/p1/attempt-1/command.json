@@ -1,0 +1,25 @@
+{
+  "launcher": "claude-print",
+  "output_format": "stream-json",
+  "stage_controller": {
+    "live": true,
+    "completed": false,
+    "pending_marker_count": 0,
+    "duplicate_marker_count": 0,
+    "amended_count": 0,
+    "rejected_marker_count": 0,
+    "rejected_unknown_stage": 0,
+    "rejected_invalid_path": 0,
+    "rejected_invalid_result": 0
+  },
+  "stream_metadata": {
+    "frames_seen": 101,
+    "parse_error_count": 51,
+    "first_parse_error": "Expecting value: line 1 column 1 (char 0)",
+    "final_result_seen": false,
+    "ignored_frame_types": {},
+    "fallback": "raw",
+    "systemic_parse_error": true,
+    "truncated_at_bytes": null
+  }
+}

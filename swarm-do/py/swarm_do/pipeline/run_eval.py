@@ -141,6 +141,8 @@ def first_mismatch(trace: RunTrace, expectation: Mapping[str, Any]) -> EvalMisma
                 return EvalMismatch("attempt_field_mismatch", expected[field], getattr(actual, field), f"attempts.{key[0]}.{key[1]}.{field}")
         if "stage_controller" in expected and actual.stage_controller != expected["stage_controller"]:
             return EvalMismatch("stage_controller_mismatch", expected["stage_controller"], actual.stage_controller, f"attempts.{key[0]}.{key[1]}.stage_controller")
+        if "stream_metadata" in expected and actual.stream_metadata != expected["stream_metadata"]:
+            return EvalMismatch("stream_metadata_mismatch", expected["stream_metadata"], actual.stream_metadata, f"attempts.{key[0]}.{key[1]}.stream_metadata")
 
     provider_count = expectation.get("expected_provider_reviews")
     if isinstance(provider_count, int) and len(trace.provider_reviews) != provider_count:

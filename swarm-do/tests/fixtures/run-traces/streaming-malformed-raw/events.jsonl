@@ -1,0 +1,2 @@
+{"run_id":"01J00000000000000000000007","event_type":"phase_session_started","phase_id":"p1","timestamp":"2026-05-02T00:01:00Z"}
+{"run_id":"01J00000000000000000000007","event_type":"phase_session_failed","phase_id":"p1","timestamp":"2026-05-02T00:02:00Z"}

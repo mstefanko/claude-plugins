@@ -1,0 +1,1 @@
+{"schema_version":1,"launcher":"claude-print","metrics":{"input_tokens":3,"output_tokens":0,"total_cost_usd":0.01},"failure":{"failure_kind":"stream_raw_fallback","retry_decision":"retry"},"artifacts":{"changed_files":[]}}

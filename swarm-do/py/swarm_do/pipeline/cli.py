@@ -437,7 +437,10 @@ def cmd_trace(args: argparse.Namespace) -> int:
     data_dir = Path(args.data_dir) if args.data_dir else None
     try:
         trace = build_run_trace(args.run_id, data_dir=data_dir)
-    except Exception as exc:
+    except FileNotFoundError as exc:
+        print(f"swarm: trace build: {exc}", file=sys.stderr)
+        return 3
+    except ValueError as exc:
         print(f"swarm: trace build: {exc}", file=sys.stderr)
         return 2
     payload = trace_to_json(trace)
@@ -468,6 +471,9 @@ def cmd_eval(args: argparse.Namespace) -> int:
     from .run_trace import build_trace_from_run_dir
 
     if args.eval_command == "run":
+        if args.include_trace and not args.json:
+            print("swarm eval: --include-trace requires --json", file=sys.stderr)
+            return 2
         try:
             result = run_fixtures(Path(args.fixture_dir), include_trace=bool(args.json and args.include_trace))
         except FileNotFoundError as exc:
@@ -3082,7 +3088,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p = eval_sub.add_parser("run")
     p.add_argument("fixture_dir")
     p.add_argument("--json", action="store_true")
-    p.add_argument("--include-trace", action="store_true")
+    p.add_argument("--include-trace", action="store_true", help="include full trace payloads in --json output")
     p.add_argument("--use-mirror", action="store_true")
     p.set_defaults(func=cmd_eval)
     p = eval_sub.add_parser("record")

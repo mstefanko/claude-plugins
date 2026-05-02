@@ -8,6 +8,7 @@ from swarm_do.pipeline.paths import REPO_ROOT
 
 
 MODULES = [
+    REPO_ROOT / "py" / "swarm_do" / "pipeline" / "policies.py",
     REPO_ROOT / "py" / "swarm_do" / "pipeline" / "run_trace.py",
     REPO_ROOT / "py" / "swarm_do" / "pipeline" / "run_eval.py",
 ]

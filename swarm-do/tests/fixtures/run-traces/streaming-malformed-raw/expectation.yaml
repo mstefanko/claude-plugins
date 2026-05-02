@@ -1,0 +1,26 @@
+schema_version: 1
+run_id: 01J00000000000000000000007
+required_artifacts:
+  - prepared_plan.v1.json
+  - phase_sessions.v1.json
+  - phase_launches/p1/attempt-1/command.json
+expected_phase_transitions:
+  - phase_id: p1
+    statuses: [pending, running, failed]
+expected_attempts:
+  - phase_id: p1
+    attempt_number: 1
+    failure_kind: stream_raw_fallback
+    retry_decision: retry
+    stream_metadata:
+      frames_seen: 101
+      parse_error_count: 51
+      first_parse_error: "Expecting value: line 1 column 1 (char 0)"
+      final_result_seen: false
+      ignored_frame_types: {}
+      fallback: raw
+      systemic_parse_error: true
+      truncated_at_bytes: null
+expected_warnings: []
+forbidden_warnings: [malformed_result]
+unrecognized_artifacts_allowed: false
