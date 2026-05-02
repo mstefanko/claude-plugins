@@ -870,12 +870,28 @@ generated from `role-specs/`; edit specs, then run
 
 ## Testing
 
-The current Python suite uses `unittest` and covers graph validation,
-preset persistence, telemetry parity and golden files, role
-generation, work-unit execution helpers, worktrees, provider doctoring, resume
-state, and TUI state helpers.
+`pytest` is the canonical dev runner. The existing `unittest.TestCase` tests
+remain supported and are collected by pytest; new tests should use pytest-style
+functions and fixtures.
 
-Run the full suite from the repo root:
+Run the suite from the repo root:
+
+```bash
+bin/swarm test unit
+bin/swarm test tui
+bin/swarm test shell
+bin/swarm test all
+```
+
+Selection and coverage:
+
+```bash
+bin/swarm test -k path_resolution
+bin/swarm test --coverage unit
+bin/swarm test unit -- -x --pdb
+```
+
+Legacy fallback during the migration:
 
 ```bash
 PYTHONPATH=py python3 -m unittest discover -s py -p 'test_*.py'
@@ -889,12 +905,10 @@ PYTHONPATH=py python3 -m swarm_do.telemetry.gen readme-section --check
 PYTHONPATH=py python3 -m swarm_do.telemetry.gen docs --check
 ```
 
-The current recommendation is not a wholesale pytest migration. Keep
-`unittest` as the baseline until a dev dependency story is added, then adopt
-pytest incrementally for the places where it buys real coverage: CLI scenario
-fixtures, Textual async interaction tests, shell wrapper smoke tests, coverage
-reporting, and property tests for parsers. See `docs/testing-strategy.md` for
-the assessment and proposed refactor path.
+Install dev extras with `python3 -m pip install -e '.[dev]'`; install
+Hypothesis properties with `python3 -m pip install -e '.[hypothesis]'`.
+Shell tests need `brew install bats-core shellcheck` on macOS. See
+`docs/testing-strategy.md` for the migration policy.
 
 ## Development Notes
 

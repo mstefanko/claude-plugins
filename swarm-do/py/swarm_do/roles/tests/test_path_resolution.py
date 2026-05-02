@@ -28,14 +28,14 @@ class FindRoleSpecsDirTests(unittest.TestCase):
             inner.mkdir(parents=True)
             with patch.object(Path, "cwd", return_value=inner):
                 resolved = roles_cli._find_role_specs_dir()
-            self.assertEqual(resolved, repo / "swarm-do" / "role-specs")
+            self.assertEqual(resolved, (repo / "swarm-do" / "role-specs").resolve())
 
     def test_cwd_walk_resolves_when_cwd_is_repo_root(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             repo = self._make_repo(Path(td))
             with patch.object(Path, "cwd", return_value=repo):
                 resolved = roles_cli._find_role_specs_dir()
-            self.assertEqual(resolved, repo / "swarm-do" / "role-specs")
+            self.assertEqual(resolved, (repo / "swarm-do" / "role-specs").resolve())
 
     def test_file_walk_fallback_when_cwd_unrelated(self) -> None:
         # Point CWD somewhere with no role-specs anywhere up the tree, then
@@ -53,7 +53,7 @@ class FindRoleSpecsDirTests(unittest.TestCase):
             repo = self._make_repo(Path(td))
             with patch.object(Path, "cwd", return_value=repo):
                 resolved = roles_cli._find_repo_root()
-            self.assertEqual(resolved, repo)
+            self.assertEqual(resolved, repo.resolve())
 
 
 if __name__ == "__main__":

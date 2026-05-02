@@ -19,7 +19,9 @@ Source of truth: `.claude-plugin/marketplace.json`.
 - **swarmdaddy work** → `swarm-do/README.md` (architecture, pipelines, presets, Phase-0, agents)
 - **CLI** → `swarm-do/bin/swarm` (canonical from a shell)
 - **Python package** → `swarm-do/py/swarm_do/`
-- **Tests** → from `swarm-do/`: `PYTHONPATH=py python3 -m unittest ...`
+- **Tests** → from `swarm-do/`: `bin/swarm test unit` (canonical after pytest bootstrap); legacy fallback `PYTHONPATH=py python3 -m unittest discover -s py -p 'test_*.py'` stays supported during migration.
+- **New swarmdaddy tests** → pytest-style functions/fixtures; leave existing `unittest.TestCase` files alone unless the file is already being materially rewritten.
+- **Shell wrappers** → `bin/swarm test shell` after `bats-core` and `shellcheck` are installed.
 
 ## Non-plugin directories
 

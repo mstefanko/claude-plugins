@@ -428,6 +428,73 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_test(args: argparse.Namespace, extras: list[str]) -> int:
+    """Dispatch to pytest and/or the bats shell layer."""
+    import subprocess
+
+    repo_root = REPO_ROOT
+    passthrough = [item for item in extras if item != "--"]
+    explicit_k = ["-k", args.k_expr] if args.k_expr else []
+    explicit_m = ["-m", args.m_expr] if args.m_expr else []
+    coverage_args = ["--cov=swarm_do", "--cov-report=term-missing"] if args.coverage else []
+
+    def _run_pytest(default_marker: list[str]) -> int:
+        marker = explicit_m if explicit_m else default_marker
+        return subprocess.call(
+            ["pytest", *marker, *explicit_k, *coverage_args, *passthrough],
+            cwd=repo_root,
+        )
+
+    def _shellcheck_targets() -> list[str]:
+        targets: list[str] = []
+        for path in sorted((repo_root / "bin").iterdir()):
+            if path.is_file():
+                targets.append(str(path))
+        targets.extend(str(path) for path in sorted((repo_root / "bin" / "_lib").glob("*.sh")))
+        targets.extend(str(path) for path in sorted((repo_root / "hooks").glob("*.sh")))
+        return targets
+
+    def _run_shell() -> int:
+        bats_dir = repo_root / "tests" / "shell"
+        if not bats_dir.is_dir():
+            print("swarm test shell: no shell tests yet (Phase 3 not done)", file=sys.stderr)
+            return 0
+        if not shutil.which("shellcheck"):
+            print(
+                "swarm test shell: `shellcheck` not found on PATH "
+                "(install with `brew install shellcheck`)",
+                file=sys.stderr,
+            )
+            return 127
+        if not shutil.which("bats"):
+            print(
+                "swarm test shell: `bats` not found on PATH "
+                "(install with `brew install bats-core`)",
+                file=sys.stderr,
+            )
+            return 127
+        rc_sc = subprocess.call(
+            ["shellcheck", "--severity=warning", "-e", "SC1090,SC1091", *_shellcheck_targets()],
+            cwd=repo_root,
+        )
+        rc_bats = subprocess.call(["bats", "-r", str(bats_dir)], cwd=repo_root)
+        return rc_sc or rc_bats
+
+    mode = args.mode or "all"
+    if mode == "unit":
+        return _run_pytest(["-m", "unit or not (tui or shell or live_provider or slow)"])
+    if mode == "tui":
+        return _run_pytest(["-m", "tui"])
+    if mode == "shell":
+        return _run_shell()
+    if mode == "all":
+        rc_py = _run_pytest([])
+        rc_sh = _run_shell()
+        return rc_py or rc_sh
+    print(f"swarm test: unknown mode {mode!r}", file=sys.stderr)
+    return 2
+
+
 def cmd_trace(args: argparse.Namespace) -> int:
     from .run_trace import build_run_trace, trace_to_dict, trace_to_json
 
@@ -3182,6 +3249,20 @@ def _build_parser() -> argparse.ArgumentParser:
     status = sub.add_parser("status")
     status.set_defaults(func=cmd_status)
 
+    test = sub.add_parser(
+        "test",
+        help="run the swarm-do test suites",
+        description=(
+            "Run pytest and/or the bats shell layer. Use `-k`/`-m` for selection, "
+            "or place raw pytest args after `--`."
+        ),
+    )
+    test.add_argument("mode", nargs="?", choices=["unit", "tui", "shell", "all"], default=None)
+    test.add_argument("--coverage", action="store_true", help="enable coverage measurement (needs dev extras)")
+    test.add_argument("-k", dest="k_expr", default=None, help="pytest -k expression")
+    test.add_argument("-m", dest="m_expr", default=None, help="pytest -m expression (overrides default mode marker)")
+    test.set_defaults(func=cmd_test)
+
     trace = sub.add_parser("trace")
     trace_sub = trace.add_subparsers(dest="trace_command")
     p = trace_sub.add_parser("build")
@@ -3749,11 +3830,15 @@ def _json_arg_list(values: list[str] | tuple[str, ...]) -> list[dict[str, Any]]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
-    args = parser.parse_args(argv)
+    args, extras = parser.parse_known_args(argv)
     if not hasattr(args, "func"):
         parser.print_help()
-        return 0
+        return 2
     resolve_data_dir().mkdir(parents=True, exist_ok=True)
+    if args.func is cmd_test:
+        return args.func(args, extras)
+    if extras:
+        parser.error(f"unrecognized arguments: {' '.join(extras)}")
     return args.func(args)
 
 

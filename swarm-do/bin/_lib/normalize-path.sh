@@ -69,6 +69,9 @@ _resolved=""
 if command -v realpath >/dev/null 2>&1; then
   _resolved="$(realpath -m "$_raw" 2>/dev/null || true)"
 fi
+if [[ -z "$_resolved" && -e "$_raw" ]] && command -v python3 >/dev/null 2>&1; then
+  _resolved="$(python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve(strict=False))' "$_raw" 2>/dev/null || true)"
+fi
 if [[ -z "$_resolved" ]]; then
   # Fallback: readlink -f requires the path to exist; use raw if it doesn't.
   _resolved="$(readlink -f "$_raw" 2>/dev/null || echo "$_raw")"
@@ -79,6 +82,9 @@ fi
 # ---------------------------------------------------------------------------
 if [[ -n "${WORKTREE_ROOT:-}" ]]; then
   _wt="${WORKTREE_ROOT%/}"
+  if [[ -e "$_wt" ]] && command -v python3 >/dev/null 2>&1; then
+    _wt="$(python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve(strict=False))' "$_wt" 2>/dev/null || printf '%s' "$_wt")"
+  fi
   if [[ "$_resolved" == "${_wt}/"* ]]; then
     _rel="${_resolved#"${_wt}/"}"
     printf '%s\n' "${_rel#/}"

@@ -1,145 +1,102 @@
 # Testing Strategy
 
-This note answers the current testing question for `swarm-do`: whether the
-suite needs pytest or a larger refactor, what it already catches, and where it
-will miss bugs that users would hit in normal operation.
+This note describes the accepted testing direction for `swarm-do` after the
+pytest adoption work in `../plans/pytest-adoption-plan.md`.
 
 ## Current Inventory
 
-- Test runner: `unittest`.
-- Passing baseline checked on 2026-04-25:
-  `python3 -m unittest discover -s py -p 'test_*.py'` ran 301 tests with 1
-  skipped test.
-- Test files: 44 `test_*.py` files under `py/swarm_do/**/tests/`.
-- Approximate test code size: 6,141 lines including shared helpers.
+- Test runner: `pytest` is the canonical dev runner; the existing
+  `unittest.TestCase` suite is still supported and collected by pytest.
+- Current Python inventory after pytest adoption: 1,011 tests across 108
+  `test_*.py` files under `py/swarm_do/**/tests/`, with about 23,758 lines of
+  test code including shared helpers.
+- Legacy fallback:
+  `PYTHONPATH=py python3 -m unittest discover -s py -p 'test_*.py'` remains
+  supported during migration for the files that still use `unittest`.
 - Main covered areas: pipeline schemas/invariants, preset and pipeline
   persistence, CLI command functions, role generation, telemetry golden/parity
   behavior, extractor hashing/parsing, work-unit scheduling, worktree helpers,
-  provider doctoring, resume/run-state, permissions, and TUI state helpers.
-- Not present today: `pytest` config, `pyproject.toml`, coverage config,
-  shell-test harness, ShellCheck gate, Bats tests, Textual `run_test()`/Pilot
-  interaction tests, or a single repo-level smoke command.
+  provider doctoring, resume/run-state, permissions, TUI state helpers, TUI
+  app interaction tests, phase-pump orchestration, path canonicalization, and
+  shell wrapper smoke coverage.
 
-## What Is Working
+## Canonical Commands
 
-The current suite is better than a token unit-test layer. It exercises real
-user-facing contracts in several places:
+From `swarm-do/`:
 
-- Preset and pipeline operations use temporary `${CLAUDE_PLUGIN_DATA}` roots,
-  write actual TOML/YAML files, reload them, and reject invalid saves.
-- Telemetry tests compare command output to golden fixtures and validate schema
-  behavior against realistic ledger directories.
-- Pipeline validation covers stage graph ordering, fan-out semantics, prompt
-  variant/lens rules, MCO provider constraints, backend route invariants, and
-  preview-only activation guards.
-- Worktree tests shell out to `git` in temporary repositories, so branch and
-  merge helpers are not purely mocked.
-- TUI state tests cover the model layer without requiring Textual, which keeps
-  most status, preset, pipeline, and provider preview logic cheap to test.
-- Generator tests guard README and telemetry docs sections against drift.
+```bash
+bin/swarm test unit
+bin/swarm test tui
+bin/swarm test shell
+bin/swarm test all
+```
 
-This suite should catch many refactor regressions in deterministic Python
-helpers, especially around schemas, routing, persistence, and telemetry.
+Useful selection and reporting forms:
 
-## Gaps That Matter
+```bash
+bin/swarm test -k path_resolution
+bin/swarm test -m tui
+bin/swarm test --coverage unit
+bin/swarm test unit -- -x --pdb
+```
 
-- There is no top-level command that a maintainer can run to mean "the plugin
-  is healthy." Different entrypoints test different subsets.
-- Slash-command behavior is mostly documented prompt protocol; the executable
-  coverage stops at deterministic helper functions and command files.
-- Shell wrappers in `bin/` are only lightly exercised through Python parity
-  tests and ad hoc `--test` flags. There are no Bats tests with stubbed `bd`,
-  `claude`, `codex`, or `mco` commands.
-- No ShellCheck gate exists for the bash-heavy wrapper layer.
-- The Textual app itself is not driven headlessly. State helpers are covered,
-  but keyboard flows, screen transitions, save/discard interactions, and visual
-  regressions are not.
-- No coverage report exists, so we do not know which modules are dark. This is
-  especially relevant for `py/swarm_do/tui/app.py`, shell-adjacent paths, and
-  error branches.
-- Parser-heavy code such as simple YAML, plan inspection, work-unit linting,
-  and path normalization would benefit from property-style or larger corpus
-  tests.
-- The full suite currently emits noisy expected-drift output and Python 3.13
-  `ResourceWarning` messages about unclosed sqlite connections. The suite still
-  passes, but noisy green runs make real failures easier to miss.
+Coverage is report-only. There is no fail-under threshold in this phase.
 
-## Do We Need pytest?
+## Local Setup
 
-Not as an immediate wholesale migration. The existing `unittest` suite passes,
-is discoverable with the standard library, and already covers a lot of real
-contracts.
+Python dev dependencies:
 
-We should add pytest as a dev-only runner when we start the next test refactor.
-The reason is practical, not fashionable: pytest can run existing
-`unittest.TestCase` tests during a gradual migration, and its fixtures,
-`tmp_path`, `monkeypatch`, output capture, parametrization, and plugin ecosystem
-fit the missing coverage areas. Textual's official testing guide also uses
-pytest plus `pytest-asyncio` for headless app interaction tests.
+```bash
+python3 -m pip install -e '.[dev]'
+python3 -m pip install -e '.[hypothesis]'
+```
 
-The right move is incremental:
+Shell test dependencies on macOS:
 
-1. Keep all current `unittest` tests green.
-2. Add dev test tooling without making plugin runtime depend on it.
-3. Write new scenario, shell, and Textual interaction tests in pytest style.
-4. Convert old tests only when they are being touched for real reasons.
+```bash
+brew install bats-core shellcheck
+```
 
-## Recommended Refactor Path
+If Homebrew is unavailable, install `bats-core` manually:
 
-1. Add a dev test command.
-   A small `scripts/test.sh` or `bin/swarm-selftest` should run the full Python
-   suite, generator drift checks, key CLI dry-runs, and optional shell checks.
+```bash
+git clone https://github.com/bats-core/bats-core.git /tmp/bats
+/tmp/bats/install.sh ~/.local
+```
 
-2. Add dev dependencies.
-   A minimal dev set would be `pytest`, `pytest-asyncio`, `coverage`, and
-   `ruff`. Add `hypothesis` only for parser/path invariants, not by default.
+## Migration Policy
 
-3. Add coverage reporting.
-   Start with report-only branch coverage. Do not gate on a percentage until
-   the current blind spots are intentionally triaged.
+Pytest is the runner, not a mandate to rewrite the suite. New tests should use
+pytest-style functions and fixtures. Existing `unittest.TestCase` files should
+stay as-is unless the file is already being materially rewritten and pytest
+removes real ceremony.
 
-4. Add shell coverage.
-   Use ShellCheck for static checks and Bats for `bin/` behavior. The Bats
-   tests should run wrappers with temporary `CLAUDE_PLUGIN_DATA` and stubbed
-   command directories on `PATH`.
+The current targeted migrations are complete:
 
-5. Add Textual interaction tests.
-   Keep state tests, then add pytest-asyncio tests using `App.run_test()` and
-   Pilot for navigation, shortcuts, route edits, save/discard, and provider
-   preview flows. Add `pytest-textual-snapshot` later if visual drift becomes a
-   recurring problem.
+- `py/swarm_do/tui/tests/test_app.py` is pytest-style and marked `tui`.
+- `py/swarm_do/pipeline/tests/test_phase_pump.py` has been split into focused
+  phase-pump modules plus a non-collected helper module.
+- Path-resolution properties live beside the existing role path tests and use
+  Hypothesis when the optional extra is installed.
 
-6. Add scenario smoke tests.
-   Cover actual operator flows without live agents:
-  `bin/swarm research --dry-run`, `bin/swarm design --dry-run`,
-  `bin/swarm review --dry-run`, `bin/swarm prepare <plan-path> --dry-run`,
-  `bin/swarm plan prepare <plan-path> --dry-run --json`,
-  `bin/swarm preset dry-run`, permission dry-runs, provider doctor with stubbed
-  executables, run-state checkpoint, resume manifests, and work-unit batching.
+## Shell Layer
 
-7. Clean current green-run noise.
-   Fix the sqlite `ResourceWarning` sources and keep expected drift output
-   buffered or scoped so successful runs are quiet.
+`bin/swarm test shell` runs ShellCheck against regular files in `bin/`,
+`bin/_lib/*.sh`, and `hooks/*.sh`, then runs Bats recursively under
+`tests/shell/`. Missing `bats` or `shellcheck` is a hard local setup error with
+an install hint.
 
 ## Source Notes
 
-External guidance checked while writing this:
-
-- Python `unittest` supports standard-library test discovery.
-  https://docs.python.org/3/library/unittest.html
-- pytest can run `unittest` suites and supports gradual migration, with limits
-  around directly injecting fixtures into `unittest.TestCase` methods.
+- pytest collects `unittest` suites during gradual migration:
   https://docs.pytest.org/en/stable/how-to/unittest.html
-- pytest fixtures provide useful built-ins such as `tmp_path`, `monkeypatch`,
-  and output capture for scenario-style tests.
+- pytest fixtures provide `tmp_path`, `monkeypatch`, and output capture:
   https://doc.pytest.org/en/latest/reference/fixtures.html
-- coverage.py measures which code and branches tests exercise.
+- coverage.py reads the `[tool.coverage.*]` config in `pyproject.toml`:
   https://coverage.readthedocs.io/
-- Textual recommends pytest plus pytest-asyncio for headless `run_test()` and
-  Pilot-driven interaction tests.
+- Textual recommends pytest plus pytest-asyncio for headless `run_test()`:
   https://textual.textualize.io/guide/testing/
-- Bats is a TAP-compliant Bash test framework suited to shell scripts and UNIX
-  commands.
+- Bats is suited to shell script behavior tests:
   https://bats-core.readthedocs.io/
-- ShellCheck is a static analysis tool for shell scripts.
+- ShellCheck is the static check for the shell wrapper layer:
   https://www.shellcheck.net/

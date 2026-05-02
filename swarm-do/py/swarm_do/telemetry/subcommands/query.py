@@ -109,32 +109,35 @@ def run(args: argparse.Namespace) -> int:
 
     tel_dir = resolve_telemetry_dir()
     conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-
-    for tbl, cols in _LEDGER_COLS.items():
-        col_defs = ", ".join(f'"{c}" TEXT' for c in cols)
-        conn.execute(f'CREATE TABLE "{tbl}" ({col_defs})')
-        rows = _load_ledger(tel_dir, tbl, cols)
-        if rows:
-            placeholders = ", ".join("?" for _ in cols)
-            col_names = ", ".join(f'"{c}"' for c in cols)
-            conn.executemany(
-                f'INSERT INTO "{tbl}" ({col_names}) VALUES ({placeholders})',
-                [[r.get(c) for c in cols] for r in rows],
-            )
-    conn.execute('CREATE INDEX IF NOT EXISTS idx_runs_preset_pipeline ON runs ("preset_name", "pipeline_name")')
-    conn.commit()
-
     try:
-        cur = conn.execute(sql)
-        if cur.description is None:
-            conn.commit()
-            return 0
-        headers = [d[0] for d in cur.description]
-        print("\t".join(headers))
-        for row in cur.fetchall():
-            print("\t".join("" if v is None else str(v) for v in row))
-    except sqlite3.Error as e:
-        print(f"swarm-telemetry: query error: {e}", file=sys.stderr)
-        return 1
-    return 0
+        conn.row_factory = sqlite3.Row
+
+        for tbl, cols in _LEDGER_COLS.items():
+            col_defs = ", ".join(f'"{c}" TEXT' for c in cols)
+            conn.execute(f'CREATE TABLE "{tbl}" ({col_defs})')
+            rows = _load_ledger(tel_dir, tbl, cols)
+            if rows:
+                placeholders = ", ".join("?" for _ in cols)
+                col_names = ", ".join(f'"{c}"' for c in cols)
+                conn.executemany(
+                    f'INSERT INTO "{tbl}" ({col_names}) VALUES ({placeholders})',
+                    [[r.get(c) for c in cols] for r in rows],
+                )
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_runs_preset_pipeline ON runs ("preset_name", "pipeline_name")')
+        conn.commit()
+
+        try:
+            cur = conn.execute(sql)
+            if cur.description is None:
+                conn.commit()
+                return 0
+            headers = [d[0] for d in cur.description]
+            print("\t".join(headers))
+            for row in cur.fetchall():
+                print("\t".join("" if v is None else str(v) for v in row))
+        except sqlite3.Error as e:
+            print(f"swarm-telemetry: query error: {e}", file=sys.stderr)
+            return 1
+        return 0
+    finally:
+        conn.close()
