@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 from contextlib import AbstractContextManager
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from . import phase_sessions as _phase_sessions
 from .policies import ResolvedPolicyUpdate
@@ -38,6 +38,10 @@ def init_phase_sessions(
     )
 
 
+def load_phase_sessions(run_id: str, *, data_dir: Path | None = None) -> dict[str, Any]:
+    return _phase_sessions.load_phase_sessions(run_id, data_dir=data_dir)
+
+
 def record_phase_result(
     run_id: str,
     phase_id: str,
@@ -52,6 +56,31 @@ def record_phase_result(
         json_file=json_file,
         expected_status=expected_status,
         data_dir=data_dir,
+    )
+
+
+def abandon_attempt_and_retry(
+    run_id: str,
+    phase_id: str,
+    *,
+    failure_kind: str,
+    data_dir: Path | None = None,
+    launcher_error: str | None = None,
+    next_retry_at: str | None = None,
+    retry_after_seconds: int | None = None,
+    attempt_record: Mapping[str, Any] | None = None,
+    assume_locked: bool = False,
+) -> dict[str, Any]:
+    return _phase_sessions.abandon_attempt_and_retry(
+        run_id,
+        phase_id,
+        failure_kind=failure_kind,
+        data_dir=data_dir,
+        launcher_error=launcher_error,
+        next_retry_at=next_retry_at,
+        retry_after_seconds=retry_after_seconds,
+        attempt_record=attempt_record,
+        assume_locked=assume_locked,
     )
 
 
@@ -156,7 +185,9 @@ __all__ = [
     "PhaseArtifactContractError",
     "PhaseSessionError",
     "PhaseSessionLockTimeout",
+    "abandon_attempt_and_retry",
     "init_phase_sessions",
+    "load_phase_sessions",
     "locked_phase_sessions",
     "phase_handoff_path",
     "phase_result_path",

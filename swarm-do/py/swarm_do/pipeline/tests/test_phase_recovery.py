@@ -12,6 +12,8 @@ from unittest import mock
 
 from swarm_do.pipeline.claude_transcript_diagnostics import encode_project_path
 from swarm_do.pipeline.paths import REPO_ROOT
+from swarm_do.pipeline.operator_decisions import apply as apply_operator_decision
+from swarm_do.pipeline.operator_decisions import record as record_operator_decision
 from swarm_do.pipeline.phase_recovery import reconcile_phase_sessions
 from swarm_do.pipeline.phase_sessions import (
     claim_next_phase,
@@ -74,6 +76,28 @@ class PhaseRecoveryTests(unittest.TestCase):
 
             self.assertEqual(result["status"], "active")
             self.assertEqual(phase_status(run_id, data_dir=data, repo_root=repo)["phases"][0]["status"], "running")
+
+    def test_operator_decision_retry_phase_records_recovery_history(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            claim_next_phase(run_id, data_dir=data, repo_root=repo, lease_owner="owner-1")
+            start_phase(run_id, "1", launcher="claude-print", lease_owner="owner-1", data_dir=data)
+            decision = record_operator_decision(
+                run_id,
+                "retry_phase",
+                {"phase_id": "1", "reason": "operator retry"},
+                data_dir=data,
+                operator="local:test",
+            )["decision"]
+
+            result = apply_operator_decision(run_id, decision["decision_id"], data_dir=data)
+
+            self.assertTrue(result["applied"])
+            state = json.loads(phase_session_path(run_id, data_dir=data).read_text(encoding="utf-8"))
+            phase = state["phases"][0]
+            self.assertEqual(phase["status"], "pending")
+            self.assertEqual(decision["decision_id"], phase["attempt_history"][-1]["operator_decision_id"])
 
     def test_same_host_dead_child_liveness_allows_recovery(self) -> None:
         with tempfile.TemporaryDirectory() as td:

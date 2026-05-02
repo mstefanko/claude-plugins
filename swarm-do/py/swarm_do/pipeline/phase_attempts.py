@@ -91,7 +91,7 @@ def _attempts_from_state(
         if not isinstance(phase, Mapping):
             continue
         try:
-            phase_record = PhaseRecord.from_mapping(phase)
+            phase_record = PhaseRecord.from_mapping(phase, preserve_unknown=True)
         except DomainContractError:
             continue
         phase_id = phase_record.phase_id
@@ -115,52 +115,62 @@ def _row_from_mapping(
     archived_label: str | None,
 ) -> dict[str, Any]:
     phase_id = str(phase.get("phase_id") or item.get("phase_id") or "")
-    attempt = int(item.get("attempt") or phase.get("attempt") or 0)
-    launch_dir = _path_value(item.get("launch_dir") or phase.get("launch_dir"), root=root)
-    if launch_dir is None and attempt > 0:
-        launch_dir = root / "phase_launches" / phase_id / f"attempt-{attempt}"
-    command = _read_json_object((launch_dir / "command.json") if launch_dir else None)
-    metrics = stdout_metrics((launch_dir / "stdout.txt") if launch_dir else None)
-    evidence_path = _evidence_path(item, phase, launch_dir)
-    manifest = _read_manifest(evidence_path)
-    taxonomy = _taxonomy_details(item, phase)
-    row = {
-        "run_id": run_id,
-        "phase_id": phase_id,
-        "phase_title": title,
-        "attempt": attempt,
-        "status": item.get("status") or phase.get("status"),
-        "failure_kind": item.get("failure_kind") or phase.get("last_failure_kind"),
-        "retry_decision": item.get("retry_decision") or phase.get("retry_policy_decision"),
-        "policy_action": item.get("policy_action"),
-        "policy_reason": item.get("policy_reason"),
-        "policy_inputs": item.get("policy_inputs") if isinstance(item.get("policy_inputs"), Mapping) else None,
-        "adopted": item.get("adopted"),
-        "started_at": item.get("started_at") or phase.get("started_at"),
-        "completed_at": item.get("completed_at") or phase.get("completed_at"),
-        "elapsed_seconds": item.get("elapsed_seconds"),
-        "launcher_returncode": item.get("returncode") if item.get("returncode") is not None else command.get("returncode"),
-        "session_name": item.get("session_name") or phase.get("session_name"),
-        "child_pid": item.get("child_pid") or phase.get("child_pid") or command.get("child_pid"),
-        "process_group_id": item.get("process_group_id") or phase.get("process_group_id") or command.get("process_group_id"),
-        "launch_dir": str(launch_dir) if launch_dir else None,
-        "evidence_path": str(evidence_path) if evidence_path else None,
-        "result_path": item.get("result_path") or phase.get("result_path") or phase.get("expected_result_path") or command.get("result_path"),
-        "handoff_path": item.get("handoff_path") or phase.get("handoff_path") or phase.get("expected_handoff_path") or command.get("handoff_path"),
-        "recovery_context_path": item.get("recovery_context_path") or phase.get("recovery_context_path"),
-        "stdout_tail_path": item.get("stdout_tail_path"),
-        "stderr_tail_path": item.get("stderr_tail_path"),
-        "changed_files": _string_list(item.get("changed_files")),
-        "cleanup": item.get("cleanup") if isinstance(item.get("cleanup"), Mapping) else None,
-        "child_process": item.get("child_process") if isinstance(item.get("child_process"), Mapping) else None,
-        "archived": archived_label is not None,
-        "archive": archived_label,
-    }
-    row.update(taxonomy)
-    row.update(metrics)
-    if manifest is not None:
-        _apply_manifest_projection(row, manifest)
-    return PhaseAttemptRecord.from_mapping(row, preserve_unknown=True).to_row()
+    try:
+        attempt = _attempt_value(item.get("attempt") if item.get("attempt") is not None else phase.get("attempt"))
+        launch_dir = _path_value(item.get("launch_dir") or phase.get("launch_dir"), root=root)
+        if launch_dir is None and attempt > 0:
+            launch_dir = root / "phase_launches" / phase_id / f"attempt-{attempt}"
+        command = _read_json_object((launch_dir / "command.json") if launch_dir else None)
+        metrics = stdout_metrics((launch_dir / "stdout.txt") if launch_dir else None)
+        evidence_path = _evidence_path(item, phase, launch_dir)
+        manifest = _read_manifest(evidence_path)
+        taxonomy = _taxonomy_details(item, phase)
+        row = {
+            "run_id": run_id,
+            "phase_id": phase_id,
+            "phase_title": title,
+            "attempt": attempt,
+            "status": item.get("status") or phase.get("status"),
+            "failure_kind": item.get("failure_kind") or phase.get("last_failure_kind"),
+            "retry_decision": item.get("retry_decision") or phase.get("retry_policy_decision"),
+            "policy_action": item.get("policy_action"),
+            "policy_reason": item.get("policy_reason"),
+            "policy_inputs": item.get("policy_inputs") if isinstance(item.get("policy_inputs"), Mapping) else None,
+            "adopted": item.get("adopted"),
+            "started_at": item.get("started_at") or phase.get("started_at"),
+            "completed_at": item.get("completed_at") or phase.get("completed_at"),
+            "elapsed_seconds": item.get("elapsed_seconds"),
+            "launcher_returncode": item.get("returncode") if item.get("returncode") is not None else command.get("returncode"),
+            "session_name": item.get("session_name") or phase.get("session_name"),
+            "child_pid": item.get("child_pid") or phase.get("child_pid") or command.get("child_pid"),
+            "process_group_id": item.get("process_group_id") or phase.get("process_group_id") or command.get("process_group_id"),
+            "launch_dir": str(launch_dir) if launch_dir else None,
+            "evidence_path": str(evidence_path) if evidence_path else None,
+            "result_path": item.get("result_path") or phase.get("result_path") or phase.get("expected_result_path") or command.get("result_path"),
+            "handoff_path": item.get("handoff_path") or phase.get("handoff_path") or phase.get("expected_handoff_path") or command.get("handoff_path"),
+            "recovery_context_path": item.get("recovery_context_path") or phase.get("recovery_context_path"),
+            "stdout_tail_path": item.get("stdout_tail_path"),
+            "stderr_tail_path": item.get("stderr_tail_path"),
+            "changed_files": _string_list(item.get("changed_files")),
+            "cleanup": item.get("cleanup") if isinstance(item.get("cleanup"), Mapping) else None,
+            "child_process": item.get("child_process") if isinstance(item.get("child_process"), Mapping) else None,
+            "archived": archived_label is not None,
+            "archive": archived_label,
+        }
+        row.update(taxonomy)
+        row.update(metrics)
+        if manifest is not None:
+            _apply_manifest_projection(row, manifest)
+        return PhaseAttemptRecord.from_mapping(row, preserve_unknown=True).to_row()
+    except (DomainContractError, TypeError, ValueError) as exc:
+        return _invalid_attempt_row(
+            run_id,
+            phase_id=phase_id,
+            title=title,
+            attempt=item.get("attempt") if item.get("attempt") is not None else phase.get("attempt"),
+            archived_label=archived_label,
+            error=exc,
+        )
 
 
 def _merge_launch_dirs(rows: list[dict[str, Any]], launch_root: Path, *, archived_label: str | None) -> None:
@@ -419,7 +429,7 @@ def _last_failure(status: Mapping[str, Any]) -> dict[str, Any] | None:
         if not isinstance(phase, Mapping):
             continue
         try:
-            record = PhaseRecord.from_mapping(phase)
+            record = PhaseRecord.from_mapping(phase, preserve_unknown=True)
         except DomainContractError:
             continue
         if not record.last_failure_kind:
@@ -453,7 +463,7 @@ def _last_error(status: Mapping[str, Any]) -> str | None:
         if not isinstance(phase, Mapping):
             continue
         try:
-            record = PhaseRecord.from_mapping(phase)
+            record = PhaseRecord.from_mapping(phase, preserve_unknown=True)
         except DomainContractError:
             continue
         if record.last_error:
@@ -511,6 +521,72 @@ def _string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, str)]
+
+
+def _attempt_value(value: Any) -> int:
+    if value is None:
+        return 0
+    if isinstance(value, bool):
+        raise ValueError("attempt must be an integer")
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("attempt must be an integer") from exc
+
+
+def _invalid_attempt_row(
+    run_id: str,
+    *,
+    phase_id: str,
+    title: str,
+    attempt: Any,
+    archived_label: str | None,
+    error: Exception,
+) -> dict[str, Any]:
+    try:
+        attempt_value = _attempt_value(attempt)
+    except ValueError:
+        attempt_value = 0
+    row = {
+        "run_id": run_id,
+        "phase_id": phase_id or "<unknown>",
+        "phase_title": title,
+        "attempt": attempt_value,
+        "status": "unknown",
+        "failure_kind": None,
+        "retry_decision": None,
+        "policy_action": None,
+        "policy_reason": None,
+        "policy_inputs": None,
+        "adopted": None,
+        "started_at": None,
+        "completed_at": None,
+        "elapsed_seconds": None,
+        "launcher_returncode": None,
+        "session_name": None,
+        "child_pid": None,
+        "process_group_id": None,
+        "launch_dir": None,
+        "evidence_path": None,
+        "result_path": None,
+        "handoff_path": None,
+        "recovery_context_path": None,
+        "stdout_tail_path": None,
+        "stderr_tail_path": None,
+        "changed_files": [],
+        "cleanup": None,
+        "child_process": None,
+        "archived": archived_label is not None,
+        "archive": archived_label,
+        "failure_category": None,
+        "failure_retry_class": None,
+        "failure_operator_title": "Attempt evidence unreadable",
+        "failure_operator_message": str(error),
+        "failure_known": False,
+        "cost_confidence": "unknown",
+        "domain_contract_error": str(error),
+    }
+    return PhaseAttemptRecord.from_mapping(row, preserve_unknown=True).to_row()
 
 
 def _archive_key(row: Mapping[str, Any]) -> str:

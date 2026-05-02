@@ -36,10 +36,13 @@ class DomainContractTests(unittest.TestCase):
         }
 
         record = PhaseRecord.from_mapping(payload)
+        self.assertIs(record.validate(), record)
         self.assertEqual(record.to_dict(), payload)
         self.assertEqual(dataclasses.replace(record, status="failed").to_dict()["status"], "failed")
         with self.assertRaisesRegex(DomainContractError, "unknown"):
             PhaseRecord.from_mapping({**payload, "surprise": True})
+        preserved = PhaseRecord.from_mapping({**payload, "future_projector_column": "kept"}, preserve_unknown=True)
+        self.assertEqual(preserved.to_dict()["future_projector_column"], "kept")
 
     def test_phase_status_enum_accepts_known_values(self) -> None:
         for status in PHASE_STATUSES:
@@ -67,21 +70,27 @@ class DomainContractTests(unittest.TestCase):
         with self.assertRaisesRegex(DomainContractError, "unknown"):
             PhaseAttemptRecord.from_mapping(payload)
         record = PhaseAttemptRecord.from_mapping(payload, preserve_unknown=True)
+        self.assertIs(record.validate(), record)
         self.assertEqual(record.to_dict(), payload)
         self.assertEqual(record.total_cost_usd, 0.42)
         self.assertEqual(dataclasses.replace(record, status="failed").to_dict()["status"], "failed")
 
-    def test_phase_status_report_rejects_unknown_top_level_keys(self) -> None:
+    def test_phase_status_report_preserves_projector_unknowns(self) -> None:
         payload = {
             "run_id": "01J00000000000000000000000",
             "status": "ready",
-            "phases": [],
+            "state_path": "/tmp/state.json",
+            "phases": [{"phase_id": "p1", "status": "pending", "attempt": 0, "future_phase_column": "kept"}],
             "recommended_command": "bin/swarm do --prepared 01J00000000000000000000000 --phase-sessions auto",
+            "future_report_column": "kept",
         }
 
-        self.assertEqual(PhaseStatusReport.from_mapping(payload).status, "ready")
-        with self.assertRaisesRegex(DomainContractError, "unknown"):
-            PhaseStatusReport.from_mapping({**payload, "surprise": True})
+        report = PhaseStatusReport.from_mapping(payload)
+        self.assertIs(report.validate(), report)
+        self.assertEqual(report.status, "ready")
+        self.assertEqual(report.to_dict(), payload)
+        self.assertEqual(report.phases[0].extra["future_phase_column"], "kept")
+        self.assertEqual(report.extra["future_report_column"], "kept")
 
     def test_doctor_finding_round_trip_and_severity(self) -> None:
         payload = {
@@ -92,7 +101,9 @@ class DomainContractTests(unittest.TestCase):
             "recommended_command": "bin/swarm phases reap run",
         }
 
-        self.assertEqual(DoctorFinding.from_mapping(payload).to_dict(), payload)
+        record = DoctorFinding.from_mapping(payload)
+        self.assertIs(record.validate(), record)
+        self.assertEqual(record.to_dict(), payload)
         self.assertEqual(DOCTOR_FINDING_SEVERITIES, frozenset({"error", "warning", "info"}))
         with self.assertRaisesRegex(DomainContractError, "severity"):
             DoctorFinding.from_mapping({**payload, "severity": "critical"})

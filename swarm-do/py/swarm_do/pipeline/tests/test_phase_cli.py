@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from swarm_do.pipeline.cli import _build_parser, _phase_evidence_payload, cmd_phases, cmd_worktrees
-from swarm_do.pipeline.operator_decisions import operator_decisions_path
+from swarm_do.pipeline.operator_decisions import operator_decisions_path, record
 from swarm_do.pipeline.phase_pump import pump_phases
 from swarm_do.pipeline.phase_sessions import init_phase_sessions
 from swarm_do.pipeline.tests.phase_session_fixtures import make_prepared_run
@@ -62,6 +62,39 @@ class PhaseCliEvidenceTests(unittest.TestCase):
             artifact = json.loads(operator_decisions_path(run_id, data_dir=data).read_text(encoding="utf-8"))
             self.assertEqual(1, len(artifact["decisions"]))
             self.assertEqual("retry_phase", artifact["decisions"][0]["kind"])
+
+    def test_operator_decision_apply_threads_confirm_token_from_parser(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            decision = record(
+                run_id,
+                "rebuild_worktree",
+                {"phase_id": "1", "reason": "fresh tree", "archive_branch": False},
+                data_dir=data,
+                operator="local:test",
+            )["decision"]
+            parser = _build_parser()
+            args = parser.parse_args(
+                [
+                    "operator-decision",
+                    "apply",
+                    run_id,
+                    decision["decision_id"],
+                    "--confirm",
+                    decision["decision_id"][:8],
+                    "--json",
+                ]
+            )
+            out = io.StringIO()
+
+            with mock.patch.dict(os.environ, {"CLAUDE_PLUGIN_DATA": str(data)}):
+                with redirect_stdout(out):
+                    exit_code = args.func(args)
+
+            payload = json.loads(out.getvalue())
+            self.assertEqual(2, exit_code)
+            self.assertEqual("kind-not-integrated", payload["error"])
 
     def test_evidence_attempt_requires_phase(self) -> None:
         err = io.StringIO()

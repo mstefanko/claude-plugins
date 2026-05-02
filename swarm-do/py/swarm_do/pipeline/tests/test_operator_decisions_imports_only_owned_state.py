@@ -17,6 +17,10 @@ class OperatorDecisionNamingFenceTests(unittest.TestCase):
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom):
                 imported_names.update(alias.name for alias in node.names)
+                self.assertFalse(
+                    (node.module or "").endswith("phase_sessions"),
+                    "operator_decisions.py must route phase-session writes through phase_session_store",
+                )
             elif isinstance(node, ast.Import):
                 imported_names.update(alias.name for alias in node.names)
 

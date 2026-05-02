@@ -602,21 +602,31 @@ Create a domain module:
 py/swarm_do/pipeline/domain.py
 ```
 
-Initial dataclasses:
+Initial dataclasses (Phase 2 first increment):
 
 ```text
-RunRef
-RunRecord
 PhaseRecord
 PhaseAttemptRecord
-StageRecord
-WorkUnitRecord
+DoctorFinding
+PhaseStatusReport
+```
+
+Deferred until a real cross-module caller needs them or the phase-record
+increment has survived a dogfood run:
+
+```text
 ProviderRunRecord
 ProviderFindingRecord
-DoctorFinding
-PolicyDecision
+RunRef
+RunRecord
+StageRecord
+WorkUnitRecord
 ArtifactExport
 ```
+
+`PolicyDecision` is intentionally not duplicated in `domain.py`; reuse or
+extend `phase_autopilot_policy.AutopilotPolicyDecision` during Phase 3 policy
+consolidation.
 
 Use stdlib dataclasses first. Include:
 
@@ -1227,7 +1237,7 @@ Mitigation:
 
 - Module name: `operator_decisions.py` (not `decisions.py`).
 - Artifact filename: `operator_decisions.v1.json` (not `decisions.json`).
-- CLI verb: `swarm decisions ...` is acceptable but every help string and
+- CLI verb: `swarm operator-decision ...` is used so every help string and
   error message must say "operator decision" to disambiguate from shared
   decisions.
 - Add a sentence to `phase_decisions.py` docstring linking to
@@ -1264,13 +1274,17 @@ abort_phase
 accept_provider_partial
 ```
 
+`skip_best_effort_stage` is a schema-slot/deferred kind until stage recovery
+has a concrete operator command that needs it.
+
 ### Implementation
 
 1. Add `OperatorDecision` typed artifact.
-2. Add `swarm decisions record <run-id> ... --json`.
-3. Add `swarm decisions apply <run-id> <decision-id> --json`.
-4. Make `/swarmdaddy:redo`, `/swarmdaddy:repump`, and future recovery commands
-   record a decision event before mutation.
+2. Add `swarm operator-decision record <run-id> ... --json`.
+3. Add `swarm operator-decision apply <run-id> <decision-id> --json`.
+4. Make `/swarmdaddy:redo` and future mutating recovery commands record a
+   decision event before mutation. Plain `/swarmdaddy:repump` remains a
+   happy-path pump tick and does not create an operator decision record.
 5. Store decisions beside phase-session state initially; route writes through
    the state store.
 6. Ensure decisions are idempotent by decision id.
@@ -1285,7 +1299,8 @@ py/swarm_do/pipeline/tests/test_phase_cli.py
 
 ### Acceptance Criteria
 
-- Every mutating recovery command can explain which operator decision caused it.
+- Every integrated mutating recovery command can explain which operator
+  decision caused it. Plain pump/repump progress is excluded by design.
 - Reapplying the same decision is a no-op or a controlled error.
 - `phases status --events` can show recent operator decisions.
 

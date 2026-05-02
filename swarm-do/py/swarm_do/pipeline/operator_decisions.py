@@ -14,7 +14,7 @@ from typing import Any, Mapping
 
 from .failure_taxonomy import failure_kind_details
 from .paths import resolve_data_dir
-from .phase_sessions import (
+from .phase_session_store import (
     PhaseSessionLockTimeout,
     abandon_attempt_and_retry,
     load_phase_sessions,
@@ -48,6 +48,7 @@ STATUSES = {
 KINDS = {
     "resume_with_input",
     "retry_phase",
+    "skip_best_effort_stage",
     "reset_phase",
     "rebuild_worktree",
     "archive_attempt",
@@ -403,6 +404,7 @@ def validate_payload(kind: str, payload: Mapping[str, Any]) -> dict[str, Any]:
     validators = {
         "resume_with_input": _validate_resume_with_input_payload,
         "retry_phase": _validate_phase_reason_payload,
+        "skip_best_effort_stage": _validate_skip_best_effort_stage_payload,
         "reset_phase": _validate_phase_reason_payload,
         "abort_phase": _validate_phase_reason_payload,
         "rebuild_worktree": _validate_rebuild_worktree_payload,
@@ -430,6 +432,15 @@ def _validate_resume_with_input_payload(payload: Mapping[str, Any]) -> dict[str,
 def _validate_phase_reason_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     _reject_unknown_keys(payload, {"phase_id", "reason"})
     return {"phase_id": _payload_string(payload, "phase_id"), "reason": _payload_string(payload, "reason")}
+
+
+def _validate_skip_best_effort_stage_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    _reject_unknown_keys(payload, {"phase_id", "stage_id", "reason"})
+    return {
+        "phase_id": _payload_string(payload, "phase_id"),
+        "stage_id": _payload_string(payload, "stage_id"),
+        "reason": _payload_string(payload, "reason"),
+    }
 
 
 def _validate_rebuild_worktree_payload(payload: Mapping[str, Any]) -> dict[str, Any]:

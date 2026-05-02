@@ -18,6 +18,27 @@ from swarm_do.pipeline.tests.phase_session_fixtures import make_prepared_run
 
 
 class OperatorDecisionTests(unittest.TestCase):
+    def test_all_declared_kinds_have_payload_validators(self) -> None:
+        payloads = {
+            "resume_with_input": {"phase_id": "1", "input": {"answer": "yes"}},
+            "retry_phase": {"phase_id": "1", "reason": "try again"},
+            "skip_best_effort_stage": {"phase_id": "1", "stage_id": "review", "reason": "best effort skip"},
+            "reset_phase": {"phase_id": "1", "reason": "reset"},
+            "rebuild_worktree": {"phase_id": "1", "reason": "fresh tree", "archive_branch": False},
+            "archive_attempt": {"phase_id": "1", "attempt": 1, "reason": "keep evidence"},
+            "cancel_run": {"reason": "operator cancelled"},
+            "abort_phase": {"phase_id": "1", "reason": "operator abort"},
+            "accept_provider_partial": {
+                "phase_id": "1",
+                "manifest_path": "/tmp/provider-review.manifest.json",
+                "accepted_findings": ["finding-1"],
+            },
+        }
+
+        self.assertEqual(set(payloads), operator_decisions.KINDS)
+        for kind, payload in payloads.items():
+            self.assertEqual(payload, operator_decisions.validate_payload(kind, payload))
+
     def test_record_is_idempotent_within_minute(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
@@ -168,6 +189,39 @@ class OperatorDecisionTests(unittest.TestCase):
             self.assertEqual("invalid-payload", ctx.exception.error)
             self.assertEqual(["extra"], ctx.exception.details["unknown_keys"])
 
+    def test_record_rejects_unknown_kind(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+
+            with self.assertRaises(OperatorDecisionError) as ctx:
+                record(
+                    run_id,
+                    "unknown_kind",
+                    {"phase_id": "1", "reason": "try again"},
+                    data_dir=data,
+                    operator="local:test",
+                )
+
+            self.assertEqual("unknown-kind", ctx.exception.error)
+
+    def test_apply_unknown_decision_id_is_controlled_error(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            record(
+                run_id,
+                "retry_phase",
+                {"phase_id": "1", "reason": "try again"},
+                data_dir=data,
+                operator="local:test",
+            )
+
+            with self.assertRaises(OperatorDecisionError) as ctx:
+                apply(run_id, "od-missing-000-deadbeef", data_dir=data)
+
+            self.assertEqual("decision-not-found", ctx.exception.error)
+
     def test_record_fails_when_run_directory_missing(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             data = Path(td) / "data"
@@ -183,6 +237,31 @@ class OperatorDecisionTests(unittest.TestCase):
                 )
 
             self.assertEqual("run-not-found", ctx.exception.error)
+
+    def test_record_emits_retention_warning_after_threshold(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+
+            with mock.patch("swarm_do.pipeline.operator_decisions.MAX_DECISION_RECORDS_BEFORE_WARNING", 1):
+                record(
+                    run_id,
+                    "retry_phase",
+                    {"phase_id": "1", "reason": "first"},
+                    data_dir=data,
+                    operator="local:test",
+                )
+                record(
+                    run_id,
+                    "retry_phase",
+                    {"phase_id": "1", "reason": "second"},
+                    data_dir=data,
+                    operator="local:test",
+                )
+
+            warnings = [row for row in _run_events(data) if row["event_type"] == "operator_decisions_retention_warning"]
+            self.assertEqual(1, len(warnings))
+            self.assertEqual(2, warnings[0]["details"]["decision_count"])
 
 
 def _running_run(tmp: Path) -> tuple[Path, Path, str]:

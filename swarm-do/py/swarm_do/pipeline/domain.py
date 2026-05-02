@@ -101,16 +101,17 @@ class PhaseRecord:
     policy_reason: str | None = None
     policy_inputs: Mapping[str, Any] | None = None
     attempt_history: tuple[Mapping[str, Any], ...] = ()
-    _present_keys: frozenset[str] = field(default_factory=frozenset, repr=False, compare=False)
+    extra: Mapping[str, Any] = field(default_factory=dict)
+    _present_keys: tuple[str, ...] = field(default_factory=tuple, repr=False, compare=False)
 
     @classmethod
-    def from_mapping(cls, value: Mapping[str, Any]) -> "PhaseRecord":
-        _reject_unknown(value, _PHASE_KEYS, "PhaseRecord")
+    def from_mapping(cls, value: Mapping[str, Any], *, preserve_unknown: bool = False) -> "PhaseRecord":
+        extra = _extra_or_reject(value, _PHASE_KEYS, "PhaseRecord", preserve_unknown=preserve_unknown)
         phase_id = _required_str(value, "phase_id", "PhaseRecord")
         status = _required_str(value, "status", "PhaseRecord")
         if status not in PHASE_STATUSES:
             raise DomainContractError(f"PhaseRecord.status must be one of {sorted(PHASE_STATUSES)}, got {status!r}")
-        return cls(
+        record = cls(
             phase_id=phase_id,
             status=status,
             attempt=_int_value(value.get("attempt"), "attempt", default=0),
@@ -156,11 +157,20 @@ class PhaseRecord:
             policy_reason=_optional_str(value.get("policy_reason"), "policy_reason"),
             policy_inputs=_optional_mapping(value.get("policy_inputs"), "policy_inputs"),
             attempt_history=tuple(item for item in value.get("attempt_history") or [] if isinstance(item, Mapping)),
-            _present_keys=frozenset(value.keys()),
+            extra=extra,
+            _present_keys=tuple(value.keys()),
         )
+        return record.validate()
+
+    def validate(self) -> "PhaseRecord":
+        if self.status not in PHASE_STATUSES:
+            raise DomainContractError(f"PhaseRecord.status must be one of {sorted(PHASE_STATUSES)}, got {self.status!r}")
+        if not self.phase_id:
+            raise DomainContractError("PhaseRecord missing required field 'phase_id'")
+        return self
 
     def to_dict(self) -> dict[str, Any]:
-        return _present_dict(
+        payload = _present_dict(
             self._present_keys,
             {
                 "phase_id": self.phase_id,
@@ -210,6 +220,8 @@ class PhaseRecord:
                 "attempt_history": [dict(item) for item in self.attempt_history],
             },
         )
+        payload.update(dict(self.extra))
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,13 +274,13 @@ class PhaseAttemptRecord:
     diff_summary_path: str | None = None
     transcript_diagnostics_path: str | None = None
     extra: Mapping[str, Any] = field(default_factory=dict)
-    _present_keys: frozenset[str] = field(default_factory=frozenset, repr=False, compare=False)
+    _present_keys: tuple[str, ...] = field(default_factory=tuple, repr=False, compare=False)
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any], *, preserve_unknown: bool = False) -> "PhaseAttemptRecord":
         extra = _extra_or_reject(value, _ATTEMPT_KEYS, "PhaseAttemptRecord", preserve_unknown=preserve_unknown)
         phase_id = _required_str(value, "phase_id", "PhaseAttemptRecord")
-        return cls(
+        record = cls(
             run_id=_optional_str(value.get("run_id"), "run_id"),
             phase_id=phase_id,
             phase_title=_optional_str(value.get("phase_title"), "phase_title"),
@@ -317,8 +329,16 @@ class PhaseAttemptRecord:
             diff_summary_path=_optional_str(value.get("diff_summary_path"), "diff_summary_path"),
             transcript_diagnostics_path=_optional_str(value.get("transcript_diagnostics_path"), "transcript_diagnostics_path"),
             extra=extra,
-            _present_keys=frozenset(value.keys()),
+            _present_keys=tuple(value.keys()),
         )
+        return record.validate()
+
+    def validate(self) -> "PhaseAttemptRecord":
+        if not self.phase_id:
+            raise DomainContractError("PhaseAttemptRecord missing required field 'phase_id'")
+        if not self.status:
+            raise DomainContractError("PhaseAttemptRecord missing required field 'status'")
+        return self
 
     def to_dict(self) -> dict[str, Any]:
         payload = _present_dict(
@@ -392,7 +412,7 @@ class DoctorFinding:
     stale_reasons: tuple[str, ...] = ()
     worktree: Mapping[str, Any] | None = None
     extra: Mapping[str, Any] = field(default_factory=dict)
-    _present_keys: frozenset[str] = field(default_factory=frozenset, repr=False, compare=False)
+    _present_keys: tuple[str, ...] = field(default_factory=tuple, repr=False, compare=False)
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "DoctorFinding":
@@ -403,7 +423,7 @@ class DoctorFinding:
             raise DomainContractError(
                 f"DoctorFinding.severity must be one of {sorted(DOCTOR_FINDING_SEVERITIES)}, got {severity!r}"
             )
-        return cls(
+        record = cls(
             id=finding_id,
             severity=severity,
             detail=_optional_str(value.get("detail"), "detail"),
@@ -414,8 +434,18 @@ class DoctorFinding:
             stale_reasons=tuple(_string_list(value.get("stale_reasons"), "stale_reasons")),
             worktree=_optional_mapping(value.get("worktree"), "worktree"),
             extra=extra,
-            _present_keys=frozenset(value.keys()),
+            _present_keys=tuple(value.keys()),
         )
+        return record.validate()
+
+    def validate(self) -> "DoctorFinding":
+        if not self.id:
+            raise DomainContractError("DoctorFinding missing required field 'id'")
+        if self.severity not in DOCTOR_FINDING_SEVERITIES:
+            raise DomainContractError(
+                f"DoctorFinding.severity must be one of {sorted(DOCTOR_FINDING_SEVERITIES)}, got {self.severity!r}"
+            )
+        return self
 
     def rank_key(self) -> tuple[int, str]:
         return {"error": 0, "warning": 1, "info": 2}.get(self.severity, 3), self.id
@@ -444,30 +474,88 @@ class PhaseStatusReport:
     run_id: str
     status: str
     phases: tuple[PhaseRecord, ...]
+    state_path: str | None = None
+    prepared_artifact_path: str | None = None
+    prepared_plan_sha: str | None = None
+    updated_at: str | None = None
+    retry_policy: Mapping[str, Any] | None = None
+    dependency_status: tuple[Mapping[str, Any], ...] = ()
+    drift: tuple[str, ...] = ()
     recommended_command: str | None = None
     active_phase: PhaseRecord | None = None
     next_phase: PhaseRecord | None = None
+    extra: Mapping[str, Any] = field(default_factory=dict)
+    _present_keys: tuple[str, ...] = field(default_factory=tuple, repr=False, compare=False)
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "PhaseStatusReport":
-        _reject_unknown(value, _PHASE_STATUS_REPORT_KEYS, "PhaseStatusReport")
+        extra = _extra_or_reject(value, _PHASE_STATUS_REPORT_KEYS, "PhaseStatusReport", preserve_unknown=True)
         run_id = _required_str(value, "run_id", "PhaseStatusReport")
         status = _required_str(value, "status", "PhaseStatusReport")
         phases = tuple(
-            PhaseRecord.from_mapping(item)
+            PhaseRecord.from_mapping(item, preserve_unknown=True)
             for item in value.get("phases") or []
             if isinstance(item, Mapping)
         )
         active_raw = value.get("active_phase")
         next_raw = value.get("next_phase")
-        return cls(
+        report = cls(
             run_id=run_id,
             status=status,
             phases=phases,
+            state_path=_optional_str(value.get("state_path"), "state_path"),
+            prepared_artifact_path=_optional_str(value.get("prepared_artifact_path"), "prepared_artifact_path"),
+            prepared_plan_sha=_optional_str(value.get("prepared_plan_sha"), "prepared_plan_sha"),
+            updated_at=_optional_str(value.get("updated_at"), "updated_at"),
+            retry_policy=_optional_mapping(value.get("retry_policy"), "retry_policy"),
+            dependency_status=tuple(
+                dict(item)
+                for item in value.get("dependency_status") or []
+                if isinstance(item, Mapping)
+            ),
+            drift=tuple(_string_list(value.get("drift"), "drift")),
             recommended_command=_optional_str(value.get("recommended_command"), "recommended_command"),
-            active_phase=PhaseRecord.from_mapping(active_raw) if isinstance(active_raw, Mapping) else None,
-            next_phase=PhaseRecord.from_mapping(next_raw) if isinstance(next_raw, Mapping) else None,
+            active_phase=PhaseRecord.from_mapping(active_raw, preserve_unknown=True) if isinstance(active_raw, Mapping) else None,
+            next_phase=PhaseRecord.from_mapping(next_raw, preserve_unknown=True) if isinstance(next_raw, Mapping) else None,
+            extra=extra,
+            _present_keys=tuple(value.keys()),
         )
+        return report.validate()
+
+    def validate(self) -> "PhaseStatusReport":
+        if not self.run_id:
+            raise DomainContractError("PhaseStatusReport missing required field 'run_id'")
+        if not self.status:
+            raise DomainContractError("PhaseStatusReport missing required field 'status'")
+        for phase in self.phases:
+            phase.validate()
+        if self.active_phase is not None:
+            self.active_phase.validate()
+        if self.next_phase is not None:
+            self.next_phase.validate()
+        return self
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = _present_dict(
+            self._present_keys,
+            {
+                "run_id": self.run_id,
+                "status": self.status,
+                "state_path": self.state_path,
+                "prepared_artifact_path": self.prepared_artifact_path,
+                "prepared_plan_sha": self.prepared_plan_sha,
+                "updated_at": self.updated_at,
+                "retry_policy": dict(self.retry_policy) if self.retry_policy is not None else None,
+                "dependency_status": [dict(item) for item in self.dependency_status],
+                "drift": list(self.drift),
+                "phases": [phase.to_dict() for phase in self.phases],
+                "recommended_command": self.recommended_command,
+                "active_phase": self.active_phase.to_dict() if self.active_phase is not None else None,
+                "next_phase": self.next_phase.to_dict() if self.next_phase is not None else None,
+            },
+        )
+        payload.update(dict(self.extra))
+        return payload
 
 
 _PHASE_KEYS = {
@@ -610,12 +698,6 @@ def _extra_or_reject(
     return unknown
 
 
-def _reject_unknown(value: Mapping[str, Any], allowed: set[str], label: str) -> None:
-    unknown = sorted(set(value) - allowed)
-    if unknown:
-        raise DomainContractError(f"{label} got unknown field(s): {', '.join(unknown)}")
-
-
 def _required_str(value: Mapping[str, Any], key: str, label: str) -> str:
     item = value.get(key)
     if not isinstance(item, str) or item == "":
@@ -681,7 +763,7 @@ def _string_list(value: Any, key: str) -> list[str]:
     return list(value)
 
 
-def _present_dict(keys: frozenset[str], values: Mapping[str, Any]) -> dict[str, Any]:
+def _present_dict(keys: tuple[str, ...], values: Mapping[str, Any]) -> dict[str, Any]:
     return {key: values[key] for key in keys if key in values}
 
 

@@ -78,6 +78,42 @@ class PhaseAttemptSummaryTests(unittest.TestCase):
             self.assertEqual(len(with_archived["attempts"]["rows"]), 1)
             self.assertTrue(with_archived["attempts"]["rows"][0]["archived"])
 
+    def test_bad_archived_attempt_row_does_not_crash_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            archive = data / "runs" / run_id / ".archived-bad"
+            archive.mkdir(parents=True, exist_ok=True)
+            (archive / "phase_sessions.v1.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "run_id": run_id,
+                        "phases": [
+                            {
+                                "phase_id": "1",
+                                "title": "Phase 1",
+                                "status": "complete",
+                                "attempt_history": [
+                                    {
+                                        "attempt": "not-an-int",
+                                        "status": ["not", "a", "string"],
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            summary = summarize_phase_attempts(run_id, data_dir=data, include_archived=True)
+
+            row = summary["attempts"]["rows"][0]
+            self.assertEqual(row["status"], "unknown")
+            self.assertTrue(row["archived"])
+            self.assertIn("domain_contract_error", row)
+
     def test_cost_conflict_preserves_both_sources(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
