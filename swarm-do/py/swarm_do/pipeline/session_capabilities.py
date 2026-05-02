@@ -84,6 +84,7 @@ def parse_claude_print_json(text: str) -> dict[str, Any]:
 
 
 SUPPORTED_CLAUDE_PRINT_STATUSES = {"complete", "failed", "blocked", "needs_input"}
+_STREAM_JSON_SUPPORT_CACHE: dict[str, tuple[bool, str | None]] = {}
 
 
 def extract_claude_print_artifacts(payload: Mapping[str, Any], *, run_dir: Path) -> dict[str, Any]:
@@ -165,6 +166,7 @@ def _claude_print_capability(
     details["claude_path"] = claude_path
     if claude_path is None:
         blockers.append("claude_cli_missing")
+        details["stream_json_supported"] = False
 
     if live and claude_path is not None:
         proc = _run(runner, [claude_path, "--version"])
@@ -173,8 +175,13 @@ def _claude_print_capability(
         details["version_stderr"] = (proc.stderr or "").strip()
         if proc.returncode != 0:
             blockers.append("claude_version_probe_failed")
+        supported, error = _probe_stream_json_support(claude_path, runner=runner)
+        details["stream_json_supported"] = supported
+        if error:
+            details["stream_json_probe_error"] = error
     elif not live:
         warnings.append("live_probe_skipped")
+        details.setdefault("stream_json_supported", False)
 
     return LauncherCapability(
         name="claude-print",
@@ -222,6 +229,28 @@ def _run(runner: Runner | None, argv: Sequence[str]) -> subprocess.CompletedProc
         capture_output=True,
         text=True,
     )
+
+
+def _probe_stream_json_support(claude_path: str, *, runner: Runner | None) -> tuple[bool, str | None]:
+    if claude_path in _STREAM_JSON_SUPPORT_CACHE:
+        return _STREAM_JSON_SUPPORT_CACHE[claude_path]
+    try:
+        if runner is not None:
+            proc = runner([claude_path, "--help"])
+        else:
+            proc = subprocess.run(
+                [claude_path, "--help"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        text = (proc.stdout or "") + "\n" + (proc.stderr or "")
+        result = ("stream-json" in text, None)
+    except Exception as exc:
+        result = (False, str(exc))
+    _STREAM_JSON_SUPPORT_CACHE[claude_path] = result
+    return result
 
 
 def _find_artifact_object(value: Any) -> Mapping[str, Any] | None:

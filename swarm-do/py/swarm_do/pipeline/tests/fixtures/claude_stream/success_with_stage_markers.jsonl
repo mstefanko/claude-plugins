@@ -1,0 +1,3 @@
+{"type":"system","subtype":"init"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"STAGE_COMPLETE {\"stage_id\":\"writer\",\"result_path\":\"/tmp/result.json\"}\n"}]}}
+{"type":"result","subtype":"success","is_error":false,"session_id":"s1","result":"ok","total_cost_usd":0.01,"usage":{"input_tokens":1,"output_tokens":1}}

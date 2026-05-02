@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import json
 import os
+import queue
+import re
 import shutil
 import subprocess
+import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
+from .claude_stream import ClaudeStreamParser
 from .context_bundle import render_context_bundle
 from .execution_workspace import ExecutionWorkspaceError, create_execution_workspace, is_sensitive_path
 from .execution_worktree import RunExecutionWorktreeError, commit_stage_artifacts
@@ -45,6 +50,7 @@ from .run_state import (
 )
 from .session_capabilities import doctor_report
 from .stage_invocation import StageInvocation, plan_stage_invocations, render_orchestrator_brief
+from .stage_controller import StageMarkerProcessor
 from .stage_sessions import (
     assign_stage_bead,
     claim_stage,
@@ -519,6 +525,7 @@ def _run_fake_stage_controller(
         )
         workspace_metadata = workspace.to_metadata(prompt_rewrite_count=0)
         artifacts = _apply_synthetic_writes(workspace.launcher_cwd, synthetic_writes)
+    controller_workspace_metadata = {**workspace_metadata, "phase_attempt": int(phase["attempt"])}
     markers = _synthetic_markers(
         stage_invocations,
         synthetic_stage_complete_markers,
@@ -562,7 +569,7 @@ def _run_fake_stage_controller(
         markers=parse_stage_markers(stdout),
         stage_invocations=stage_invocations,
         prepared=prepared,
-        workspace_metadata=workspace_metadata,
+        workspace_metadata=controller_workspace_metadata,
         launch_dir=launch_dir,
         data_dir=data_dir,
     )
@@ -585,84 +592,24 @@ def _process_stage_markers(
     launch_dir: Path,
     data_dir: Path,
 ) -> dict[str, Any]:
-    if not markers:
-        return {"completed": False, "markers": [], "commits": [], "worktree_diff": None, "commit_sha": None, "changed_files": []}
-    by_id = {stage.stage_id: stage for stage in stage_invocations}
-    commits: list[str] = []
-    marker_payloads: list[dict[str, Any]] = []
-    latest_diff: Mapping[str, Any] | None = None
-    allowed_files = _phase_allowed_files(prepared, phase_id)
-    run_excludes = _run_artifact_excludes(run_id, workspace_metadata)
-    completed_stage_ids: set[str] = set()
-    had_controller_failure = False
+    processor = StageMarkerProcessor(
+        run_id=run_id,
+        phase_id=phase_id,
+        phase_attempt=_stage_marker_phase_attempt(workspace_metadata),
+        stage_invocations=stage_invocations,
+        prepared=prepared,
+        workspace_metadata=workspace_metadata,
+        launch_dir=launch_dir,
+        data_dir=data_dir,
+    )
     for marker in markers:
-        marker_payload = marker.to_dict()
-        marker_payloads.append(marker_payload)
-        if marker.stage_id not in by_id:
-            marker_payload["controller_status"] = "unknown_stage_marker"
-            had_controller_failure = True
-            continue
-        if marker.kind == "failed":
-            record_stage_failed(run_id, phase_id, marker.stage_id, marker.failure_kind or "stage_failed", marker.notes, data_dir=data_dir)
-            _mark_stage_bead_blocked(run_id, phase_id, marker, data_dir=data_dir)
-            had_controller_failure = True
-            continue
-        claim_stage(run_id, phase_id, marker.stage_id, data_dir=data_dir)
-        try:
-            stage_result = _load_valid_stage_result(
-                run_id,
-                phase_id,
-                marker,
-                expected_result_path=by_id[marker.stage_id].expected_result_path,
-                data_dir=data_dir,
-            )
-            marker_payload["validated_result_path"] = str(stage_result["path"])
-        except PhaseSessionError as exc:
-            marker_payload["controller_status"] = "stage_result_invalid"
-            record_stage_failed(run_id, phase_id, marker.stage_id, "stage_result_invalid", str(exc), data_dir=data_dir)
-            had_controller_failure = True
-            continue
-        commit_sha: str | None = None
-        try:
-            if workspace_metadata:
-                record = commit_stage_artifacts(
-                    _commit_target_from_workspace(prepared, workspace_metadata),
-                    allowed_files=allowed_files,
-                    run_artifact_excludes=run_excludes,
-                    commit_subject=marker.commit_subject or marker.summary or "stage artifacts",
-                    writer_summary=marker.summary or f"stage {marker.stage_id} completed",
-                    stage_id=marker.stage_id,
-                )
-                latest_diff = record.worktree_diff
-                commit_sha = record.commit_sha
-                if commit_sha:
-                    commits.append(commit_sha)
-        except RunExecutionWorktreeError as exc:
-            record_stage_failed(run_id, phase_id, marker.stage_id, "adoptable_artifacts_uncommittable", str(exc), data_dir=data_dir)
-            had_controller_failure = True
-            continue
-        record_stage_adopted(
-            run_id,
-            phase_id,
-            marker.stage_id,
-            commit_sha=commit_sha,
-            result_path=marker.result_path,
-            transcript_path=launch_dir / "stdout.txt",
-            data_dir=data_dir,
-        )
-        _close_stage_bead(run_id, phase_id, marker.stage_id, commit_sha=commit_sha, data_dir=data_dir)
-        _append_stage_event(data_dir, run_id=run_id, phase_id=phase_id, stage_id=marker.stage_id, event_type="stage_adopted", commit_sha=commit_sha)
-        completed_stage_ids.add(marker.stage_id)
-    changed = changed_files_from_worktree_diff(latest_diff or {}) if latest_diff else []
-    expected_stage_ids = set(by_id)
-    return {
-        "completed": bool(expected_stage_ids) and expected_stage_ids.issubset(completed_stage_ids) and not had_controller_failure,
-        "markers": marker_payloads,
-        "commits": commits,
-        "commit_sha": commits[-1] if commits else None,
-        "worktree_diff": _normalized_worktree_diff(latest_diff) if latest_diff else None,
-        "changed_files": changed,
-    }
+        processor.process_marker(marker)
+    return processor.finish()
+
+
+def _stage_marker_phase_attempt(workspace_metadata: Mapping[str, Any]) -> int:
+    value = workspace_metadata.get("phase_attempt")
+    return int(value) if isinstance(value, int) and not isinstance(value, bool) and value > 0 else 1
 
 
 def _load_valid_stage_result(
@@ -828,6 +775,7 @@ def _prepare_phase_launch(
     }.get(launcher, "unknown")
     metadata: dict[str, Any] = {
         "launcher": launcher,
+        "phase_attempt": attempt,
         "prompt_path": str(launcher_prompt_path),
         "prompt_sha": prompt_sha,
         "prompt_delivery": prompt_delivery,
@@ -1027,6 +975,7 @@ def _run_claude_print_phase(
         )
         return {"status": "launcher_error", "reason": reason, "launch_dir": str(launch["launch_dir"])}
     workspace_metadata = workspace.to_metadata(prompt_rewrite_count=prompt_rewrite_count)
+    workspace_metadata["phase_attempt"] = attempt
 
     resolved_claude = claude_path or shutil.which("claude") or ("claude" if claude_runner is not None else None)
     if not resolved_claude:
@@ -1048,19 +997,27 @@ def _run_claude_print_phase(
     coordinator_settings = {"permissions": {"allow": _allowed_tools_arg("dispatcher"), "deny": []}}
     _write_json_if_changed(coordinator_settings_path, coordinator_settings)
     coordinator_settings_sha = _sha256_file(coordinator_settings_path)
+    real_streaming = claude_runner is None
+    output_format = "stream-json" if real_streaming else "json"
     argv = [
         resolved_claude,
         "-p",
         "--disable-slash-commands",
         "--settings",
         str(coordinator_settings_path),
+    ]
+    if real_streaming:
+        argv.append("--verbose")
+    argv.extend(
+        [
         "--output-format",
-        "json",
+        output_format,
         "--permission-mode",
         "dontAsk",
         "--allowedTools",
         *_allowed_tools_arg("dispatcher"),
-    ]
+        ]
+    )
     if max_budget_usd is not None:
         argv.extend(["--max-budget-usd", str(max_budget_usd)])
     launch = _prepare_phase_launch(
@@ -1076,10 +1033,12 @@ def _run_claude_print_phase(
         settings_sha=coordinator_settings_sha,
         workspace_metadata={
             **workspace_metadata,
+            "output_format": output_format,
             "writer_settings_path": str(writer_settings_path),
             "writer_settings_sha": _sha256_file(writer_settings_path),
             "stage_session_path": str(stage_session_path(run_id, phase_id, data_dir=data_dir)),
             "stage_count": len(stage_plan["stage_invocations"]),
+            **(_stream_command_metadata() if real_streaming else {}),
         },
     )
     launch_dir = launch["launch_dir"]
@@ -1104,6 +1063,10 @@ def _run_claude_print_phase(
                 result_path=result_path,
                 handoff_path=handoff_path,
                 cwd=workspace.launcher_cwd,
+                phase_attempt=attempt,
+                stage_invocations=stage_plan["stage_invocations"],
+                prepared=prepared,
+                workspace_metadata=workspace_metadata,
             )
     except subprocess.TimeoutExpired as exc:
         (launch_dir / "stdout.txt").write_text(exc.stdout or "", encoding="utf-8")
@@ -1124,16 +1087,20 @@ def _run_claude_print_phase(
     stderr = proc.stderr or ""
     (launch_dir / "stdout.txt").write_text(stdout, encoding="utf-8")
     (launch_dir / "stderr.txt").write_text(stderr, encoding="utf-8")
-    stage_controller = _process_stage_markers(
-        run_id,
-        phase_id,
-        markers=parse_stage_markers(stdout),
-        stage_invocations=stage_plan["stage_invocations"],
-        prepared=prepared,
-        workspace_metadata=workspace.to_metadata(prompt_rewrite_count=prompt_rewrite_count),
-        launch_dir=launch_dir,
-        data_dir=data_dir,
-    )
+    live_stage_controller = getattr(proc, "stage_controller", None)
+    if isinstance(live_stage_controller, Mapping):
+        stage_controller = dict(live_stage_controller)
+    else:
+        stage_controller = _process_stage_markers(
+            run_id,
+            phase_id,
+            markers=parse_stage_markers(stdout),
+            stage_invocations=stage_plan["stage_invocations"],
+            prepared=prepared,
+            workspace_metadata=workspace_metadata,
+            launch_dir=launch_dir,
+            data_dir=data_dir,
+        )
     if stage_controller.get("completed") and not result_path.is_file():
         _write_controller_phase_result(
             run_id,
@@ -1212,6 +1179,10 @@ def _run_real_claude(
     handoff_path: Path,
     prompt_text: str | None = None,
     cwd: Path | None = None,
+    phase_attempt: int = 1,
+    stage_invocations: list[StageInvocation] | None = None,
+    prepared: Mapping[str, Any] | None = None,
+    workspace_metadata: Mapping[str, Any] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     state = load_phase_sessions(run_id, data_dir=data_dir)
     policy = state.get("lease_policy") if isinstance(state.get("lease_policy"), Mapping) else {}
@@ -1269,6 +1240,195 @@ def _run_real_claude(
         # attached, even if the caller closed it. Detach it after the one-time
         # write so later collection only drains stdout/stderr.
         proc.stdin = None
+    if not hasattr(proc, "stdout") or not hasattr(proc, "stderr") or proc.stdout is None or proc.stderr is None:
+        return _run_real_claude_communicate_compat(
+            proc,
+            argv,
+            run_id=run_id,
+            phase_id=phase_id,
+            lease_owner=lease_owner,
+            data_dir=data_dir,
+            refresh_interval=refresh_interval,
+            timeout_seconds=timeout_seconds,
+            started=started,
+        )
+
+    parser = ClaudeStreamParser()
+    processor = (
+        StageMarkerProcessor(
+            run_id=run_id,
+            phase_id=phase_id,
+            phase_attempt=phase_attempt,
+            stage_invocations=list(stage_invocations or []),
+            prepared=prepared or {},
+            workspace_metadata=workspace_metadata or {},
+            launch_dir=launch_dir,
+            data_dir=data_dir,
+        )
+        if stage_invocations
+        else None
+    )
+    stdout_lines: list[str] = []
+    stderr_lines: list[str] = []
+    final_result_frame: Mapping[str, Any] | None = None
+    pipe_queue: queue.Queue[tuple[str, str | None]] = queue.Queue()
+    stdout_closed = False
+    stderr_closed = False
+    last_refresh = time.monotonic()
+    stdout_stream_path = launch_dir / "stdout.stream.jsonl"
+    stderr_stream_path = launch_dir / "stderr.stream.txt"
+    stdout_stream_path.parent.mkdir(parents=True, exist_ok=True)
+    stdout_stream_bytes = 0
+    stdout_truncated_at: int | None = None
+
+    stdout_thread = threading.Thread(
+        target=_enqueue_stream_lines,
+        args=("stdout", proc.stdout, pipe_queue),
+        name="claude-stdout-reader",
+        daemon=True,
+    )
+    stderr_thread = threading.Thread(
+        target=_enqueue_stream_lines,
+        args=("stderr", proc.stderr, pipe_queue),
+        name="claude-stderr-reader",
+        daemon=True,
+    )
+    stdout_thread.start()
+    stderr_thread.start()
+    with stdout_stream_path.open("a", encoding="utf-8", buffering=1) as stdout_stream, stderr_stream_path.open(
+        "a", encoding="utf-8", buffering=1
+    ) as stderr_stream:
+        while not (stdout_closed and stderr_closed):
+            elapsed = time.monotonic() - started
+            if elapsed > timeout_seconds:
+                proc.kill()
+                stdout_closed, stderr_closed, stdout_stream_bytes, stdout_truncated_at, final_result_frame = _drain_stream_queue(
+                    pipe_queue,
+                    parser=parser,
+                    processor=processor,
+                    stdout_stream=stdout_stream,
+                    stdout_stream_path=stdout_stream_path,
+                    stderr_stream=stderr_stream,
+                    stdout_lines=stdout_lines,
+                    stderr_lines=stderr_lines,
+                    stdout_stream_bytes=stdout_stream_bytes,
+                    stdout_truncated_at=stdout_truncated_at,
+                    metadata=metadata,
+                    command_path=command_path,
+                    deadline=time.monotonic() + 5.0,
+                    stdout_closed=stdout_closed,
+                    stderr_closed=stderr_closed,
+                    final_result_frame=final_result_frame,
+                )
+                stdout_thread.join(timeout=5.0)
+                stderr_thread.join(timeout=5.0)
+                stage_controller = processor.finish() if processor is not None else _initial_stage_controller_metadata(live=True)
+                stdout_text = _stdout_contract(final_result_frame, stdout_lines, metadata)
+                stderr_text = "".join(stderr_lines)
+                _finalize_stream_metadata(metadata, parser, stage_controller=stage_controller, fallback=metadata.get("stream_metadata", {}).get("fallback"))
+                command_path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+                (launch_dir / "stdout.txt").write_text(stdout_text, encoding="utf-8")
+                (launch_dir / "stderr.txt").write_text(stderr_text, encoding="utf-8")
+                if not stdout_stream.closed:
+                    stdout_stream.close()
+                if not stderr_stream.closed:
+                    stderr_stream.close()
+                raise subprocess.TimeoutExpired(list(argv), timeout_seconds, output=stdout_text, stderr=stderr_text)
+            wait_for = min(refresh_interval, max(0.1, timeout_seconds - elapsed))
+            try:
+                stream_name, line = pipe_queue.get(timeout=wait_for)
+            except queue.Empty:
+                pass
+            else:
+                if stream_name == "stdout" and line is None:
+                    stdout_closed = True
+                elif stream_name == "stderr" and line is None:
+                    stderr_closed = True
+                elif stream_name == "stdout" and line is not None:
+                    stdout_lines.append(line)
+                    stdout_stream, stdout_stream_bytes, stdout_truncated_at = _write_stdout_stream_line(
+                        stdout_stream,
+                        stdout_stream_path,
+                        line,
+                        stdout_stream_bytes=stdout_stream_bytes,
+                        stdout_truncated_at=stdout_truncated_at,
+                        metadata=metadata,
+                        command_path=command_path,
+                    )
+                    chunk = parser.feed_line(line)
+                    if chunk.kind == "assistant_text" and processor is not None and not _systemic_parse_error(parser.metadata()):
+                        processor.process_text(chunk.text)
+                    elif chunk.kind == "result":
+                        final_result_frame = chunk.raw_frame
+                elif stream_name == "stderr" and line is not None:
+                    stderr_lines.append(line)
+                    stderr_stream.write(line)
+            if time.monotonic() - last_refresh >= refresh_interval:
+                refresh_phase(run_id, phase_id, lease_owner=lease_owner, data_dir=data_dir)
+                last_refresh = time.monotonic()
+        if not stdout_stream.closed:
+            stdout_stream.close()
+        if not stderr_stream.closed:
+            stderr_stream.close()
+    stdout_thread.join(timeout=5.0)
+    stderr_thread.join(timeout=5.0)
+    if hasattr(proc, "wait"):
+        try:
+            proc.wait(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5.0)
+    returncode = getattr(proc, "returncode", None)
+    if returncode is None and hasattr(proc, "poll"):
+        returncode = proc.poll()
+    returncode = int(returncode or 0)
+    elapsed = time.monotonic() - started
+    stderr_text = "".join(stderr_lines)
+    if _should_retry_legacy_json(returncode, elapsed, stderr_text):
+        metadata.setdefault("stream_metadata", {})["fallback"] = "legacy_json_retry"
+        metadata["output_format"] = "json"
+        command_path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        return _run_real_claude_legacy_json(
+            _legacy_json_argv(argv),
+            run_id=run_id,
+            phase_id=phase_id,
+            lease_owner=lease_owner,
+            data_dir=data_dir,
+            launch_dir=launch_dir,
+            command_path=command_path,
+            metadata=metadata,
+            prompt_sha=prompt_sha,
+            result_path=result_path,
+            handoff_path=handoff_path,
+            prompt_text=prompt_text,
+            cwd=cwd,
+        )
+    stage_controller = processor.finish() if processor is not None else _initial_stage_controller_metadata(live=True)
+    fallback = None
+    if final_result_frame is None:
+        fallback = "raw"
+    stdout_text = _stdout_contract(final_result_frame, stdout_lines, metadata, fallback=fallback)
+    _finalize_stream_metadata(metadata, parser, stage_controller=stage_controller, fallback=fallback)
+    command_path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (launch_dir / "stdout.txt").write_text(stdout_text, encoding="utf-8")
+    (launch_dir / "stderr.txt").write_text(stderr_text, encoding="utf-8")
+    completed = subprocess.CompletedProcess(list(argv), returncode, stdout=stdout_text, stderr=stderr_text)
+    setattr(completed, "stage_controller", stage_controller)
+    return completed
+
+
+def _run_real_claude_communicate_compat(
+    proc: Any,
+    argv: Sequence[str],
+    *,
+    run_id: str,
+    phase_id: str,
+    lease_owner: str,
+    data_dir: Path,
+    refresh_interval: int,
+    timeout_seconds: int,
+    started: float,
+) -> subprocess.CompletedProcess[str]:
     while True:
         elapsed = time.monotonic() - started
         if elapsed > timeout_seconds:
@@ -1285,6 +1445,282 @@ def _run_real_claude(
             return subprocess.CompletedProcess(list(argv), proc.returncode, stdout=stdout, stderr=stderr)
         except subprocess.TimeoutExpired:
             refresh_phase(run_id, phase_id, lease_owner=lease_owner, data_dir=data_dir)
+
+
+def _run_real_claude_legacy_json(
+    argv: Sequence[str],
+    *,
+    run_id: str,
+    phase_id: str,
+    lease_owner: str,
+    data_dir: Path,
+    launch_dir: Path,
+    command_path: Path,
+    metadata: dict[str, Any],
+    prompt_sha: str,
+    result_path: Path,
+    handoff_path: Path,
+    prompt_text: str | None,
+    cwd: Path | None,
+) -> subprocess.CompletedProcess[str]:
+    state = load_phase_sessions(run_id, data_dir=data_dir)
+    policy = state.get("lease_policy") if isinstance(state.get("lease_policy"), Mapping) else {}
+    refresh_interval = max(1, int(policy.get("refresh_interval_seconds") or 300))
+    timeout_seconds = max(1, int(policy.get("running_ttl_seconds") or 14400) - (2 * refresh_interval))
+    started = time.monotonic()
+    env = os.environ.copy()
+    if cwd is not None:
+        env["PWD"] = str(cwd)
+    proc = subprocess.Popen(
+        list(argv),
+        stdin=subprocess.PIPE if prompt_text is not None else None,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+        cwd=str(cwd) if cwd is not None else None,
+        env=env,
+    )
+    process_group_id: int | None = None
+    metadata_error: str | None = None
+    try:
+        process_group_id = os.getpgid(proc.pid)
+    except Exception as exc:
+        metadata_error = str(exc)
+    metadata["child_pid"] = proc.pid
+    metadata["process_group_id"] = process_group_id
+    if metadata_error:
+        metadata["process_group_lookup_error"] = metadata_error
+    command_path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    record_launch_metadata(
+        run_id,
+        phase_id,
+        data_dir=data_dir,
+        launch_dir=launch_dir,
+        command_path=command_path,
+        parent_pid=os.getpid(),
+        child_pid=proc.pid,
+        process_group_id=process_group_id,
+        prompt_sha=prompt_sha,
+        expected_result_path=result_path,
+        expected_handoff_path=handoff_path,
+        launch_metadata_error=metadata_error,
+    )
+    if prompt_text is not None and proc.stdin is not None:
+        proc.stdin.write(prompt_text)
+        proc.stdin.flush()
+        proc.stdin.close()
+        proc.stdin = None
+    return _run_real_claude_communicate_compat(
+        proc,
+        argv,
+        run_id=run_id,
+        phase_id=phase_id,
+        lease_owner=lease_owner,
+        data_dir=data_dir,
+        refresh_interval=refresh_interval,
+        timeout_seconds=timeout_seconds,
+        started=started,
+    )
+
+
+def _enqueue_stream_lines(stream_name: str, stream: Any, out: "queue.Queue[tuple[str, str | None]]") -> None:
+    try:
+        for line in iter(stream.readline, ""):
+            if line == "":
+                break
+            out.put((stream_name, line))
+    finally:
+        out.put((stream_name, None))
+
+
+def _drain_stream_queue(
+    pipe_queue: "queue.Queue[tuple[str, str | None]]",
+    *,
+    parser: ClaudeStreamParser,
+    processor: StageMarkerProcessor | None,
+    stdout_stream: Any,
+    stdout_stream_path: Path,
+    stderr_stream: Any,
+    stdout_lines: list[str],
+    stderr_lines: list[str],
+    stdout_stream_bytes: int,
+    stdout_truncated_at: int | None,
+    metadata: dict[str, Any],
+    command_path: Path,
+    deadline: float,
+    stdout_closed: bool,
+    stderr_closed: bool,
+    final_result_frame: Mapping[str, Any] | None,
+) -> tuple[bool, bool, int, int | None, Mapping[str, Any] | None]:
+    while time.monotonic() < deadline and not (stdout_closed and stderr_closed):
+        try:
+            stream_name, line = pipe_queue.get(timeout=0.1)
+        except queue.Empty:
+            continue
+        if stream_name == "stdout" and line is None:
+            stdout_closed = True
+        elif stream_name == "stderr" and line is None:
+            stderr_closed = True
+        elif stream_name == "stdout" and line is not None:
+            stdout_lines.append(line)
+            stdout_stream, stdout_stream_bytes, stdout_truncated_at = _write_stdout_stream_line(
+                stdout_stream,
+                stdout_stream_path,
+                line,
+                stdout_stream_bytes=stdout_stream_bytes,
+                stdout_truncated_at=stdout_truncated_at,
+                metadata=metadata,
+                command_path=command_path,
+            )
+            chunk = parser.feed_line(line)
+            if chunk.kind == "assistant_text" and processor is not None and not _systemic_parse_error(parser.metadata()):
+                processor.process_text(chunk.text)
+            elif chunk.kind == "result":
+                final_result_frame = chunk.raw_frame
+        elif stream_name == "stderr" and line is not None:
+            stderr_lines.append(line)
+            stderr_stream.write(line)
+    return stdout_closed, stderr_closed, stdout_stream_bytes, stdout_truncated_at, final_result_frame
+
+
+_STDOUT_STREAM_CAP_BYTES = 64 * 1024 * 1024
+
+
+def _write_stdout_stream_line(
+    stream: Any,
+    stream_path: Path,
+    line: str,
+    *,
+    stdout_stream_bytes: int,
+    stdout_truncated_at: int | None,
+    metadata: dict[str, Any],
+    command_path: Path,
+) -> tuple[Any, int, int | None]:
+    line_bytes = len(line.encode("utf-8", errors="replace"))
+    if stdout_truncated_at is None and stdout_stream_bytes + line_bytes > _STDOUT_STREAM_CAP_BYTES:
+        truncated_at = stdout_stream_bytes + line_bytes
+        sentinel = {
+            "type": "_truncated",
+            "at_bytes": truncated_at,
+            "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        }
+        stream.write(json.dumps(sentinel, sort_keys=True) + "\n")
+        stream.flush()
+        stream.close()
+        rollover = stream_path.with_name(stream_path.name + ".1")
+        if rollover.exists():
+            rollover.unlink()
+        stream_path.replace(rollover)
+        stream = stream_path.open("a", encoding="utf-8", buffering=1)
+        metadata.setdefault("stream_metadata", {})["truncated_at_bytes"] = truncated_at
+        command_path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        stdout_truncated_at = truncated_at
+        stdout_stream_bytes = 0
+    stream.write(line)
+    return stream, stdout_stream_bytes + line_bytes, stdout_truncated_at
+
+
+def _stdout_contract(
+    final_result_frame: Mapping[str, Any] | None,
+    stdout_lines: list[str],
+    metadata: dict[str, Any],
+    *,
+    fallback: str | None = None,
+) -> str:
+    if final_result_frame is not None:
+        return json.dumps(dict(final_result_frame), sort_keys=True) + "\n"
+    metadata.setdefault("stream_metadata", {})["fallback"] = fallback or "raw"
+    return "".join(stdout_lines)
+
+
+def _finalize_stream_metadata(
+    metadata: dict[str, Any],
+    parser: ClaudeStreamParser,
+    *,
+    stage_controller: Mapping[str, Any],
+    fallback: str | None,
+) -> None:
+    stream_metadata = metadata.setdefault("stream_metadata", {})
+    existing_truncation = stream_metadata.get("truncated_at_bytes")
+    stream_metadata.update(parser.metadata())
+    stream_metadata["systemic_parse_error"] = _systemic_parse_error(stream_metadata)
+    stream_metadata["truncated_at_bytes"] = existing_truncation
+    if fallback is not None:
+        stream_metadata["fallback"] = fallback
+    else:
+        stream_metadata.setdefault("fallback", None)
+    metadata["stream_final_result_seen"] = bool(stream_metadata.get("final_result_seen"))
+    metadata["stage_controller"] = dict(stage_controller)
+
+
+def _systemic_parse_error(metadata: Mapping[str, Any]) -> bool:
+    errors = int(metadata.get("parse_error_count") or 0)
+    frames = int(metadata.get("frames_seen") or 0)
+    return errors > 50 or (frames > 100 and errors / max(frames, 1) > 0.25)
+
+
+def _should_retry_legacy_json(returncode: int, elapsed: float, stderr_text: str) -> bool:
+    if returncode == 0 or elapsed >= 3.0:
+        return False
+    return bool(re.search(r"unknown option|invalid choice: 'stream-json'|unrecognized argument|unrecognized option", stderr_text, re.I))
+
+
+def _legacy_json_argv(argv: Sequence[str]) -> list[str]:
+    out = list(argv)
+    if "--verbose" in out:
+        out.remove("--verbose")
+    try:
+        index = out.index("--output-format")
+    except ValueError:
+        out.extend(["--output-format", "json"])
+        return out
+    if index + 1 < len(out):
+        out[index + 1] = "json"
+    else:
+        out.append("json")
+    return out
+
+
+def _stream_command_metadata() -> dict[str, Any]:
+    return {
+        "stream_stdout_path": "stdout.stream.jsonl",
+        "stream_stderr_path": "stderr.stream.txt",
+        "stream_metadata": _initial_stream_metadata(),
+        "stage_controller": _initial_stage_controller_metadata(live=True),
+    }
+
+
+def _initial_stream_metadata() -> dict[str, Any]:
+    return {
+        "frames_seen": 0,
+        "parse_error_count": 0,
+        "first_parse_error": None,
+        "final_result_seen": False,
+        "ignored_frame_types": {},
+        "fallback": None,
+        "systemic_parse_error": False,
+        "truncated_at_bytes": None,
+    }
+
+
+def _initial_stage_controller_metadata(*, live: bool) -> dict[str, Any]:
+    return {
+        "live": bool(live),
+        "completed": False,
+        "markers": [],
+        "commits": [],
+        "commit_sha": None,
+        "worktree_diff": None,
+        "changed_files": [],
+        "pending_marker_count": 0,
+        "duplicate_marker_count": 0,
+        "amended_count": 0,
+        "rejected_marker_count": 0,
+        "rejected_unknown_stage": 0,
+        "rejected_invalid_path": 0,
+        "rejected_invalid_result": 0,
+    }
 
 
 def _allowed_tools_arg(role: str = "writer") -> list[str]:

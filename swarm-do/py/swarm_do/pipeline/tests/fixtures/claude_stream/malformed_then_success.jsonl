@@ -1,0 +1,3 @@
+this is not json
+{"type":"assistant","message":{"content":[{"type":"text","text":"hello"}]}}
+{"type":"result","subtype":"success","is_error":false,"session_id":"s2","result":"ok"}

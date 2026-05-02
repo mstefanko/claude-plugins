@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest import mock
 
 from swarm_do.pipeline.paths import REPO_ROOT
+from swarm_do.pipeline import session_capabilities
 from swarm_do.pipeline.session_capabilities import (
     doctor_report,
     extract_claude_print_artifacts,
@@ -41,6 +42,40 @@ class SessionCapabilitiesTests(unittest.TestCase):
         launchers = {item["name"]: item for item in report["launchers"]}
         self.assertTrue(launchers["claude-print"]["eligible"])
         self.assertTrue(calls)
+
+    def test_claude_print_stream_json_probe_supported(self) -> None:
+        def runner(argv):
+            if argv[-1] == "--help":
+                return subprocess.CompletedProcess(argv, 0, stdout="--output-format text,json,stream-json\n", stderr="")
+            return subprocess.CompletedProcess(argv, 0, stdout="claude 1.0\n", stderr="")
+
+        with tempfile.TemporaryDirectory() as td, mock.patch("shutil.which", return_value="/usr/bin/claude-stream-supported"):
+            session_capabilities._STREAM_JSON_SUPPORT_CACHE.clear()
+            fixture_dir = Path(td) / "py" / "swarm_do" / "pipeline" / "tests" / "fixtures" / "claude_print"
+            fixture_dir.mkdir(parents=True)
+            for source in (REPO_ROOT / "py" / "swarm_do" / "pipeline" / "tests" / "fixtures" / "claude_print").glob("*.json"):
+                (fixture_dir / source.name).write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+            report = doctor_report(live=True, runner=runner, repo_root=Path(td))
+
+        launchers = {item["name"]: item for item in report["launchers"]}
+        self.assertTrue(launchers["claude-print"]["details"]["stream_json_supported"])
+
+    def test_claude_print_stream_json_probe_unsupported(self) -> None:
+        def runner(argv):
+            if argv[-1] == "--help":
+                return subprocess.CompletedProcess(argv, 0, stdout="--output-format text,json\n", stderr="")
+            return subprocess.CompletedProcess(argv, 0, stdout="claude 1.0\n", stderr="")
+
+        with tempfile.TemporaryDirectory() as td, mock.patch("shutil.which", return_value="/usr/bin/claude-stream-unsupported"):
+            session_capabilities._STREAM_JSON_SUPPORT_CACHE.clear()
+            fixture_dir = Path(td) / "py" / "swarm_do" / "pipeline" / "tests" / "fixtures" / "claude_print"
+            fixture_dir.mkdir(parents=True)
+            for source in (REPO_ROOT / "py" / "swarm_do" / "pipeline" / "tests" / "fixtures" / "claude_print").glob("*.json"):
+                (fixture_dir / source.name).write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+            report = doctor_report(live=True, runner=runner, repo_root=Path(td))
+
+        launchers = {item["name"]: item for item in report["launchers"]}
+        self.assertFalse(launchers["claude-print"]["details"]["stream_json_supported"])
 
     def test_malformed_claude_print_json_is_rejected(self) -> None:
         with self.assertRaises(ValueError):
