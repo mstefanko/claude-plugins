@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from . import phase_sessions as _phase_sessions
-from .phase_autopilot_policy import ResolvedPolicyUpdate
+from .policies import ResolvedPolicyUpdate
 
 
 PhaseArtifactContractError = _phase_sessions.PhaseArtifactContractError

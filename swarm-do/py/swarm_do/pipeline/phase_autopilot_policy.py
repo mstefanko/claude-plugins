@@ -33,6 +33,22 @@ POLICY_REASONS = (
 
 DEFAULT_BACKOFF_SCHEDULE_SECONDS = (60, 180, 600)
 
+DEFAULT_RETRY_POLICY_DICT = {
+    "max_session_attempts": 2,
+    "max_recovery_attempts": 1,
+    "recovery_timeout_threshold_seconds": 600,
+    "retry_sleep_threshold_seconds": 0,
+    "short_retry_backoff_seconds": 60,
+    "max_retry_after_seconds": 1800,
+    "max_consecutive_same_failure_kind": 2,
+    "autopilot_profile": "standard",
+    "max_failed_attempt_cost_usd": None,
+    "max_failed_run_cost_usd": None,
+    "max_phase_attempt_budget_usd": None,
+    "worktree_baseline_path": None,
+    "worktree_baseline_warning": None,
+}
+
 _PROFILE_DEFAULTS: dict[str, dict[str, Any]] = {
     "standard": {},
     "dogfood": {
@@ -128,25 +144,42 @@ def expand_profile(profile: str) -> dict[str, Any]:
     return expanded
 
 
+def default_retry_policy() -> dict[str, Any]:
+    return dict(DEFAULT_RETRY_POLICY_DICT)
+
+
 def retry_policy_config(policy: Mapping[str, Any]) -> AutopilotPolicyConfig:
     profile = str(policy.get("autopilot_profile") or "standard")
     if profile not in POLICY_PROFILES:
         raise ValueError(f"unsupported autopilot policy profile: {profile}")
+    defaults = DEFAULT_RETRY_POLICY_DICT
     return AutopilotPolicyConfig(
         autopilot_profile=profile,
-        max_session_attempts=_positive_int(policy.get("max_session_attempts"), default=2, minimum=1),
-        max_recovery_attempts=_positive_int(policy.get("max_recovery_attempts"), default=1, minimum=0),
+        max_session_attempts=_positive_int(policy.get("max_session_attempts"), default=int(defaults["max_session_attempts"]), minimum=1),
+        max_recovery_attempts=_positive_int(policy.get("max_recovery_attempts"), default=int(defaults["max_recovery_attempts"]), minimum=0),
         recovery_timeout_threshold_seconds=_positive_int(
             policy.get("recovery_timeout_threshold_seconds"),
-            default=600,
+            default=int(defaults["recovery_timeout_threshold_seconds"]),
             minimum=1,
         ),
-        retry_sleep_threshold_seconds=_positive_int(policy.get("retry_sleep_threshold_seconds"), default=0, minimum=0),
-        short_retry_backoff_seconds=_positive_int(policy.get("short_retry_backoff_seconds"), default=60, minimum=0),
-        max_retry_after_seconds=_positive_int(policy.get("max_retry_after_seconds"), default=1800, minimum=0),
+        retry_sleep_threshold_seconds=_positive_int(
+            policy.get("retry_sleep_threshold_seconds"),
+            default=int(defaults["retry_sleep_threshold_seconds"]),
+            minimum=0,
+        ),
+        short_retry_backoff_seconds=_positive_int(
+            policy.get("short_retry_backoff_seconds"),
+            default=int(defaults["short_retry_backoff_seconds"]),
+            minimum=0,
+        ),
+        max_retry_after_seconds=_positive_int(
+            policy.get("max_retry_after_seconds"),
+            default=int(defaults["max_retry_after_seconds"]),
+            minimum=0,
+        ),
         max_consecutive_same_failure_kind=_positive_int(
             policy.get("max_consecutive_same_failure_kind"),
-            default=2,
+            default=int(defaults["max_consecutive_same_failure_kind"]),
             minimum=1,
         ),
         max_failed_attempt_cost_usd=_optional_nonnegative_float(policy.get("max_failed_attempt_cost_usd")),
@@ -356,7 +389,7 @@ def validate_policy_overrides(values: Mapping[str, Any]) -> None:
             "max_failed_run_cost_usd",
             "max_phase_attempt_budget_usd",
         }:
-            _optional_nonnegative_float(value)
+            _optional_nonnegative_float(value, key=key)
             continue
         if key in {
             "max_session_attempts",
@@ -368,7 +401,7 @@ def validate_policy_overrides(values: Mapping[str, Any]) -> None:
             "max_consecutive_same_failure_kind",
         }:
             minimum = 1 if key in {"max_session_attempts", "recovery_timeout_threshold_seconds", "max_consecutive_same_failure_kind"} else 0
-            _positive_int(value, default=minimum, minimum=minimum)
+            _positive_int(value, default=minimum, minimum=minimum, key=key)
 
 
 def _policy_inputs(policy_input: AutopilotPolicyInput, config: AutopilotPolicyConfig) -> dict[str, Any]:
@@ -434,23 +467,27 @@ def _decision(
     )
 
 
-def _positive_int(value: Any, *, default: int, minimum: int) -> int:
+def _positive_int(value: Any, *, default: int, minimum: int, key: str | None = None) -> int:
     if value is None:
         return default
     if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError(f"expected integer policy value, got {value!r}")
+        prefix = f"policy[{key}] " if key else ""
+        raise ValueError(f"{prefix}expected integer, got {value!r}")
     if value < minimum:
-        raise ValueError(f"policy integer value {value!r} is less than minimum {minimum}")
+        prefix = f"policy[{key}] " if key else "policy "
+        raise ValueError(f"{prefix}integer value {value!r} is less than minimum {minimum}")
     return value
 
 
-def _optional_nonnegative_float(value: Any) -> float | None:
+def _optional_nonnegative_float(value: Any, *, key: str | None = None) -> float | None:
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(f"expected numeric policy threshold, got {value!r}")
+        prefix = f"policy[{key}] " if key else ""
+        raise ValueError(f"{prefix}expected numeric threshold, got {value!r}")
     if float(value) < 0:
-        raise ValueError(f"policy threshold {value!r} is less than minimum 0")
+        prefix = f"policy[{key}] " if key else "policy "
+        raise ValueError(f"{prefix}threshold {value!r} is less than minimum 0")
     return float(value)
 
 
@@ -458,10 +495,12 @@ __all__ = [
     "AutopilotPolicyConfig",
     "AutopilotPolicyDecision",
     "AutopilotPolicyInput",
+    "DEFAULT_RETRY_POLICY_DICT",
     "POLICY_ACTIONS",
     "POLICY_PROFILES",
     "POLICY_REASONS",
     "ResolvedPolicyUpdate",
+    "default_retry_policy",
     "evaluate_autopilot_policy",
     "expand_profile",
     "fallback_retry_after_seconds",

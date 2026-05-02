@@ -7,6 +7,54 @@ truth is still the append-only ledgers under
 `${CLAUDE_PLUGIN_DATA}/telemetry/`; the TUI should mirror these commands before
 it grows richer charts.
 
+## Run Trace Fixtures
+
+The Phase 4 control-plane eval harness reads durable run artifacts without live
+Claude or Codex calls:
+
+```bash
+bin/swarm trace build <run-id> --json
+bin/swarm eval run tests/fixtures/run-traces
+```
+
+Trace JSON is schema-versioned with integer `schema_version: 1`. Version 1 is
+additive-only: removing or renaming a field requires a version bump, while
+adding optional fields does not. The trace stores paths, digests, counters, and
+selected structured fields only; it does not inline prompt, stdout, stderr,
+result, handoff, or evidence content.
+
+### Adding A Fixture
+
+Create a directory under `tests/fixtures/run-traces/<name>/`:
+
+```text
+<name>/
+  expectation.yaml
+  active-run.json
+  events.jsonl
+  run/
+    prepared_plan.v1.json
+    phase_sessions.v1.json
+```
+
+Use `required_artifacts` for hard presence checks, `expected_warnings` for
+intentional malformed artifacts, and `forbidden_warnings` for warnings that
+must never appear. Assertions may check `stage_controller.*` counters from
+`command.json`, but should not check launcher argv details.
+
+### Dogfooding Against A Real Run
+
+Regenerate an expectation from an existing run directory:
+
+```bash
+bin/swarm eval record "${CLAUDE_PLUGIN_DATA}/runs/<run-id>" --to tests/fixtures/run-traces/<name>
+bin/swarm eval run tests/fixtures/run-traces/<name> --json
+```
+
+Review the generated `expectation.yaml` before committing it. Keep raw prompt
+and stdout content in fixture files only when it is synthetic and safe; trace
+output must never depend on free-form text content.
+
 ## Baseline Gate
 
 Before promoting a preset above `balanced`, capture at least 10 representative

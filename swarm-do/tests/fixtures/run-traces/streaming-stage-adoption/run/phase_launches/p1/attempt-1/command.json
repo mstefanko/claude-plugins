@@ -1,0 +1,20 @@
+{
+  "launcher": "claude-print",
+  "stage_controller": {
+    "live": true,
+    "completed": true,
+    "pending_marker_count": 0,
+    "duplicate_marker_count": 1,
+    "amended_count": 0,
+    "rejected_marker_count": 0,
+    "rejected_unknown_stage": 0,
+    "rejected_invalid_path": 0,
+    "rejected_invalid_result": 0,
+    "parse_error": 0,
+    "legacy_json_retry": 0,
+    "ignored_frame_types": {}
+  },
+  "stream_metadata": {
+    "final_result_seen": true
+  }
+}

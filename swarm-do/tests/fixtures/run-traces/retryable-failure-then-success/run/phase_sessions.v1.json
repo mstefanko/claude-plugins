@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "run_id": "01J00000000000000000000002",
+  "phases": [
+    {
+      "phase_id": "p1",
+      "phase_index": 0,
+      "title": "Retry phase",
+      "depends_on_phase_ids": [],
+      "status": "complete",
+      "attempt": 2,
+      "started_at": "2026-05-02T00:04:00Z",
+      "completed_at": "2026-05-02T00:05:00Z",
+      "attempt_history": [
+        {
+          "attempt": 1,
+          "launcher": "fake-test",
+          "launch_dir": "run/phase_launches/p1/attempt-1",
+          "result_path": "run/phase_results/p1/attempt-1.result.json",
+          "handoff_path": "run/phase_handoffs/p1/attempt-1.handoff.json",
+          "failure_kind": "launcher_nonzero_no_artifacts",
+          "retry_decision": "retry",
+          "evidence_path": "run/phase_launches/p1/attempt-1/evidence.json"
+        },
+        {
+          "attempt": 2,
+          "launcher": "fake-test",
+          "launch_dir": "run/phase_launches/p1/attempt-2",
+          "result_path": "run/phase_results/p1/attempt-2.result.json",
+          "handoff_path": "run/phase_handoffs/p1/attempt-2.handoff.json",
+          "failure_kind": null,
+          "retry_decision": null,
+          "evidence_path": "run/phase_launches/p1/attempt-2/evidence.json"
+        }
+      ]
+    }
+  ]
+}

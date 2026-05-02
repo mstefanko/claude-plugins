@@ -1,0 +1,1 @@
+{"schema_version":1,"launcher":"fake-test","metrics":{"input_tokens":7,"output_tokens":1,"total_cost_usd":0.01},"failure":{"failure_kind":"launcher_nonzero_no_artifacts","retry_decision":"retry"},"artifacts":{"changed_files":[]}}

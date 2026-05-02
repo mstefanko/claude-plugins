@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .paths import REPO_ROOT, resolve_data_dir
-from .phase_autopilot_policy import (
+from .policies import (
     AutopilotPolicyInput,
     evaluate_autopilot_policy,
     retry_policy_config,

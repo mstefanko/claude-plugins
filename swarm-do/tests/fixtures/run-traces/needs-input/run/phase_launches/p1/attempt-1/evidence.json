@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "launcher": "fake-test",
+  "metrics": {"input_tokens": 4, "output_tokens": 2, "total_cost_usd": 0.0},
+  "failure": {"failure_kind": "needs_input", "retry_decision": "human_gate"},
+  "artifacts": {"changed_files": []}
+}

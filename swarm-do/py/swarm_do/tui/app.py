@@ -40,6 +40,7 @@ else:  # pragma: no cover - UI smoke-tested through the wrapper in operator use.
 
 from swarm_do.pipeline.config_hash import active_config_hash
 from swarm_do.pipeline.graph_source import resolve_preset_graph
+from swarm_do.pipeline.policies import resolved_policy_summary
 from swarm_do.pipeline.registry import find_pipeline, find_preset, list_presets, load_pipeline, load_preset, sha256_file
 from swarm_do.pipeline.resolver import BACKENDS, EFFORTS, BackendResolver, ROLE_DEFAULTS, active_preset_name
 from swarm_do.pipeline.validation import MCO_PROVIDER_ORDER, schema_lint_pipeline
@@ -743,7 +744,8 @@ if TEXTUAL_IMPORT_ERROR is None:
 
     def _policy_summary(preset: Mapping[str, Any]) -> str:
         bits = []
-        review = preset.get("review_providers")
+        summary = resolved_policy_summary(review_providers=preset.get("review_providers"))
+        review = summary.review_providers
         if isinstance(review, Mapping):
             selection = review.get("selection", "auto")
             bits.append(f"review={selection}")

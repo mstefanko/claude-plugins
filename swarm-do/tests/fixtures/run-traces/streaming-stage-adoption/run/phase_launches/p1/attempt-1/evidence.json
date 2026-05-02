@@ -1,0 +1,1 @@
+{"schema_version":1,"launcher":"claude-print","metrics":{"input_tokens":5,"output_tokens":5,"total_cost_usd":0.03},"failure":{"failure_kind":null,"retry_decision":null},"artifacts":{"changed_files":["src/stage.py"]}}

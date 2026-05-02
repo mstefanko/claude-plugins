@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "run_id": "01J00000000000000000000001",
+  "status": "accepted",
+  "phase_map": [{"phase_id": "p1", "title": "Needs input phase"}]
+}

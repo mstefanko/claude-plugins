@@ -38,7 +38,7 @@ from .registry import (
 )
 from .rollout import format_status, history_lines, load_state, mark_dogfood, set_field
 from .validation import schema_lint_pipeline, schema_lint_work_units, validate_preset_and_pipeline, validate_preset_mapping
-from .phase_autopilot_policy import ResolvedPolicyUpdate, expand_profile
+from .policies import ResolvedPolicyUpdate, expand_profile
 
 
 def _ensure_current_file() -> Path:
@@ -425,6 +425,94 @@ def cmd_status(args: argparse.Namespace) -> int:
             f"source={latest.get('source') or 'n/a'}"
         )
     return 0
+
+
+def cmd_trace(args: argparse.Namespace) -> int:
+    from .run_trace import build_run_trace, trace_to_dict, trace_to_json
+
+    if args.trace_command != "build":
+        print("swarm: trace: missing command", file=sys.stderr)
+        return 2
+    data_dir = Path(args.data_dir) if args.data_dir else None
+    try:
+        trace = build_run_trace(args.run_id, data_dir=data_dir)
+    except Exception as exc:
+        print(f"swarm: trace build: {exc}", file=sys.stderr)
+        return 2
+    payload = trace_to_json(trace)
+    if args.out:
+        Path(args.out).write_text(payload, encoding="utf-8")
+    elif args.json:
+        print(payload, end="")
+    else:
+        data = trace_to_dict(trace)
+        print(f"run trace: {data['run_id']}")
+        print(f"  phases: {data['summary']['phases']}")
+        print(f"  attempts: {data['summary']['attempts']}")
+        print(f"  warnings: {data['summary']['warnings']}")
+        print(f"  unrecognized: {data['summary']['unrecognized']}")
+    return 0
+
+
+def cmd_eval(args: argparse.Namespace) -> int:
+    from .run_eval import (
+        FixtureLoadError,
+        expectation_from_trace,
+        expectation_to_yaml,
+        result_to_json,
+        run_fixtures,
+    )
+    from .run_trace import build_trace_from_run_dir
+
+    if args.eval_command == "run":
+        try:
+            result = run_fixtures(Path(args.fixture_dir), include_trace=bool(args.json and args.include_trace))
+        except FileNotFoundError as exc:
+            payload = {"fixture_dir": args.fixture_dir, "status": "error", "error": str(exc)}
+            if args.json:
+                print(json.dumps(payload, indent=2, sort_keys=True))
+            else:
+                print(f"swarm eval: {exc}", file=sys.stderr)
+            return 3
+        except FixtureLoadError as exc:
+            payload = {"fixture_dir": args.fixture_dir, "status": "error", "error": str(exc)}
+            if args.json:
+                print(json.dumps(payload, indent=2, sort_keys=True))
+            else:
+                print(f"swarm eval: {exc}", file=sys.stderr)
+            return 2
+        if args.json:
+            print(result_to_json(result), end="")
+        elif result.first_mismatch is None:
+            print(f"swarm eval: passed {len(result.results)} fixture(s)")
+        else:
+            mismatch = result.first_mismatch
+            print(
+                f"swarm eval: failed {mismatch.kind} "
+                f"expected={mismatch.expected!r} actual={mismatch.actual!r} path={mismatch.path}",
+                file=sys.stderr,
+            )
+        return 0 if result.first_mismatch is None else 1
+
+    if args.eval_command == "record":
+        run_dir = Path(args.run_dir)
+        fixture_dir = Path(args.to)
+        try:
+            trace = build_trace_from_run_dir(run_dir)
+        except Exception as exc:
+            print(f"swarm eval record: {exc}", file=sys.stderr)
+            return 3
+        fixture_dir.mkdir(parents=True, exist_ok=True)
+        target_run = fixture_dir / "run"
+        if not target_run.exists():
+            shutil.copytree(run_dir, target_run)
+        expectation = expectation_from_trace(trace)
+        (fixture_dir / "expectation.yaml").write_text(expectation_to_yaml(expectation), encoding="utf-8")
+        print(f"swarm eval record: wrote {fixture_dir / 'expectation.yaml'}")
+        return 0
+
+    print("swarm: eval: missing command", file=sys.stderr)
+    return 2
 
 
 def _jsonl_rows(path: Path) -> list[dict]:
@@ -2856,6 +2944,27 @@ def _build_parser() -> argparse.ArgumentParser:
 
     status = sub.add_parser("status")
     status.set_defaults(func=cmd_status)
+
+    trace = sub.add_parser("trace")
+    trace_sub = trace.add_subparsers(dest="trace_command")
+    p = trace_sub.add_parser("build")
+    p.add_argument("run_id")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--out")
+    p.add_argument("--data-dir")
+    p.set_defaults(func=cmd_trace)
+
+    eval_cmd = sub.add_parser("eval")
+    eval_sub = eval_cmd.add_subparsers(dest="eval_command")
+    p = eval_sub.add_parser("run")
+    p.add_argument("fixture_dir")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--include-trace", action="store_true")
+    p.set_defaults(func=cmd_eval)
+    p = eval_sub.add_parser("record")
+    p.add_argument("run_dir")
+    p.add_argument("--to", required=True)
+    p.set_defaults(func=cmd_eval)
 
     rollout = sub.add_parser("rollout")
     rollout_sub = rollout.add_subparsers(dest="rollout_command")

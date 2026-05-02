@@ -1,0 +1,10 @@
+{
+  "schema_version": "provider-review.manifest.v1",
+  "status": "partial_success",
+  "status_reason": "one provider passed schema validation",
+  "selection": {
+    "selected_providers": ["codex"],
+    "min_success": 1,
+    "max_parallel": 4
+  }
+}

@@ -22,8 +22,9 @@ except ImportError:  # pragma: no cover - v1 is POSIX-only by design.
 from .paths import REPO_ROOT, resolve_data_dir
 from .prepare import StalePreparedArtifactError, verify_prepared_run
 from .failure_taxonomy import failure_kind_details
-from .phase_autopilot_policy import (
+from .policies import (
     ResolvedPolicyUpdate,
+    default_retry_policy,
     profile_defaults,
     retry_policy_config,
     validate_policy_overrides,
@@ -67,22 +68,6 @@ DEFAULT_LEASE_POLICY = {
     "running_ttl_seconds": 14400,
     "refresh_interval_seconds": 300,
 }
-DEFAULT_RETRY_POLICY = {
-    "max_session_attempts": 2,
-    "max_recovery_attempts": 1,
-    "recovery_timeout_threshold_seconds": 600,
-    "retry_sleep_threshold_seconds": 0,
-    "short_retry_backoff_seconds": 60,
-    "max_retry_after_seconds": 1800,
-    "max_consecutive_same_failure_kind": 2,
-    "autopilot_profile": "standard",
-    "max_failed_attempt_cost_usd": None,
-    "max_failed_run_cost_usd": None,
-    "max_phase_attempt_budget_usd": None,
-    "worktree_baseline_path": None,
-    "worktree_baseline_warning": None,
-}
-
 BLOCKED_RETRY_POLICY_HUMAN_GATE = "retry_policy_human_gate"
 BLOCKED_DETERMINISTIC_CONTRACT_FAILURE = "deterministic_contract_failure"
 BLOCKED_PERMISSION_CONTRACT_FAILURE = "permission_contract_failure"
@@ -1485,9 +1470,10 @@ def _retry_policy_with_update(
 def _normalize_retry_policy(retry_policy: Any) -> dict[str, Any]:
     existing = dict(retry_policy) if isinstance(retry_policy, Mapping) else {}
     profile_value = existing.get("autopilot_profile")
-    profile = profile_value if isinstance(profile_value, str) and profile_value else str(DEFAULT_RETRY_POLICY["autopilot_profile"])
+    defaults = default_retry_policy()
+    profile = profile_value if isinstance(profile_value, str) and profile_value else str(defaults["autopilot_profile"])
     try:
-        normalized = dict(DEFAULT_RETRY_POLICY)
+        normalized = default_retry_policy()
         normalized.update(profile_defaults(profile))
         normalized["autopilot_profile"] = profile
         for key, value in existing.items():

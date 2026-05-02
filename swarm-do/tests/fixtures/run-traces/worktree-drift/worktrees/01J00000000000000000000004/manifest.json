@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "adoption_state": "blocked",
+  "branch": "swarm/01J00000000000000000000004/execution",
+  "base_sha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "drift": {
+    "kind": "base_drift_safe"
+  }
+}
