@@ -74,6 +74,18 @@
       "items": { "type": "object" }
     },
     "error": { "type": ["object", "null"] },
+    "worktree_diff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["committed", "staged", "unstaged", "untracked"],
+      "properties": {
+        "committed": { "type": "array", "items": { "type": "string" } },
+        "staged": { "type": "array", "items": { "type": "string" } },
+        "unstaged": { "type": "array", "items": { "type": "string" } },
+        "untracked": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "commit_sha": { "type": ["string", "null"] },
     "retryable": { "type": "boolean" },
     "failure_kind": { "type": "string" },
     "retry_after_seconds": { "type": ["integer", "null"], "minimum": 0 }

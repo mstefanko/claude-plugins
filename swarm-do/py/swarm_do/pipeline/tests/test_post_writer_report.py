@@ -10,10 +10,35 @@ import unittest
 from pathlib import Path
 
 from swarm_do.pipeline.cli import cmd_work_units
-from swarm_do.pipeline.post_writer import build_post_writer_report
+from swarm_do.pipeline.post_writer import build_post_writer_report, worktree_diff_summary
 
 
 class PostWriterReportTests(unittest.TestCase):
+    def test_worktree_diff_summary_separates_dirty_states_and_excludes_run_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo = init_repo(Path(td))
+            base = git_stdout(repo, "rev-parse", "HEAD")
+            write(repo / "committed.md", "committed\n")
+            git(repo, "add", "committed.md")
+            git(repo, "commit", "-m", "committed")
+            write(repo / "staged.md", "staged\n")
+            git(repo, "add", "staged.md")
+            write(repo / "py" / "a.py", "changed\n")
+            write(repo / "untracked.md", "untracked\n")
+            write(repo / "data" / "runs" / "01ARZ3NDEKTSV4RRFFQ69G5FAV" / "artifact.json", "{}")
+
+            summary = worktree_diff_summary(
+                repo,
+                base_sha=base,
+                project_subdir="",
+                extra_excludes=["data/runs/01ARZ3NDEKTSV4RRFFQ69G5FAV"],
+            )
+
+        self.assertEqual(summary["committed"], ["committed.md"])
+        self.assertEqual(summary["staged"], ["staged.md"])
+        self.assertEqual(summary["unstaged"], ["py/a.py"])
+        self.assertEqual(summary["untracked"], ["untracked.md"])
+
     def test_report_includes_changed_files_diff_stat_validation_and_budget(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             repo = init_repo(Path(td))

@@ -294,7 +294,9 @@ class PhasePumpTests(unittest.TestCase):
             status = phase_status(run_id, data_dir=data, repo_root=repo)
             self.assertEqual(status["phases"][0]["status"], "complete")
             command = json.loads((data / "runs" / run_id / "phase_launches" / "1" / "attempt-1" / "command.json").read_text(encoding="utf-8"))
-            self.assertEqual(command["settings_path"], str(data / "runs" / run_id / "writer-settings.json"))
+            self.assertEqual(command["settings_path"], str(data / "runs" / run_id / "coordinator-settings.json"))
+            self.assertEqual(command["writer_settings_path"], str(data / "runs" / run_id / "writer-settings.json"))
+            self.assertTrue((data / "runs" / run_id / "coordinator-settings.json").is_file())
             self.assertTrue((data / "runs" / run_id / "writer-settings.json").is_file())
             expected_mode = "safe-symlink" if is_sensitive_path(repo) else "real"
             self.assertEqual(command["execution_workspace_mode"], expected_mode)

@@ -68,6 +68,18 @@
       "type": "array",
       "items": { "type": "object" }
     },
+    "worktree_diff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["committed", "staged", "unstaged", "untracked"],
+      "properties": {
+        "committed": { "type": "array", "items": { "type": "string" } },
+        "staged": { "type": "array", "items": { "type": "string" } },
+        "unstaged": { "type": "array", "items": { "type": "string" } },
+        "untracked": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "commit_sha": { "type": ["string", "null"] },
     "next_phase_context": {
       "type": "array",
       "items": { "type": "string" }

@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/07/schema#",
+  "$id": "https://mstefanko-plugins/swarm-do/stage_sessions.schema.json#v1",
+  "title": "swarm-do phase stage-session ledger",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "phase_id",
+    "graph_hash",
+    "stages",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "schema_version": { "type": "integer", "enum": [1] },
+    "run_id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "phase_id": { "type": "string" },
+    "graph_hash": { "type": "string" },
+    "preset_id": { "type": ["string", "null"] },
+    "topological_layers": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "items": { "type": "string" }
+      }
+    },
+    "fan_out_branches": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": { "type": "string" }
+      }
+    },
+    "lenses": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": { "type": "string" }
+      }
+    },
+    "failure_tolerance": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "stages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["stage_id", "agent_role", "status", "attempt", "created_at"],
+        "properties": {
+          "stage_id": { "type": "string" },
+          "agent_role": { "type": "string" },
+          "layer_index": { "type": ["integer", "null"] },
+          "fan_out_key": { "type": ["string", "null"] },
+          "fan_out_index": { "type": ["integer", "null"] },
+          "merge_target": { "type": ["string", "null"] },
+          "is_provider_stage": { "type": "boolean" },
+          "lens_chain": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "failure_tolerance": { "type": "string" },
+          "upstream_stage_ids": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "bead_id": { "type": ["string", "null"] },
+          "status": {
+            "type": "string",
+            "enum": ["pending", "in_progress", "adopted", "failed", "blocked", "skipped"]
+          },
+          "attempt": { "type": "integer", "minimum": 0 },
+          "task_prompt_path": { "type": ["string", "null"] },
+          "transcript_path": { "type": ["string", "null"] },
+          "result_path": { "type": ["string", "null"] },
+          "commit_sha": { "type": ["string", "null"] },
+          "failure_kind": { "type": ["string", "null"] },
+          "notes": { "type": ["string", "null"] },
+          "started_at": { "type": ["string", "null"] },
+          "closed_at": { "type": ["string", "null"] },
+          "retry_after_seconds": { "type": ["integer", "null"], "minimum": 0 },
+          "created_at": { "type": "string" }
+        }
+      }
+    },
+    "created_at": { "type": "string" },
+    "updated_at": { "type": "string" }
+  }
+}

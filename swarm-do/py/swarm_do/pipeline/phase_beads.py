@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping, Sequence
 
 from .paths import resolve_data_dir
 from .run_state import _atomic_json_write, utc_now
@@ -21,6 +21,103 @@ ALLOWLIST = {
     "phase_session_complete",
 }
 DEDUPE_KINDS = {"phase_attempt_retry_scheduled"}
+BdRunner = Callable[[Sequence[str]], subprocess.CompletedProcess[str]]
+
+
+def create_run_epic(
+    run_id: str,
+    *,
+    title: str | None = None,
+    description: str | None = None,
+    runner: BdRunner | None = None,
+) -> dict[str, Any]:
+    """Best-effort BEADS epic creation for a phase-session run."""
+
+    issue_title = title or f"swarm-do run {run_id}"
+    argv = [
+        "bd",
+        "create",
+        issue_title,
+        "--type",
+        "epic",
+        "--description",
+        description or f"Controller-owned phase-session lifecycle for run {run_id}.",
+        "--silent",
+    ]
+    return _run_bd_create(argv, runner=runner, key="bd_epic_id")
+
+
+def create_stage_child(
+    run_id: str,
+    phase_id: str,
+    stage_id: str,
+    *,
+    agent_role: str,
+    parent_id: str | None,
+    runner: BdRunner | None = None,
+) -> dict[str, Any]:
+    """Best-effort BEADS child creation for one planned stage."""
+
+    if not parent_id:
+        return {"created": False, "reason": "missing_parent_id", "bead_id": None}
+    argv = [
+        "bd",
+        "create",
+        f"{phase_id} {stage_id}",
+        "--type",
+        "task",
+        "--assignee",
+        agent_role,
+        "--parent",
+        parent_id,
+        "--description",
+        f"run_id: {run_id}\nphase_id: {phase_id}\nstage_id: {stage_id}\nagent_role: {agent_role}",
+        "--silent",
+    ]
+    return _run_bd_create(argv, runner=runner, key="bead_id")
+
+
+def close_stage_child(
+    bead_id: str | None,
+    *,
+    commit_sha: str | None,
+    runner: BdRunner | None = None,
+) -> dict[str, Any]:
+    if not bead_id:
+        return {"closed": False, "reason": "missing_bead_id"}
+    reason = f"adopted at {commit_sha}" if commit_sha else "stage completed without commit"
+    try:
+        proc = _run_bd(["bd", "close", bead_id, "--reason", reason], runner=runner, timeout=10)
+    except subprocess.TimeoutExpired:
+        return {"closed": False, "reason": "bd close timed out"}
+    except Exception as exc:
+        return {"closed": False, "reason": str(exc)}
+    if proc.returncode != 0:
+        return {"closed": False, "reason": (proc.stderr or proc.stdout).strip()}
+    return {"closed": True, "bead_id": bead_id}
+
+
+def mark_stage_blocked(
+    bead_id: str | None,
+    *,
+    failure_kind: str,
+    notes: str | None = None,
+    runner: BdRunner | None = None,
+) -> dict[str, Any]:
+    if not bead_id:
+        return {"updated": False, "reason": "missing_bead_id"}
+    text = f"stage blocked: {failure_kind}"
+    if notes:
+        text += f"\n\n{notes}"
+    try:
+        proc = _run_bd(["bd", "update", bead_id, "--append-notes", text], runner=runner, timeout=10)
+    except subprocess.TimeoutExpired:
+        return {"updated": False, "reason": "bd update timed out"}
+    except Exception as exc:
+        return {"updated": False, "reason": str(exc)}
+    if proc.returncode != 0:
+        return {"updated": False, "reason": (proc.stderr or proc.stdout).strip()}
+    return {"updated": True, "bead_id": bead_id}
 
 
 def write_phase_beads_note(
@@ -59,6 +156,46 @@ def write_phase_beads_note(
     if kind in DEDUPE_KINDS:
         _remember_dedupe(base, run_id, fingerprint)
     return {"written": True, "bd_epic_id": bd_epic_id}
+
+
+def _run_bd_create(argv: list[str], *, runner: BdRunner | None, key: str) -> dict[str, Any]:
+    try:
+        proc = _run_bd(argv, runner=runner, timeout=10)
+    except subprocess.TimeoutExpired:
+        return {"created": False, "reason": "bd create timed out", key: None}
+    except Exception as exc:
+        return {"created": False, "reason": str(exc), key: None}
+    if proc.returncode != 0:
+        return {"created": False, "reason": (proc.stderr or proc.stdout).strip(), key: None}
+    bead_id = _parse_created_id(proc.stdout)
+    if not bead_id:
+        return {"created": False, "reason": "bd create returned no issue id", key: None}
+    return {"created": True, key: bead_id}
+
+
+def _run_bd(
+    argv: Sequence[str],
+    *,
+    runner: BdRunner | None,
+    timeout: int,
+) -> subprocess.CompletedProcess[str]:
+    if runner is not None:
+        return runner(argv)
+    return subprocess.run(
+        list(argv),
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=timeout,
+    )
+
+
+def _parse_created_id(stdout: str) -> str | None:
+    for token in stdout.replace("\n", " ").split():
+        if token.strip():
+            return token.strip()
+    return None
 
 
 def _note_text(run_id: str, *, kind: str, phase_id: str | None, details: Mapping[str, Any]) -> str:
@@ -120,4 +257,11 @@ def _remember_dedupe(base: Path, run_id: str, fingerprint: str) -> None:
     _atomic_json_write(path, {"fingerprints": fingerprints})
 
 
-__all__ = ["ALLOWLIST", "write_phase_beads_note"]
+__all__ = [
+    "ALLOWLIST",
+    "close_stage_child",
+    "create_run_epic",
+    "create_stage_child",
+    "mark_stage_blocked",
+    "write_phase_beads_note",
+]

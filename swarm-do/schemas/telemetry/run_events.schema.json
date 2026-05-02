@@ -69,6 +69,7 @@
         "phase_result_recorded",
         "phase_handoff_recorded",
         "phase_context_rendered",
+        "stage_adopted",
         "phase_pump_started",
         "phase_pump_stopped",
         "phase_pump_launcher_ineligible",

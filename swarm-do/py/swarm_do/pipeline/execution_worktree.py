@@ -23,6 +23,7 @@ except ImportError:  # pragma: no cover - POSIX-only lock primitive.
     fcntl = None  # type: ignore[assignment]
 
 from .paths import REPO_ROOT
+from .post_writer import worktree_diff_summary
 from .run_state import _atomic_json_write, append_run_event, utc_now, validate_run_event
 from .unit_sessions import (
     find_unit_session,
@@ -54,6 +55,14 @@ class RunExecutionWorktreeRebuildRequired(RunExecutionWorktreeError):
         super().__init__(message)
         self.payload = dict(payload)
         self.unadopted_commits = tuple(str(item) for item in self.payload.get("unadopted_commits") or [])
+
+
+@dataclass(frozen=True)
+class CommitRecord:
+    commit_sha: str | None
+    paths_committed: tuple[str, ...]
+    worktree_diff: Mapping[str, list[str]]
+    status: str = "committed"
 
 
 RUN_EXECUTION_WORKTREE_SCHEMA_PATH = REPO_ROOT / "schemas" / "run_execution_worktree.schema.json"
@@ -283,6 +292,65 @@ def materialize_run_execution_worktree(
         adoption_state=str(manifest.get("adoption_state") or "unadopted"),
         source_dirty_ignored_paths=tuple(source_dirty_ignored_paths),
     )
+
+
+def commit_stage_artifacts(
+    resolved: RunExecutionWorktree | ResolvedExecutionWorktree | Mapping[str, Any],
+    *,
+    allowed_files: Iterable[str],
+    run_artifact_excludes: Iterable[str],
+    commit_subject: str,
+    writer_summary: str,
+    stage_id: str,
+) -> CommitRecord:
+    """Commit the current stage's dirty artifacts with explicit path staging."""
+
+    safe_git_root = _resolved_path(resolved, "safe_git_root", "safe_git_worktree_root")
+    project_subdir = _resolved_string(resolved, "project_subdir")
+    base_sha = _resolved_string(resolved, "base_sha", "git_base_sha")
+    summary = worktree_diff_summary(
+        safe_git_root,
+        base_sha=base_sha,
+        project_subdir=project_subdir,
+        extra_excludes=tuple(run_artifact_excludes),
+    )
+    dirty_paths = sorted({path for key in ("staged", "unstaged", "untracked") for path in summary.get(key, [])})
+    if not dirty_paths:
+        return CommitRecord(commit_sha=None, paths_committed=(), worktree_diff=summary, status="no_changes")
+    allowed = tuple(str(item) for item in allowed_files if isinstance(item, str) and item)
+    outside = [
+        path
+        for path in dirty_paths
+        if not _path_allowed(_project_relative_from_git(path, project_subdir=project_subdir), allowed)
+    ]
+    if outside:
+        raise RunExecutionWorktreeError("phase_artifact_outside_allowed_files: " + ", ".join(outside))
+    _run_git_stage(safe_git_root, dirty_paths)
+    subject = _commit_subject(stage_id, commit_subject)
+    result = _run_git_with_env(
+        safe_git_root,
+        "commit",
+        "--no-verify",
+        "-m",
+        subject,
+        "-m",
+        writer_summary or "stage artifacts committed by swarm-do controller",
+        check=False,
+    )
+    if result.returncode != 0:
+        # Nothing staged is a valid no-op race; any other commit failure should
+        # route the stage through retry.
+        if "nothing to commit" in _combined_output(result).lower():
+            return CommitRecord(commit_sha=None, paths_committed=(), worktree_diff=summary, status="no_changes")
+        raise RunExecutionWorktreeError("adoptable_artifacts_uncommittable: " + (_combined_output(result) or "git commit failed"))
+    commit_sha = _git_stdout(safe_git_root, "rev-parse", "HEAD")
+    post_summary = worktree_diff_summary(
+        safe_git_root,
+        base_sha=base_sha,
+        project_subdir=project_subdir,
+        extra_excludes=tuple(run_artifact_excludes),
+    )
+    return CommitRecord(commit_sha=commit_sha, paths_committed=tuple(dirty_paths), worktree_diff=post_summary)
 
 
 def adopt_run_worktree(run_id: str, *, data_dir: Path, apply: bool = False) -> dict[str, Any]:
@@ -2717,6 +2785,34 @@ def _git_lines(repo: Path, *args: str) -> list[str]:
     return [line for line in _git_stdout(repo, *args).splitlines() if line]
 
 
+def _run_git_stage(repo: Path, paths: Iterable[str]) -> None:
+    path_list = [path for path in paths if path]
+    if not path_list:
+        return
+    _run_git_with_env(repo, "add", "--", *path_list, check=True)
+
+
+def _run_git_with_env(repo: Path, *args: str, check: bool) -> subprocess.CompletedProcess[str]:
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": os.environ.get("GIT_AUTHOR_NAME", "swarm-do"),
+        "GIT_AUTHOR_EMAIL": os.environ.get("GIT_AUTHOR_EMAIL", "swarm-do@example.invalid"),
+        "GIT_COMMITTER_NAME": os.environ.get("GIT_COMMITTER_NAME", "swarm-do"),
+        "GIT_COMMITTER_EMAIL": os.environ.get("GIT_COMMITTER_EMAIL", "swarm-do@example.invalid"),
+    }
+    result = subprocess.run(
+        ["git", "-C", str(repo), *args],
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+    )
+    if check and result.returncode != 0:
+        raise RunExecutionWorktreeError(_combined_output(result) or f"git {' '.join(args)} failed")
+    return result
+
+
 def _run_git(repo: Path, *args: str, check: bool) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
         ["git", "-C", str(repo), *args],
@@ -2732,6 +2828,53 @@ def _run_git(repo: Path, *args: str, check: bool) -> subprocess.CompletedProcess
 
 def _combined_output(result: subprocess.CompletedProcess[str]) -> str:
     return "\n".join(part for part in (result.stdout.strip(), result.stderr.strip()) if part)
+
+
+def _resolved_path(value: RunExecutionWorktree | ResolvedExecutionWorktree | Mapping[str, Any], *names: str) -> Path:
+    for name in names:
+        if isinstance(value, Mapping):
+            raw = value.get(name)
+        else:
+            raw = getattr(value, name, None)
+        if raw:
+            return Path(str(raw))
+    raise RunExecutionWorktreeError(f"resolved worktree is missing path field: {'/'.join(names)}")
+
+
+def _resolved_string(value: RunExecutionWorktree | ResolvedExecutionWorktree | Mapping[str, Any], *names: str) -> str:
+    for name in names:
+        if isinstance(value, Mapping):
+            raw = value.get(name)
+        else:
+            raw = getattr(value, name, None)
+        if isinstance(raw, str):
+            return raw
+    raise RunExecutionWorktreeError(f"resolved worktree is missing string field: {'/'.join(names)}")
+
+
+def _project_relative_from_git(path: str, *, project_subdir: str) -> str:
+    prefix = project_subdir.strip("/")
+    normalized = Path(path).as_posix()
+    if prefix and normalized == prefix:
+        return ""
+    if prefix and normalized.startswith(prefix + "/"):
+        return normalized[len(prefix) + 1 :]
+    return normalized
+
+
+def _path_allowed(project_relative_path: str, allowed_files: tuple[str, ...]) -> bool:
+    if not allowed_files:
+        return False
+    return any(fnmatch.fnmatch(project_relative_path, pattern) for pattern in allowed_files)
+
+
+def _commit_subject(stage_id: str, commit_subject: str) -> str:
+    subject = " ".join((commit_subject or "stage artifacts").split())
+    prefix = f"{stage_id}: "
+    max_subject = 72 - len(prefix)
+    if max_subject > 10 and len(subject) > max_subject:
+        subject = subject[: max_subject - 3].rstrip() + "..."
+    return prefix + subject
 
 
 def _safe_ref_segment(value: str) -> str:
@@ -2815,6 +2958,7 @@ def _atomic_write_bytes(destination: Path, data: bytes) -> None:
 
 
 __all__ = [
+    "CommitRecord",
     "RunExecutionWorktree",
     "RunExecutionWorktreeAdoptionBlocked",
     "RunExecutionWorktreeError",
@@ -2822,6 +2966,7 @@ __all__ = [
     "adopt_run_worktree",
     "build_run_worktree_scope_check",
     "cleanup_run_worktree",
+    "commit_stage_artifacts",
     "execution_branch_name",
     "initialize_unit_sessions",
     "integrate_run_worktree",

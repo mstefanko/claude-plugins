@@ -1,0 +1,18 @@
+{
+  "_generated": "generated from role-specs/agent-<name>.md \u2014 do not edit; run `python3 -m swarm_do.roles gen --write` to update",
+  "merge_policy": "deny-wins",
+  "permissions": {
+    "allow": [
+      "Task",
+      "Read",
+      "Bash(bd:*)",
+      "Bash(git:diff)",
+      "Bash(git:log)",
+      "Bash(git:status)",
+      "Bash(swarm:stages:*)"
+    ],
+    "deny": []
+  },
+  "role": "dispatcher",
+  "schema_version": 1
+}

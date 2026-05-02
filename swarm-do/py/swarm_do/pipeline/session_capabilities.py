@@ -123,7 +123,13 @@ def _fake_test_capability() -> LauncherCapability:
     return LauncherCapability(
         name="fake-test",
         eligible=True,
-        details={"test_only": True, "spend_required": False},
+        details={
+            "test_only": True,
+            "spend_required": False,
+            "synthetic_writes": True,
+            "synthetic_task_dispatches": True,
+            "synthetic_stage_complete_markers": True,
+        },
     )
 
 

@@ -1721,6 +1721,8 @@ def cmd_phases(args: argparse.Namespace) -> int:
                 init_if_missing=args.init,
                 stop_on_checkpoint=args.stop_on_checkpoint,
                 fake_statuses=args.fake_status or (),
+                synthetic_writes=_json_arg_list(args.synthetic_write or ()),
+                synthetic_stage_complete_markers=_json_arg_list(args.synthetic_stage_complete or ()),
                 max_budget_usd=_phase_attempt_budget_cli_value(args),
                 policy_update=policy_update_from_args_and_env(args),
             )
@@ -2693,7 +2695,89 @@ def _format_worktree_reset(payload: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def cmd_stages(args: argparse.Namespace) -> int:
+    from .stage_sessions import (
+        load_stage_sessions,
+        record_stage_adopted,
+        record_stage_failed,
+        stage_session_path,
+    )
+
+    try:
+        if args.stages_command == "list":
+            payload = load_stage_sessions(args.run_id, args.phase)
+            exit_code = 0
+        elif args.stages_command == "signal-complete":
+            payload = record_stage_adopted(
+                args.run_id,
+                args.phase,
+                args.stage_id,
+                commit_sha=None,
+                result_path=args.result,
+            )
+            payload["marker"] = {
+                "stage_id": args.stage_id,
+                "result_path": args.result,
+            }
+            exit_code = 0
+        elif args.stages_command == "signal-failed":
+            payload = record_stage_failed(
+                args.run_id,
+                args.phase,
+                args.stage_id,
+                args.failure_kind,
+                args.notes,
+            )
+            payload["marker"] = {
+                "stage_id": args.stage_id,
+                "failure_kind": args.failure_kind,
+                "notes": args.notes,
+            }
+            exit_code = 0
+        else:
+            print("swarm: stages: missing command", file=sys.stderr)
+            return 1
+    except Exception as exc:
+        print(f"swarm: stages {args.stages_command}: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    elif args.stages_command == "signal-complete":
+        print("STAGE_COMPLETE " + json.dumps(payload["marker"], sort_keys=True))
+    elif args.stages_command == "signal-failed":
+        print("STAGE_FAILED " + json.dumps(payload["marker"], sort_keys=True))
+    else:
+        print(f"stages: {payload.get('run_id')} {payload.get('phase_id')}")
+        print(f"state: {stage_session_path(args.run_id, args.phase)}")
+        for stage in payload.get("stages") or []:
+            print(f"- {stage.get('stage_id')} {stage.get('status')} {stage.get('agent_role')}")
+    return exit_code
+
+
 def cmd_selftest(args: argparse.Namespace) -> int:
+    if getattr(args, "selftest_command", None) == "writer-phase":
+        from .writer_phase_selftest import run_writer_phase_selftest
+
+        payload = run_writer_phase_selftest()
+        if args.json:
+            print(json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            print(f"writer-phase selftest: {payload.get('status')}")
+            for line in payload.get("summary") or []:
+                print(f"  {line}")
+        return 0 if payload.get("status") == "pass" else 1
+    if getattr(args, "selftest_command", None) == "capability-probe":
+        from .capability_probe import run_capability_probe
+
+        payload = run_capability_probe()
+        if args.json:
+            print(json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            print(f"capability-probe: {payload.get('status')}")
+            if payload.get("reason"):
+                print(payload["reason"])
+        return 0 if payload.get("status") in {"pass", "skip"} else 1
     from .selftest import format_json, format_text, run_selftest
 
     report = run_selftest(
@@ -3006,6 +3090,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--init", action="store_true", help="initialize phase-session state when missing")
     p.add_argument("--stop-on-checkpoint", action="store_true")
     p.add_argument("--fake-status", action="append", choices=["complete", "failed", "blocked", "needs_input"], help=argparse.SUPPRESS)
+    p.add_argument("--synthetic-write", action="append", help=argparse.SUPPRESS)
+    p.add_argument("--synthetic-stage-complete", action="append", help=argparse.SUPPRESS)
     p.add_argument("--max-budget-usd", type=float)
     _add_phase_policy_flags(p)
     p.add_argument("--json", action="store_true")
@@ -3181,6 +3267,29 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_worktrees)
 
+    stages = sub.add_parser("stages")
+    stages_sub = stages.add_subparsers(dest="stages_command")
+    p = stages_sub.add_parser("list")
+    p.add_argument("run_id")
+    p.add_argument("phase")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_stages)
+    p = stages_sub.add_parser("signal-complete")
+    p.add_argument("run_id")
+    p.add_argument("phase")
+    p.add_argument("stage_id")
+    p.add_argument("--result", required=True)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_stages)
+    p = stages_sub.add_parser("signal-failed")
+    p.add_argument("run_id")
+    p.add_argument("phase")
+    p.add_argument("stage_id")
+    p.add_argument("--failure-kind", required=True)
+    p.add_argument("--notes")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_stages)
+
     permissions = sub.add_parser("permissions")
     permissions_sub = permissions.add_subparsers(dest="permissions_command")
     p = permissions_sub.add_parser("check")
@@ -3197,6 +3306,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--role", action="append")
     p.set_defaults(func=cmd_permissions_install)
     selftest = sub.add_parser("selftest")
+    selftest.add_argument("selftest_command", nargs="?", choices=["writer-phase", "capability-probe"])
     selftest.add_argument("--plan", help="optional plan path; enables preset-dry-run check")
     selftest.add_argument("--preset", help="preset to inspect; defaults to active preset (or stock default pipeline)")
     selftest.add_argument("--json", action="store_true", help="emit machine-readable JSON")
@@ -3211,6 +3321,16 @@ def _add_phase_policy_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--max-failed-attempt-cost-usd", type=float)
     parser.add_argument("--max-failed-run-cost-usd", type=float)
     parser.add_argument("--max-phase-attempt-budget-usd", type=float)
+
+
+def _json_arg_list(values: list[str] | tuple[str, ...]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for value in values:
+        parsed = json.loads(value)
+        if not isinstance(parsed, dict):
+            raise ValueError("synthetic JSON arguments must be objects")
+        out.append(parsed)
+    return out
 
 
 def main(argv: list[str] | None = None) -> int:

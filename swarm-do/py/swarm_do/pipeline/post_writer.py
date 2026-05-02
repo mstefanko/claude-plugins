@@ -7,7 +7,7 @@ import re
 import subprocess
 import time
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 from .executor import writer_budget_status
 from .validation import unit_blocked_file_violations
@@ -111,6 +111,47 @@ def changed_files_since(repo: str | Path, base_ref: str) -> list[str]:
     tracked = _git_lines(repo, "diff", "--name-only", "--relative", base_ref, "--")
     untracked = _git_lines(repo, "ls-files", "--others", "--exclude-standard")
     return sorted({path for path in tracked + untracked if path})
+
+
+def worktree_diff_summary(
+    safe_git_root: Path,
+    *,
+    base_sha: str,
+    project_subdir: str,
+    extra_excludes: Iterable[str] = (),
+) -> dict[str, list[str]]:
+    """Return {committed, staged, unstaged, untracked} paths for a worktree.
+
+    Returned paths are git-root relative. ``project_subdir`` limits results to
+    the prepared project checkout. ``extra_excludes`` accepts git-root-relative
+    paths or prefixes such as ``data/runs/<run_id>``.
+    """
+
+    root = Path(safe_git_root)
+    subdir = _normalize_diff_path(project_subdir)
+    excludes = tuple(_normalize_diff_path(item) for item in extra_excludes if str(item).strip())
+    pathspec = subdir or "."
+    committed = _git_name_status_paths(root, "diff", "--name-status", "-z", f"{base_sha}..HEAD", "--", pathspec)
+    staged = _git_name_status_paths(root, "diff", "--cached", "--name-status", "-z", "--", pathspec)
+    unstaged = _git_name_status_paths(root, "diff", "--name-status", "-z", "--", pathspec)
+    untracked = _git_lines(root, "ls-files", "--others", "--exclude-standard", "-z", "--", pathspec, split_null=True)
+    return {
+        "committed": _filter_diff_paths(committed, project_subdir=subdir, excludes=excludes),
+        "staged": _filter_diff_paths(staged, project_subdir=subdir, excludes=excludes),
+        "unstaged": _filter_diff_paths(unstaged, project_subdir=subdir, excludes=excludes),
+        "untracked": _filter_diff_paths(untracked, project_subdir=subdir, excludes=excludes),
+    }
+
+
+def changed_files_from_worktree_diff(summary: Mapping[str, Any]) -> list[str]:
+    """Compatibility wrapper for legacy ``changed_files`` consumers."""
+
+    values: set[str] = set()
+    for key in ("committed", "staged", "unstaged", "untracked"):
+        items = summary.get(key)
+        if isinstance(items, list):
+            values.update(str(item) for item in items if isinstance(item, str) and item)
+    return sorted(values)
 
 
 def diff_stat_since(repo: str | Path, base_ref: str) -> dict[str, Any]:
@@ -337,8 +378,60 @@ def _shortstat_count(text: str, pattern: str) -> int:
     return int(match.group(1)) if match else 0
 
 
-def _git_lines(repo: str | Path, *args: str) -> list[str]:
+def _git_name_status_paths(repo: str | Path, *args: str) -> list[str]:
+    fields = _git_lines(repo, *args, split_null=True)
+    paths: list[str] = []
+    index = 0
+    while index < len(fields):
+        status = fields[index]
+        index += 1
+        if status.startswith("R") or status.startswith("C"):
+            if index < len(fields):
+                paths.append(fields[index])
+                index += 1
+            if index < len(fields):
+                paths.append(fields[index])
+                index += 1
+            continue
+        if index < len(fields):
+            paths.append(fields[index])
+            index += 1
+    return paths
+
+
+def _filter_diff_paths(
+    paths: Iterable[str],
+    *,
+    project_subdir: str,
+    excludes: tuple[str, ...],
+) -> list[str]:
+    values: set[str] = set()
+    for raw in paths:
+        path = _normalize_diff_path(raw)
+        if not path:
+            continue
+        if project_subdir and path != project_subdir and not path.startswith(project_subdir + "/"):
+            continue
+        if any(path == exclude or path.startswith(exclude + "/") for exclude in excludes):
+            continue
+        values.add(path)
+    return sorted(values)
+
+
+def _normalize_diff_path(value: str | Path) -> str:
+    raw = str(value).strip()
+    if raw in {"", "."}:
+        return ""
+    path = Path(raw).as_posix()
+    while path.startswith("./"):
+        path = path[2:]
+    return "" if path == "." else path.strip("/")
+
+
+def _git_lines(repo: str | Path, *args: str, split_null: bool = False) -> list[str]:
     output = _git_stdout(repo, *args)
+    if split_null:
+        return [field for field in output.split("\0") if field]
     return [line.strip() for line in output.splitlines() if line.strip()]
 
 
