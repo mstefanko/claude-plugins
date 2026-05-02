@@ -141,6 +141,52 @@ class PhaseRecoveryTests(unittest.TestCase):
             self.assertEqual(phase["attempt_history"][0]["retry_after_seconds"], 1800)
             self.assertEqual(Path(phase["attempt_history"][0]["result_path"]).resolve(strict=False), result_path.resolve(strict=False))
 
+    def test_legacy_command_without_output_format_recovers_from_stdout_txt(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            claim_next_phase(run_id, data_dir=data, repo_root=repo, lease_owner="owner-1")
+            started = start_phase(run_id, "1", launcher="claude-print", lease_owner="owner-1", data_dir=data)
+            result_path = _write_result(data, run_id, started["phase"], status="complete")
+            attempt = int(started["phase"]["attempt"])
+            _write_command(
+                data,
+                run_id,
+                "1",
+                attempt,
+                {
+                    "launcher": "claude-print",
+                    "returncode": 0,
+                },
+            )
+            _write_stdout(
+                data,
+                run_id,
+                "1",
+                attempt,
+                {
+                    "type": "result",
+                    "result": json.dumps(
+                        {
+                            "status": "complete",
+                            "result_path": str(result_path),
+                            "handoff_path": str(phase_handoff_path(run_id, "1", attempt, data_dir=data)),
+                        }
+                    ),
+                },
+            )
+
+            result = reconcile_phase_sessions(
+                run_id,
+                data_dir=data,
+                repo_root=repo,
+                now=datetime(2026, 4, 29, tzinfo=UTC),
+            )
+
+            self.assertEqual(result["status"], "complete")
+            state = json.loads(phase_session_path(run_id, data_dir=data).read_text(encoding="utf-8"))
+            self.assertEqual(state["phases"][0]["status"], "complete")
+
     def test_same_failure_kind_twice_blocks_instead_of_retry_exhausting(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             repo, data, run_id = make_prepared_run(Path(td), phase_count=1)

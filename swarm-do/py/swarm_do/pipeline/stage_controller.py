@@ -384,9 +384,8 @@ class StageMarkerProcessor:
         append_run_event(self.data_dir, row)
 
     def _assert_owner_thread(self) -> None:
-        assert threading.current_thread() is threading.main_thread() or self._owner_thread is threading.current_thread(), (
-            "StageMarkerProcessor is not thread-safe"
-        )
+        if threading.current_thread() is not threading.main_thread() and self._owner_thread is not threading.current_thread():
+            raise RuntimeError("StageMarkerProcessor is not thread-safe")
 
 
 def _ledger_commits(adopted_by_id: Mapping[str, Mapping[str, Any]], invocations: list[StageInvocation]) -> list[str]:

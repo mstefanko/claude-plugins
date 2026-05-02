@@ -6,6 +6,8 @@ import os
 import re
 import subprocess
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -434,9 +436,11 @@ class PhasePumpTests(unittest.TestCase):
                 pid = 12345
                 returncode = 0
                 stdin = None
+                stdout = io.StringIO("{}\n")
+                stderr = io.StringIO("")
 
-                def communicate(self, input=None, timeout=None):
-                    return "{}", ""
+                def wait(self, timeout=None):
+                    return self.returncode
 
             def fake_popen(*args, **kwargs):
                 popen_kwargs.update(kwargs)
@@ -481,9 +485,11 @@ class PhasePumpTests(unittest.TestCase):
                 pid = 12345
                 returncode = 0
                 stdin = None
+                stdout = io.StringIO("{}\n")
+                stderr = io.StringIO("")
 
-                def communicate(self, input=None, timeout=None):
-                    return "{}", ""
+                def wait(self, timeout=None):
+                    return self.returncode
 
             def fake_popen(*args, **kwargs):
                 popen_kwargs.update(kwargs)
@@ -546,25 +552,21 @@ class PhasePumpTests(unittest.TestCase):
                     self.returncode = None
                     self.stdin_handle = FakeStdin()
                     self.stdin = self.stdin_handle
-                    self.wait_calls = 0
+                    self.stdout = _DelayedLineStream("{}\n", delay_seconds=1.2)
+                    self.stderr = io.StringIO("")
 
                 def wait(self, timeout=None):
-                    self.wait_calls += 1
-                    if self.wait_calls == 1:
-                        raise subprocess.TimeoutExpired(["claude"], timeout)
                     self.returncode = 0
                     return 0
-
-                def communicate(self):
-                    if self.stdin is not None:
-                        raise AssertionError("stdin should be detached before communicate")
-                    return "{}", ""
 
             proc = FakeProc()
 
             with mock.patch("swarm_do.pipeline.phase_pump.subprocess.Popen", return_value=proc), mock.patch(
                 "swarm_do.pipeline.phase_pump.os.getpgid",
                 return_value=12345,
+            ), mock.patch(
+                "swarm_do.pipeline.phase_pump.load_phase_sessions",
+                return_value={"lease_policy": {"refresh_interval_seconds": 1, "running_ttl_seconds": 5}},
             ):
                 phase_pump._run_real_claude(
                     ["claude"],
@@ -586,6 +588,217 @@ class PhasePumpTests(unittest.TestCase):
             self.assertIsNone(proc.stdin)
             events = (data / "telemetry" / "run_events.jsonl").read_text(encoding="utf-8")
             self.assertIn("phase_session_refreshed", events)
+
+    def test_streaming_live_adoption_before_exit(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            claim_next_phase(run_id, data_dir=data, repo_root=repo, lease_owner="owner-1")
+            start_phase(run_id, "1", launcher="claude-print", lease_owner="owner-1", data_dir=data)
+            launch_dir = data / "runs" / run_id / "phase_launches" / "1" / "attempt-1"
+            launch_dir.mkdir(parents=True)
+            command_path = launch_dir / "command.json"
+            command_path.write_text(json.dumps(phase_pump._stream_command_metadata()), encoding="utf-8")
+            invocations, snapshot = plan_stage_invocations(
+                {"name": "default", "pipeline": "default"},
+                {"run_id": run_id, "phase_id": "1", "phase_attempt": 1},
+                data_dir=data,
+            )
+            invocation = invocations[0]
+            init_stage_sessions(run_id, "1", [invocation], snapshot, data_dir=data)
+            _write_stage_result(data, run_id, "1", 1, invocation.expected_result_path, invocation.stage_id)
+            marker_text = "STAGE_COMPLETE " + json.dumps({"stage_id": invocation.stage_id, "result_path": str(invocation.expected_result_path)})
+            finish = threading.Event()
+            proc = _StreamProc(
+                stdout=_GatedStream(
+                    [
+                        json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": marker_text + "\n"}]}}) + "\n",
+                        finish,
+                        json.dumps({"type": "result", "subtype": "success", "is_error": False, "session_id": "s1", "result": "{}"}) + "\n",
+                    ]
+                )
+            )
+
+            result_holder: dict[str, subprocess.CompletedProcess[str] | BaseException] = {}
+
+            def run_launcher() -> None:
+                try:
+                    result_holder["result"] = phase_pump._run_real_claude(
+                        ["claude", "-p", "--verbose", "--output-format", "stream-json"],
+                        run_id=run_id,
+                        phase_id="1",
+                        lease_owner="owner-1",
+                        data_dir=data,
+                        launch_dir=launch_dir,
+                        command_path=command_path,
+                        metadata=phase_pump._stream_command_metadata(),
+                        prompt_sha="a" * 64,
+                        result_path=data / "result.json",
+                        handoff_path=data / "handoff.json",
+                        phase_attempt=1,
+                        stage_invocations=[invocation],
+                        prepared={},
+                        workspace_metadata={"phase_attempt": 1},
+                    )
+                except BaseException as exc:
+                    result_holder["result"] = exc
+
+            with mock.patch("swarm_do.pipeline.phase_pump.subprocess.Popen", return_value=proc), mock.patch(
+                "swarm_do.pipeline.phase_pump.os.getpgid",
+                return_value=12345,
+            ):
+                thread = threading.Thread(target=run_launcher)
+                thread.start()
+                deadline = time.monotonic() + 5.0
+                while time.monotonic() < deadline:
+                    state = load_stage_sessions(run_id, "1", data_dir=data)
+                    if state["stages"][0]["status"] == "adopted":
+                        break
+                    time.sleep(0.05)
+                state = load_stage_sessions(run_id, "1", data_dir=data)
+                self.assertEqual(state["stages"][0]["status"], "adopted")
+                self.assertIsNone(proc.poll())
+                finish.set()
+                thread.join(timeout=5.0)
+
+        self.assertFalse(thread.is_alive())
+        self.assertIsInstance(result_holder["result"], subprocess.CompletedProcess)
+
+    def test_streaming_lease_refresh_called_on_cadence(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            claim_next_phase(run_id, data_dir=data, repo_root=repo, lease_owner="owner-1")
+            start_phase(run_id, "1", launcher="claude-print", lease_owner="owner-1", data_dir=data)
+            launch_dir = data / "runs" / run_id / "phase_launches" / "1" / "attempt-1"
+            launch_dir.mkdir(parents=True)
+            command_path = launch_dir / "command.json"
+            command_path.write_text(json.dumps(phase_pump._stream_command_metadata()), encoding="utf-8")
+            frame = json.dumps({"type": "result", "subtype": "success", "is_error": False, "session_id": "s1", "result": "ok"}) + "\n"
+
+            with mock.patch("swarm_do.pipeline.phase_pump.subprocess.Popen", return_value=_StreamProc(stdout=_DelayedLineStream(frame, 1.2))), mock.patch(
+                "swarm_do.pipeline.phase_pump.os.getpgid",
+                return_value=12345,
+            ), mock.patch(
+                "swarm_do.pipeline.phase_pump.load_phase_sessions",
+                return_value={"lease_policy": {"refresh_interval_seconds": 1, "running_ttl_seconds": 5}},
+            ), mock.patch("swarm_do.pipeline.phase_pump.refresh_phase") as refresh:
+                phase_pump._run_real_claude(
+                    ["claude", "-p", "--verbose", "--output-format", "stream-json"],
+                    run_id=run_id,
+                    phase_id="1",
+                    lease_owner="owner-1",
+                    data_dir=data,
+                    launch_dir=launch_dir,
+                    command_path=command_path,
+                    metadata=phase_pump._stream_command_metadata(),
+                    prompt_sha="a" * 64,
+                    result_path=data / "result.json",
+                    handoff_path=data / "handoff.json",
+                )
+
+        refresh.assert_called()
+
+    def test_streaming_timeout_writes_partial_stream_jsonl(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            claim_next_phase(run_id, data_dir=data, repo_root=repo, lease_owner="owner-1")
+            start_phase(run_id, "1", launcher="claude-print", lease_owner="owner-1", data_dir=data)
+            launch_dir = data / "runs" / run_id / "phase_launches" / "1" / "attempt-1"
+            launch_dir.mkdir(parents=True)
+            command_path = launch_dir / "command.json"
+            command_path.write_text(json.dumps(phase_pump._stream_command_metadata()), encoding="utf-8")
+            kill_event = threading.Event()
+            proc = _StreamProc(
+                stdout=_GatedStream(
+                    [
+                        json.dumps({"type": "system", "subtype": "init"}) + "\n",
+                        kill_event,
+                    ]
+                ),
+                kill_event=kill_event,
+            )
+
+            with mock.patch("swarm_do.pipeline.phase_pump.subprocess.Popen", return_value=proc), mock.patch(
+                "swarm_do.pipeline.phase_pump.os.getpgid",
+                return_value=12345,
+            ), mock.patch(
+                "swarm_do.pipeline.phase_pump.load_phase_sessions",
+                return_value={"lease_policy": {"refresh_interval_seconds": 1, "running_ttl_seconds": 3}},
+            ):
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    phase_pump._run_real_claude(
+                        ["claude", "-p", "--verbose", "--output-format", "stream-json"],
+                        run_id=run_id,
+                        phase_id="1",
+                        lease_owner="owner-1",
+                        data_dir=data,
+                        launch_dir=launch_dir,
+                        command_path=command_path,
+                        metadata=phase_pump._stream_command_metadata(),
+                        prompt_sha="a" * 64,
+                        result_path=data / "result.json",
+                        handoff_path=data / "handoff.json",
+                    )
+
+            self.assertGreater((launch_dir / "stdout.stream.jsonl").stat().st_size, 0)
+
+    def test_concurrency_invariant_no_ledger_writes_from_reader_thread(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            claim_next_phase(run_id, data_dir=data, repo_root=repo, lease_owner="owner-1")
+            start_phase(run_id, "1", launcher="claude-print", lease_owner="owner-1", data_dir=data)
+            launch_dir = data / "runs" / run_id / "phase_launches" / "1" / "attempt-1"
+            launch_dir.mkdir(parents=True)
+            command_path = launch_dir / "command.json"
+            command_path.write_text(json.dumps(phase_pump._stream_command_metadata()), encoding="utf-8")
+            invocations, snapshot = plan_stage_invocations(
+                {"name": "default", "pipeline": "default"},
+                {"run_id": run_id, "phase_id": "1", "phase_attempt": 1},
+                data_dir=data,
+            )
+            invocation = invocations[0]
+            init_stage_sessions(run_id, "1", [invocation], snapshot, data_dir=data)
+            _write_stage_result(data, run_id, "1", 1, invocation.expected_result_path, invocation.stage_id)
+            marker_text = "STAGE_COMPLETE " + json.dumps({"stage_id": invocation.stage_id, "result_path": str(invocation.expected_result_path)})
+            stdout = "\n".join(
+                [
+                    json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": marker_text + "\n"}]}}),
+                    json.dumps({"type": "result", "subtype": "success", "is_error": False, "session_id": "s1", "result": "{}"}),
+                ]
+            ) + "\n"
+
+            from swarm_do.pipeline import stage_controller
+
+            original = stage_controller.record_stage_adopted
+
+            def checked_record(*args, **kwargs):
+                self.assertNotIn(threading.current_thread().name, {"claude-stdout-reader", "claude-stderr-reader"})
+                return original(*args, **kwargs)
+
+            with mock.patch("swarm_do.pipeline.phase_pump.subprocess.Popen", return_value=_StreamProc(stdout=stdout)), mock.patch(
+                "swarm_do.pipeline.phase_pump.os.getpgid",
+                return_value=12345,
+            ), mock.patch("swarm_do.pipeline.stage_controller.record_stage_adopted", side_effect=checked_record):
+                phase_pump._run_real_claude(
+                    ["claude", "-p", "--verbose", "--output-format", "stream-json"],
+                    run_id=run_id,
+                    phase_id="1",
+                    lease_owner="owner-1",
+                    data_dir=data,
+                    launch_dir=launch_dir,
+                    command_path=command_path,
+                    metadata=phase_pump._stream_command_metadata(),
+                    prompt_sha="a" * 64,
+                    result_path=data / "result.json",
+                    handoff_path=data / "handoff.json",
+                    phase_attempt=1,
+                    stage_invocations=[invocation],
+                    prepared={},
+                    workspace_metadata={"phase_attempt": 1},
+                )
 
     def test_streaming_live_stage_marker_is_adopted(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -671,9 +884,61 @@ class PhasePumpTests(unittest.TestCase):
                 )
 
             parsed = parse_claude_print_json((launch_dir / "stdout.txt").read_text(encoding="utf-8"))
+            legacy_parsed = parse_claude_print_json(json.dumps(frame, sort_keys=True) + "\n")
 
         self.assertEqual(parsed["session_id"], "s1")
-        self.assertEqual(parse_claude_print_json(proc.stdout)["result"], "ok")
+        self.assertEqual(parsed, legacy_parsed)
+        self.assertEqual(parse_claude_print_json(proc.stdout), legacy_parsed)
+
+    def test_systemic_parse_error_still_processes_deferred_stage_markers(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            claim_next_phase(run_id, data_dir=data, repo_root=repo, lease_owner="owner-1")
+            start_phase(run_id, "1", launcher="claude-print", lease_owner="owner-1", data_dir=data)
+            launch_dir = data / "runs" / run_id / "phase_launches" / "1" / "attempt-1"
+            launch_dir.mkdir(parents=True)
+            command_path = launch_dir / "command.json"
+            command_path.write_text(json.dumps(phase_pump._stream_command_metadata()), encoding="utf-8")
+            invocations, snapshot = plan_stage_invocations(
+                {"name": "default", "pipeline": "default"},
+                {"run_id": run_id, "phase_id": "1", "phase_attempt": 1},
+                data_dir=data,
+            )
+            invocation = invocations[0]
+            init_stage_sessions(run_id, "1", [invocation], snapshot, data_dir=data)
+            _write_stage_result(data, run_id, "1", 1, invocation.expected_result_path, invocation.stage_id)
+            marker_text = "STAGE_COMPLETE " + json.dumps({"stage_id": invocation.stage_id, "result_path": str(invocation.expected_result_path)})
+            malformed = ["{not-json\n" for _ in range(51)]
+            marker_frame = json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": marker_text + "\n"}]}}) + "\n"
+            result_frame = json.dumps({"type": "result", "subtype": "success", "is_error": False, "session_id": "s1", "result": "{}"}) + "\n"
+
+            with mock.patch(
+                "swarm_do.pipeline.phase_pump.subprocess.Popen",
+                return_value=_StreamProc(stdout="".join([*malformed, marker_frame, result_frame])),
+            ), mock.patch("swarm_do.pipeline.phase_pump.os.getpgid", return_value=12345):
+                phase_pump._run_real_claude(
+                    ["claude", "-p", "--verbose", "--output-format", "stream-json"],
+                    run_id=run_id,
+                    phase_id="1",
+                    lease_owner="owner-1",
+                    data_dir=data,
+                    launch_dir=launch_dir,
+                    command_path=command_path,
+                    metadata=phase_pump._stream_command_metadata(),
+                    prompt_sha="a" * 64,
+                    result_path=data / "result.json",
+                    handoff_path=data / "handoff.json",
+                    phase_attempt=1,
+                    stage_invocations=[invocation],
+                    prepared={},
+                    workspace_metadata={"phase_attempt": 1},
+                )
+            state = load_stage_sessions(run_id, "1", data_dir=data)
+            command = json.loads(command_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(state["stages"][0]["status"], "adopted")
+        self.assertTrue(command["stream_metadata"]["systemic_parse_error"])
 
     def test_no_result_frame_writes_raw_stdout_to_stdout_txt(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -839,15 +1104,46 @@ def _eligible_claude_report() -> dict:
     return {"launchers": [{"name": "claude-print", "eligible": True, "hard_blockers": []}]}
 
 
+class _DelayedLineStream:
+    def __init__(self, line: str, delay_seconds: float) -> None:
+        self._line = line
+        self._delay_seconds = delay_seconds
+        self._sent = False
+
+    def readline(self) -> str:
+        if self._sent:
+            return ""
+        time.sleep(self._delay_seconds)
+        self._sent = True
+        return self._line
+
+
+class _GatedStream:
+    def __init__(self, items) -> None:
+        self._items = list(items)
+        self._index = 0
+
+    def readline(self) -> str:
+        while self._index < len(self._items):
+            item = self._items[self._index]
+            self._index += 1
+            if isinstance(item, threading.Event):
+                item.wait()
+                continue
+            return item
+        return ""
+
+
 class _StreamProc:
     pid = 12345
     stdin = None
 
-    def __init__(self, *, stdout: str = "", stderr: str = "", returncode: int = 0) -> None:
-        self.stdout = io.StringIO(stdout)
-        self.stderr = io.StringIO(stderr)
+    def __init__(self, *, stdout="", stderr="", returncode: int = 0, kill_event: threading.Event | None = None) -> None:
+        self.stdout = io.StringIO(stdout) if isinstance(stdout, str) else stdout
+        self.stderr = io.StringIO(stderr) if isinstance(stderr, str) else stderr
         self.returncode = None
         self._final_returncode = returncode
+        self._kill_event = kill_event
         self.killed = False
 
     def wait(self, timeout=None):
@@ -860,6 +1156,8 @@ class _StreamProc:
     def kill(self):
         self.killed = True
         self.returncode = -9
+        if self._kill_event is not None:
+            self._kill_event.set()
 
 
 class _LegacyProc:
@@ -867,15 +1165,14 @@ class _LegacyProc:
     stdin = None
 
     def __init__(self, *, stdout: str, stderr: str, returncode: int) -> None:
-        self.stdout_text = stdout
-        self.stderr_text = stderr
-        self.returncode = returncode
+        self.stdout = io.StringIO(stdout)
+        self.stderr = io.StringIO(stderr)
+        self.returncode = None
+        self._final_returncode = returncode
 
     def wait(self, timeout=None):
+        self.returncode = self._final_returncode
         return self.returncode
-
-    def communicate(self):
-        return self.stdout_text, self.stderr_text
 
 
 def _write_stage_result(data: Path, run_id: str, phase_id: str, attempt: int, result_path: Path, stage_id: str) -> None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -136,6 +137,25 @@ class StageMarkerProcessorTests(unittest.TestCase):
         self.assertEqual(summary["amended_count"], 1)
         self.assertEqual(state["stages"][0]["commit_sha"], "b" * 40)
         append_event.assert_not_called()
+
+    def test_processor_rejects_non_owner_thread_calls(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            _data, _invocation, processor = _processor(Path(td))
+            failures: list[BaseException] = []
+
+            def call_from_reader_thread() -> None:
+                try:
+                    processor.process_text("")
+                except BaseException as exc:
+                    failures.append(exc)
+
+            thread = threading.Thread(target=call_from_reader_thread, name="claude-stdout-reader")
+            thread.start()
+            thread.join(timeout=5.0)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(len(failures), 1)
+        self.assertIsInstance(failures[0], RuntimeError)
 
 
 def _processor(tmp: Path) -> tuple[Path, StageInvocation, StageMarkerProcessor]:

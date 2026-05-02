@@ -612,70 +612,6 @@ def _stage_marker_phase_attempt(workspace_metadata: Mapping[str, Any]) -> int:
     return int(value) if isinstance(value, int) and not isinstance(value, bool) and value > 0 else 1
 
 
-def _load_valid_stage_result(
-    run_id: str,
-    phase_id: str,
-    marker: StageMarker,
-    *,
-    expected_result_path: Path,
-    data_dir: Path,
-) -> dict[str, Any]:
-    result_path = _validated_stage_result_path(
-        marker.result_path,
-        expected_result_path=expected_result_path,
-        data_dir=data_dir,
-        run_id=run_id,
-        phase_id=phase_id,
-    )
-    try:
-        payload = json.loads(result_path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        raise PhaseSessionError(f"stage_result_unreadable: {result_path}: {exc}") from exc
-    if not isinstance(payload, dict):
-        raise PhaseSessionError(f"stage_result_invalid: {result_path}: root must be an object")
-    schema = json.loads((REPO_ROOT / "schemas" / "stage_result.schema.json").read_text(encoding="utf-8"))
-    from swarm_do.telemetry.schemas import validate_value
-
-    errors = validate_value(payload, schema)
-    semantic_errors = []
-    for key, expected in (("run_id", run_id), ("phase_id", phase_id), ("stage_id", marker.stage_id)):
-        if payload.get(key) != expected:
-            semantic_errors.append(f"$.{key}: expected {expected!r}, got {payload.get(key)!r}")
-    if payload.get("status") != "complete":
-        semantic_errors.append(f"$.status: expected 'complete', got {payload.get('status')!r}")
-    if errors or semantic_errors:
-        details = "; ".join([*errors, *semantic_errors])
-        raise PhaseSessionError(f"stage_result_invalid: {result_path}: {details}")
-    return {"path": result_path, "payload": payload}
-
-
-def _validated_stage_result_path(
-    raw_path: str | None,
-    *,
-    expected_result_path: Path,
-    data_dir: Path,
-    run_id: str,
-    phase_id: str,
-) -> Path:
-    if not isinstance(raw_path, str) or not raw_path.strip():
-        raise PhaseSessionError("stage_result_path_invalid: missing result_path")
-    path = Path(raw_path).expanduser()
-    if not path.is_absolute():
-        raise PhaseSessionError(f"stage_result_path_invalid: result_path must be absolute: {raw_path}")
-    root = (data_dir / "runs" / run_id / "phases" / phase_id / "stage_results").resolve(strict=False)
-    resolved = path.resolve(strict=False)
-    try:
-        resolved.relative_to(root)
-    except ValueError as exc:
-        raise PhaseSessionError(f"stage_result_path_invalid: result_path escapes stage_results: {raw_path}") from exc
-    expected = expected_result_path.expanduser().resolve(strict=False)
-    if resolved != expected:
-        raise PhaseSessionError(
-            f"stage_result_path_invalid: result_path does not match planned stage result path: {raw_path}"
-        )
-    return resolved
-
-
 def _write_controller_phase_result(
     run_id: str,
     phase_id: str,
@@ -1091,16 +1027,20 @@ def _run_claude_print_phase(
     if isinstance(live_stage_controller, Mapping):
         stage_controller = dict(live_stage_controller)
     else:
-        stage_controller = _process_stage_markers(
-            run_id,
-            phase_id,
-            markers=parse_stage_markers(stdout),
-            stage_invocations=stage_plan["stage_invocations"],
-            prepared=prepared,
-            workspace_metadata=workspace_metadata,
-            launch_dir=launch_dir,
-            data_dir=data_dir,
-        )
+        markers = parse_stage_markers(stdout)
+        if markers:
+            stage_controller = _process_stage_markers(
+                run_id,
+                phase_id,
+                markers=markers,
+                stage_invocations=stage_plan["stage_invocations"],
+                prepared=prepared,
+                workspace_metadata=workspace_metadata,
+                launch_dir=launch_dir,
+                data_dir=data_dir,
+            )
+        else:
+            stage_controller = _initial_stage_controller_metadata(live=False)
     if stage_controller.get("completed") and not result_path.is_file():
         _write_controller_phase_result(
             run_id,
@@ -1236,22 +1176,11 @@ def _run_real_claude(
         proc.stdin.write(prompt_text)
         proc.stdin.flush()
         proc.stdin.close()
-        # ``communicate()`` still tries to flush ``stdin`` when the handle is
-        # attached, even if the caller closed it. Detach it after the one-time
-        # write so later collection only drains stdout/stderr.
+        # Detach after the one-time write so later collection only drains
+        # stdout/stderr.
         proc.stdin = None
     if not hasattr(proc, "stdout") or not hasattr(proc, "stderr") or proc.stdout is None or proc.stderr is None:
-        return _run_real_claude_communicate_compat(
-            proc,
-            argv,
-            run_id=run_id,
-            phase_id=phase_id,
-            lease_owner=lease_owner,
-            data_dir=data_dir,
-            refresh_interval=refresh_interval,
-            timeout_seconds=timeout_seconds,
-            started=started,
-        )
+        raise RuntimeError("claude subprocess pipes unavailable")
 
     parser = ClaudeStreamParser()
     processor = (
@@ -1270,6 +1199,7 @@ def _run_real_claude(
     )
     stdout_lines: list[str] = []
     stderr_lines: list[str] = []
+    deferred_marker_texts: list[str] = []
     final_result_frame: Mapping[str, Any] | None = None
     pipe_queue: queue.Queue[tuple[str, str | None]] = queue.Queue()
     stdout_closed = False
@@ -1311,6 +1241,7 @@ def _run_real_claude(
                     stderr_stream=stderr_stream,
                     stdout_lines=stdout_lines,
                     stderr_lines=stderr_lines,
+                    deferred_marker_texts=deferred_marker_texts,
                     stdout_stream_bytes=stdout_stream_bytes,
                     stdout_truncated_at=stdout_truncated_at,
                     metadata=metadata,
@@ -1322,6 +1253,7 @@ def _run_real_claude(
                 )
                 stdout_thread.join(timeout=5.0)
                 stderr_thread.join(timeout=5.0)
+                _process_deferred_marker_texts(processor, deferred_marker_texts)
                 stage_controller = processor.finish() if processor is not None else _initial_stage_controller_metadata(live=True)
                 stdout_text = _stdout_contract(final_result_frame, stdout_lines, metadata)
                 stderr_text = "".join(stderr_lines)
@@ -1356,8 +1288,11 @@ def _run_real_claude(
                         command_path=command_path,
                     )
                     chunk = parser.feed_line(line)
-                    if chunk.kind == "assistant_text" and processor is not None and not _systemic_parse_error(parser.metadata()):
-                        processor.process_text(chunk.text)
+                    if chunk.kind == "assistant_text" and processor is not None:
+                        if _systemic_parse_error(parser.metadata()):
+                            deferred_marker_texts.append(chunk.text)
+                        else:
+                            processor.process_text(chunk.text)
                     elif chunk.kind == "result":
                         final_result_frame = chunk.raw_frame
                 elif stream_name == "stderr" and line is not None:
@@ -1403,6 +1338,7 @@ def _run_real_claude(
             prompt_text=prompt_text,
             cwd=cwd,
         )
+    _process_deferred_marker_texts(processor, deferred_marker_texts)
     stage_controller = processor.finish() if processor is not None else _initial_stage_controller_metadata(live=True)
     fallback = None
     if final_result_frame is None:
@@ -1415,36 +1351,6 @@ def _run_real_claude(
     completed = subprocess.CompletedProcess(list(argv), returncode, stdout=stdout_text, stderr=stderr_text)
     setattr(completed, "stage_controller", stage_controller)
     return completed
-
-
-def _run_real_claude_communicate_compat(
-    proc: Any,
-    argv: Sequence[str],
-    *,
-    run_id: str,
-    phase_id: str,
-    lease_owner: str,
-    data_dir: Path,
-    refresh_interval: int,
-    timeout_seconds: int,
-    started: float,
-) -> subprocess.CompletedProcess[str]:
-    while True:
-        elapsed = time.monotonic() - started
-        if elapsed > timeout_seconds:
-            proc.kill()
-            stdout, stderr = proc.communicate()
-            raise subprocess.TimeoutExpired(argv, timeout_seconds, output=stdout, stderr=stderr)
-        wait_for = min(refresh_interval, max(0.1, timeout_seconds - elapsed))
-        try:
-            if hasattr(proc, "wait"):
-                proc.wait(timeout=wait_for)
-                stdout, stderr = proc.communicate()
-            else:
-                stdout, stderr = proc.communicate(timeout=wait_for)
-            return subprocess.CompletedProcess(list(argv), proc.returncode, stdout=stdout, stderr=stderr)
-        except subprocess.TimeoutExpired:
-            refresh_phase(run_id, phase_id, lease_owner=lease_owner, data_dir=data_dir)
 
 
 def _run_real_claude_legacy_json(
@@ -1511,7 +1417,7 @@ def _run_real_claude_legacy_json(
         proc.stdin.flush()
         proc.stdin.close()
         proc.stdin = None
-    return _run_real_claude_communicate_compat(
+    return _collect_process_output_with_readers(
         proc,
         argv,
         run_id=run_id,
@@ -1522,6 +1428,92 @@ def _run_real_claude_legacy_json(
         timeout_seconds=timeout_seconds,
         started=started,
     )
+
+
+def _collect_process_output_with_readers(
+    proc: Any,
+    argv: Sequence[str],
+    *,
+    run_id: str,
+    phase_id: str,
+    lease_owner: str,
+    data_dir: Path,
+    refresh_interval: int,
+    timeout_seconds: int,
+    started: float,
+) -> subprocess.CompletedProcess[str]:
+    if not hasattr(proc, "stdout") or not hasattr(proc, "stderr") or proc.stdout is None or proc.stderr is None:
+        raise RuntimeError("claude subprocess pipes unavailable")
+    pipe_queue: queue.Queue[tuple[str, str | None]] = queue.Queue()
+    stdout_lines: list[str] = []
+    stderr_lines: list[str] = []
+    stdout_closed = False
+    stderr_closed = False
+    last_refresh = time.monotonic()
+    stdout_thread = threading.Thread(
+        target=_enqueue_stream_lines,
+        args=("stdout", proc.stdout, pipe_queue),
+        name="claude-stdout-reader",
+        daemon=True,
+    )
+    stderr_thread = threading.Thread(
+        target=_enqueue_stream_lines,
+        args=("stderr", proc.stderr, pipe_queue),
+        name="claude-stderr-reader",
+        daemon=True,
+    )
+    stdout_thread.start()
+    stderr_thread.start()
+    while not (stdout_closed and stderr_closed):
+        elapsed = time.monotonic() - started
+        if elapsed > timeout_seconds:
+            proc.kill()
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline and not (stdout_closed and stderr_closed):
+                try:
+                    stream_name, line = pipe_queue.get(timeout=0.1)
+                except queue.Empty:
+                    continue
+                if stream_name == "stdout" and line is None:
+                    stdout_closed = True
+                elif stream_name == "stderr" and line is None:
+                    stderr_closed = True
+                elif stream_name == "stdout" and line is not None:
+                    stdout_lines.append(line)
+                elif stream_name == "stderr" and line is not None:
+                    stderr_lines.append(line)
+            stdout_thread.join(timeout=5.0)
+            stderr_thread.join(timeout=5.0)
+            raise subprocess.TimeoutExpired(list(argv), timeout_seconds, output="".join(stdout_lines), stderr="".join(stderr_lines))
+        wait_for = min(refresh_interval, max(0.1, timeout_seconds - elapsed))
+        try:
+            stream_name, line = pipe_queue.get(timeout=wait_for)
+        except queue.Empty:
+            pass
+        else:
+            if stream_name == "stdout" and line is None:
+                stdout_closed = True
+            elif stream_name == "stderr" and line is None:
+                stderr_closed = True
+            elif stream_name == "stdout" and line is not None:
+                stdout_lines.append(line)
+            elif stream_name == "stderr" and line is not None:
+                stderr_lines.append(line)
+        if time.monotonic() - last_refresh >= refresh_interval:
+            refresh_phase(run_id, phase_id, lease_owner=lease_owner, data_dir=data_dir)
+            last_refresh = time.monotonic()
+    stdout_thread.join(timeout=5.0)
+    stderr_thread.join(timeout=5.0)
+    if hasattr(proc, "wait"):
+        try:
+            proc.wait(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5.0)
+    returncode = getattr(proc, "returncode", None)
+    if returncode is None and hasattr(proc, "poll"):
+        returncode = proc.poll()
+    return subprocess.CompletedProcess(list(argv), int(returncode or 0), stdout="".join(stdout_lines), stderr="".join(stderr_lines))
 
 
 def _enqueue_stream_lines(stream_name: str, stream: Any, out: "queue.Queue[tuple[str, str | None]]") -> None:
@@ -1544,6 +1536,7 @@ def _drain_stream_queue(
     stderr_stream: Any,
     stdout_lines: list[str],
     stderr_lines: list[str],
+    deferred_marker_texts: list[str],
     stdout_stream_bytes: int,
     stdout_truncated_at: int | None,
     metadata: dict[str, Any],
@@ -1574,14 +1567,23 @@ def _drain_stream_queue(
                 command_path=command_path,
             )
             chunk = parser.feed_line(line)
-            if chunk.kind == "assistant_text" and processor is not None and not _systemic_parse_error(parser.metadata()):
-                processor.process_text(chunk.text)
+            if chunk.kind == "assistant_text" and processor is not None:
+                if _systemic_parse_error(parser.metadata()):
+                    deferred_marker_texts.append(chunk.text)
+                else:
+                    processor.process_text(chunk.text)
             elif chunk.kind == "result":
                 final_result_frame = chunk.raw_frame
         elif stream_name == "stderr" and line is not None:
             stderr_lines.append(line)
             stderr_stream.write(line)
     return stdout_closed, stderr_closed, stdout_stream_bytes, stdout_truncated_at, final_result_frame
+
+
+def _process_deferred_marker_texts(processor: StageMarkerProcessor | None, deferred_marker_texts: list[str]) -> None:
+    if processor is not None and deferred_marker_texts:
+        processor.process_text("\n".join(deferred_marker_texts))
+        deferred_marker_texts.clear()
 
 
 _STDOUT_STREAM_CAP_BYTES = 64 * 1024 * 1024
