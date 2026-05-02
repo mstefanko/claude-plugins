@@ -608,6 +608,20 @@ def _process_stage_markers(
             had_controller_failure = True
             continue
         claim_stage(run_id, phase_id, marker.stage_id, data_dir=data_dir)
+        try:
+            stage_result = _load_valid_stage_result(
+                run_id,
+                phase_id,
+                marker,
+                expected_result_path=by_id[marker.stage_id].expected_result_path,
+                data_dir=data_dir,
+            )
+            marker_payload["validated_result_path"] = str(stage_result["path"])
+        except PhaseSessionError as exc:
+            marker_payload["controller_status"] = "stage_result_invalid"
+            record_stage_failed(run_id, phase_id, marker.stage_id, "stage_result_invalid", str(exc), data_dir=data_dir)
+            had_controller_failure = True
+            continue
         commit_sha: str | None = None
         try:
             if workspace_metadata:
@@ -649,6 +663,70 @@ def _process_stage_markers(
         "worktree_diff": _normalized_worktree_diff(latest_diff) if latest_diff else None,
         "changed_files": changed,
     }
+
+
+def _load_valid_stage_result(
+    run_id: str,
+    phase_id: str,
+    marker: StageMarker,
+    *,
+    expected_result_path: Path,
+    data_dir: Path,
+) -> dict[str, Any]:
+    result_path = _validated_stage_result_path(
+        marker.result_path,
+        expected_result_path=expected_result_path,
+        data_dir=data_dir,
+        run_id=run_id,
+        phase_id=phase_id,
+    )
+    try:
+        payload = json.loads(result_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise PhaseSessionError(f"stage_result_unreadable: {result_path}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise PhaseSessionError(f"stage_result_invalid: {result_path}: root must be an object")
+    schema = json.loads((REPO_ROOT / "schemas" / "stage_result.schema.json").read_text(encoding="utf-8"))
+    from swarm_do.telemetry.schemas import validate_value
+
+    errors = validate_value(payload, schema)
+    semantic_errors = []
+    for key, expected in (("run_id", run_id), ("phase_id", phase_id), ("stage_id", marker.stage_id)):
+        if payload.get(key) != expected:
+            semantic_errors.append(f"$.{key}: expected {expected!r}, got {payload.get(key)!r}")
+    if payload.get("status") != "complete":
+        semantic_errors.append(f"$.status: expected 'complete', got {payload.get('status')!r}")
+    if errors or semantic_errors:
+        details = "; ".join([*errors, *semantic_errors])
+        raise PhaseSessionError(f"stage_result_invalid: {result_path}: {details}")
+    return {"path": result_path, "payload": payload}
+
+
+def _validated_stage_result_path(
+    raw_path: str | None,
+    *,
+    expected_result_path: Path,
+    data_dir: Path,
+    run_id: str,
+    phase_id: str,
+) -> Path:
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        raise PhaseSessionError("stage_result_path_invalid: missing result_path")
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        raise PhaseSessionError(f"stage_result_path_invalid: result_path must be absolute: {raw_path}")
+    root = (data_dir / "runs" / run_id / "phases" / phase_id / "stage_results").resolve(strict=False)
+    resolved = path.resolve(strict=False)
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise PhaseSessionError(f"stage_result_path_invalid: result_path escapes stage_results: {raw_path}") from exc
+    expected = expected_result_path.expanduser().resolve(strict=False)
+    if resolved != expected:
+        raise PhaseSessionError(
+            f"stage_result_path_invalid: result_path does not match planned stage result path: {raw_path}"
+        )
+    return resolved
 
 
 def _write_controller_phase_result(

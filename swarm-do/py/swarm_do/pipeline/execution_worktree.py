@@ -199,13 +199,13 @@ def resolve_run_execution_worktree(
             f"git prefix maps to {expected_project}, expected source project root {source_project}"
         )
     _assert_supported_git_checkout(source_project)
-    worktree_run_root = Path(data_dir).expanduser() / "worktrees" / run_id
-    safe_git = (worktree_run_root / "repo").resolve(strict=False)
+    control_run_root = Path(data_dir).expanduser() / "worktrees" / run_id
+    checkout_run_root = _safe_run_worktree_root(data_dir, run_id, sensitive_prefixes=sensitive_prefixes)
+    safe_git = (checkout_run_root / "repo").resolve(strict=False)
     safe_project = (safe_git / project_subdir).resolve(strict=False) if project_subdir else safe_git
-    manifest_path = worktree_run_root / "manifest.json"
+    manifest_path = control_run_root / "manifest.json"
     _assert_not_sensitive(safe_git, sensitive_prefixes=sensitive_prefixes)
     _assert_not_sensitive(safe_project, sensitive_prefixes=sensitive_prefixes)
-    _assert_not_sensitive(manifest_path, sensitive_prefixes=sensitive_prefixes)
     base_ref = str(prepared_plan.get("git_base_ref") or "HEAD")
     base_sha = _prepared_base_sha(source_project, prepared_plan, base_ref=base_ref)
     copy_specs = _artifact_copy_specs(
@@ -2760,6 +2760,40 @@ def _assert_not_sensitive(path: Path, *, sensitive_prefixes: Iterable[str]) -> N
         except ValueError:
             continue
         raise RunExecutionWorktreeError(f"safe worktree root resolves inside a sensitive path: {path}")
+
+
+def _safe_run_worktree_root(data_dir: Path, run_id: str, *, sensitive_prefixes: Iterable[str]) -> Path:
+    prefixes = tuple(sensitive_prefixes)
+    candidates = [
+        Path(data_dir).expanduser() / "worktrees" / run_id,
+        _default_worktree_data_dir() / "worktrees" / run_id,
+        Path("/tmp") / "swarmdaddy-worktrees" / run_id,
+        Path(tempfile.gettempdir()) / "swarmdaddy-worktrees" / run_id,
+    ]
+    for candidate in _unique_paths(candidates):
+        try:
+            _assert_not_sensitive(candidate, sensitive_prefixes=prefixes)
+        except RunExecutionWorktreeError:
+            continue
+        return candidate
+    raise RunExecutionWorktreeError("no non-sensitive run execution worktree directory is available")
+
+
+def _default_worktree_data_dir() -> Path:
+    xdg = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+    return Path(xdg).expanduser() / "swarmdaddy"
+
+
+def _unique_paths(paths: Iterable[Path]) -> tuple[Path, ...]:
+    seen: set[str] = set()
+    out: list[Path] = []
+    for path in paths:
+        key = str(Path(path).expanduser())
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(Path(path))
+    return tuple(out)
 
 
 def _git_config_bool(repo: Path, key: str) -> bool:

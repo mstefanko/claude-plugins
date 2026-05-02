@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -127,6 +128,29 @@ class ExecutionWorktreeTests(unittest.TestCase):
                 deny_writer_policy,
                 "scrub must not mutate source-tree dispatcher policy",
             )
+
+    def test_sensitive_data_dir_uses_external_checkout_and_control_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as td, mock.patch.dict(os.environ, {"XDG_DATA_HOME": str(Path(td) / "xdg")}):
+            root = Path(td)
+            git_root, project, data, _prepared = _prepared_monorepo(root)
+            sensitive = root / "home" / ".claude"
+            sensitive_data = sensitive / "state"
+            shutil.copytree(data, sensitive_data)
+            prepared = json.loads((sensitive_data / "runs" / RUN_ID / "prepared_plan.v1.json").read_text(encoding="utf-8"))
+
+            worktree = materialize_run_execution_worktree(
+                RUN_ID,
+                source_project_root=project,
+                data_dir=sensitive_data,
+                prepared_plan=prepared,
+                sensitive_prefixes=[str(sensitive)],
+            )
+
+            self.assertEqual(worktree.source_git_root, git_root.resolve(strict=False))
+            self.assertEqual(worktree.manifest_path, sensitive_data / "worktrees" / RUN_ID / "manifest.json")
+            self.assertTrue(worktree.manifest_path.is_file())
+            self.assertFalse(str(worktree.safe_git_root).startswith(str(sensitive)))
+            self.assertTrue(str(worktree.safe_git_root).startswith(str((root / "xdg").resolve(strict=False))))
 
     def test_artifact_copy_rejects_symlinked_source(self) -> None:
         with tempfile.TemporaryDirectory() as td:

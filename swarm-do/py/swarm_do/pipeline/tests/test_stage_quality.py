@@ -128,6 +128,68 @@ class StageQualityTests(unittest.TestCase):
         self.assertFalse(processed["completed"])
         self.assertEqual(processed["markers"][0]["controller_status"], "unknown_stage_marker")
 
+    def test_controller_rejects_stage_result_path_outside_stage_results(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            data = Path(td)
+            invocations, snapshot = plan_stage_invocations(
+                {"name": "default", "pipeline": "default"},
+                {"run_id": RUN_ID, "phase_id": "1"},
+                data_dir=data,
+            )
+            init_stage_sessions(RUN_ID, "1", invocations[:1], snapshot, data_dir=data)
+            payload = {"stage_id": "research", "result_path": str(data / "escape.result.json")}
+            marker = parse_stage_marker_line("STAGE_COMPLETE " + json.dumps(payload, sort_keys=True))
+            self.assertIsNotNone(marker)
+
+            processed = _process_stage_markers(
+                RUN_ID,
+                "1",
+                markers=[marker],
+                stage_invocations=invocations[:1],
+                prepared={},
+                workspace_metadata={},
+                launch_dir=data,
+                data_dir=data,
+            )
+            state = load_stage_sessions(RUN_ID, "1", data_dir=data)
+
+        self.assertFalse(processed["completed"])
+        self.assertEqual(processed["markers"][0]["controller_status"], "stage_result_invalid")
+        self.assertEqual(state["stages"][0]["status"], "failed")
+        self.assertEqual(state["stages"][0]["failure_kind"], "stage_result_invalid")
+
+    def test_controller_validates_stage_result_schema_before_adoption(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            data = Path(td)
+            invocations, snapshot = plan_stage_invocations(
+                {"name": "default", "pipeline": "default"},
+                {"run_id": RUN_ID, "phase_id": "1"},
+                data_dir=data,
+            )
+            init_stage_sessions(RUN_ID, "1", invocations[:1], snapshot, data_dir=data)
+            result_path = invocations[0].expected_result_path
+            result_path.parent.mkdir(parents=True, exist_ok=True)
+            result_path.write_text(json.dumps({"schema_version": 1, "stage_id": "research"}) + "\n", encoding="utf-8")
+            payload = {"stage_id": "research", "result_path": str(result_path)}
+            marker = parse_stage_marker_line("STAGE_COMPLETE " + json.dumps(payload, sort_keys=True))
+            self.assertIsNotNone(marker)
+
+            processed = _process_stage_markers(
+                RUN_ID,
+                "1",
+                markers=[marker],
+                stage_invocations=invocations[:1],
+                prepared={},
+                workspace_metadata={},
+                launch_dir=data,
+                data_dir=data,
+            )
+            state = load_stage_sessions(RUN_ID, "1", data_dir=data)
+
+        self.assertFalse(processed["completed"])
+        self.assertEqual(state["stages"][0]["status"], "failed")
+        self.assertIn("missing required property", state["stages"][0]["notes"])
+
 
 if __name__ == "__main__":
     unittest.main()
