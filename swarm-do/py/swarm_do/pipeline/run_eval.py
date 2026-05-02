@@ -23,6 +23,15 @@ EVAL_EXPECTATION_SCHEMA: dict[str, Any] = {
         "unrecognized_artifacts_allowed",
     },
 }
+_PHASE_EXIT_EVENT_TYPES = frozenset(
+    {
+        "phase_session_completed",
+        "phase_session_failed",
+        "phase_session_blocked",
+        "phase_session_needs_input",
+        "phase_attempt_retry_exhausted",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -152,6 +161,10 @@ def first_mismatch(trace: RunTrace, expectation: Mapping[str, Any]) -> EvalMisma
     if isinstance(worktree_count, int) and len(trace.worktree_observations) != worktree_count:
         return EvalMismatch("worktree_observation_count_mismatch", worktree_count, len(trace.worktree_observations), "worktree_observations")
 
+    adoption_mismatch = _stage_adoption_precedes_exit_mismatch(trace, expectation)
+    if adoption_mismatch is not None:
+        return adoption_mismatch
+
     actual_warnings = [warning.kind for warning in trace.warnings]
     expected_warnings = [str(item) for item in expectation.get("expected_warnings") or []]
     if expected_warnings:
@@ -216,6 +229,8 @@ def _validate_expectation(value: Mapping[str, Any]) -> None:
     _assert_list(value, "required_artifacts")
     _assert_list(value, "expected_phase_transitions")
     _assert_list(value, "expected_attempts")
+    if "expected_adoption_precedes_exit" in value:
+        _assert_list(value, "expected_adoption_precedes_exit")
     _assert_list(value, "expected_warnings")
     _assert_list(value, "forbidden_warnings")
     if not isinstance(value.get("unrecognized_artifacts_allowed"), bool):
@@ -230,6 +245,69 @@ def _assert_list(value: Mapping[str, Any], key: str) -> None:
 def _expected_run_id(expectation: Mapping[str, Any]) -> str:
     value = expectation.get("run_id")
     return str(value) if value else "run"
+
+
+def _stage_adoption_precedes_exit_mismatch(trace: RunTrace, expectation: Mapping[str, Any]) -> EvalMismatch | None:
+    for expected in expectation.get("expected_adoption_precedes_exit") or []:
+        if not isinstance(expected, Mapping):
+            continue
+        phase_id = str(expected.get("phase_id") or "")
+        stage_id = str(expected.get("stage_id") or "")
+        adoption = next(
+            (
+                row
+                for row in trace.run_event_recent
+                if row.event_type == "stage_adopted"
+                and row.phase_id == phase_id
+                and _event_stage_id(row) == stage_id
+            ),
+            None,
+        )
+        if adoption is None:
+            return EvalMismatch(
+                "stage_adoption_missing",
+                {"phase_id": phase_id, "stage_id": stage_id},
+                [_event_key(row) for row in trace.run_event_recent],
+                f"events.{phase_id}.{stage_id}.stage_adopted",
+            )
+        exit_event = next(
+            (
+                row
+                for row in trace.run_event_recent
+                if row.phase_id == phase_id and row.event_type in _PHASE_EXIT_EVENT_TYPES
+            ),
+            None,
+        )
+        if exit_event is None:
+            return EvalMismatch(
+                "phase_exit_missing",
+                {"phase_id": phase_id, "after_stage_id": stage_id},
+                [_event_key(row) for row in trace.run_event_recent if row.phase_id == phase_id],
+                f"events.{phase_id}.phase_exit",
+            )
+        if not adoption.timestamp or not exit_event.timestamp or adoption.timestamp >= exit_event.timestamp:
+            return EvalMismatch(
+                "stage_adoption_after_phase_exit",
+                {"adoption_before": exit_event.timestamp},
+                {"stage_adopted": adoption.timestamp, "phase_exit": exit_event.timestamp},
+                f"events.{phase_id}.{stage_id}.timestamp",
+            )
+    return None
+
+
+def _event_stage_id(row: Any) -> str | None:
+    details = row.details if isinstance(row.details, Mapping) else {}
+    value = details.get("stage_id") or row.work_unit_id
+    return str(value) if value is not None else None
+
+
+def _event_key(row: Any) -> dict[str, Any]:
+    return {
+        "event_type": row.event_type,
+        "phase_id": row.phase_id,
+        "stage_id": _event_stage_id(row),
+        "timestamp": row.timestamp,
+    }
 
 
 def _default_required_artifacts(trace: RunTrace) -> list[str]:

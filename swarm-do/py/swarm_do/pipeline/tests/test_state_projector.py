@@ -7,8 +7,10 @@ import tempfile
 import unittest
 from contextlib import closing
 from pathlib import Path
+from unittest import mock
 
 from swarm_do.pipeline.paths import REPO_ROOT
+from swarm_do.pipeline.phase_sessions import phase_status
 from swarm_do.pipeline.state_projector import mirror_path_for, project_run, query_mirror
 
 
@@ -104,6 +106,58 @@ class StateProjectorTests(unittest.TestCase):
             project_run(run_id, data_dir=data_dir)
             with closing(sqlite3.connect(mirror_path_for(run_id, data_dir=data_dir))) as conn:
                 self.assertEqual(conn.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+
+    def test_phase_status_mirror_preserves_retry_policy_and_phase_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            run_id = materialize_fixture("clean-single-phase", data_dir)
+            phase_path = data_dir / "runs" / run_id / "phase_sessions.v1.json"
+            payload = json.loads(phase_path.read_text(encoding="utf-8"))
+            payload["retry_policy"]["max_session_attempts"] = 3
+            phase = payload["phases"][0]
+            phase.update(
+                {
+                    "status": "retry_waiting",
+                    "max_session_attempts": 3,
+                    "next_retry_at": "2026-05-02T00:03:00Z",
+                    "lease_owner": None,
+                    "lease_host": None,
+                    "lease_pid": None,
+                    "lease_command": None,
+                    "lease_expires_at": None,
+                    "session_name": None,
+                    "result_path": "run/phase_results/p1/attempt-1.result.json",
+                    "handoff_path": "run/phase_handoffs/p1/attempt-1.handoff.json",
+                    "last_error": "launcher crashed",
+                    "last_launcher_error": "launcher crashed",
+                    "retry_exhausted_at": None,
+                    "blocked_reason": "retry_policy_human_gate",
+                    "retry_policy_decision": "retry",
+                    "blocked_at": "2026-05-02T00:02:30Z",
+                    "launch_dir": "run/phase_launches/p1/attempt-1",
+                    "command_path": "run/phase_launches/p1/attempt-1/command.json",
+                    "parent_pid": 111,
+                    "child_pid": 222,
+                    "process_group_id": 222,
+                    "prompt_sha": "b" * 64,
+                    "expected_result_path": "run/phase_results/p1/attempt-2.result.json",
+                    "expected_handoff_path": "run/phase_handoffs/p1/attempt-2.handoff.json",
+                    "launch_metadata_error": "missing launcher metadata",
+                    "recovery_context_path": "run/phase_recovery/p1/attempt-1.context.json",
+                    "evidence_path": "run/phase_launches/p1/attempt-1/evidence.json",
+                }
+            )
+            phase_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            with mock.patch.dict("os.environ", {"SWARM_DISABLE_STATE_MIRROR": "1"}):
+                expected = phase_status(run_id, data_dir=data_dir)
+
+            project_run(run_id, data_dir=data_dir)
+            actual = phase_status(run_id, data_dir=data_dir)
+
+            self.assertEqual(actual["retry_policy"], expected["retry_policy"])
+            self.assertEqual(actual["phases"], expected["phases"])
+            self.assertEqual(actual["active_phase"], expected["active_phase"])
+            self.assertEqual(actual["next_phase"], expected["next_phase"])
 
 
 if __name__ == "__main__":

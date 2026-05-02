@@ -25,6 +25,9 @@ expected_attempts:
       parse_error: 0
       legacy_json_retry: 0
       ignored_frame_types: {}
+expected_adoption_precedes_exit:
+  - phase_id: p1
+    stage_id: s1
 expected_warnings: []
 forbidden_warnings: [malformed_result]
 unrecognized_artifacts_allowed: false

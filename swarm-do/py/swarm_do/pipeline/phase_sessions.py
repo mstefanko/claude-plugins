@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import signal
@@ -24,9 +25,7 @@ from .prepare import StalePreparedArtifactError, verify_prepared_run
 from .failure_taxonomy import failure_kind_details
 from .policies import (
     ResolvedPolicyUpdate,
-    default_retry_policy,
-    profile_defaults,
-    retry_policy_config,
+    normalize_retry_policy,
     validate_policy_overrides,
 )
 from .phase_evidence import MANIFEST_SCHEMA_VERSION, attempt_evidence_path, write_attempt_evidence_manifest
@@ -36,6 +35,7 @@ from .run_state import _atomic_json_write, append_run_event, utc_now, validate_r
 SCHEMA_VERSION = 1
 STATE_FILENAME = "phase_sessions.v1.json"
 LOCK_FILENAME = "phase_sessions.v1.lock"
+_LOGGER = logging.getLogger(__name__)
 
 STATUS_PENDING = "pending"
 STATUS_LEASED = "leased"
@@ -286,8 +286,12 @@ def phase_status(run_id: str, *, data_dir: Path | None = None, repo_root: Path |
             mirror_status = load_phase_status_from_mirror(run_id, data_dir=base)
             if mirror_status is not None:
                 return mirror_status
-        except (FileNotFoundError, OSError, ValueError, sqlite3.DatabaseError):
-            pass
+        except (FileNotFoundError, OSError, ValueError, sqlite3.DatabaseError) as exc:
+            _LOGGER.debug(
+                "phase_status mirror read failed; falling back to canonical JSON for run_id=%s",
+                run_id,
+                exc_info=True,
+            )
     state_path = phase_session_path(run_id, data_dir=base)
     prepared_path = _prepared_artifact_path(run_id, data_dir=base)
     if not state_path.exists():
@@ -1479,20 +1483,8 @@ def _retry_policy_with_update(
 
 
 def _normalize_retry_policy(retry_policy: Any) -> dict[str, Any]:
-    existing = dict(retry_policy) if isinstance(retry_policy, Mapping) else {}
-    profile_value = existing.get("autopilot_profile")
-    defaults = default_retry_policy()
-    profile = profile_value if isinstance(profile_value, str) and profile_value else str(defaults["autopilot_profile"])
     try:
-        normalized = default_retry_policy()
-        normalized.update(profile_defaults(profile))
-        normalized["autopilot_profile"] = profile
-        for key, value in existing.items():
-            if value is not None:
-                normalized[key] = value
-            elif key not in normalized:
-                normalized[key] = value
-        retry_policy_config(normalized)
+        normalized = normalize_retry_policy(dict(retry_policy) if isinstance(retry_policy, Mapping) else None)
     except ValueError as exc:
         raise PhaseSessionError(str(exc)) from exc
     return normalized

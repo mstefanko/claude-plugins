@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import dataclasses
 import unittest
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from swarm_do.pipeline.domain import (
     DoctorFinding,
     PhaseAttemptRecord,
     PhaseRecord,
+    PhaseStatusReport,
 )
 from swarm_do.pipeline.paths import REPO_ROOT
 
@@ -28,10 +30,14 @@ class DomainContractTests(unittest.TestCase):
             "status": "running",
             "attempt": 1,
             "lease_owner": "owner",
+            "failure_category": "lifecycle",
+            "policy_inputs": {"attempt": 1},
             "attempt_history": [],
         }
 
-        self.assertEqual(PhaseRecord.from_mapping(payload).to_dict(), payload)
+        record = PhaseRecord.from_mapping(payload)
+        self.assertEqual(record.to_dict(), payload)
+        self.assertEqual(dataclasses.replace(record, status="failed").to_dict()["status"], "failed")
         with self.assertRaisesRegex(DomainContractError, "unknown"):
             PhaseRecord.from_mapping({**payload, "surprise": True})
 
@@ -50,6 +56,11 @@ class DomainContractTests(unittest.TestCase):
             "attempt": 1,
             "status": "complete",
             "changed_files": ["src/app.py"],
+            "failure_category": "launcher",
+            "failure_known": True,
+            "total_cost_usd": 0.42,
+            "cost_confidence": "provider_reported",
+            "permission_denial_count": 2,
             "future_projector_column": "kept",
         }
 
@@ -57,6 +68,20 @@ class DomainContractTests(unittest.TestCase):
             PhaseAttemptRecord.from_mapping(payload)
         record = PhaseAttemptRecord.from_mapping(payload, preserve_unknown=True)
         self.assertEqual(record.to_dict(), payload)
+        self.assertEqual(record.total_cost_usd, 0.42)
+        self.assertEqual(dataclasses.replace(record, status="failed").to_dict()["status"], "failed")
+
+    def test_phase_status_report_rejects_unknown_top_level_keys(self) -> None:
+        payload = {
+            "run_id": "01J00000000000000000000000",
+            "status": "ready",
+            "phases": [],
+            "recommended_command": "bin/swarm do --prepared 01J00000000000000000000000 --phase-sessions auto",
+        }
+
+        self.assertEqual(PhaseStatusReport.from_mapping(payload).status, "ready")
+        with self.assertRaisesRegex(DomainContractError, "unknown"):
+            PhaseStatusReport.from_mapping({**payload, "surprise": True})
 
     def test_doctor_finding_round_trip_and_severity(self) -> None:
         payload = {

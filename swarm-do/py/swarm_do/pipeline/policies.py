@@ -59,6 +59,23 @@ def resolved_policy_summary(
     )
 
 
+def normalize_retry_policy(retry_policy: Mapping[str, Any] | None) -> dict[str, Any]:
+    existing = dict(retry_policy) if isinstance(retry_policy, Mapping) else {}
+    profile_value = existing.get("autopilot_profile")
+    defaults = default_retry_policy()
+    profile = profile_value if isinstance(profile_value, str) and profile_value else str(defaults["autopilot_profile"])
+    normalized = default_retry_policy()
+    normalized.update(profile_defaults(profile))
+    normalized["autopilot_profile"] = profile
+    for key, value in existing.items():
+        if value is not None:
+            normalized[key] = value
+        elif key not in normalized:
+            normalized[key] = value
+    retry_policy_config(normalized)
+    return normalized
+
+
 def _review_provider_dict(value: Mapping[str, Any] | ReviewProviderPolicy | None) -> dict[str, Any] | None:
     if isinstance(value, ReviewProviderPolicy):
         return value.as_dict()
@@ -82,6 +99,7 @@ __all__ = [
     "evaluate_autopilot_policy",
     "expand_profile",
     "fallback_retry_after_seconds",
+    "normalize_retry_policy",
     "profile_defaults",
     "resolved_policy_summary",
     "retry_policy_config",

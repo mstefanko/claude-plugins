@@ -688,9 +688,11 @@ between phase-session pumping and other call sites.
 
 ### Objective
 
-Centralize retry, timeout, budget, and failure-tolerance settings into
-small immutable policy objects, consolidating existing scattered policy
-helpers.
+Centralize retry and provider-selection policy display first, without
+forking existing runtime policy behavior. Timeout, writer-budget,
+failure-tolerance, and worktree-recovery policy objects are follow-up
+surfaces that should only be introduced when there is a concrete caller to
+consolidate.
 
 ### Why
 
@@ -710,26 +712,28 @@ chosen.").
 py/swarm_do/pipeline/policies.py
 ```
 
-Initial objects:
+Initial surface:
 
 ```text
-RetryPolicy
-TimeoutPolicy
-BudgetPolicy
-FailureTolerancePolicy
-ProviderSelectionPolicy
-WorktreeRecoveryPolicy
+AutopilotPolicyConfig / retry helpers re-exported from phase_autopilot_policy.py
+ResolvedPolicySummary for display/reporting
+ReviewProviderPolicy re-exported from provider_review.py
 ```
 
 ### Implementation
 
-1. Add policy objects with `from_mapping()` and `to_dict()`.
-2. Wrap existing phase-session retry policy defaults.
-3. Wrap provider-review `selection`, `min_success`, `max_parallel`, and
-   timeout configuration.
-4. Wrap budget preview thresholds.
-5. Update TUI/config/status rendering to display policies through one helper.
-6. Do not add caching behavior until a concrete cacheable operation is chosen.
+1. Add `policies.py` as the canonical import/display facade.
+2. Re-export existing phase-session retry policy symbols directly; do not
+   introduce a parallel `RetryPolicy`.
+3. Collapse duplicated phase-session retry defaults into one source of truth.
+4. Re-export provider-review `ReviewProviderPolicy`.
+5. Expose cost-USD retry gates through `ResolvedPolicySummary.budget`.
+6. Defer generic `TimeoutPolicy`, `BudgetPolicy`,
+   `FailureTolerancePolicy`, and `WorktreeRecoveryPolicy` until a follow-up
+   phase has real consolidation call sites. In particular, do not merge
+   writer-tool budgets with cost-USD retry gates.
+7. Update TUI/config/status rendering to display policies through one helper.
+8. Do not add caching behavior until a concrete cacheable operation is chosen.
 
 ### Test Anchors
 

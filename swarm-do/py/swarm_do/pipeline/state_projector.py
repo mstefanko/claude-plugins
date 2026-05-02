@@ -27,6 +27,7 @@ except ImportError:  # pragma: no cover - v1 is POSIX-only by design.
 from swarm_do.telemetry.schemas import load_schema, validate_value
 
 from .paths import resolve_data_dir
+from .policies import normalize_retry_policy
 from .run_state import active_run_path, checkpoint_path, utc_now
 
 
@@ -44,6 +45,42 @@ _NONDETERMINISTIC_COLUMNS = {
     ("artifact_sources", "read_at"),
     ("projector_meta", "projected_at"),
 }
+_PHASE_STATUS_KEYS = (
+    "phase_id",
+    "phase_index",
+    "title",
+    "depends_on_phase_ids",
+    "status",
+    "lease_owner",
+    "lease_expires_at",
+    "attempt",
+    "session_name",
+    "started_at",
+    "completed_at",
+    "result_path",
+    "handoff_path",
+    "last_error",
+    "max_session_attempts",
+    "next_retry_at",
+    "last_failure_kind",
+    "last_launcher_error",
+    "retry_exhausted_at",
+    "blocked_reason",
+    "retry_policy_decision",
+    "blocked_at",
+    "launch_dir",
+    "command_path",
+    "parent_pid",
+    "child_pid",
+    "process_group_id",
+    "prompt_sha",
+    "expected_result_path",
+    "expected_handoff_path",
+    "launch_metadata_error",
+    "recovery_context_path",
+    "evidence_path",
+    "attempt_history",
+)
 
 
 class ProjectionError(RuntimeError):
@@ -157,8 +194,7 @@ def query_mirror(run_id: str, sql: str, *, data_dir: Path | None = None) -> list
     path = mirror_path_for(run_id, data_dir=data_dir)
     if not path.is_file():
         raise FileNotFoundError(f"state mirror not found: {path}")
-    uri = f"file:{path}?mode=ro"
-    with closing(sqlite3.connect(uri, uri=True)) as conn:
+    with closing(sqlite3.connect(_sqlite_ro_uri(path), uri=True)) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(sql).fetchall()
     return [dict(row) for row in rows]
@@ -176,7 +212,7 @@ def load_phase_status_from_mirror(run_id: str, *, data_dir: Path | None = None) 
     if not path.is_file():
         raise FileNotFoundError(f"state mirror not found: {path}")
     _assert_sources_current(path)
-    with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as conn:
+    with closing(sqlite3.connect(_sqlite_ro_uri(path), uri=True)) as conn:
         conn.row_factory = sqlite3.Row
         run_row = conn.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone()
         if run_row is None:
@@ -235,7 +271,7 @@ def load_phase_status_from_mirror(run_id: str, *, data_dir: Path | None = None) 
         "prepared_artifact_path": run_row["prepared_artifact_path"],
         "prepared_plan_sha": run_row["prepared_plan_sha"],
         "updated_at": run_row["updated_at"],
-        "retry_policy": None,
+        "retry_policy": _json_mapping_or_none(run_row["retry_policy_json"]),
         "next_phase": next_phase,
         "active_phase": active,
         "phases": phases,
@@ -264,9 +300,9 @@ def _project_to_path(run_id: str, *, data_dir: Path, db_path: Path) -> Projectio
             INSERT INTO runs (
               run_id, schema_version, bd_epic_id, status, prepared_artifact_path,
               prepared_plan_path, prepared_plan_sha, prepared_inspect_path,
-              integration_branch_head, active_phase_id, active_phase_index,
-              active_attempt, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              retry_policy_json, integration_branch_head, active_phase_id,
+              active_phase_index, active_attempt, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             run_row,
         )
@@ -279,8 +315,9 @@ def _project_to_path(run_id: str, *, data_dir: Path, db_path: Path) -> Projectio
               run_id, phase_id, phase_index, title, status, depends_on_phase_ids,
               attempt, session_name, lease_owner, lease_host, lease_pid,
               lease_command, lease_expires_at, started_at, completed_at,
-              result_path, handoff_path, last_error, last_failure_kind
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              result_path, handoff_path, last_error, last_failure_kind,
+              payload_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             phases,
         )
@@ -499,6 +536,7 @@ def _run_row(
         prepared_plan_path,
         prepared_sha,
         _string_or_none(active.get("prepared_inspect_path") or checkpoint.get("prepared_inspect_path")),
+        _json_or_none(_normalized_retry_policy_for_status(phase_state)),
         _sha40_or_none(active.get("integration_branch_head") or checkpoint.get("integration_branch_head")),
         _string_or_none((active_phase or {}).get("phase_id") or active.get("phase_id") or checkpoint.get("phase_id")),
         _int_or_none((active_phase or {}).get("phase_index") or active.get("phase_session_phase_index") or checkpoint.get("phase_session_phase_index")),
@@ -538,6 +576,7 @@ def _phase_rows(run_id: str, phase_state: Mapping[str, Any] | None) -> list[tupl
                 _string_or_none(phase.get("handoff_path")),
                 _string_or_none(phase.get("last_error")),
                 _string_or_none(phase.get("last_failure_kind")),
+                json.dumps(dict(phase), sort_keys=True, separators=(",", ":")),
             )
         )
     return rows
@@ -712,7 +751,7 @@ def _insert_warnings(conn: sqlite3.Connection, run_id: str, warnings: Sequence[P
 
 
 def _check_database(path: Path) -> None:
-    with closing(sqlite3.connect(path)) as conn:
+    with closing(sqlite3.connect(_sqlite_ro_uri(path), uri=True)) as conn:
         integrity = conn.execute("PRAGMA integrity_check").fetchone()
         if integrity is None or integrity[0] != "ok":
             raise ProjectionError(f"sqlite integrity_check failed: {integrity[0] if integrity else 'no result'}")
@@ -722,7 +761,10 @@ def _check_database(path: Path) -> None:
 
 
 def _compare_databases(*, expected: Path, actual: Path) -> list[MirrorDiff]:
-    with closing(sqlite3.connect(expected)) as exp, closing(sqlite3.connect(actual)) as act:
+    with (
+        closing(sqlite3.connect(_sqlite_ro_uri(expected), uri=True)) as exp,
+        closing(sqlite3.connect(_sqlite_ro_uri(actual), uri=True)) as act,
+    ):
         exp.row_factory = sqlite3.Row
         act.row_factory = sqlite3.Row
         tables = [row[0] for row in exp.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
@@ -779,7 +821,7 @@ def _primary_key(table: str, expected: Mapping[str, Any], actual: Mapping[str, A
 
 
 def _assert_sources_current(mirror_path: Path) -> None:
-    with closing(sqlite3.connect(f"file:{mirror_path}?mode=ro", uri=True)) as conn:
+    with closing(sqlite3.connect(_sqlite_ro_uri(mirror_path), uri=True)) as conn:
         rows = conn.execute("SELECT path, sha256, size_bytes, mtime_ns FROM artifact_sources").fetchall()
     for path_text, sha, size, mtime in rows:
         path = Path(str(path_text))
@@ -814,6 +856,10 @@ def _projector_lock(run_dir: Path) -> Iterator[None]:
 def _tmp_mirror_path(mirror_path: Path, *, suffix: str = ".tmp") -> Path:
     stamp = f"{os.getpid()}.{time.time_ns()}"
     return mirror_path.parent / f".{mirror_path.name}.{stamp}{suffix}"
+
+
+def _sqlite_ro_uri(path: Path) -> str:
+    return path.resolve(strict=False).as_uri() + "?mode=ro"
 
 
 def _fsync_file(path: Path) -> None:
@@ -869,43 +915,29 @@ def _phase_ids(phase_state: Mapping[str, Any] | None) -> list[str]:
     ]
 
 
+def _normalized_retry_policy_for_status(phase_state: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(phase_state, Mapping):
+        return None
+    retry_policy = phase_state.get("retry_policy") if isinstance(phase_state.get("retry_policy"), Mapping) else None
+    return normalize_retry_policy(retry_policy)
+
+
 def _phase_status_row(row: Mapping[str, Any], attempts: list[dict[str, Any]]) -> dict[str, Any]:
-    return {
-        "phase_id": row.get("phase_id"),
-        "phase_index": row.get("phase_index"),
-        "title": row.get("title"),
-        "depends_on_phase_ids": _json_list(row.get("depends_on_phase_ids")),
-        "status": row.get("status"),
-        "lease_owner": row.get("lease_owner"),
-        "lease_expires_at": row.get("lease_expires_at"),
-        "attempt": row.get("attempt"),
-        "session_name": row.get("session_name"),
-        "started_at": row.get("started_at"),
-        "completed_at": row.get("completed_at"),
-        "result_path": row.get("result_path"),
-        "handoff_path": row.get("handoff_path"),
-        "last_error": row.get("last_error"),
-        "max_session_attempts": None,
-        "next_retry_at": None,
-        "last_failure_kind": row.get("last_failure_kind"),
-        "last_launcher_error": None,
-        "retry_exhausted_at": None,
-        "blocked_reason": None,
-        "retry_policy_decision": None,
-        "blocked_at": None,
-        "launch_dir": None,
-        "command_path": None,
-        "parent_pid": None,
-        "child_pid": row.get("child_pid"),
-        "process_group_id": row.get("process_group_id"),
-        "prompt_sha": None,
-        "expected_result_path": None,
-        "expected_handoff_path": None,
-        "launch_metadata_error": None,
-        "recovery_context_path": None,
-        "evidence_path": None,
-        "attempt_history": attempts,
-    }
+    payload = _json_mapping(row.get("payload_json"))
+    if payload:
+        summary = {key: payload.get(key) for key in _PHASE_STATUS_KEYS}
+        if not isinstance(summary.get("attempt_history"), list):
+            summary["attempt_history"] = []
+        return summary
+    return {key: _phase_status_fallback_value(row, key, attempts) for key in _PHASE_STATUS_KEYS}
+
+
+def _phase_status_fallback_value(row: Mapping[str, Any], key: str, attempts: list[dict[str, Any]]) -> Any:
+    if key == "depends_on_phase_ids":
+        return _json_list(row.get("depends_on_phase_ids"))
+    if key == "attempt_history":
+        return attempts
+    return row.get(key)
 
 
 def _attempt_history_from_row(row: Mapping[str, Any]) -> dict[str, Any]:
@@ -930,13 +962,16 @@ def _deps_complete(phases: Sequence[Mapping[str, Any]], phase: Mapping[str, Any]
 
 
 def _dependency_status(phases: Sequence[Mapping[str, Any]], next_phase: Mapping[str, Any] | None) -> list[dict[str, Any]]:
-    if next_phase is None:
+    phase = next_phase
+    if phase is None:
+        phase = next((item for item in phases if item.get("status") == "pending"), None)
+    if phase is None:
         return []
-    by_id = {phase.get("phase_id"): phase for phase in phases}
+    by_id = {item.get("phase_id"): item for item in phases}
     rows: list[dict[str, Any]] = []
-    for dep in next_phase.get("depends_on_phase_ids") or []:
-        phase = by_id.get(dep)
-        rows.append({"phase_id": dep, "status": phase.get("status") if isinstance(phase, Mapping) else "missing"})
+    for dep in phase.get("depends_on_phase_ids") or []:
+        dep_phase = by_id.get(dep)
+        rows.append({"phase_id": dep, "status": dep_phase.get("status") if isinstance(dep_phase, Mapping) else "missing"})
     return rows
 
 
@@ -975,6 +1010,16 @@ def _json_mapping(value: Any) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return dict(parsed) if isinstance(parsed, Mapping) else {}
+
+
+def _json_mapping_or_none(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return None
+    return dict(parsed) if isinstance(parsed, Mapping) else None
 
 
 def _string_list(value: Any) -> list[str]:

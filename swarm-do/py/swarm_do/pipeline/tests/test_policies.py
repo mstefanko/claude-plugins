@@ -83,6 +83,7 @@ class PoliciesTests(unittest.TestCase):
     def test_default_retry_policy_matches_historical_literal(self) -> None:
         self.assertEqual(policies.default_retry_policy(), HISTORICAL_DEFAULT_RETRY_POLICY)
         self.assertEqual(policies.retry_policy_config({}), policies.retry_policy_config(HISTORICAL_DEFAULT_RETRY_POLICY))
+        self.assertEqual(policies.normalize_retry_policy({}), HISTORICAL_DEFAULT_RETRY_POLICY)
 
 
 if __name__ == "__main__":

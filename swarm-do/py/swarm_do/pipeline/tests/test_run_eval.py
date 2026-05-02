@@ -62,6 +62,33 @@ class RunEvalTests(unittest.TestCase):
         self.assertEqual(mismatch.expected, "missing.json")
         self.assertEqual(mismatch.path, "missing.json")
 
+    def test_stage_adoption_precedes_phase_exit_expectation(self) -> None:
+        fixture = FIXTURES / "streaming-stage-adoption"
+        trace = build_trace_from_run_dir(
+            fixture / "run",
+            data_dir=fixture,
+            events_path=fixture / "events.jsonl",
+            active_path=fixture / "active-run.json",
+            worktree_manifest_path=fixture / "worktrees" / "01J00000000000000000000006" / "manifest.json",
+        )
+
+        mismatch = first_mismatch(
+            trace,
+            {
+                "schema_version": 1,
+                "required_artifacts": [],
+                "expected_phase_transitions": [],
+                "expected_attempts": [],
+                "expected_adoption_precedes_exit": [{"phase_id": "p1", "stage_id": "missing"}],
+                "expected_warnings": [],
+                "forbidden_warnings": [],
+                "unrecognized_artifacts_allowed": True,
+            },
+        )
+
+        self.assertIsInstance(mismatch, EvalMismatch)
+        self.assertEqual(mismatch.kind, "stage_adoption_missing")
+
     def test_include_trace_requires_json(self) -> None:
         stderr = io.StringIO()
         with redirect_stderr(stderr):

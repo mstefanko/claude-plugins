@@ -46,10 +46,12 @@ class StateProjectorDiffTests(unittest.TestCase):
             project_run(run_id, data_dir=data_dir)
             mirror_path_for(run_id, data_dir=data_dir).write_bytes(b"not sqlite")
 
-            status = phase_status(run_id, data_dir=data_dir)
+            with self.assertLogs("swarm_do.pipeline.phase_sessions", level="DEBUG") as logs:
+                status = phase_status(run_id, data_dir=data_dir)
 
             self.assertEqual(status["run_id"], run_id)
             self.assertIn("status", status)
+            self.assertIn("phase_status mirror read failed", "\n".join(logs.output))
 
     def test_only_state_projector_writes_mirror_file(self) -> None:
         violations: list[str] = []

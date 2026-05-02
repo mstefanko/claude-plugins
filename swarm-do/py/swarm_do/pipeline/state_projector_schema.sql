@@ -18,6 +18,9 @@ CREATE TABLE runs (
   prepared_plan_sha       TEXT
     CHECK (prepared_plan_sha IS NULL OR length(prepared_plan_sha) = 64),
   prepared_inspect_path   TEXT,
+  retry_policy_json       TEXT,
+  -- Git object IDs remain SHA-1 here until Phase 9 migrates branch-head
+  -- identity columns to a hash-algorithm-aware representation.
   integration_branch_head TEXT
     CHECK (integration_branch_head IS NULL OR length(integration_branch_head) = 40),
   active_phase_id         TEXT,
@@ -47,6 +50,7 @@ CREATE TABLE phases (
   handoff_path            TEXT,
   last_error              TEXT,
   last_failure_kind       TEXT,
+  payload_json            TEXT NOT NULL,
   PRIMARY KEY (run_id, phase_id)
 ) STRICT;
 

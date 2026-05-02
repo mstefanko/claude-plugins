@@ -92,9 +92,16 @@ class PhaseRecord:
     launch_metadata_error: str | None = None
     recovery_context_path: str | None = None
     evidence_path: str | None = None
+    failure_category: str | None = None
+    failure_retry_class: str | None = None
+    failure_operator_title: str | None = None
+    failure_operator_message: str | None = None
+    failure_known: bool | None = None
+    policy_action: str | None = None
+    policy_reason: str | None = None
+    policy_inputs: Mapping[str, Any] | None = None
     attempt_history: tuple[Mapping[str, Any], ...] = ()
     _present_keys: frozenset[str] = field(default_factory=frozenset, repr=False, compare=False)
-    _raw: Mapping[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "PhaseRecord":
@@ -140,14 +147,19 @@ class PhaseRecord:
             launch_metadata_error=_optional_str(value.get("launch_metadata_error"), "launch_metadata_error"),
             recovery_context_path=_optional_str(value.get("recovery_context_path"), "recovery_context_path"),
             evidence_path=_optional_str(value.get("evidence_path"), "evidence_path"),
+            failure_category=_optional_str(value.get("failure_category"), "failure_category"),
+            failure_retry_class=_optional_str(value.get("failure_retry_class"), "failure_retry_class"),
+            failure_operator_title=_optional_str(value.get("failure_operator_title"), "failure_operator_title"),
+            failure_operator_message=_optional_str(value.get("failure_operator_message"), "failure_operator_message"),
+            failure_known=_optional_bool(value.get("failure_known"), "failure_known"),
+            policy_action=_optional_str(value.get("policy_action"), "policy_action"),
+            policy_reason=_optional_str(value.get("policy_reason"), "policy_reason"),
+            policy_inputs=_optional_mapping(value.get("policy_inputs"), "policy_inputs"),
             attempt_history=tuple(item for item in value.get("attempt_history") or [] if isinstance(item, Mapping)),
             _present_keys=frozenset(value.keys()),
-            _raw=dict(value),
         )
 
     def to_dict(self) -> dict[str, Any]:
-        if self._raw:
-            return dict(self._raw)
         return _present_dict(
             self._present_keys,
             {
@@ -187,6 +199,14 @@ class PhaseRecord:
                 "launch_metadata_error": self.launch_metadata_error,
                 "recovery_context_path": self.recovery_context_path,
                 "evidence_path": self.evidence_path,
+                "failure_category": self.failure_category,
+                "failure_retry_class": self.failure_retry_class,
+                "failure_operator_title": self.failure_operator_title,
+                "failure_operator_message": self.failure_operator_message,
+                "failure_known": self.failure_known,
+                "policy_action": self.policy_action,
+                "policy_reason": self.policy_reason,
+                "policy_inputs": dict(self.policy_inputs) if self.policy_inputs is not None else None,
                 "attempt_history": [dict(item) for item in self.attempt_history],
             },
         )
@@ -224,9 +244,25 @@ class PhaseAttemptRecord:
     child_process: Mapping[str, Any] | None = None
     archived: bool = False
     archive: str | None = None
+    failure_category: str | None = None
+    failure_retry_class: str | None = None
+    failure_operator_title: str | None = None
+    failure_operator_message: str | None = None
+    failure_known: bool | None = None
+    total_cost_usd: float | None = None
+    cost_confidence: str | None = None
+    input_tokens: int | None = None
+    cache_creation_input_tokens: int | None = None
+    cache_read_input_tokens: int | None = None
+    output_tokens: int | None = None
+    duration_ms: int | None = None
+    duration_api_ms: int | None = None
+    num_turns: int | None = None
+    permission_denial_count: int | None = None
+    diff_summary_path: str | None = None
+    transcript_diagnostics_path: str | None = None
     extra: Mapping[str, Any] = field(default_factory=dict)
     _present_keys: frozenset[str] = field(default_factory=frozenset, repr=False, compare=False)
-    _raw: Mapping[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any], *, preserve_unknown: bool = False) -> "PhaseAttemptRecord":
@@ -263,14 +299,28 @@ class PhaseAttemptRecord:
             child_process=_optional_mapping(value.get("child_process"), "child_process"),
             archived=bool(value.get("archived")),
             archive=_optional_str(value.get("archive"), "archive"),
+            failure_category=_optional_str(value.get("failure_category"), "failure_category"),
+            failure_retry_class=_optional_str(value.get("failure_retry_class"), "failure_retry_class"),
+            failure_operator_title=_optional_str(value.get("failure_operator_title"), "failure_operator_title"),
+            failure_operator_message=_optional_str(value.get("failure_operator_message"), "failure_operator_message"),
+            failure_known=_optional_bool(value.get("failure_known"), "failure_known"),
+            total_cost_usd=_optional_float(value.get("total_cost_usd"), "total_cost_usd"),
+            cost_confidence=_optional_str(value.get("cost_confidence"), "cost_confidence"),
+            input_tokens=_optional_int(value.get("input_tokens"), "input_tokens"),
+            cache_creation_input_tokens=_optional_int(value.get("cache_creation_input_tokens"), "cache_creation_input_tokens"),
+            cache_read_input_tokens=_optional_int(value.get("cache_read_input_tokens"), "cache_read_input_tokens"),
+            output_tokens=_optional_int(value.get("output_tokens"), "output_tokens"),
+            duration_ms=_optional_int(value.get("duration_ms"), "duration_ms"),
+            duration_api_ms=_optional_int(value.get("duration_api_ms"), "duration_api_ms"),
+            num_turns=_optional_int(value.get("num_turns"), "num_turns"),
+            permission_denial_count=_optional_int(value.get("permission_denial_count"), "permission_denial_count"),
+            diff_summary_path=_optional_str(value.get("diff_summary_path"), "diff_summary_path"),
+            transcript_diagnostics_path=_optional_str(value.get("transcript_diagnostics_path"), "transcript_diagnostics_path"),
             extra=extra,
             _present_keys=frozenset(value.keys()),
-            _raw=dict(value),
         )
 
     def to_dict(self) -> dict[str, Any]:
-        if self._raw:
-            return dict(self._raw)
         payload = _present_dict(
             self._present_keys,
             {
@@ -304,6 +354,23 @@ class PhaseAttemptRecord:
                 "child_process": dict(self.child_process) if self.child_process is not None else None,
                 "archived": self.archived,
                 "archive": self.archive,
+                "failure_category": self.failure_category,
+                "failure_retry_class": self.failure_retry_class,
+                "failure_operator_title": self.failure_operator_title,
+                "failure_operator_message": self.failure_operator_message,
+                "failure_known": self.failure_known,
+                "total_cost_usd": self.total_cost_usd,
+                "cost_confidence": self.cost_confidence,
+                "input_tokens": self.input_tokens,
+                "cache_creation_input_tokens": self.cache_creation_input_tokens,
+                "cache_read_input_tokens": self.cache_read_input_tokens,
+                "output_tokens": self.output_tokens,
+                "duration_ms": self.duration_ms,
+                "duration_api_ms": self.duration_api_ms,
+                "num_turns": self.num_turns,
+                "permission_denial_count": self.permission_denial_count,
+                "diff_summary_path": self.diff_summary_path,
+                "transcript_diagnostics_path": self.transcript_diagnostics_path,
             },
         )
         payload.update(dict(self.extra))
@@ -383,6 +450,7 @@ class PhaseStatusReport:
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "PhaseStatusReport":
+        _reject_unknown(value, _PHASE_STATUS_REPORT_KEYS, "PhaseStatusReport")
         run_id = _required_str(value, "run_id", "PhaseStatusReport")
         status = _required_str(value, "status", "PhaseStatusReport")
         phases = tuple(
@@ -512,6 +580,22 @@ _DOCTOR_KEYS = {
     "worktree",
 }
 
+_PHASE_STATUS_REPORT_KEYS = {
+    "run_id",
+    "status",
+    "state_path",
+    "prepared_artifact_path",
+    "prepared_plan_sha",
+    "updated_at",
+    "retry_policy",
+    "next_phase",
+    "active_phase",
+    "phases",
+    "dependency_status",
+    "recommended_command",
+    "drift",
+}
+
 
 def _extra_or_reject(
     value: Mapping[str, Any],
@@ -561,6 +645,14 @@ def _optional_float(value: Any, key: str) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise DomainContractError(f"{key} must be a number or null")
     return float(value)
+
+
+def _optional_bool(value: Any, key: str) -> bool | None:
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise DomainContractError(f"{key} must be a boolean or null")
+    return value
 
 
 def _optional_mapping(value: Any, key: str) -> Mapping[str, Any] | None:

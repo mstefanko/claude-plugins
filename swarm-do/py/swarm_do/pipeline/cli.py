@@ -531,7 +531,7 @@ def cmd_eval(args: argparse.Namespace) -> int:
         fixture_dir = Path(args.to)
         try:
             trace = build_trace_from_run_dir(run_dir)
-        except Exception as exc:
+        except (FileNotFoundError, OSError, ValueError) as exc:
             print(f"swarm eval record: {exc}", file=sys.stderr)
             return 3
         fixture_dir.mkdir(parents=True, exist_ok=True)
@@ -553,11 +553,13 @@ def _eval_mirror_parity_error(
     discover_fixtures: Any,
     load_expectation: Any,
 ) -> str | None:
-    from .state_projector import diff_mirror, project_run
+    import sqlite3
+
+    from .state_projector import ProjectionError, diff_mirror, project_run
 
     try:
         fixtures = discover_fixtures(fixture_dir)
-    except Exception as exc:
+    except (FileNotFoundError, OSError, ValueError) as exc:
         return str(exc)
     for fixture in fixtures:
         try:
@@ -570,7 +572,7 @@ def _eval_mirror_parity_error(
                 diffs = diff_mirror(run_id, data_dir=data_dir)
                 if diffs:
                     return f"{fixture.name}: {diffs[0].to_dict()}"
-        except Exception as exc:
+        except (FileNotFoundError, OSError, ProjectionError, sqlite3.DatabaseError, ValueError) as exc:
             return f"{fixture.name}: {exc}"
     return None
 
@@ -582,7 +584,7 @@ def _fixture_run_id(fixture: Path) -> str:
             continue
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
+        except (OSError, json.JSONDecodeError):
             continue
         if isinstance(payload, Mapping) and isinstance(payload.get("run_id"), str):
             return str(payload["run_id"])
@@ -607,7 +609,9 @@ def _materialize_fixture_data_dir(fixture: Path, run_id: str, data_dir: Path) ->
 
 
 def cmd_state(args: argparse.Namespace) -> int:
-    from .state_projector import diff_mirror, project_run, query_mirror
+    import sqlite3
+
+    from .state_projector import ProjectionError, diff_mirror, project_run, query_mirror
 
     data_dir = Path(args.data_dir) if getattr(args, "data_dir", None) else None
     try:
@@ -637,7 +641,7 @@ def cmd_state(args: argparse.Namespace) -> int:
                     f"table={diff.table} key={diff.primary_key} column={diff.column}"
                 )
             return 0 if not diffs else 1
-    except Exception as exc:
+    except (FileNotFoundError, OSError, ProjectionError, sqlite3.DatabaseError, ValueError) as exc:
         print(f"swarm: state {args.state_command}: {exc}", file=sys.stderr)
         return 1
     print("swarm: state: missing command", file=sys.stderr)
