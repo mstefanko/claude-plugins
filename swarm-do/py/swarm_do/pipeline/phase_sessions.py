@@ -807,59 +807,94 @@ def abandon_attempt_and_retry(
     next_retry_at: str | None = None,
     retry_after_seconds: int | None = None,
     attempt_record: Mapping[str, Any] | None = None,
+    assume_locked: bool = False,
 ) -> dict[str, Any]:
     base = data_dir or resolve_data_dir()
+    if assume_locked:
+        return _abandon_attempt_and_retry_locked(
+            base,
+            run_id,
+            phase_id,
+            failure_kind=failure_kind,
+            launcher_error=launcher_error,
+            next_retry_at=next_retry_at,
+            retry_after_seconds=retry_after_seconds,
+            attempt_record=attempt_record,
+        )
     with locked_phase_sessions(run_id, data_dir=base):
-        state = load_phase_sessions(run_id, data_dir=base)
-        phase = _find_phase(state, phase_id)
-        if phase.get("status") not in {STATUS_RUNNING, STATUS_STALE, STATUS_FAILED, STATUS_RETRY_WAITING}:
-            raise PhaseSessionError(f"phase {phase_id} cannot retry from {phase.get('status')}")
-        record = dict(attempt_record or _attempt_record_from_phase(phase))
-        record.setdefault("failure_kind", failure_kind)
-        record.setdefault("retry_decision", "retry")
-        record.setdefault("retry_after_seconds", retry_after_seconds)
-        record.setdefault("adopted", False)
-        record.setdefault("status", STATUS_RETRY_WAITING if next_retry_at else STATUS_PENDING)
-        evidence_path = _write_attempt_evidence_best_effort(
+        return _abandon_attempt_and_retry_locked(
             base,
-            run_id=run_id,
-            state=state,
-            phase=phase,
-            transition="abandon_attempt_and_retry",
-            attempt_record=record,
+            run_id,
+            phase_id,
+            failure_kind=failure_kind,
+            launcher_error=launcher_error,
+            next_retry_at=next_retry_at,
+            retry_after_seconds=retry_after_seconds,
+            attempt_record=attempt_record,
         )
-        if evidence_path:
-            record["evidence_path"] = evidence_path
-        _append_attempt_history(phase, record)
-        phase["status"] = STATUS_RETRY_WAITING if next_retry_at else STATUS_PENDING
-        phase["lease_owner"] = None
-        phase["lease_host"] = None
-        phase["lease_pid"] = None
-        phase["lease_command"] = None
-        phase["lease_expires_at"] = None
-        phase["last_error"] = launcher_error or failure_kind
-        phase["last_failure_kind"] = failure_kind
-        phase["last_launcher_error"] = launcher_error
-        phase["next_retry_at"] = next_retry_at
-        phase["retry_policy_decision"] = record.get("retry_decision")
-        _touch_and_write(base, run_id, state)
-        event_type = "phase_attempt_retry_scheduled" if next_retry_at else "phase_attempt_abandoned"
-        _append_phase_event(
-            base,
-            run_id=run_id,
-            event_type=event_type,
-            phase=phase,
-            reason=failure_kind,
-            details={
-                "failure_kind": failure_kind,
-                "next_retry_at": next_retry_at,
-                "retry_after_seconds": retry_after_seconds,
-                "evidence_path": evidence_path,
-                **_taxonomy_event_details(record),
-                **_policy_event_details(record),
-            },
-        )
-        return {"retry": True, "phase": _phase_summary(phase), "state": state}
+
+
+def _abandon_attempt_and_retry_locked(
+    data_dir: Path,
+    run_id: str,
+    phase_id: str,
+    *,
+    failure_kind: str,
+    launcher_error: str | None,
+    next_retry_at: str | None,
+    retry_after_seconds: int | None,
+    attempt_record: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    state = load_phase_sessions(run_id, data_dir=data_dir)
+    phase = _find_phase(state, phase_id)
+    if phase.get("status") not in {STATUS_RUNNING, STATUS_STALE, STATUS_FAILED, STATUS_RETRY_WAITING}:
+        raise PhaseSessionError(f"phase {phase_id} cannot retry from {phase.get('status')}")
+    record = dict(attempt_record or _attempt_record_from_phase(phase))
+    record.setdefault("failure_kind", failure_kind)
+    record.setdefault("retry_decision", "retry")
+    record.setdefault("retry_after_seconds", retry_after_seconds)
+    record.setdefault("adopted", False)
+    record.setdefault("status", STATUS_RETRY_WAITING if next_retry_at else STATUS_PENDING)
+    evidence_path = _write_attempt_evidence_best_effort(
+        data_dir,
+        run_id=run_id,
+        state=state,
+        phase=phase,
+        transition="abandon_attempt_and_retry",
+        attempt_record=record,
+    )
+    if evidence_path:
+        record["evidence_path"] = evidence_path
+    _append_attempt_history(phase, record)
+    phase["status"] = STATUS_RETRY_WAITING if next_retry_at else STATUS_PENDING
+    phase["lease_owner"] = None
+    phase["lease_host"] = None
+    phase["lease_pid"] = None
+    phase["lease_command"] = None
+    phase["lease_expires_at"] = None
+    phase["last_error"] = launcher_error or failure_kind
+    phase["last_failure_kind"] = failure_kind
+    phase["last_launcher_error"] = launcher_error
+    phase["next_retry_at"] = next_retry_at
+    phase["retry_policy_decision"] = record.get("retry_decision")
+    _touch_and_write(data_dir, run_id, state)
+    event_type = "phase_attempt_retry_scheduled" if next_retry_at else "phase_attempt_abandoned"
+    _append_phase_event(
+        data_dir,
+        run_id=run_id,
+        event_type=event_type,
+        phase=phase,
+        reason=failure_kind,
+        details={
+            "failure_kind": failure_kind,
+            "next_retry_at": next_retry_at,
+            "retry_after_seconds": retry_after_seconds,
+            "evidence_path": evidence_path,
+            **_taxonomy_event_details(record),
+            **_policy_event_details(record),
+        },
+    )
+    return {"retry": True, "phase": _phase_summary(phase), "state": state}
 
 
 def release_retry_waiting(

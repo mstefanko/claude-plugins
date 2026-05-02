@@ -1,5 +1,6 @@
 # path | protected filenames | justification
 py/swarm_do/pipeline/execution_worktree.py | manifest.json | owns run execution worktree manifests under data/worktrees/<run-id>/
+py/swarm_do/pipeline/operator_decisions.py | operator_decisions.v1.json | owns schema-versioned operator recovery decisions
 py/swarm_do/pipeline/phase_decisions.py | shared_decisions.v1.json | owns schema-versioned shared phase decisions
 py/swarm_do/pipeline/phase_evidence.py | evidence.json | owns schema-versioned per-attempt evidence manifests
 py/swarm_do/pipeline/phase_sessions.py | phase_sessions.v1.json | owns phase-session state and lock-coordinated mutation

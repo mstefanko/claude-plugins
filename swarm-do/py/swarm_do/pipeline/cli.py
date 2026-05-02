@@ -1779,6 +1779,92 @@ def cmd_context(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_operator_decision(args: argparse.Namespace) -> int:
+    from .operator_decisions import (
+        OperatorDecisionError,
+        apply as apply_operator_decision,
+        list_decisions,
+        record as record_operator_decision,
+        show_decision,
+    )
+
+    try:
+        command = args.operator_decision_command
+        if command == "record":
+            payload_arg = json.loads(args.payload)
+            if not isinstance(payload_arg, dict):
+                raise OperatorDecisionError(
+                    "invalid-payload",
+                    "operator decision payload must be a JSON object",
+                )
+            payload = record_operator_decision(
+                args.run_id,
+                args.kind,
+                payload_arg,
+                operator=args.operator,
+            )
+            exit_code = 0
+        elif command == "apply":
+            payload = apply_operator_decision(
+                args.run_id,
+                args.decision_id,
+                confirm_token=args.confirm,
+            )
+            exit_code = 0
+        elif command == "list":
+            payload = list_decisions(args.run_id, status=args.status, kind=args.kind)
+            exit_code = 0
+        elif command == "show":
+            payload = show_decision(args.run_id, args.decision_id)
+            exit_code = 0
+        else:
+            print("swarm: operator decision: missing command", file=sys.stderr)
+            return 1
+    except json.JSONDecodeError as exc:
+        payload = {"error": "invalid-payload-json", "message": f"operator decision payload JSON is invalid: {exc}"}
+        exit_code = 2
+    except OperatorDecisionError as exc:
+        payload = exc.to_payload()
+        exit_code = exc.exit_code
+    except Exception as exc:
+        payload = {"error": "operator-decision-failed", "message": f"operator decision failed: {exc}"}
+        exit_code = 1
+
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    elif exit_code == 0:
+        print(_format_operator_decision(args.operator_decision_command, payload))
+    else:
+        print(f"swarm: operator decision {args.operator_decision_command}: {payload.get('message')}", file=sys.stderr)
+        if payload.get("confirm_token"):
+            print(f"swarm: operator decision confirm token: {payload.get('confirm_token')}", file=sys.stderr)
+    return exit_code
+
+
+def _format_operator_decision(command: str, payload: Mapping[str, Any]) -> str:
+    if command == "list":
+        lines = [f"operator decision list: {payload.get('run_id')}"]
+        for item in payload.get("decisions") or []:
+            if isinstance(item, Mapping):
+                lines.append(f"  - {item.get('decision_id')} {item.get('kind')} {item.get('status')}")
+        if len(lines) == 1:
+            lines.append("  no operator decisions")
+        return "\n".join(lines)
+    decision = payload.get("decision")
+    if isinstance(decision, Mapping):
+        lines = [
+            f"operator decision {command}: {decision.get('decision_id')}",
+            f"  kind: {decision.get('kind')}",
+            f"  status: {decision.get('status')}",
+        ]
+        if payload.get("confirm_token"):
+            lines.append(f"  confirm_token: {payload.get('confirm_token')}")
+        if payload.get("path"):
+            lines.append(f"  path: {payload.get('path')}")
+        return "\n".join(lines)
+    return json.dumps(payload, indent=2, sort_keys=True)
+
+
 def cmd_phases(args: argparse.Namespace) -> int:
     from .phase_pump import format_pump_result, pump_phases
     from .phase_recovery import reconcile_phase_sessions
@@ -1855,6 +1941,7 @@ def cmd_phases(args: argparse.Namespace) -> int:
             doctor = None
             worktree_reset = None
             phase_reset = None
+            operator_decision = None
             if not args.no_doctor:
                 from .phase_doctor import run_phase_doctor
 
@@ -1870,6 +1957,17 @@ def cmd_phases(args: argparse.Namespace) -> int:
                     force=bool(args.force),
                 )
             if args.phase:
+                if not args.rebuild_worktree:
+                    from .operator_decisions import record as record_operator_decision
+
+                    operator_decision = record_operator_decision(
+                        args.run_id,
+                        "retry_phase",
+                        {
+                            "phase_id": args.phase,
+                            "reason": "phases redo requested phase repump",
+                        },
+                    )
                 phase_reset = reset_phase_session(args.run_id, args.phase, hard=args.hard)
             max_phases = None if args.max_phases == "all" else int(args.max_phases)
             pump = pump_phases(
@@ -1883,6 +1981,7 @@ def cmd_phases(args: argparse.Namespace) -> int:
             payload = {
                 "run_id": args.run_id,
                 "doctor": doctor,
+                "operator_decision": operator_decision,
                 "worktree_reset": worktree_reset,
                 "phase_reset": phase_reset,
                 "pump": pump,
@@ -2006,6 +2105,11 @@ def _format_phase_redo(payload: Mapping[str, Any]) -> str:
             lines.append(f"  doctor_next: {doctor.get('recommended_command')}")
     if payload.get("worktree_reset"):
         lines.append("  worktree: reset")
+    operator_decision = payload.get("operator_decision")
+    if isinstance(operator_decision, Mapping):
+        decision = operator_decision.get("decision")
+        if isinstance(decision, Mapping):
+            lines.append(f"  operator_decision: {decision.get('decision_id')} {decision.get('status')}")
     if payload.get("phase_reset"):
         phase_reset = payload["phase_reset"]
         if isinstance(phase_reset, Mapping):
@@ -3099,6 +3203,55 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("run_dir")
     p.add_argument("--to", required=True)
     p.set_defaults(func=cmd_eval)
+
+    operator_decision = sub.add_parser(
+        "operator-decision",
+        description=(
+            "Record, apply, and inspect operator decision recovery artifacts. "
+            "Operator decisions are not authenticated; do not use this artifact as a security boundary. "
+            "operator_decisions.v1.json grows monotonically until the run directory is archived."
+        ),
+        help="record or apply an operator decision recovery artifact",
+    )
+    operator_decision_sub = operator_decision.add_subparsers(dest="operator_decision_command")
+    p = operator_decision_sub.add_parser(
+        "record",
+        help="record an operator decision without mutating happy-path pump state",
+        description=(
+            "Record an operator decision. Operator decisions are not authenticated; "
+            "do not use this artifact as a security boundary."
+        ),
+    )
+    p.add_argument("run_id")
+    p.add_argument("--kind", required=True)
+    p.add_argument("--payload", required=True, help="operator decision payload JSON object")
+    p.add_argument("--operator", help="operator decision identity as local:<id> or ci:<id>; emails are rejected")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_operator_decision)
+    p = operator_decision_sub.add_parser(
+        "apply",
+        help="apply an integrated operator decision recovery command",
+        description=(
+            "Apply an operator decision. Destructive operator decisions require "
+            "--confirm with the first 8 chars of the decision id."
+        ),
+    )
+    p.add_argument("run_id")
+    p.add_argument("decision_id")
+    p.add_argument("--confirm", help="first 8 chars of the operator decision id for destructive kinds")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_operator_decision)
+    p = operator_decision_sub.add_parser("list", help="list operator decision recovery records")
+    p.add_argument("run_id")
+    p.add_argument("--status")
+    p.add_argument("--kind")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_operator_decision)
+    p = operator_decision_sub.add_parser("show", help="show one operator decision recovery record")
+    p.add_argument("run_id")
+    p.add_argument("decision_id")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_operator_decision)
 
     state = sub.add_parser("state")
     state_sub = state.add_subparsers(dest="state_command")

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import os
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -11,12 +12,57 @@ from types import SimpleNamespace
 from unittest import mock
 
 from swarm_do.pipeline.cli import _build_parser, _phase_evidence_payload, cmd_phases, cmd_worktrees
+from swarm_do.pipeline.operator_decisions import operator_decisions_path
 from swarm_do.pipeline.phase_pump import pump_phases
 from swarm_do.pipeline.phase_sessions import init_phase_sessions
 from swarm_do.pipeline.tests.phase_session_fixtures import make_prepared_run
 
 
 class PhaseCliEvidenceTests(unittest.TestCase):
+    def test_happy_path_does_not_create_operator_decisions(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+
+            result = pump_phases(run_id, launcher="fake-test", max_phases=None, data_dir=data)
+
+            self.assertEqual("complete", result["status"])
+            self.assertFalse(operator_decisions_path(run_id, data_dir=data).exists())
+
+    def test_phase_redo_records_operator_decision_row(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            args = argparse.Namespace(
+                phases_command="redo",
+                run_id=run_id,
+                phase="1",
+                hard=False,
+                rebuild_worktree=False,
+                archive_branch=False,
+                force=False,
+                launcher="fake-test",
+                max_phases="1",
+                init=False,
+                no_doctor=True,
+                max_budget_usd=None,
+                policy_profile=None,
+                max_failed_attempt_cost_usd=None,
+                max_failed_run_cost_usd=None,
+                max_phase_attempt_budget_usd=None,
+                json=True,
+            )
+
+            out = io.StringIO()
+            with mock.patch.dict(os.environ, {"CLAUDE_PLUGIN_DATA": str(data)}):
+                with redirect_stdout(out):
+                    exit_code = cmd_phases(args)
+
+            self.assertEqual(0, exit_code, out.getvalue())
+            artifact = json.loads(operator_decisions_path(run_id, data_dir=data).read_text(encoding="utf-8"))
+            self.assertEqual(1, len(artifact["decisions"]))
+            self.assertEqual("retry_phase", artifact["decisions"][0]["kind"])
+
     def test_evidence_attempt_requires_phase(self) -> None:
         err = io.StringIO()
         args = argparse.Namespace(

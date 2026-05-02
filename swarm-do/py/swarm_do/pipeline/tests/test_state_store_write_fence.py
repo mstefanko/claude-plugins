@@ -17,6 +17,7 @@ PROTECTED_FILENAMES = {
     "active-run.json",
     "evidence.json",
     "manifest.json",
+    "operator_decisions.v1.json",
     "phase_sessions.v1.json",
     "prepared_plan.v1.json",
     "run_events.jsonl",

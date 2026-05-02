@@ -540,7 +540,7 @@ progresses:
 
 | `kind`                    | Integrated? | PR / commit | Test name |
 |---|---|---|---|
-| `retry_phase`             | ☐           |             |           |
+| `retry_phase`             | ☑           | working tree | `test_apply_is_append_only`, `test_phase_redo_records_operator_decision_row` |
 | `abort_phase`             | ☐           |             |           |
 | `reset_phase`             | ☐           |             |           |
 | `archive_attempt`         | ☐           |             |           |

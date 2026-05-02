@@ -210,6 +210,14 @@ _SPECS = (
         "An operator cancelled the phase session attempt.",
         ("operator_action",),
     ),
+    FailureKindSpec(
+        "operator_requested_retry",
+        "operator",
+        "retry",
+        "Operator requested retry",
+        "An operator recorded a recovery decision to retry the phase.",
+        ("operator_decision",),
+    ),
 )
 
 _ARTIFACT_ERROR_SPECS = tuple(

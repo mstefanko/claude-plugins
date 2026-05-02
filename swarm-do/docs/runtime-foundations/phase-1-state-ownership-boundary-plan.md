@@ -191,10 +191,9 @@ Initial fence whitelist (filename → owner module):
 | `evidence.json`            | `phase_evidence.py`                                         |
 | `manifest.json`            | `execution_worktree.py` (path-component-scoped: parent dir matches `worktrees/<run-id>/`) |
 
-**Note:** `operator_decisions.v1.json` is intentionally **excluded** from the
-initial fence — verified 2026-05-02 that the file family does not exist
-anywhere in the codebase. Add to the fence when the operator-decisions surface
-lands (Phase 2 or 4).
+**Update:** `operator_decisions.v1.json` was intentionally excluded from the
+initial fence because the file family did not exist yet; Phase 7 adds it with
+`operator_decisions.py` as the owner module.
 
 The fence is for **writes only**. Direct path-resolution **reads** (e.g.
 `phase_pump.py:2072,2092` resolves a `prepared_plan.v1.json` path for read
@@ -270,9 +269,8 @@ justification, and file a follow-up blocker for Phase 4.5.
 
 Known follow-ups deferred from this phase:
 
-- **`operator_decisions.v1.json` family does not yet exist** (verified
-  2026-05-02 — zero grep hits across `py/swarm_do/`). Add to fence when the
-  operator-decisions surface lands.
+- **`operator_decisions.v1.json` family** is added by Phase 7 with
+  `operator_decisions.py` as the owner module.
 - **`stage_sessions` wrapper** (`stage_session_store.py`) is intentionally
   not in this PR; defer to Phase 1.5.
 - **Direct-write call sites** in `mco_stage.py`, `prepare.py`, `decompose.py`,

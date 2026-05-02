@@ -199,6 +199,10 @@
                 "failure_operator_message": { "type": ["string", "null"] },
                 "failure_known": { "type": ["boolean", "null"] },
                 "retry_decision": { "type": ["string", "null"] },
+                "operator_decision_id": { "type": ["string", "null"] },
+                "operator_decision_kind": { "type": ["string", "null"] },
+                "operator": { "type": ["string", "null"] },
+                "operator_reason": { "type": ["string", "null"] },
                 "retry_after_seconds": { "type": ["integer", "null"], "minimum": 0 },
                 "policy_action": {
                   "type": ["string", "null"],

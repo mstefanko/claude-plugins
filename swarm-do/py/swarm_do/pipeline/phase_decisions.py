@@ -1,4 +1,8 @@
-"""Run-scoped shared decisions for phase-session context rendering."""
+"""Run-scoped shared decisions for phase-session context rendering.
+
+See py/swarm_do/pipeline/operator_decisions.py for human-recorded recovery
+decisions.
+"""
 
 from __future__ import annotations
 

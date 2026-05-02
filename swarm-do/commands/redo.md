@@ -17,6 +17,9 @@ If the doctor is clean, run:
 "${CLAUDE_PLUGIN_ROOT}/bin/swarm" phases redo $ARGUMENTS --json
 ```
 
+When a specific phase is redone, the command records an operator decision audit
+row before mutating phase-session state.
+
 If the doctor reports a finding with multiple safe resolutions, ask one
 `AskUserQuestion` before mutating state:
 
