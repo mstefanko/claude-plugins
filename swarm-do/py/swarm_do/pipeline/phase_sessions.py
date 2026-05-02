@@ -277,6 +277,17 @@ def phase_status(run_id: str, *, data_dir: Path | None = None, repo_root: Path |
     """Read-only status for CLI, TUI, and resume integration."""
 
     base = data_dir or resolve_data_dir()
+    if os.environ.get("SWARM_DISABLE_STATE_MIRROR") != "1":
+        try:
+            import sqlite3
+
+            from .state_projector import load_phase_status_from_mirror
+
+            mirror_status = load_phase_status_from_mirror(run_id, data_dir=base)
+            if mirror_status is not None:
+                return mirror_status
+        except (FileNotFoundError, OSError, ValueError, sqlite3.DatabaseError):
+            pass
     state_path = phase_session_path(run_id, data_dir=base)
     prepared_path = _prepared_artifact_path(run_id, data_dir=base)
     if not state_path.exists():

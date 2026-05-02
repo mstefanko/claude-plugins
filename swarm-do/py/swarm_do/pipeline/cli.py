@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -457,8 +458,10 @@ def cmd_trace(args: argparse.Namespace) -> int:
 def cmd_eval(args: argparse.Namespace) -> int:
     from .run_eval import (
         FixtureLoadError,
+        discover_fixtures,
         expectation_from_trace,
         expectation_to_yaml,
+        load_expectation,
         result_to_json,
         run_fixtures,
     )
@@ -481,6 +484,29 @@ def cmd_eval(args: argparse.Namespace) -> int:
             else:
                 print(f"swarm eval: {exc}", file=sys.stderr)
             return 2
+        if getattr(args, "use_mirror", False):
+            mirror_error = _eval_mirror_parity_error(
+                Path(args.fixture_dir),
+                discover_fixtures=discover_fixtures,
+                load_expectation=load_expectation,
+            )
+            if mirror_error is not None and result.first_mismatch is None:
+                payload = {
+                    "fixture_dir": args.fixture_dir,
+                    "status": "failed",
+                    "error": mirror_error,
+                    "first_mismatch": {
+                        "kind": "mirror_parity",
+                        "expected": "clean mirror projection",
+                        "actual": mirror_error,
+                        "path": "state.mirror.sqlite",
+                    },
+                }
+                if args.json:
+                    print(json.dumps(payload, indent=2, sort_keys=True))
+                else:
+                    print(f"swarm eval: failed mirror_parity actual={mirror_error!r} path=state.mirror.sqlite", file=sys.stderr)
+                return 1
         if args.json:
             print(result_to_json(result), end="")
         elif result.first_mismatch is None:
@@ -513,6 +539,103 @@ def cmd_eval(args: argparse.Namespace) -> int:
 
     print("swarm: eval: missing command", file=sys.stderr)
     return 2
+
+
+def _eval_mirror_parity_error(
+    fixture_dir: Path,
+    *,
+    discover_fixtures: Any,
+    load_expectation: Any,
+) -> str | None:
+    from .state_projector import diff_mirror, project_run
+
+    try:
+        fixtures = discover_fixtures(fixture_dir)
+    except Exception as exc:
+        return str(exc)
+    for fixture in fixtures:
+        try:
+            expectation = load_expectation(fixture / "expectation.yaml")
+            run_id = str(expectation.get("run_id") or _fixture_run_id(fixture))
+            with tempfile.TemporaryDirectory(prefix="swarm-eval-mirror-") as tmp:
+                data_dir = Path(tmp)
+                _materialize_fixture_data_dir(fixture, run_id, data_dir)
+                project_run(run_id, data_dir=data_dir)
+                diffs = diff_mirror(run_id, data_dir=data_dir)
+                if diffs:
+                    return f"{fixture.name}: {diffs[0].to_dict()}"
+        except Exception as exc:
+            return f"{fixture.name}: {exc}"
+    return None
+
+
+def _fixture_run_id(fixture: Path) -> str:
+    for name in ("phase_sessions.v1.json", "prepared_plan.v1.json"):
+        path = fixture / "run" / name
+        if not path.is_file():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if isinstance(payload, Mapping) and isinstance(payload.get("run_id"), str):
+            return str(payload["run_id"])
+    return "run"
+
+
+def _materialize_fixture_data_dir(fixture: Path, run_id: str, data_dir: Path) -> None:
+    run_source = fixture / "run"
+    run_target = data_dir / "runs" / run_id
+    shutil.copytree(run_source, run_target)
+    events = fixture / "events.jsonl"
+    if events.is_file():
+        telemetry = data_dir / "telemetry"
+        telemetry.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(events, telemetry / "run_events.jsonl")
+    active = fixture / "active-run.json"
+    if active.is_file():
+        shutil.copy2(active, data_dir / "active-run.json")
+    worktree = fixture / "worktrees" / run_id
+    if worktree.is_dir():
+        shutil.copytree(worktree, data_dir / "worktrees" / run_id)
+
+
+def cmd_state(args: argparse.Namespace) -> int:
+    from .state_projector import diff_mirror, project_run, query_mirror
+
+    data_dir = Path(args.data_dir) if getattr(args, "data_dir", None) else None
+    try:
+        if args.state_command == "project":
+            result = project_run(args.run_id, data_dir=data_dir)
+            if args.json:
+                print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+            else:
+                print(f"state mirror: {result.mirror_path}")
+                print(f"  sources: {result.source_count}")
+                print(f"  warnings: {result.warning_count}")
+            return 0
+        if args.state_command == "mirror":
+            rows = query_mirror(args.run_id, args.query, data_dir=data_dir)
+            print(json.dumps(rows, indent=2, sort_keys=True))
+            return 0
+        if args.state_command == "diff-mirror":
+            diffs = diff_mirror(args.run_id, data_dir=data_dir)
+            if args.json:
+                print(json.dumps([diff.to_dict() for diff in diffs], indent=2, sort_keys=True))
+            elif not diffs:
+                print(f"state mirror: {args.run_id} clean")
+            else:
+                diff = diffs[0]
+                print(
+                    f"state mirror: {args.run_id} differs "
+                    f"table={diff.table} key={diff.primary_key} column={diff.column}"
+                )
+            return 0 if not diffs else 1
+    except Exception as exc:
+        print(f"swarm: state {args.state_command}: {exc}", file=sys.stderr)
+        return 1
+    print("swarm: state: missing command", file=sys.stderr)
+    return 1
 
 
 def _jsonl_rows(path: Path) -> list[dict]:
@@ -2960,11 +3083,30 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("fixture_dir")
     p.add_argument("--json", action="store_true")
     p.add_argument("--include-trace", action="store_true")
+    p.add_argument("--use-mirror", action="store_true")
     p.set_defaults(func=cmd_eval)
     p = eval_sub.add_parser("record")
     p.add_argument("run_dir")
     p.add_argument("--to", required=True)
     p.set_defaults(func=cmd_eval)
+
+    state = sub.add_parser("state")
+    state_sub = state.add_subparsers(dest="state_command")
+    p = state_sub.add_parser("project")
+    p.add_argument("run_id")
+    p.add_argument("--data-dir")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_state)
+    p = state_sub.add_parser("mirror")
+    p.add_argument("run_id")
+    p.add_argument("--query", required=True)
+    p.add_argument("--data-dir")
+    p.set_defaults(func=cmd_state)
+    p = state_sub.add_parser("diff-mirror")
+    p.add_argument("run_id")
+    p.add_argument("--data-dir")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_state)
 
     rollout = sub.add_parser("rollout")
     rollout_sub = rollout.add_subparsers(dest="rollout_command")

@@ -11,6 +11,7 @@ import re
 from pathlib import Path
 from typing import Any, Mapping
 
+from .domain import DomainContractError, PhaseAttemptRecord, PhaseRecord
 from .failure_taxonomy import failure_kind_details
 from .paths import resolve_data_dir
 from .phase_attempt_metrics import TOKEN_FIELDS, stdout_metrics
@@ -89,12 +90,16 @@ def _attempts_from_state(
     for phase in state.get("phases") or []:
         if not isinstance(phase, Mapping):
             continue
-        phase_id = str(phase.get("phase_id") or "")
-        title = str(phase.get("title") or phase_id)
+        try:
+            phase_record = PhaseRecord.from_mapping(phase)
+        except DomainContractError:
+            continue
+        phase_id = phase_record.phase_id
+        title = phase_record.title or phase_id
         for item in phase.get("attempt_history") or []:
             if isinstance(item, Mapping):
                 rows.append(_row_from_mapping(run_id, root, phase, item, title=title, archived_label=archived_label))
-        attempt = int(phase.get("attempt") or 0)
+        attempt = phase_record.attempt
         if attempt > 0 and not any(row.get("phase_id") == phase_id and row.get("attempt") == attempt for row in rows):
             rows.append(_row_from_mapping(run_id, root, phase, phase, title=title, archived_label=archived_label))
     return rows
@@ -155,7 +160,7 @@ def _row_from_mapping(
     row.update(metrics)
     if manifest is not None:
         _apply_manifest_projection(row, manifest)
-    return row
+    return PhaseAttemptRecord.from_mapping(row, preserve_unknown=True).to_row()
 
 
 def _merge_launch_dirs(rows: list[dict[str, Any]], launch_root: Path, *, archived_label: str | None) -> None:
@@ -392,46 +397,67 @@ def _attempt_counts_by_phase(attempts: list[dict[str, Any]]) -> dict[str, int]:
 
 
 def is_failed_attempt(row: Mapping[str, Any]) -> bool:
-    if row.get("adopted") is True or row.get("retry_decision") == "adopted":
+    try:
+        record = PhaseAttemptRecord.from_mapping(row, preserve_unknown=True)
+    except DomainContractError:
+        record = None
+    adopted = record.adopted if record is not None else row.get("adopted")
+    retry_decision = record.retry_decision if record is not None else row.get("retry_decision")
+    failure_kind = record.failure_kind if record is not None else row.get("failure_kind")
+    status = record.status if record is not None else row.get("status")
+    if adopted is True or retry_decision == "adopted":
         return False
-    if row.get("failure_kind"):
+    if failure_kind:
         return True
-    if row.get("retry_decision") in {"retry", "recovery_retry", "retry_exhausted", "same_failure_limit", "deterministic_contract_failure"}:
+    if retry_decision in {"retry", "recovery_retry", "retry_exhausted", "same_failure_limit", "deterministic_contract_failure"}:
         return True
-    return row.get("status") in {"failed", "blocked", "needs_input", "retry_waiting", "retry_exhausted"}
+    return status in {"failed", "blocked", "needs_input", "retry_waiting", "retry_exhausted"}
 
 
 def _last_failure(status: Mapping[str, Any]) -> dict[str, Any] | None:
     for phase in reversed(status.get("phases") or []):
-        if isinstance(phase, Mapping) and phase.get("last_failure_kind"):
-            details = failure_kind_details(phase.get("last_failure_kind"))
-            for key in (
-                "failure_category",
-                "failure_retry_class",
-                "failure_operator_title",
-                "failure_operator_message",
-                "failure_known",
-            ):
-                if phase.get(key) is not None:
-                    details[key] = phase.get(key)
-            return {
-                "phase_id": phase.get("phase_id"),
-                "attempt": phase.get("attempt"),
-                "failure_kind": phase.get("last_failure_kind"),
-                "retry_decision": phase.get("retry_policy_decision"),
-                "policy_action": phase.get("policy_action"),
-                "policy_reason": phase.get("policy_reason"),
-                "blocked_reason": phase.get("blocked_reason"),
-                "evidence_path": phase.get("evidence_path"),
-                **details,
-            }
+        if not isinstance(phase, Mapping):
+            continue
+        try:
+            record = PhaseRecord.from_mapping(phase)
+        except DomainContractError:
+            continue
+        if not record.last_failure_kind:
+            continue
+        details = failure_kind_details(record.last_failure_kind)
+        for key in (
+            "failure_category",
+            "failure_retry_class",
+            "failure_operator_title",
+            "failure_operator_message",
+            "failure_known",
+        ):
+            if phase.get(key) is not None:
+                details[key] = phase.get(key)
+        return {
+            "phase_id": record.phase_id,
+            "attempt": record.attempt,
+            "failure_kind": record.last_failure_kind,
+            "retry_decision": record.retry_policy_decision,
+            "policy_action": phase.get("policy_action"),
+            "policy_reason": phase.get("policy_reason"),
+            "blocked_reason": record.blocked_reason,
+            "evidence_path": record.evidence_path,
+            **details,
+        }
     return None
 
 
 def _last_error(status: Mapping[str, Any]) -> str | None:
     for phase in reversed(status.get("phases") or []):
-        if isinstance(phase, Mapping) and isinstance(phase.get("last_error"), str):
-            return str(phase["last_error"])
+        if not isinstance(phase, Mapping):
+            continue
+        try:
+            record = PhaseRecord.from_mapping(phase)
+        except DomainContractError:
+            continue
+        if record.last_error:
+            return record.last_error
     return None
 
 

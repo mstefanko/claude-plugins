@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+from .domain import DoctorFinding, PhaseStatusReport, WORKTREE_STATUS_SENTINELS
 from .paths import resolve_data_dir
 
 
@@ -40,7 +41,8 @@ def run_phase_doctor(
                     "recommended_command": f"bin/swarm phases doctor {run_id} --json",
                 }
             )
-    ranked = sorted(findings, key=_finding_rank)
+    ranked_records = sorted((DoctorFinding.from_mapping(item) for item in findings), key=lambda item: item.rank_key())
+    ranked = [item.to_dict() for item in ranked_records]
     return {
         "run_id": run_id,
         "status": "ok" if not ranked else "findings",
@@ -55,28 +57,29 @@ def format_phase_doctor(report: Mapping[str, Any]) -> str:
     for finding in report.get("findings") or []:
         if not isinstance(finding, Mapping):
             continue
+        record = DoctorFinding.from_mapping(finding)
         bits = [
-            str(finding.get("severity") or "info").upper(),
-            str(finding.get("id") or "finding"),
+            record.severity.upper(),
+            record.id,
         ]
-        if finding.get("phase_id"):
-            bits.append(f"phase={finding.get('phase_id')}")
+        if record.phase_id:
+            bits.append(f"phase={record.phase_id}")
         lines.append("  - " + " ".join(bits))
-        if finding.get("detail"):
-            lines.append(f"      {finding.get('detail')}")
-        if finding.get("recommended_command"):
-            lines.append(f"      next: {finding.get('recommended_command')}")
+        if record.detail:
+            lines.append(f"      {record.detail}")
+        if record.recommended_command:
+            lines.append(f"      next: {record.recommended_command}")
     return "\n".join(lines)
 
 
 def _probe_phase_status(run_id: str, data_dir: Path, repo_root: Path | None) -> list[dict[str, Any]]:
     from .phase_sessions import phase_status
 
-    status = phase_status(run_id, data_dir=data_dir, repo_root=repo_root)
-    current = str(status.get("status") or "unknown")
+    status = PhaseStatusReport.from_mapping(phase_status(run_id, data_dir=data_dir, repo_root=repo_root))
+    current = status.status
     if current in {"ready", "complete"}:
         return []
-    command = status.get("recommended_command") or f"bin/swarm phases status {run_id}"
+    command = status.recommended_command or f"bin/swarm phases status {run_id}"
     return [
         {
             "id": "phase_status",
@@ -91,20 +94,20 @@ def _probe_phase_status(run_id: str, data_dir: Path, repo_root: Path | None) -> 
 def _probe_lease(run_id: str, data_dir: Path, repo_root: Path | None) -> list[dict[str, Any]]:
     from .phase_sessions import parse_phase_datetime, phase_status
 
-    status = phase_status(run_id, data_dir=data_dir, repo_root=repo_root)
-    active = status.get("active_phase")
-    if not isinstance(active, Mapping):
+    status = PhaseStatusReport.from_mapping(phase_status(run_id, data_dir=data_dir, repo_root=repo_root))
+    active = status.active_phase
+    if active is None:
         return []
-    expires = parse_phase_datetime(active.get("lease_expires_at"))
+    expires = parse_phase_datetime(active.lease_expires_at)
     if expires is None or expires > datetime.now(UTC):
         return []
-    phase_id = str(active.get("phase_id") or "")
+    phase_id = active.phase_id
     return [
         {
             "id": "lease_expired",
             "severity": "warning",
             "phase_id": phase_id,
-            "detail": f"phase {phase_id} lease expired at {active.get('lease_expires_at')}",
+            "detail": f"phase {phase_id} lease expired at {active.lease_expires_at}",
             "recommended_command": f"bin/swarm phases reap {run_id}",
         }
     ]
@@ -114,7 +117,7 @@ def _probe_worktree(run_id: str, data_dir: Path, repo_root: Path | None) -> list
     from .execution_worktree import run_worktree_status
 
     status = run_worktree_status(run_id, data_dir=data_dir)
-    if status.get("status") in {"ok", "not_found"}:
+    if status.get("status") in WORKTREE_STATUS_SENTINELS:
         return []
     if status.get("base_drift_safe") and not any(
         status.get(key) for key in ("unadopted_commits", "dirty_paths", "identity_mismatch")
@@ -172,12 +175,5 @@ def _probe_prepared_dispatch(run_id: str, data_dir: Path, repo_root: Path | None
             }
         )
     return findings
-
-
-def _finding_rank(item: Mapping[str, Any]) -> tuple[int, str]:
-    severity = str(item.get("severity") or "info")
-    rank = {"error": 0, "warning": 1, "info": 2}.get(severity, 3)
-    return rank, str(item.get("id") or "")
-
 
 __all__ = ["format_phase_doctor", "run_phase_doctor"]
