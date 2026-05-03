@@ -67,6 +67,7 @@ ClaudeRunner = Callable[[Sequence[str], str], subprocess.CompletedProcess[str]]
 
 RESULT_STATUS_FOR_COMMAND = {
     "complete": "complete",
+    "partial_success": "partial_success",
     "failed": "failed",
     "blocked": "blocked",
     "needs_input": "needs_input",
@@ -416,7 +417,7 @@ def _handle_recovery_decision(
     if status in {"active", "leased", "running"}:
         _append_pump_event(data_dir, run_id=run_id, event_type="phase_pump_stopped", details={"status": "active", "recovery": recovery})
         return {"result": {"status": "active", "completed_phases": completed, "recovery": recovery}}
-    if status in {"blocked", "needs_input", "failed", "failed_nonretryable", "retry_exhausted", "drift"}:
+    if status in {"partial_success", "blocked", "needs_input", "failed", "failed_nonretryable", "retry_exhausted", "drift"}:
         _append_pump_event(data_dir, run_id=run_id, event_type="phase_pump_stopped", details={"status": status, "recovery": recovery})
         return {
             "result": {
@@ -684,20 +685,27 @@ def _write_controller_phase_result(
     commits = [str(item) for item in stage_controller.get("commits") or [] if isinstance(item, str)]
     completed_work_units = [str(item) for item in stage_controller.get("completed_work_units") or [] if isinstance(item, str)]
     failed_work_units = [str(item) for item in stage_controller.get("failed_work_units") or [] if isinstance(item, str)]
+    status = _phase_result_status_from_stage_controller(stage_controller)
+    blockers = [f"blocked work unit: {unit}" for unit in failed_work_units]
+    summary = (
+        f"controller adopted {len(commits)} stage commit(s)"
+        if status == "complete"
+        else f"controller partially adopted {len(completed_work_units)} work unit(s); {len(failed_work_units)} blocked"
+    )
     handoff = {
         "schema_version": 1,
         "run_id": run_id,
         "phase_id": phase_id,
         "phase_attempt": int(phase["attempt"]),
-        "status": "complete",
+        "status": status,
         "written_at": now,
-        "summary": f"controller adopted {len(commits)} stage commit(s)",
+        "summary": summary,
         "decisions": [],
         "changed_files": changed,
         "completed_work_units": completed_work_units,
         "open_items": [],
-        "blockers": [],
-        "do_not_retry": [],
+        "blockers": blockers,
+        "do_not_retry": blockers if status == "partial_success" else [],
         "validation_summary": [],
         "artifacts": [],
         "worktree_diff": diff,
@@ -709,7 +717,7 @@ def _write_controller_phase_result(
         "run_id": run_id,
         "phase_id": phase_id,
         "phase_attempt": int(phase["attempt"]),
-        "status": "complete",
+        "status": status,
         "launcher": launcher,
         "session_name": phase.get("session_name"),
         "prepared_plan_sha": _status_prepared_sha(run_id, data_dir=data_dir),
@@ -720,11 +728,11 @@ def _write_controller_phase_result(
         "summary": handoff["summary"],
         "completed_work_units": completed_work_units,
         "failed_work_units": failed_work_units,
-        "blocked_reason": None,
+        "blocked_reason": "partial_success" if status == "partial_success" else None,
         "needs_input": [],
         "validation": [],
         "artifacts": [],
-        "error": None,
+        "error": {"message": "partial success"} if status == "partial_success" else None,
         "worktree_diff": diff,
         "commit_sha": commits[-1] if commits else None,
     }
@@ -732,6 +740,49 @@ def _write_controller_phase_result(
     handoff_path.parent.mkdir(parents=True, exist_ok=True)
     handoff_path.write_text(json.dumps(handoff, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     result_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _phase_result_status_from_stage_controller(stage_controller: Mapping[str, Any]) -> str:
+    value = stage_controller.get("phase_result_status")
+    if value == "partial_success":
+        return "partial_success"
+    if value == "complete":
+        return "complete"
+    terminal = stage_controller.get("terminal_state")
+    if terminal == "PARTIAL_SUCCESS":
+        return "partial_success"
+    return "complete"
+
+
+def _stage_controller_writes_phase_result(stage_controller: Mapping[str, Any]) -> bool:
+    if stage_controller.get("completed"):
+        return True
+    return _phase_result_status_from_stage_controller(stage_controller) == "partial_success"
+
+
+def _dispatcher_fanout_permission_failure(argv: Sequence[str], *, phase_sessions_mode: str) -> str | None:
+    if phase_sessions_mode != "fanout":
+        return None
+    if "--dangerously-skip-permissions" in argv:
+        return None
+    allowed = _allowed_tools_from_argv(argv)
+    if any(tool == "Agent" or tool.startswith("Agent(") or tool == "Task" or tool.startswith("Task(") for tool in allowed):
+        return None
+    return "dispatcher_missing_agent_tool"
+
+
+def _allowed_tools_from_argv(argv: Sequence[str]) -> list[str]:
+    try:
+        index = list(argv).index("--allowedTools")
+    except ValueError:
+        return []
+    values: list[str] = []
+    for value in list(argv)[index + 1 :]:
+        if isinstance(value, str) and value.startswith("--"):
+            break
+        if isinstance(value, str) and value:
+            values.append(value)
+    return values
 
 
 def _prepare_phase_launch(
@@ -1025,6 +1076,32 @@ def _run_claude_print_phase(
     if max_budget_usd is not None:
         argv.extend(["--max-budget-usd", str(max_budget_usd)])
     launch_contract["argv"] = list(argv)
+    permission_failure = _dispatcher_fanout_permission_failure(argv, phase_sessions_mode=phase_sessions_mode)
+    if permission_failure is not None:
+        launch = _prepare_phase_launch(
+            run_id,
+            phase_id,
+            phase,
+            launcher="claude-print",
+            source_prompt_path=prompt_path,
+            data_dir=data_dir,
+            prompt_text=prompt_text,
+            argv=argv,
+            settings_path=coordinator_settings_path,
+            settings_sha=coordinator_settings_sha,
+            workspace_metadata={
+                **workspace_metadata,
+                "reason": permission_failure,
+                "output_format": output_format,
+                "writer_settings_path": str(writer_settings_path),
+                "writer_settings_sha": _sha256_file(writer_settings_path),
+                "stage_session_path": str(stage_session_path(run_id, phase_id, data_dir=data_dir)),
+                "stage_count": len(stage_plan["stage_invocations"]),
+                "phase_sessions_mode": phase_sessions_mode,
+                "launch_contract": launch_contract,
+            },
+        )
+        return {"status": "launcher_error", "reason": permission_failure, "launch_dir": str(launch["launch_dir"])}
     launch = _prepare_phase_launch(
         run_id,
         phase_id,
@@ -1112,7 +1189,7 @@ def _run_claude_print_phase(
             )
         else:
             stage_controller = _initial_stage_controller_metadata(live=False)
-    if stage_controller.get("completed") and not result_path.is_file():
+    if _stage_controller_writes_phase_result(stage_controller) and not result_path.is_file():
         _write_controller_phase_result(
             run_id,
             phase_id,
@@ -1781,6 +1858,8 @@ def _initial_stage_controller_metadata(*, live: bool) -> dict[str, Any]:
     return {
         "live": bool(live),
         "completed": False,
+        "terminal_state": "pending",
+        "phase_result_status": "pending",
         "markers": [],
         "commits": [],
         "commit_sha": None,
@@ -1788,6 +1867,8 @@ def _initial_stage_controller_metadata(*, live: bool) -> dict[str, Any]:
         "changed_files": [],
         "completed_work_units": [],
         "failed_work_units": [],
+        "retry_requested_work_units": [],
+        "failed_stage_ids": [],
         "pending_marker_count": 0,
         "duplicate_marker_count": 0,
         "amended_count": 0,
@@ -1796,6 +1877,8 @@ def _initial_stage_controller_metadata(*, live: bool) -> dict[str, Any]:
         "rejected_invalid_path": 0,
         "rejected_invalid_result": 0,
         "failed_recorded_count": 0,
+        "retry_requested_count": 0,
+        "stage_result_missing_count": 0,
     }
 
 

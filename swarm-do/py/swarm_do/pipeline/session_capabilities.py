@@ -83,7 +83,7 @@ def parse_claude_print_json(text: str) -> dict[str, Any]:
     return value
 
 
-SUPPORTED_CLAUDE_PRINT_STATUSES = {"complete", "failed", "blocked", "needs_input"}
+SUPPORTED_CLAUDE_PRINT_STATUSES = {"complete", "partial_success", "failed", "blocked", "needs_input"}
 _STREAM_JSON_SUPPORT_CACHE: dict[str, tuple[bool, str | None]] = {}
 
 

@@ -261,7 +261,7 @@ def _active_run_finding(data_dir: Path, run_id: str | None) -> PreflightFinding:
     details = {"active_run_id": active_run_id, "status": status, "active_run_path": str(active_run_path(data_dir))}
     if active_run_id == run_id:
         return PreflightFinding("active-run-same-run", "advisory", "pass", "active run already references this run", details)
-    if status in {"complete", "completed", "merged", "cancelled", "failed", "blocked"}:
+    if status in {"complete", "completed", "partial_success", "merged", "cancelled", "failed", "blocked"}:
         return PreflightFinding("active-run-terminal", "advisory", "warn", "terminal active run should be cleared", details)
     return PreflightFinding(
         "active-run-conflict",

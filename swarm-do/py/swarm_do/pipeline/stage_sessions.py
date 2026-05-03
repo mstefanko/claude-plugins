@@ -222,6 +222,38 @@ def record_stage_failed(
     )
 
 
+def record_stage_retry_requested(
+    run_id: str,
+    phase_id: str,
+    stage_id: str,
+    failure_kind: str,
+    notes: str | None = None,
+    *,
+    data_dir: Path | None = None,
+    fresh_reviewer: bool = True,
+) -> dict[str, Any]:
+    """Record a retryable stage failure without making the stage terminal."""
+
+    base = data_dir or resolve_data_dir()
+    with locked_stage_sessions(run_id, phase_id, data_dir=base):
+        state = load_stage_sessions(run_id, phase_id, data_dir=base)
+        stage = _find_stage(state, stage_id)
+        if stage["status"] in TERMINAL_STATUSES:
+            return {"recorded": False, "reason": "already_terminal", "stage": dict(stage), "state": state}
+        if stage["status"] == STATUS_PENDING:
+            stage["attempt"] = int(stage.get("attempt") or 0) + 1
+            stage["started_at"] = stage.get("started_at") or utc_now()
+        stage["status"] = STATUS_PENDING
+        stage["failure_kind"] = failure_kind
+        stage["notes"] = notes
+        stage["retry_cycle_count"] = int(stage.get("attempt") or 0)
+        stage["fresh_reviewer_required"] = bool(fresh_reviewer)
+        stage["last_retry_requested_at"] = utc_now()
+        stage["closed_at"] = None
+        _touch_and_write(base, run_id, phase_id, state)
+        return {"recorded": True, "stage": dict(stage), "state": state}
+
+
 def record_stage_skipped(
     run_id: str,
     phase_id: str,
@@ -323,6 +355,7 @@ def _record_terminal(
         stage["transcript_path"] = transcript_path
         stage["failure_kind"] = failure_kind
         stage["notes"] = notes
+        stage["fresh_reviewer_required"] = False
         stage["closed_at"] = utc_now()
         _touch_and_write(base, run_id, phase_id, state)
         return {"recorded": True, "stage": dict(stage), "state": state}
@@ -384,6 +417,9 @@ def _stage_record(stage: Any, now: str) -> dict[str, Any]:
         "commit_sha": None,
         "failure_kind": None,
         "notes": None,
+        "retry_cycle_count": 0,
+        "fresh_reviewer_required": False,
+        "last_retry_requested_at": None,
         "started_at": None,
         "closed_at": None,
         "retry_after_seconds": None,
@@ -464,6 +500,7 @@ __all__ = [
     "record_stage_adopted",
     "record_stage_blocked",
     "record_stage_failed",
+    "record_stage_retry_requested",
     "record_stage_skipped",
     "stage_session_path",
     "stage_summary",

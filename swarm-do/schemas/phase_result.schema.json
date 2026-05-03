@@ -36,7 +36,7 @@
     "phase_attempt": { "type": "integer", "minimum": 1 },
     "status": {
       "type": "string",
-      "enum": ["complete", "failed", "blocked", "needs_input"]
+      "enum": ["complete", "partial_success", "failed", "blocked", "needs_input"]
     },
     "launcher": { "type": "string" },
     "session_name": { "type": ["string", "null"] },

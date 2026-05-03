@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 
-PHASE_RESULT_STATUSES = ("complete", "failed", "blocked", "needs_input")
+PHASE_RESULT_STATUSES = ("complete", "partial_success", "failed", "blocked", "needs_input")
 
 
 def phase_result_template(

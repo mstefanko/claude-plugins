@@ -405,14 +405,22 @@ def _render_fanout_orchestrator_brief(
             "upstream_stage_ids": list(invocation.upstream_stage_ids),
             "failure_tolerance": invocation.failure_tolerance,
             "lens_chain": list(invocation.lens_chain),
+            "prompt_prefix": f"cd {worktree_path} && " if worktree_path else "",
+            "fresh_reviewer": {
+                "required_on_retry": True,
+                "retry_cycle_cap": 3,
+                "prior_findings": "exclude from retry prompts",
+            },
         }
         prompt = "\n".join(
             [
                 f"Stage contract JSON: {json.dumps(stage_payload, sort_keys=True)}",
                 "",
+                f"Prompt prefix for Bash commands: {stage_payload['prompt_prefix'] or '(none)'}",
                 "Before finishing, write a stage result JSON to the prescribed result_path exactly.",
                 "Use `status: complete` for success, `status: complete_with_concerns` for adopted work with follow-up notes, `status: blocked` for non-retryable blockers, or `status: needs_input` for missing context.",
                 bash_cwd,
+                "On retry after a retryable failure, launch a fresh_reviewer sub-agent and do not include prior_findings from the failed attempt. Stop after 3 cycles and report blocked.",
                 "",
                 role_text,
                 "",
@@ -430,7 +438,9 @@ def _render_fanout_orchestrator_brief(
                 f"- bead_id: {invocation.bead_id or '-'}",
                 f"- allowed_files: {', '.join(allowed_files)}",
                 f"- acceptance_criteria: {invocation.acceptance_criteria or '-'}",
+                f"- prompt_prefix: {stage_payload['prompt_prefix'] or '-'}",
                 f"- bash_cwd_discipline: {bash_cwd}",
+                "- fresh_reviewer: required on retry; prior_findings excluded; retry_cycle_cap: 3",
                 "",
                 "Dispatch form:",
                 "```text",

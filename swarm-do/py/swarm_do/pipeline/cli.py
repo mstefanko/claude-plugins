@@ -3596,7 +3596,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-phases", default="1")
     p.add_argument("--init", action="store_true", help="initialize phase-session state when missing")
     p.add_argument("--stop-on-checkpoint", action="store_true")
-    p.add_argument("--fake-status", action="append", choices=["complete", "failed", "blocked", "needs_input"], help=argparse.SUPPRESS)
+    p.add_argument("--fake-status", action="append", choices=["complete", "partial_success", "failed", "blocked", "needs_input"], help=argparse.SUPPRESS)
     p.add_argument("--synthetic-write", action="append", help=argparse.SUPPRESS)
     p.add_argument("--synthetic-stage-complete", action="append", help=argparse.SUPPRESS)
     p.add_argument("--max-budget-usd", type=float)

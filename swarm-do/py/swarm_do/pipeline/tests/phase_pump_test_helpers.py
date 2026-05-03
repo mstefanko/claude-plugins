@@ -105,7 +105,7 @@ def _claude_runner(data: Path, run_id: str, statuses: list[str], stdout_template
         else:
             stdout = stdout_template.replace('<RUN_DIR>', str(data / 'runs' / run_id))
         if returncodes is None:
-            returncode = 0 if status == 'complete' else 1
+            returncode = 0 if status in {'complete', 'partial_success'} else 1
         else:
             returncode = returncodes[min(calls['count'] - 1, len(returncodes) - 1)]
         return subprocess.CompletedProcess(argv, returncode, stdout=stdout, stderr='')

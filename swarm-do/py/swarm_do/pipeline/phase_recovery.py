@@ -26,6 +26,7 @@ from .phase_sessions import (
     STATUS_LEASED,
     STATUS_NEEDS_INPUT,
     STATUS_PENDING,
+    STATUS_PARTIAL_SUCCESS,
     STATUS_RETRY_EXHAUSTED,
     STATUS_RETRY_WAITING,
     STATUS_RUNNING,
@@ -51,7 +52,7 @@ from .phase_beads import write_phase_beads_note
 
 
 ACTIVE_STATUSES = {STATUS_LEASED, STATUS_RUNNING}
-STOP_STATUSES = (STATUS_BLOCKED, STATUS_NEEDS_INPUT, STATUS_RETRY_EXHAUSTED)
+STOP_STATUSES = (STATUS_PARTIAL_SUCCESS, STATUS_BLOCKED, STATUS_NEEDS_INPUT, STATUS_RETRY_EXHAUSTED)
 MAX_RECONCILIATION_PASSES = 20
 
 
@@ -217,6 +218,7 @@ def reconcile_phase_sessions(
             return _decision(run_id, base, terminal_status if terminal_status != "failed" else "failed_nonretryable", actions)
 
         active_action_details: dict[str, Any] | None = None
+        unit_failure_kind: str | None = None
         if phase.get("status") in ACTIVE_STATUSES and launcher_result is None:
             active_action = _active_phase_decision(phase, now=current_time)
             if active_action.get("status") == "active":
@@ -240,7 +242,9 @@ def reconcile_phase_sessions(
             failure_kind = str(phase.get("last_failure_kind") or "failed_nonretryable")
             return _decision(run_id, base, "failed_nonretryable", actions, blocked_reason=failure_kind)
         else:
-            failure_kind = _launcher_failure_kind(launcher_result, artifact)
+            command = _command_metadata(_launch_dir(run_id, phase, data_dir=base))
+            unit_failure_kind = _failure_kind_for_unit(command.get("stage_controller"))
+            failure_kind = unit_failure_kind or _launcher_failure_kind(launcher_result, artifact)
 
         evidence = _build_attempt_evidence(
             run_id,
@@ -255,7 +259,7 @@ def reconcile_phase_sessions(
             adopted=False,
             partial_artifacts=artifact.get("partial", False),
             artifact_error_kinds=artifact.get("error_kinds") or [],
-            classify_launcher=launcher_result is not None,
+            classify_launcher=launcher_result is not None and unit_failure_kind is None,
         )
         failure_kind = str(evidence.get("failure_kind") or failure_kind)
         launcher_error = evidence.get("diagnostic_last_error")
@@ -1065,9 +1069,44 @@ def _decision(
 def _artifact_failure_kind(result: Mapping[str, Any], launcher_result: Mapping[str, Any] | None) -> str:
     if isinstance(result.get("failure_kind"), str):
         return str(result["failure_kind"])
+    if result.get("status") == "partial_success":
+        return "PARTIAL_SUCCESS"
     if launcher_result is not None and int(launcher_result.get("returncode") or 0) != 0:
         return "launcher_nonzero_with_artifacts"
     return "adoptable_artifacts"
+
+
+def _failure_kind_for_unit(stage_controller: Any) -> str | None:
+    if not isinstance(stage_controller, Mapping):
+        return None
+    terminal = stage_controller.get("terminal_state")
+    if terminal == "PARTIAL_SUCCESS":
+        return "PARTIAL_SUCCESS"
+    for marker in stage_controller.get("markers") or []:
+        if not isinstance(marker, Mapping):
+            continue
+        controller_status = marker.get("controller_status")
+        if controller_status == "stage_result_missing":
+            return "stage_result_missing"
+        if controller_status == "retry_cycle_cap_exceeded":
+            return "retry_cycle_cap_exceeded"
+        failure_kind = marker.get("failure_kind")
+        if isinstance(failure_kind, str) and failure_kind:
+            return failure_kind
+        raw = marker.get("raw")
+        if isinstance(raw, Mapping) and isinstance(raw.get("failure_kind"), str):
+            return str(raw["failure_kind"])
+    if int(stage_controller.get("stage_result_missing_count") or 0) > 0:
+        return "stage_result_missing"
+    if int(stage_controller.get("rejected_invalid_result") or 0) > 0:
+        return "NORMALIZATION_ERROR"
+    if int(stage_controller.get("rejected_invalid_path") or 0) > 0:
+        return "NORMALIZATION_ERROR"
+    if int(stage_controller.get("failed_recorded_count") or 0) > 0:
+        return "sub_agent_error"
+    if int(stage_controller.get("retry_requested_count") or 0) > 0:
+        return "sub_agent_error"
+    return None
 
 
 def _launcher_failure_kind(launcher_result: Mapping[str, Any] | None, artifact: Mapping[str, Any]) -> str:
@@ -1084,6 +1123,8 @@ def _launcher_failure_kind(launcher_result: Mapping[str, Any] | None, artifact: 
     stdout = str(launcher_result.get("stdout") or "")
     try:
         outer = parse_claude_print_json(stdout)
+        if _outer_json_token_exhausted(outer):
+            return "dispatcher_token_exhausted"
         extract_claude_print_artifacts(outer, run_dir=Path("/definitely-not-used"))
     except ValueError as exc:
         if not stdout:
@@ -1094,6 +1135,17 @@ def _launcher_failure_kind(launcher_result: Mapping[str, Any] | None, artifact: 
     except Exception:
         return "outer_json_invalid_no_artifacts" if stdout else "outer_json_missing_no_artifacts"
     return "outer_artifacts_missing"
+
+
+def _outer_json_token_exhausted(outer: Mapping[str, Any]) -> bool:
+    for key in ("subtype", "stop_reason", "finish_reason"):
+        value = outer.get(key)
+        if isinstance(value, str) and value.lower() in {"max_tokens", "token_limit", "length"}:
+            return True
+    result = outer.get("result")
+    if isinstance(result, Mapping):
+        return _outer_json_token_exhausted(result)
+    return False
 
 
 def _launcher_error(launcher_result: Mapping[str, Any] | None, artifact: Mapping[str, Any]) -> str | None:

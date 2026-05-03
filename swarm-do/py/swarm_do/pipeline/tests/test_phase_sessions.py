@@ -134,6 +134,23 @@ class PhaseSessionTests(unittest.TestCase):
             self.assertEqual(status["status"], "failed")
             self.assertIn("phases status", status["recommended_command"])
 
+    def test_partial_success_is_terminal_but_not_complete(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=2)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            claim_next_phase(run_id, data_dir=data, repo_root=repo, lease_owner="owner-1")
+            started = start_phase(run_id, "1", launcher="manual", lease_owner="owner-1", data_dir=data)
+            result_path = _write_result(data, run_id, started["phase"], status="partial_success")
+
+            recorded = record_phase_result(run_id, "1", json_file=result_path, expected_status="partial_success", data_dir=data)
+            status = phase_status(run_id, data_dir=data, repo_root=repo)
+            claim = claim_next_phase(run_id, data_dir=data, repo_root=repo, lease_owner="owner-2")
+
+        self.assertEqual(recorded["phase"]["status"], "partial_success")
+        self.assertEqual(status["status"], "partial_success")
+        self.assertFalse(claim["claimed"])
+        self.assertEqual(claim["reason"], "no_claimable_phase")
+
     def test_hard_reset_clears_dispatch_fields(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             repo, data, run_id = make_prepared_run(Path(td), phase_count=1)

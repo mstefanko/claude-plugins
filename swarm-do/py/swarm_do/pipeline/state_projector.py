@@ -233,6 +233,7 @@ def load_phase_status_from_mirror(run_id: str, *, data_dir: Path | None = None) 
     next_phase = next((phase for phase in phases if phase.get("status") == "pending" and _deps_complete(phases, phase)), None)
     active = next((phase for phase in phases if phase.get("status") in {"leased", "running"}), None)
     retry_waiting = next((phase for phase in phases if phase.get("status") == "retry_waiting"), None)
+    partial_success = next((phase for phase in phases if phase.get("status") == "partial_success"), None)
     blocked = next((phase for phase in phases if phase.get("status") in {"blocked", "needs_input"}), None)
     retry_exhausted = next((phase for phase in phases if phase.get("status") == "retry_exhausted"), None)
     stale = next((phase for phase in phases if phase.get("status") == "stale"), None)
@@ -246,6 +247,9 @@ def load_phase_status_from_mirror(run_id: str, *, data_dir: Path | None = None) 
     elif retry_waiting is not None:
         overall = "retry_waiting"
         recommended = f"bin/swarm phases recover {run_id}"
+    elif partial_success is not None:
+        overall = "partial_success"
+        recommended = f"bin/swarm phases status {run_id}"
     elif blocked is not None:
         overall = str(blocked["status"])
         recommended = f"bin/swarm phases status {run_id}"
@@ -899,7 +903,7 @@ def _phase_overall_status(phases: Sequence[Mapping[str, Any]]) -> str | None:
     statuses = {str(phase.get("status") or "") for phase in phases}
     if statuses == {"complete"}:
         return "complete"
-    for status in ("running", "leased", "retry_waiting", "blocked", "needs_input", "retry_exhausted", "stale", "failed"):
+    for status in ("running", "leased", "retry_waiting", "partial_success", "blocked", "needs_input", "retry_exhausted", "stale", "failed"):
         if status in statuses:
             return status
     return "ready" if "pending" in statuses else "incomplete"

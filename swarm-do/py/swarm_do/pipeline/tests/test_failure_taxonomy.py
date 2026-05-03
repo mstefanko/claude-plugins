@@ -52,6 +52,26 @@ class FailureTaxonomyTests(unittest.TestCase):
                 self.assertIn(kind, known_failure_kinds())
                 self.assertTrue(failure_kind_details(kind)["failure_known"])
 
+    def test_mco_and_dispatcher_fanout_kinds_are_known(self) -> None:
+        expected = {
+            "RETRYABLE_TIMEOUT": "retry",
+            "RETRYABLE_RATE_LIMIT": "retry",
+            "RETRYABLE_TRANSIENT_NETWORK": "retry",
+            "NON_RETRYABLE_AUTH": "human_gate",
+            "NON_RETRYABLE_INVALID_INPUT": "human_gate",
+            "NON_RETRYABLE_UNSUPPORTED_CAPABILITY": "human_gate",
+            "NORMALIZATION_ERROR": "human_gate",
+            "PARTIAL_SUCCESS": "terminal",
+            "dispatcher_missing_agent_tool": "human_gate",
+            "dispatcher_token_exhausted": "retry",
+            "stage_result_missing": "human_gate",
+            "sub_agent_error": "retry",
+        }
+        for kind, retry_class in expected.items():
+            with self.subTest(kind=kind):
+                self.assertIn(kind, known_failure_kinds())
+                self.assertEqual(failure_kind_details(kind)["failure_retry_class"], retry_class)
+
 
 if __name__ == "__main__":
     unittest.main()

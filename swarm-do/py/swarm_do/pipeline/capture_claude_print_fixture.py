@@ -17,7 +17,7 @@ from .tests.phase_session_fixtures import make_prepared_run
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--status", choices=["complete", "failed", "blocked", "needs_input"], default="complete")
+    parser.add_argument("--status", choices=["complete", "partial_success", "failed", "blocked", "needs_input"], default="complete")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--claude-path")
     args = parser.parse_args(argv)
@@ -47,7 +47,7 @@ def main(argv: list[str] | None = None) -> int:
             prompt,
             result_path=result_path,
             handoff_path=handoff_path,
-            status_values=["blocked", "complete", "failed", "needs_input"],
+            status_values=["blocked", "complete", "partial_success", "failed", "needs_input"],
         )
         prompt += f"\nFor fixture capture, finish this tiny phase with status `{args.status}`.\n"
         proc = subprocess.run(

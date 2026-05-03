@@ -73,7 +73,7 @@ class PhaseArtifactContractTests(unittest.TestCase):
             phase_content_sha=PHASE_SHA,
         )
 
-        for status in ("complete", "failed", "blocked", "needs_input"):
+        for status in ("complete", "partial_success", "failed", "blocked", "needs_input"):
             self.assertIn(status, text)
         self.assertIn("handoff.decisions", text)
         self.assertIn("plain string", text)

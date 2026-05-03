@@ -870,11 +870,20 @@ generated from `role-specs/`; edit specs, then run
 
 ## Testing
 
-`pytest` is the canonical dev runner. The existing `unittest.TestCase` tests
+`pytest` is the canonical Python test runner. The `bin/swarm test` commands
+below are convenience wrappers that invoke the current interpreter as
+`python -m pytest`; direct pytest commands are also supported and are often the
+best way to validate a focused area. The existing `unittest.TestCase` tests
 remain supported and are collected by pytest; new tests should use pytest-style
 functions and fixtures.
 
-Run the suite from the repo root:
+Install the Python dev dependencies first:
+
+```bash
+python3 -m pip install -e '.[dev]'
+```
+
+Run the standard wrapper suite from the repo root:
 
 ```bash
 bin/swarm test unit
@@ -891,6 +900,14 @@ bin/swarm test --coverage unit
 bin/swarm test unit -- -x --pdb
 ```
 
+Direct pytest forms:
+
+```bash
+python3 -m pytest py/swarm_do/pipeline/tests
+python3 -m pytest py/swarm_do/pipeline/tests/test_phase_pump_claude_launcher.py
+python3 -m pytest py/swarm_do/pipeline/tests -k phase_pump
+```
+
 Legacy fallback during the migration:
 
 ```bash
@@ -905,10 +922,10 @@ PYTHONPATH=py python3 -m swarm_do.telemetry.gen readme-section --check
 PYTHONPATH=py python3 -m swarm_do.telemetry.gen docs --check
 ```
 
-Install dev extras with `python3 -m pip install -e '.[dev]'`; install
-Hypothesis properties with `python3 -m pip install -e '.[hypothesis]'`.
-Shell tests need `brew install bats-core shellcheck` on macOS. See
-`docs/testing-strategy.md` for the migration policy.
+Install Hypothesis properties with
+`python3 -m pip install -e '.[hypothesis]'`. Shell tests need
+`brew install bats-core shellcheck` on macOS. See `docs/testing-strategy.md`
+for the migration policy.
 
 ## Development Notes
 

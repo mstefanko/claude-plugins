@@ -119,6 +119,7 @@
               "leased",
               "running",
               "complete",
+              "partial_success",
               "failed",
               "blocked",
               "needs_input",

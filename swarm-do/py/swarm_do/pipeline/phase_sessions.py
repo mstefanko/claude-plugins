@@ -41,6 +41,7 @@ STATUS_PENDING = "pending"
 STATUS_LEASED = "leased"
 STATUS_RUNNING = "running"
 STATUS_COMPLETE = "complete"
+STATUS_PARTIAL_SUCCESS = "partial_success"
 STATUS_FAILED = "failed"
 STATUS_BLOCKED = "blocked"
 STATUS_NEEDS_INPUT = "needs_input"
@@ -50,15 +51,25 @@ STATUS_RETRY_EXHAUSTED = "retry_exhausted"
 
 CLAIMABLE_STATUSES = {STATUS_PENDING}
 ACTIVE_STATUSES = {STATUS_LEASED, STATUS_RUNNING}
-TERMINAL_STATUSES = {STATUS_COMPLETE, STATUS_FAILED, STATUS_BLOCKED, STATUS_NEEDS_INPUT, STATUS_RETRY_EXHAUSTED}
+TERMINAL_STATUSES = {
+    STATUS_COMPLETE,
+    STATUS_PARTIAL_SUCCESS,
+    STATUS_FAILED,
+    STATUS_BLOCKED,
+    STATUS_NEEDS_INPUT,
+    STATUS_RETRY_EXHAUSTED,
+}
 RESULT_TO_PHASE_STATUS = {
     "complete": STATUS_COMPLETE,
+    "PARTIAL_SUCCESS": STATUS_PARTIAL_SUCCESS,
+    "partial_success": STATUS_PARTIAL_SUCCESS,
     "failed": STATUS_FAILED,
     "blocked": STATUS_BLOCKED,
     "needs_input": STATUS_NEEDS_INPUT,
 }
 PHASE_STATUS_TO_EVENT = {
     STATUS_COMPLETE: "phase_session_completed",
+    STATUS_PARTIAL_SUCCESS: "phase_session_partial_success",
     STATUS_FAILED: "phase_session_failed",
     STATUS_BLOCKED: "phase_session_blocked",
     STATUS_NEEDS_INPUT: "phase_session_needs_input",
@@ -353,9 +364,13 @@ def phase_status(run_id: str, *, data_dir: Path | None = None, repo_root: Path |
         None,
     )
     retry_exhausted = next((phase for phase in state["phases"] if phase.get("status") == STATUS_RETRY_EXHAUSTED), None)
+    partial_success = next((phase for phase in state["phases"] if phase.get("status") == STATUS_PARTIAL_SUCCESS), None)
     if all(phase.get("status") == STATUS_COMPLETE for phase in state["phases"]):
         overall = "complete"
         recommended = None
+    elif partial_success is not None:
+        overall = STATUS_PARTIAL_SUCCESS
+        recommended = f"bin/swarm phases status {run_id}"
     elif active is not None:
         overall = str(active["status"])
         recommended = f"bin/swarm phases status {run_id}"
@@ -1820,7 +1835,7 @@ def _apply_phase_result(
     phase["lease_command"] = None
     phase["lease_expires_at"] = None
     phase["next_retry_at"] = None
-    phase["last_error"] = _result_error_message(result) if phase_status != STATUS_COMPLETE else None
+    phase["last_error"] = _result_error_message(result) if phase_status not in {STATUS_COMPLETE, STATUS_PARTIAL_SUCCESS} else None
     phase["last_failure_kind"] = result.get("failure_kind") if isinstance(result.get("failure_kind"), str) else phase.get("last_failure_kind")
     if phase_status == STATUS_BLOCKED:
         phase["blocked_reason"] = BLOCKED_CHILD_REPORTED_BLOCKED
@@ -1830,7 +1845,7 @@ def _apply_phase_result(
         phase["blocked_reason"] = BLOCKED_CHILD_REPORTED_BLOCKED
         phase["retry_policy_decision"] = "child_reported_needs_input"
         phase["blocked_at"] = result["completed_at"]
-    elif phase_status == STATUS_COMPLETE:
+    elif phase_status in {STATUS_COMPLETE, STATUS_PARTIAL_SUCCESS}:
         phase["blocked_reason"] = None
         phase["retry_policy_decision"] = None
         phase["blocked_at"] = None

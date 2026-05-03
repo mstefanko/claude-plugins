@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Literal, Mapping
 
 from .execution_worktree import RunExecutionWorktreeError, commit_stage_artifacts
+from .failure_taxonomy import failure_kind_details
 from .orchestrator_stream import StageMarker, parse_stage_markers
 from .phase_beads import close_stage_child, mark_stage_blocked
 from .phase_sessions import PhaseSessionError
@@ -23,8 +24,14 @@ from .stage_sessions import (
     record_stage_adopted,
     record_stage_blocked,
     record_stage_failed,
+    record_stage_retry_requested,
 )
 from .unit_session_adopter import adopt_unit_stage
+
+
+PARTIAL_SUCCESS = "PARTIAL_SUCCESS"
+PHASE_STATUS_PARTIAL_SUCCESS = "partial_success"
+MAX_FRESH_REVIEWER_RETRY_CYCLES = 3
 
 
 @dataclass
@@ -42,6 +49,7 @@ class MarkerDecision:
         "blocked_recorded",
         "needs_input_recorded",
         "failed_recorded",
+        "retry_requested",
     ]
     commit_sha: str | None = None
     reason: str | None = None
@@ -92,6 +100,8 @@ class StageMarkerProcessor:
         self._rejected_invalid_path = 0
         self._rejected_invalid_result = 0
         self._failed_recorded_count = 0
+        self._retry_requested_count = 0
+        self._stage_result_missing_count = 0
 
     def process_text(self, text: str) -> list[MarkerDecision]:
         """Parse marker lines from text and process them on the owner thread."""
@@ -112,6 +122,7 @@ class StageMarkerProcessor:
     def finish(self) -> dict[str, Any]:
         self._assert_owner_thread()
         self._retry_pending()
+        self._fail_unresolved_pending_markers()
         current = self._load_current_state()
         adopted_by_id = {
             str(stage.get("stage_id")): stage
@@ -129,9 +140,19 @@ class StageMarkerProcessor:
         changed = changed_files_from_worktree_diff(self._latest_diff or {}) if self._latest_diff else []
         completed_work_units = _work_units_for_status(adopted_by_id, self.stage_invocations, STATUS_ADOPTED)
         failed_work_units = _failed_work_units(current, self.stage_invocations)
+        retry_requested_work_units = _retry_requested_work_units(current, self.stage_invocations)
+        failed_stage_ids = _failed_stage_ids(current)
+        terminal_state = _terminal_state_for_summary(
+            completed=completed,
+            adopted_stage_ids=set(adopted_by_id),
+            failed_stage_ids=set(failed_stage_ids),
+            had_controller_failure=self._had_controller_failure,
+        )
         return {
             "live": True,
             "completed": completed,
+            "terminal_state": terminal_state,
+            "phase_result_status": PHASE_STATUS_PARTIAL_SUCCESS if terminal_state == PARTIAL_SUCCESS else terminal_state,
             "markers": self._marker_payloads,
             "commits": commits,
             "commit_sha": commits[-1] if commits else None,
@@ -139,6 +160,8 @@ class StageMarkerProcessor:
             "changed_files": changed,
             "completed_work_units": completed_work_units,
             "failed_work_units": failed_work_units,
+            "retry_requested_work_units": retry_requested_work_units,
+            "failed_stage_ids": failed_stage_ids,
             "pending_marker_count": len(self._pending),
             "duplicate_marker_count": self._duplicate_marker_count,
             "amended_count": self._amended_count,
@@ -147,6 +170,8 @@ class StageMarkerProcessor:
             "rejected_invalid_path": self._rejected_invalid_path,
             "rejected_invalid_result": self._rejected_invalid_result,
             "failed_recorded_count": self._failed_recorded_count,
+            "retry_requested_count": self._retry_requested_count,
+            "stage_result_missing_count": self._stage_result_missing_count,
         }
 
     def _process_marker(
@@ -177,19 +202,7 @@ class StageMarkerProcessor:
             return MarkerDecision(marker, "duplicate", commit_sha=_optional_str(terminal.get("commit_sha")))
 
         if marker.kind == "failed":
-            record_stage_failed(
-                self.run_id,
-                self.phase_id,
-                marker.stage_id,
-                marker.failure_kind or "stage_failed",
-                marker.notes,
-                data_dir=self.data_dir,
-            )
-            self._mark_stage_bead_blocked(marker)
-            self._had_controller_failure = True
-            self._failed_recorded_count += 1
-            payload["controller_status"] = "failed_recorded"
-            return MarkerDecision(marker, "failed_recorded", reason=marker.failure_kind or "stage_failed")
+            return self._record_stage_failure(marker, payload, failure_kind=marker.failure_kind or "stage_failed", notes=marker.notes)
 
         claim_stage(self.run_id, self.phase_id, marker.stage_id, data_dir=self.data_dir)
         try:
@@ -232,6 +245,9 @@ class StageMarkerProcessor:
         if result_status in {"blocked", "needs_input", "failed"}:
             failure_kind = _stage_result_failure_kind(result_payload, default=result_status)
             notes = _stage_result_notes(result_payload)
+            retry_decision = self._maybe_record_retry_request(marker, payload, failure_kind=failure_kind, notes=notes)
+            if retry_decision is not None:
+                return retry_decision
             if result_status == "blocked":
                 record_stage_blocked(
                     self.run_id,
@@ -253,15 +269,26 @@ class StageMarkerProcessor:
                 )
                 outcome = "needs_input_recorded"
             else:
-                record_stage_failed(
-                    self.run_id,
-                    self.phase_id,
-                    marker.stage_id,
-                    failure_kind,
-                    notes,
-                    data_dir=self.data_dir,
-                )
-                outcome = "failed_recorded"
+                if _failure_retry_class(failure_kind) == "human_gate":
+                    record_stage_blocked(
+                        self.run_id,
+                        self.phase_id,
+                        marker.stage_id,
+                        failure_kind,
+                        notes,
+                        data_dir=self.data_dir,
+                    )
+                    outcome = "blocked_recorded"
+                else:
+                    record_stage_failed(
+                        self.run_id,
+                        self.phase_id,
+                        marker.stage_id,
+                        failure_kind,
+                        notes,
+                        data_dir=self.data_dir,
+                    )
+                    outcome = "failed_recorded"
             self._mark_stage_bead_blocked(marker, failure_kind=failure_kind, notes=notes)
             self._had_controller_failure = True
             self._failed_recorded_count += 1
@@ -345,6 +372,110 @@ class StageMarkerProcessor:
         for marker, payload in pending:
             decisions.append(self._process_marker(marker, payload, append_pending=True))
         return decisions
+
+    def _fail_unresolved_pending_markers(self) -> None:
+        if not self._pending:
+            return
+        pending = self._pending
+        self._pending = []
+        for marker, payload in pending:
+            failure_kind = "stage_result_missing"
+            record_stage_failed(
+                self.run_id,
+                self.phase_id,
+                marker.stage_id,
+                failure_kind,
+                f"stage result still missing at finish: {marker.result_path}",
+                data_dir=self.data_dir,
+            )
+            self._mark_stage_bead_blocked(marker, failure_kind=failure_kind, notes="stage result missing at finish")
+            payload["controller_status"] = failure_kind
+            self._had_controller_failure = True
+            self._failed_recorded_count += 1
+            self._stage_result_missing_count += 1
+
+    def _record_stage_failure(
+        self,
+        marker: StageMarker,
+        payload: dict[str, Any],
+        *,
+        failure_kind: str,
+        notes: str | None,
+    ) -> MarkerDecision:
+        retry_decision = self._maybe_record_retry_request(marker, payload, failure_kind=failure_kind, notes=notes)
+        if retry_decision is not None:
+            return retry_decision
+        if _failure_retry_class(failure_kind) == "human_gate":
+            record_stage_blocked(
+                self.run_id,
+                self.phase_id,
+                marker.stage_id,
+                failure_kind,
+                notes,
+                data_dir=self.data_dir,
+            )
+            self._mark_stage_bead_blocked(marker, failure_kind=failure_kind, notes=notes)
+            self._had_controller_failure = True
+            self._failed_recorded_count += 1
+            payload["controller_status"] = "blocked_recorded"
+            return MarkerDecision(marker, "blocked_recorded", reason=failure_kind)
+        record_stage_failed(
+            self.run_id,
+            self.phase_id,
+            marker.stage_id,
+            failure_kind,
+            notes,
+            data_dir=self.data_dir,
+        )
+        self._mark_stage_bead_blocked(marker, failure_kind=failure_kind, notes=notes)
+        self._had_controller_failure = True
+        self._failed_recorded_count += 1
+        payload["controller_status"] = "failed_recorded"
+        return MarkerDecision(marker, "failed_recorded", reason=failure_kind)
+
+    def _maybe_record_retry_request(
+        self,
+        marker: StageMarker,
+        payload: dict[str, Any],
+        *,
+        failure_kind: str,
+        notes: str | None,
+    ) -> MarkerDecision | None:
+        if _failure_retry_class(failure_kind) != "retry":
+            return None
+        recorded = record_stage_retry_requested(
+            self.run_id,
+            self.phase_id,
+            marker.stage_id,
+            failure_kind,
+            notes,
+            data_dir=self.data_dir,
+            fresh_reviewer=True,
+        )
+        stage = recorded.get("stage") if isinstance(recorded, Mapping) else {}
+        retry_cycle = int(stage.get("retry_cycle_count") or stage.get("attempt") or 0) if isinstance(stage, Mapping) else 0
+        payload["controller_status"] = "retry_requested"
+        payload["retry_cycle_count"] = retry_cycle
+        payload["fresh_reviewer"] = True
+        payload["prior_findings"] = "excluded"
+        self._retry_requested_count += 1
+        if retry_cycle <= MAX_FRESH_REVIEWER_RETRY_CYCLES:
+            return MarkerDecision(marker, "retry_requested", reason=failure_kind)
+        capped_kind = "retry_cycle_cap_exceeded"
+        record_stage_blocked(
+            self.run_id,
+            self.phase_id,
+            marker.stage_id,
+            capped_kind,
+            notes or f"retry cycle cap exceeded after {MAX_FRESH_REVIEWER_RETRY_CYCLES} fresh-reviewer cycles",
+            data_dir=self.data_dir,
+        )
+        self._mark_stage_bead_blocked(marker, failure_kind=capped_kind, notes=notes)
+        self._append_human_gate_event(marker.stage_id, failure_kind=capped_kind, work_unit_id=self._by_id[marker.stage_id].work_unit_id)
+        self._had_controller_failure = True
+        self._failed_recorded_count += 1
+        payload["controller_status"] = "retry_cycle_cap_exceeded"
+        return MarkerDecision(marker, "blocked_recorded", reason=capped_kind)
 
     def _load_valid_stage_result(self, marker: StageMarker, *, expected_result_path: Path) -> dict[str, Any]:
         result_path = self._validated_stage_result_path(marker.result_path, expected_result_path=expected_result_path)
@@ -479,6 +610,30 @@ class StageMarkerProcessor:
         validate_run_event(row, error_cls=PhaseSessionError)
         append_run_event(self.data_dir, row)
 
+    def _append_human_gate_event(self, stage_id: str, *, failure_kind: str, work_unit_id: str | None) -> None:
+        row = {
+            "run_id": self.run_id,
+            "timestamp": utc_now(),
+            "event_type": "stage_human_gate",
+            "bd_epic_id": None,
+            "phase_id": self.phase_id,
+            "work_unit_id": work_unit_id,
+            "child_bead_ids": None,
+            "reason": failure_kind,
+            "retry_count": None,
+            "handoff_count": None,
+            "integration_branch_head": None,
+            "details": {
+                "stage_id": stage_id,
+                "failure_kind": failure_kind,
+                "retry_cycle_cap": MAX_FRESH_REVIEWER_RETRY_CYCLES,
+                "fresh_reviewer": True,
+            },
+            "schema_ok": True,
+        }
+        validate_run_event(row, error_cls=PhaseSessionError)
+        append_run_event(self.data_dir, row)
+
     def _assert_owner_thread(self) -> None:
         if threading.current_thread() is not threading.main_thread() and self._owner_thread is not threading.current_thread():
             raise RuntimeError("StageMarkerProcessor is not thread-safe")
@@ -558,6 +713,58 @@ def _failed_work_units(current: Mapping[str, Any], invocations: list[StageInvoca
         if stages_by_id.get(invocation.stage_id, {}).get("status") in {"failed", "blocked"} and invocation.work_unit_id not in out:
             out.append(invocation.work_unit_id)
     return out
+
+
+def _retry_requested_work_units(current: Mapping[str, Any], invocations: list[StageInvocation]) -> list[str]:
+    stages_by_id = {
+        str(stage.get("stage_id")): stage
+        for stage in current.get("stages") or []
+        if isinstance(stage, Mapping)
+    }
+    out: list[str] = []
+    for invocation in invocations:
+        if not invocation.work_unit_id:
+            continue
+        stage = stages_by_id.get(invocation.stage_id, {})
+        if (
+            stage.get("status") == "pending"
+            and bool(stage.get("fresh_reviewer_required"))
+            and invocation.work_unit_id not in out
+        ):
+            out.append(invocation.work_unit_id)
+    return out
+
+
+def _failed_stage_ids(current: Mapping[str, Any]) -> list[str]:
+    out: list[str] = []
+    for stage in current.get("stages") or []:
+        if not isinstance(stage, Mapping):
+            continue
+        if stage.get("status") in {"failed", "blocked"} and isinstance(stage.get("stage_id"), str):
+            out.append(str(stage["stage_id"]))
+    return out
+
+
+def _terminal_state_for_summary(
+    *,
+    completed: bool,
+    adopted_stage_ids: set[str],
+    failed_stage_ids: set[str],
+    had_controller_failure: bool,
+) -> str:
+    if completed:
+        return "complete"
+    if adopted_stage_ids and (failed_stage_ids or had_controller_failure):
+        return PARTIAL_SUCCESS
+    if failed_stage_ids or had_controller_failure:
+        return "failed"
+    return "pending"
+
+
+def _failure_retry_class(failure_kind: str | None) -> str | None:
+    details = failure_kind_details(failure_kind)
+    value = details.get("failure_retry_class")
+    return value if isinstance(value, str) else None
 
 
 def _stage_bead_id(run_id: str, phase_id: str, stage_id: str, *, data_dir: Path) -> str | None:

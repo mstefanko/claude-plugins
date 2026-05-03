@@ -165,6 +165,46 @@ class PhaseRecoveryTests(unittest.TestCase):
             self.assertEqual(phase["attempt_history"][0]["retry_after_seconds"], 1800)
             self.assertEqual(Path(phase["attempt_history"][0]["result_path"]).resolve(strict=False), result_path.resolve(strict=False))
 
+    def test_stage_controller_unit_failure_kind_drives_retry_classification(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo, data, run_id = make_prepared_run(Path(td), phase_count=1)
+            init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+            claim_next_phase(run_id, data_dir=data, repo_root=repo, lease_owner="owner-1")
+            start_phase(run_id, "1", launcher="claude-print", lease_owner="owner-1", data_dir=data)
+            _write_command(
+                data,
+                run_id,
+                "1",
+                1,
+                {
+                    "stage_controller": {
+                        "completed": False,
+                        "markers": [
+                            {
+                                "kind": "failed",
+                                "stage_id": "writer",
+                                "failure_kind": "RETRYABLE_TIMEOUT",
+                                "controller_status": "retry_requested",
+                            }
+                        ],
+                        "retry_requested_count": 1,
+                    }
+                },
+            )
+
+            result = reconcile_phase_sessions(
+                run_id,
+                data_dir=data,
+                repo_root=repo,
+                launcher_result={"status": "launched", "returncode": 1, "stdout": "", "stderr": "timeout"},
+                now=datetime(2026, 4, 29, tzinfo=UTC),
+            )
+            state = json.loads(phase_session_path(run_id, data_dir=data).read_text(encoding="utf-8"))
+
+        self.assertEqual(result["status"], "retry_waiting")
+        self.assertEqual(state["phases"][0]["last_failure_kind"], "RETRYABLE_TIMEOUT")
+        self.assertEqual(state["phases"][0]["attempt_history"][0]["failure_retry_class"], "retry")
+
     def test_legacy_command_without_output_format_recovers_from_stdout_txt(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             repo, data, run_id = make_prepared_run(Path(td), phase_count=1)

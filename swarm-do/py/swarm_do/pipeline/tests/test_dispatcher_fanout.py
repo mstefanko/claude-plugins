@@ -9,7 +9,7 @@ import pytest
 from swarm_do.pipeline import phase_pump
 from swarm_do.pipeline.execution_worktree import materialize_run_execution_worktree, materialize_unit_execution_worktree
 from swarm_do.pipeline.orchestrator_stream import parse_stage_marker_line, parse_transcript_task_invocations
-from swarm_do.pipeline.phase_pump import pump_phases
+from swarm_do.pipeline.phase_pump import _dispatcher_fanout_permission_failure, pump_phases
 from swarm_do.pipeline.stage_controller import StageMarkerProcessor
 from swarm_do.pipeline.stage_invocation import plan_stage_invocations, render_orchestrator_brief, with_runtime_fields
 from swarm_do.pipeline.stage_sessions import init_stage_sessions, load_stage_sessions
@@ -144,6 +144,18 @@ def test_fanout_launch_contract_uses_bypass_and_agent_prompt(monkeypatch: pytest
     assert command["launch_contract"]["posture"] == "bypass-cascade"
     assert "Agent(subagent_type=" in str(seen["prompt"])
     assert "bash_cwd_discipline" in str(seen["prompt"])
+
+
+def test_fanout_permission_contract_fails_without_bypass_or_agent_allowlist() -> None:
+    assert (
+        _dispatcher_fanout_permission_failure(
+            ["claude", "-p", "--allowedTools", "Read", "Bash(git status:*)"],
+            phase_sessions_mode="fanout",
+        )
+        == "dispatcher_missing_agent_tool"
+    )
+    assert _dispatcher_fanout_permission_failure(["claude", "-p", "--dangerously-skip-permissions"], phase_sessions_mode="fanout") is None
+    assert _dispatcher_fanout_permission_failure(["claude", "-p", "--allowedTools", "Read", "Agent"], phase_sessions_mode="fanout") is None
 
 
 def test_unit_marker_commits_unit_worktree_then_merges() -> None:

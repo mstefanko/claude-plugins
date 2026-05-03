@@ -7,9 +7,12 @@ pytest adoption work in `../plans/pytest-adoption-plan.md`.
 
 - Test runner: `pytest` is the canonical dev runner; the existing
   `unittest.TestCase` suite is still supported and collected by pytest.
-- Current Python inventory after pytest adoption: 1,011 tests across 108
-  `test_*.py` files under `py/swarm_do/**/tests/`, with about 23,758 lines of
-  test code including shared helpers.
+- The canonical pytest configuration lives in `pyproject.toml` under
+  `[tool.pytest.ini_options]`. It sets `testpaths = ["py"]`, `pythonpath =
+  ["py"]`, strict markers/config, and the project marker vocabulary.
+- The `bin/swarm test` wrapper invokes the current interpreter as
+  `python -m pytest`, so any active virtualenv or `.venv/bin/python` with the
+  dev extras installed can run the same tests directly.
 - Legacy fallback:
   `PYTHONPATH=py python3 -m unittest discover -s py -p 'test_*.py'` remains
   supported during migration for the files that still use `unittest`.
@@ -25,6 +28,7 @@ pytest adoption work in `../plans/pytest-adoption-plan.md`.
 From `swarm-do/`:
 
 ```bash
+python3 -m pip install -e '.[dev]'
 bin/swarm test unit
 bin/swarm test tui
 bin/swarm test shell
@@ -38,6 +42,15 @@ bin/swarm test -k path_resolution
 bin/swarm test -m tui
 bin/swarm test --coverage unit
 bin/swarm test unit -- -x --pdb
+```
+
+Direct pytest is also supported and is preferred for focused validation while
+developing:
+
+```bash
+python3 -m pytest py/swarm_do/pipeline/tests
+python3 -m pytest py/swarm_do/pipeline/tests/test_phase_pump_claude_launcher.py
+python3 -m pytest py/swarm_do/pipeline/tests -k phase_pump
 ```
 
 Coverage is report-only. There is no fail-under threshold in this phase.

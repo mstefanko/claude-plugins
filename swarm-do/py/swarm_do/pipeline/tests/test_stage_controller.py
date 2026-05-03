@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import tempfile
 import threading
@@ -66,6 +67,92 @@ class StageMarkerProcessorTests(unittest.TestCase):
         self.assertFalse(summary["completed"])
         self.assertEqual(state["stages"][0]["status"], "failed")
         self.assertEqual(state["stages"][0]["failure_kind"], "blocked")
+
+    def test_retryable_failed_marker_requests_fresh_reviewer_and_caps_at_three(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            data, invocation, processor = _processor(Path(td))
+            marker = StageMarker(kind="failed", stage_id=invocation.stage_id, failure_kind="RETRYABLE_TIMEOUT", notes="timeout")
+
+            first = processor.process_marker(marker)
+            second = processor.process_marker(marker)
+            third = processor.process_marker(marker)
+            fourth = processor.process_marker(marker)
+            summary = processor.finish()
+            state = load_stage_sessions(RUN_ID, PHASE_ID, data_dir=data)
+            events = (data / "telemetry" / "run_events.jsonl").read_text(encoding="utf-8")
+
+        self.assertEqual(first.outcome, "retry_requested")
+        self.assertEqual(second.outcome, "retry_requested")
+        self.assertEqual(third.outcome, "retry_requested")
+        self.assertEqual(fourth.outcome, "blocked_recorded")
+        self.assertEqual(fourth.reason, "retry_cycle_cap_exceeded")
+        self.assertEqual(state["stages"][0]["status"], "blocked")
+        self.assertEqual(state["stages"][0]["retry_cycle_count"], 4)
+        self.assertTrue(state["stages"][0]["fresh_reviewer_required"] is False)
+        self.assertEqual(summary["retry_requested_count"], 4)
+        self.assertEqual(summary["terminal_state"], "failed")
+        self.assertIn("stage_human_gate", events)
+
+    def test_marker_missing_result_becomes_stage_result_missing_at_finish(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            data, invocation, processor = _processor(Path(td))
+            marker = _complete_marker(invocation)
+
+            decision = processor.process_marker(marker)
+            summary = processor.finish()
+            state = load_stage_sessions(RUN_ID, PHASE_ID, data_dir=data)
+
+        self.assertEqual(decision.outcome, "pending")
+        self.assertEqual(summary["stage_result_missing_count"], 1)
+        self.assertEqual(summary["terminal_state"], "failed")
+        self.assertEqual(state["stages"][0]["status"], "failed")
+        self.assertEqual(state["stages"][0]["failure_kind"], "stage_result_missing")
+
+    def test_mixed_adopted_and_blocked_stages_report_partial_success(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            data = tmp / "data"
+            data.mkdir()
+            invocations, snapshot = plan_stage_invocations(
+                {"name": "default", "pipeline": "default"},
+                {"run_id": RUN_ID, "phase_id": PHASE_ID, "phase_attempt": 1},
+                data_dir=data,
+            )
+            first = invocations[0]
+            second = dataclasses.replace(
+                first,
+                stage_id="second-stage",
+                expected_result_path=first.expected_result_path.with_name("second-stage.result.json"),
+            )
+            init_stage_sessions(RUN_ID, PHASE_ID, [first, second], snapshot, data_dir=data)
+            processor = StageMarkerProcessor(
+                run_id=RUN_ID,
+                phase_id=PHASE_ID,
+                phase_attempt=1,
+                stage_invocations=[first, second],
+                prepared={},
+                workspace_metadata={},
+                launch_dir=tmp / "launch",
+                data_dir=data,
+            )
+            _write_stage_result(first.expected_result_path, first)
+
+            adopted = processor.process_marker(_complete_marker(first))
+            blocked = processor.process_marker(
+                StageMarker(
+                    kind="failed",
+                    stage_id=second.stage_id,
+                    failure_kind="NON_RETRYABLE_INVALID_INPUT",
+                    notes="bad input",
+                )
+            )
+            summary = processor.finish()
+
+        self.assertEqual(adopted.outcome, "adopted")
+        self.assertEqual(blocked.outcome, "blocked_recorded")
+        self.assertEqual(summary["terminal_state"], "PARTIAL_SUCCESS")
+        self.assertEqual(summary["phase_result_status"], "partial_success")
+        self.assertEqual(summary["failed_stage_ids"], ["second-stage"])
 
     def test_marker_with_wrong_result_path_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as td:
