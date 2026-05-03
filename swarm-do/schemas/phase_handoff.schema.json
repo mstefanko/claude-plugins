@@ -48,6 +48,18 @@
       "type": "array",
       "items": { "type": "string" }
     },
+    "preserved_work_units": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "retry_target_work_units": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "stage_work_unit_map": {
+      "type": "object",
+      "additionalProperties": { "type": ["string", "null"] }
+    },
     "open_items": {
       "type": "array",
       "items": { "type": "string" }

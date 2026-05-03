@@ -65,6 +65,7 @@ class FailureTaxonomyTests(unittest.TestCase):
             "dispatcher_missing_agent_tool": "human_gate",
             "dispatcher_token_exhausted": "retry",
             "stage_result_missing": "human_gate",
+            "stage_metadata_tampered": "human_gate",
             "sub_agent_error": "retry",
         }
         for kind, retry_class in expected.items():

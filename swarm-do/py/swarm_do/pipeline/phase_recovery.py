@@ -47,6 +47,7 @@ from .phase_sessions import (
 )
 from .run_state import append_run_event, utc_now, validate_run_event
 from .session_capabilities import extract_claude_print_artifacts, parse_claude_print_json
+from .stage_controller import resume_stage_adoption_journals, retry_failed_units
 from .worktree_baseline import changed_files_since_baseline
 from .phase_beads import write_phase_beads_note
 
@@ -243,6 +244,30 @@ def reconcile_phase_sessions(
             return _decision(run_id, base, "failed_nonretryable", actions, blocked_reason=failure_kind)
         else:
             command = _command_metadata(_launch_dir(run_id, phase, data_dir=base))
+            adoption_resume = _resume_adoption_journals_if_needed(
+                run_id,
+                phase,
+                command=command,
+                data_dir=base,
+                dry_run=dry_run,
+            )
+            if adoption_resume is not None:
+                actions.append(adoption_resume)
+            redispatch_units = _unit_redispatch_targets(command.get("stage_controller"))
+            if redispatch_units and not dry_run:
+                actions.append(
+                    {
+                        "phase_id": phase_id,
+                        "attempt": attempt,
+                        "action": "unit_redispatch_prepared",
+                        **retry_failed_units(
+                            run_id=run_id,
+                            phase_id=phase_id,
+                            unit_ids=redispatch_units,
+                            data_dir=base,
+                        ),
+                    }
+                )
             unit_failure_kind = _failure_kind_for_unit(command.get("stage_controller"))
             failure_kind = unit_failure_kind or _launcher_failure_kind(launcher_result, artifact)
 
@@ -1088,6 +1113,8 @@ def _failure_kind_for_unit(stage_controller: Any) -> str | None:
         controller_status = marker.get("controller_status")
         if controller_status == "stage_result_missing":
             return "stage_result_missing"
+        if controller_status == "stage_metadata_tampered":
+            return "stage_metadata_tampered"
         if controller_status == "retry_cycle_cap_exceeded":
             return "retry_cycle_cap_exceeded"
         failure_kind = marker.get("failure_kind")
@@ -1098,6 +1125,8 @@ def _failure_kind_for_unit(stage_controller: Any) -> str | None:
             return str(raw["failure_kind"])
     if int(stage_controller.get("stage_result_missing_count") or 0) > 0:
         return "stage_result_missing"
+    if int(stage_controller.get("rejected_metadata_tampered") or 0) > 0:
+        return "stage_metadata_tampered"
     if int(stage_controller.get("rejected_invalid_result") or 0) > 0:
         return "NORMALIZATION_ERROR"
     if int(stage_controller.get("rejected_invalid_path") or 0) > 0:
@@ -1107,6 +1136,68 @@ def _failure_kind_for_unit(stage_controller: Any) -> str | None:
     if int(stage_controller.get("retry_requested_count") or 0) > 0:
         return "sub_agent_error"
     return None
+
+
+def _unit_redispatch_targets(stage_controller: Any) -> list[str]:
+    if not isinstance(stage_controller, Mapping):
+        return []
+    return [
+        str(item)
+        for item in stage_controller.get("retry_requested_work_units") or []
+        if isinstance(item, str) and item
+    ]
+
+
+def _resume_adoption_journals_if_needed(
+    run_id: str,
+    phase: Mapping[str, Any],
+    *,
+    command: Mapping[str, Any],
+    data_dir: Path,
+    dry_run: bool,
+) -> dict[str, Any] | None:
+    if dry_run:
+        return None
+    phase_id = str(phase.get("phase_id") or "")
+    attempt = int(phase.get("attempt") or 0)
+    launch_dir_value = phase.get("launch_dir") or command.get("launch_dir")
+    launch_dir = Path(str(launch_dir_value)) if isinstance(launch_dir_value, str) and launch_dir_value else _launch_dir(run_id, phase, data_dir=data_dir)
+    try:
+        resumed = resume_stage_adoption_journals(
+            run_id=run_id,
+            phase_id=phase_id,
+            phase_attempt=attempt,
+            prepared=_prepared_artifact_for_recovery(run_id, data_dir=data_dir),
+            workspace_metadata=command,
+            launch_dir=launch_dir,
+            data_dir=data_dir,
+        )
+    except Exception as exc:
+        return {
+            "phase_id": phase_id,
+            "attempt": attempt,
+            "action": "stage_adoption_resume_failed",
+            "reason": str(exc),
+        }
+    if not resumed.get("resumed_adoption_journals"):
+        return None
+    return {
+        "phase_id": phase_id,
+        "attempt": attempt,
+        "action": "stage_adoption_resumed",
+        "completed": bool(resumed.get("completed")),
+        "terminal_state": resumed.get("terminal_state"),
+        "resumed_adoption_journals": resumed.get("resumed_adoption_journals"),
+    }
+
+
+def _prepared_artifact_for_recovery(run_id: str, *, data_dir: Path) -> dict[str, Any]:
+    path = data_dir / "runs" / run_id / "prepared_plan.v1.json"
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 def _launcher_failure_kind(launcher_result: Mapping[str, Any] | None, artifact: Mapping[str, Any]) -> str:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from .execution_worktree import (
     RunExecutionWorktreeError,
@@ -32,6 +32,7 @@ def adopt_unit_stage(
     workspace_metadata: Mapping[str, Any],
     commit_subject: str,
     writer_summary: str,
+    journal_checkpoint: Callable[[str, Mapping[str, Any] | None], None] | None = None,
 ) -> dict[str, Any] | None:
     """Commit and merge a unit-backed writer stage before stage adoption.
 
@@ -63,6 +64,15 @@ def adopt_unit_stage(
         writer_summary=writer_summary,
         stage_id=invocation.stage_id,
     )
+    _checkpoint(
+        journal_checkpoint,
+        "unit_committed",
+        {
+            "commit_sha": record.commit_sha,
+            "paths_committed": list(record.paths_committed),
+            "status": record.status,
+        },
+    )
     changed_files = changed_files_from_worktree_diff(record.worktree_diff)
     report_path = _write_post_writer_report(
         data,
@@ -76,9 +86,18 @@ def adopt_unit_stage(
     )
     record_unit_post_writer_report(run_id, phase_id, invocation.work_unit_id, data_dir=data, report_path=report_path)
     record_unit_spec_review_verdict(run_id, phase_id, invocation.work_unit_id, data_dir=data, verdict="skipped")
+    _checkpoint(
+        journal_checkpoint,
+        "unit_reported",
+        {
+            "post_writer_report_path": str(report_path),
+            "spec_review_verdict": "skipped",
+        },
+    )
     merged = merge_unit_execution_worktree(run_id, phase_id, invocation.work_unit_id, data_dir=data, apply=True)
     if merged.get("status") not in {"merged", "dry_run"}:
         raise RunExecutionWorktreeError(f"unit adoption did not merge cleanly: {merged.get('status')}")
+    _checkpoint(journal_checkpoint, "unit_merged", merged)
     return {
         "status": "merged",
         "work_unit_id": invocation.work_unit_id,
@@ -124,6 +143,15 @@ def _write_post_writer_report(
 def _run_artifact_excludes(run_id: str, *, project_subdir: str) -> list[str]:
     rel = f"data/runs/{run_id}"
     return [str(Path(project_subdir.strip("/")) / rel) if project_subdir.strip("/") else rel]
+
+
+def _checkpoint(
+    callback: Callable[[str, Mapping[str, Any] | None], None] | None,
+    checkpoint: str,
+    payload: Mapping[str, Any] | None,
+) -> None:
+    if callback is not None:
+        callback(checkpoint, payload)
 
 
 __all__ = ["adopt_unit_stage"]

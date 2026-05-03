@@ -1207,7 +1207,7 @@ def _active_graph_source_summary() -> dict[str, str | None]:
 
 
 def _phase_sessions_mode(args: argparse.Namespace) -> str:
-    value = getattr(args, "phase_sessions", "off") or "off"
+    value = getattr(args, "phase_sessions", "fanout") or "fanout"
     if value not in {"auto", "fanout", "off"}:
         raise ValueError(f"unsupported phase-sessions mode: {value}")
     return value
@@ -1289,6 +1289,7 @@ def _dispatch_with_phase_sessions(args: argparse.Namespace, dispatch_payload: Ma
     launcher = "claude-print"
     run_id = str(dispatch_payload["run_id"])
     mode = _phase_sessions_mode(args)
+    warnings = _phase_sessions_warnings(mode, run_id=run_id)
     pump_payload = pump_phases(
         run_id,
         launcher=launcher,
@@ -1305,6 +1306,7 @@ def _dispatch_with_phase_sessions(args: argparse.Namespace, dispatch_payload: Ma
         "status": pump_payload.get("status"),
         "completed_phase_count": len(pump_payload.get("completed_phases") or []),
         "pump": pump_payload,
+        "warnings": warnings,
     }
     policy = _policy_payload_for_run(run_id)
     if policy is not None:
@@ -1313,10 +1315,45 @@ def _dispatch_with_phase_sessions(args: argparse.Namespace, dispatch_payload: Ma
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
+        for warning in warnings:
+            print(f"warning: {warning}", file=sys.stderr)
         _print_prepared_dispatch(argparse.Namespace(json=False), dispatch_payload)
         print(format_pump_result(pump_payload))
         print(f"Status: {payload['status_label']}")
     return 0 if pump_payload.get("status") == "complete" else 2
+
+
+def _phase_sessions_warnings(mode: str, *, run_id: str) -> list[str]:
+    if mode != "auto":
+        return []
+    warning = (
+        "--phase-sessions=auto is a temporary legacy/debug path; fanout is the default "
+        "full-pipeline mode with bypass-cascade and controller-owned unit redispatch."
+    )
+    try:
+        from .run_state import append_run_event, utc_now, validate_run_event
+        from .phase_sessions import PhaseSessionError
+
+        row = {
+            "run_id": run_id,
+            "timestamp": utc_now(),
+            "event_type": "phase_sessions_auto_warning",
+            "bd_epic_id": None,
+            "phase_id": None,
+            "work_unit_id": None,
+            "child_bead_ids": None,
+            "reason": "auto_compatibility_warning",
+            "retry_count": None,
+            "handoff_count": None,
+            "integration_branch_head": None,
+            "details": {"mode": mode, "warning": warning},
+            "schema_ok": True,
+        }
+        validate_run_event(row, error_cls=PhaseSessionError)
+        append_run_event(resolve_data_dir(), row)
+    except Exception:
+        pass
+    return [warning]
 
 
 def _phase_session_status_label(status: str) -> str:
@@ -3406,7 +3443,15 @@ def _build_parser() -> argparse.ArgumentParser:
     do.add_argument("--prepared", nargs="?", const=True, metavar="RUN_ID_OR_PATH")
     do.add_argument("--prepare", action="store_true", help="run the prepare gate before dispatch")
     do.add_argument("--continue", dest="prepare_continue", action="store_true", help="auto-accept safe prepared output and continue dispatch")
-    do.add_argument("--phase-sessions", choices=["auto", "fanout", "off"], default="off", help="run accepted prepared phases through the fresh-session pump")
+    do.add_argument(
+        "--phase-sessions",
+        choices=["fanout", "off", "auto"],
+        default="fanout",
+        help=(
+            "run accepted prepared phases through the fresh-session pump; default fanout keeps "
+            "bypass-cascade and unit-level redispatch, off stops after prepare/verify, auto is legacy/debug"
+        ),
+    )
     do.add_argument("--max-budget-usd", type=float, help="forwarded to the claude-print phase-session launcher")
     _add_phase_policy_flags(do)
     do.add_argument("--bd-epic-id")

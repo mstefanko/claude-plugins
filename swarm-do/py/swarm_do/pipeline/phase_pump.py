@@ -508,9 +508,21 @@ def _prepare_stage_controller(
     init_stage_sessions(run_id, phase_id, invocations, graph_snapshot, data_dir=data_dir)
     _ensure_stage_beads(run_id, phase_id, prepared=prepared, invocations=invocations, data_dir=data_dir)
     invocations = with_runtime_fields(invocations, bead_ids=_stage_bead_map(run_id, phase_id, data_dir=data_dir))
+    dispatch_metadata = _stage_dispatch_metadata(
+        run_id,
+        phase_id,
+        invocations,
+        phase_sessions_mode=phase_sessions_mode,
+        data_dir=data_dir,
+    )
+    dispatch_invocations = [
+        invocation
+        for invocation in invocations
+        if invocation.stage_id in set(dispatch_metadata["dispatch_stage_ids"])
+    ]
     prompt_text = render_orchestrator_brief(
         base_prompt=base_prompt_text,
-        stage_invocations=invocations,
+        stage_invocations=dispatch_invocations,
         run_id=run_id,
         phase_id=phase_id,
         phase_sessions_mode=phase_sessions_mode,
@@ -518,6 +530,8 @@ def _prepare_stage_controller(
     return {
         "preset": preset,
         "stage_invocations": invocations,
+        "dispatch_stage_invocations": dispatch_invocations,
+        "dispatch_metadata": dispatch_metadata,
         "graph_snapshot": graph_snapshot,
         "prompt_text": prompt_text,
         "base_prompt_path": str(base_prompt_path),
@@ -542,6 +556,65 @@ def _materialize_unit_worktrees(
         payload = materialize_unit_execution_worktree(run_id, phase_id, unit_id, data_dir=data_dir)
         paths[unit_id] = Path(str(payload["project_root"]))
     return paths
+
+
+def _stage_dispatch_metadata(
+    run_id: str,
+    phase_id: str,
+    invocations: list[StageInvocation],
+    *,
+    phase_sessions_mode: str,
+    data_dir: Path,
+) -> dict[str, Any]:
+    if phase_sessions_mode != "fanout":
+        return {
+            "dispatch_stage_ids": [invocation.stage_id for invocation in invocations],
+            "preserved_work_units": [],
+            "retry_target_work_units": [],
+            "stage_work_unit_map": {invocation.stage_id: invocation.work_unit_id for invocation in invocations},
+        }
+    try:
+        state = load_stage_sessions(run_id, phase_id, data_dir=data_dir)
+    except Exception:
+        return {
+            "dispatch_stage_ids": [invocation.stage_id for invocation in invocations],
+            "preserved_work_units": [],
+            "retry_target_work_units": [],
+            "stage_work_unit_map": {invocation.stage_id: invocation.work_unit_id for invocation in invocations},
+        }
+    stages = [stage for stage in state.get("stages") or [] if isinstance(stage, Mapping)]
+    by_id = {str(stage.get("stage_id")): stage for stage in stages if isinstance(stage.get("stage_id"), str)}
+    dispatch_ids = [
+        invocation.stage_id
+        for invocation in invocations
+        if by_id.get(invocation.stage_id, {}).get("status") not in {"adopted", "blocked", "failed", "skipped"}
+    ]
+    if not dispatch_ids:
+        dispatch_ids = [invocation.stage_id for invocation in invocations]
+    preserved = _unique_strings(
+        stage.get("work_unit_id")
+        for stage in stages
+        if stage.get("status") == "adopted" and isinstance(stage.get("work_unit_id"), str)
+    )
+    retry_targets = _unique_strings(
+        by_id.get(invocation.stage_id, {}).get("work_unit_id")
+        for invocation in invocations
+        if invocation.stage_id in dispatch_ids and isinstance(by_id.get(invocation.stage_id, {}).get("work_unit_id"), str)
+    )
+    return {
+        "dispatch_stage_ids": dispatch_ids,
+        "preserved_work_units": preserved,
+        "retry_target_work_units": retry_targets,
+        "stage_work_unit_map": {invocation.stage_id: invocation.work_unit_id for invocation in invocations},
+    }
+
+
+def _unique_strings(values: Iterable[Any]) -> list[str]:
+    out: list[str] = []
+    for value in values:
+        if isinstance(value, str) and value and value not in out:
+            out.append(value)
+    return out
 
 
 def _stage_bead_map(run_id: str, phase_id: str, *, data_dir: Path) -> dict[str, str | None]:
@@ -684,6 +757,13 @@ def _write_controller_phase_result(
     changed = changed_files_from_worktree_diff(diff)
     commits = [str(item) for item in stage_controller.get("commits") or [] if isinstance(item, str)]
     completed_work_units = [str(item) for item in stage_controller.get("completed_work_units") or [] if isinstance(item, str)]
+    preserved_work_units = [str(item) for item in stage_controller.get("preserved_work_units") or [] if isinstance(item, str)]
+    retry_target_work_units = [str(item) for item in stage_controller.get("retry_target_work_units") or [] if isinstance(item, str)]
+    stage_work_unit_map = {
+        str(key): (str(value) if isinstance(value, str) else None)
+        for key, value in (stage_controller.get("stage_work_unit_map") or {}).items()
+        if isinstance(key, str)
+    } if isinstance(stage_controller.get("stage_work_unit_map"), Mapping) else {}
     failed_work_units = [str(item) for item in stage_controller.get("failed_work_units") or [] if isinstance(item, str)]
     status = _phase_result_status_from_stage_controller(stage_controller)
     blockers = [f"blocked work unit: {unit}" for unit in failed_work_units]
@@ -703,6 +783,9 @@ def _write_controller_phase_result(
         "decisions": [],
         "changed_files": changed,
         "completed_work_units": completed_work_units,
+        "preserved_work_units": preserved_work_units,
+        "retry_target_work_units": retry_target_work_units,
+        "stage_work_unit_map": stage_work_unit_map,
         "open_items": [],
         "blockers": blockers,
         "do_not_retry": blockers if status == "partial_success" else [],
@@ -727,6 +810,9 @@ def _write_controller_phase_result(
         "handoff_path": str(handoff_path),
         "summary": handoff["summary"],
         "completed_work_units": completed_work_units,
+        "preserved_work_units": preserved_work_units,
+        "retry_target_work_units": retry_target_work_units,
+        "stage_work_unit_map": stage_work_unit_map,
         "failed_work_units": failed_work_units,
         "blocked_reason": "partial_success" if status == "partial_success" else None,
         "needs_input": [],
@@ -1024,6 +1110,7 @@ def _run_claude_print_phase(
         return {"status": "launcher_error", "reason": reason, "launch_dir": str(launch["launch_dir"])}
     workspace_metadata = workspace.to_metadata(prompt_rewrite_count=prompt_rewrite_count)
     workspace_metadata["phase_attempt"] = attempt
+    workspace_metadata.update(dict(stage_plan.get("dispatch_metadata") or {}))
 
     resolved_claude = claude_path or shutil.which("claude") or ("claude" if claude_runner is not None else None)
     if not resolved_claude:
@@ -1096,7 +1183,12 @@ def _run_claude_print_phase(
                 "writer_settings_path": str(writer_settings_path),
                 "writer_settings_sha": _sha256_file(writer_settings_path),
                 "stage_session_path": str(stage_session_path(run_id, phase_id, data_dir=data_dir)),
-                "stage_count": len(stage_plan["stage_invocations"]),
+                "stage_count": len(stage_plan["dispatch_stage_invocations"]),
+                "stage_total_count": len(stage_plan["stage_invocations"]),
+                "dispatch_stage_ids": list(stage_plan["dispatch_metadata"]["dispatch_stage_ids"]),
+                "preserved_work_units": list(stage_plan["dispatch_metadata"]["preserved_work_units"]),
+                "retry_target_work_units": list(stage_plan["dispatch_metadata"]["retry_target_work_units"]),
+                "stage_work_unit_map": dict(stage_plan["dispatch_metadata"]["stage_work_unit_map"]),
                 "phase_sessions_mode": phase_sessions_mode,
                 "launch_contract": launch_contract,
             },
@@ -1119,7 +1211,12 @@ def _run_claude_print_phase(
             "writer_settings_path": str(writer_settings_path),
             "writer_settings_sha": _sha256_file(writer_settings_path),
             "stage_session_path": str(stage_session_path(run_id, phase_id, data_dir=data_dir)),
-            "stage_count": len(stage_plan["stage_invocations"]),
+            "stage_count": len(stage_plan["dispatch_stage_invocations"]),
+            "stage_total_count": len(stage_plan["stage_invocations"]),
+            "dispatch_stage_ids": list(stage_plan["dispatch_metadata"]["dispatch_stage_ids"]),
+            "preserved_work_units": list(stage_plan["dispatch_metadata"]["preserved_work_units"]),
+            "retry_target_work_units": list(stage_plan["dispatch_metadata"]["retry_target_work_units"]),
+            "stage_work_unit_map": dict(stage_plan["dispatch_metadata"]["stage_work_unit_map"]),
             "phase_sessions_mode": phase_sessions_mode,
             "launch_contract": launch_contract,
             **(_stream_command_metadata() if real_streaming else {}),
@@ -1866,6 +1963,9 @@ def _initial_stage_controller_metadata(*, live: bool) -> dict[str, Any]:
         "worktree_diff": None,
         "changed_files": [],
         "completed_work_units": [],
+        "preserved_work_units": [],
+        "retry_target_work_units": [],
+        "stage_work_unit_map": {},
         "failed_work_units": [],
         "retry_requested_work_units": [],
         "failed_stage_ids": [],
@@ -1876,6 +1976,7 @@ def _initial_stage_controller_metadata(*, live: bool) -> dict[str, Any]:
         "rejected_unknown_stage": 0,
         "rejected_invalid_path": 0,
         "rejected_invalid_result": 0,
+        "rejected_metadata_tampered": 0,
         "failed_recorded_count": 0,
         "retry_requested_count": 0,
         "stage_result_missing_count": 0,

@@ -283,6 +283,14 @@ _SPECS = (
         ("stage_controller", "stage_result_path"),
     ),
     FailureKindSpec(
+        "stage_metadata_tampered",
+        "artifact_contract",
+        "human_gate",
+        "Stage metadata binding mismatch",
+        "A stage marker or result JSON disagreed with controller-owned launch, stage-session, or unit-session metadata.",
+        ("stage_controller", "stage_session", "stage_result_path"),
+    ),
+    FailureKindSpec(
         "sub_agent_error",
         "child_result",
         "retry",

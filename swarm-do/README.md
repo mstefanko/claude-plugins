@@ -126,11 +126,12 @@ bin/swarm phases status <run-id> --attempts --include-archived
 bin/swarm phases pump <run-id> --launcher manual --max-phases 1
 bin/swarm phases pump <run-id> --launcher claude-print --max-phases all --init
 bin/swarm do --prepared <run-id> --phase-sessions auto
+bin/swarm do --prepared <run-id> --phase-sessions fanout
 bin/swarm context render --run-id <run-id> --phase <phase-id> --role dispatcher --json
 ```
 
 `phases recover` reconciles existing phase-session state without launching a
-new child. The foreground pump and `do --prepared ... --phase-sessions auto`
+new child. The foreground pump and `do --prepared ... --phase-sessions auto|fanout`
 run the same reconciliation before claiming work, so rerunning them after an
 interruption adopts valid artifacts, preserves abandoned-attempt evidence, and
 does not retry blocked or input-gated phases.
@@ -146,9 +147,11 @@ prompt plus the follow-up result command. `fake-test` is for deterministic unit
 tests. `claude-print` is the foreground no-babysitting sequential launcher: it
 starts a fresh Claude print session for each accepted phase, validates the
 result and handoff artifacts, then advances to the next phase only after a
-complete result. It is not a daemon, a parallel scheduler, or a recursive
-orchestrator. `bin/swarm do --prepared <run-id> --phase-sessions auto` is the
-prepared-run shortcut for the same foreground all-phases pump.
+complete result. `--phase-sessions fanout` keeps the v1 bypass-cascade posture,
+uses binary `STAGE_COMPLETE`/`STAGE_FAILED` markers plus structured stage-result
+JSON, and retries only failed unit targets with a reduced prompt while preserving
+adopted units. `--phase-sessions auto` remains the sequential compatibility mode
+and now emits a warning so operators can choose fanout deliberately.
 
 Before using `claude-print`, check local readiness:
 
@@ -478,9 +481,12 @@ State and evidence are intentionally split by responsibility:
 3. For accepted artifacts, `bin/swarm do --prepared` verifies status, hashes,
    git base, sidecar descriptors, path containment, and work-unit lint before
    any Beads child issue is created.
-4. With `--phase-sessions auto`, the durable phase queue initializes or resumes,
-   reconciles stale or abandoned attempts, renders phase-scoped context, and
-   pumps fresh `claude-print` sessions until completion or a terminal pause.
+4. With `--phase-sessions auto|fanout`, the durable phase queue initializes or
+   resumes, reconciles stale or abandoned attempts, renders phase-scoped context,
+   and pumps fresh `claude-print` sessions until completion or a terminal pause.
+   `fanout` dispatches controller-owned Agent stages, keeps bypass-cascade
+   permissions for v1, validates exact stage metadata bindings, and retries only
+   failed unit targets after partial adoption.
 5. The active preset graph resolves into topological layers. The dispatcher
    creates Beads issues and dependency edges for each stage, fan-out branch,
    merge agent, provider stage, or work unit.
@@ -492,7 +498,7 @@ State and evidence are intentionally split by responsibility:
 8. Each phase writes structured result and handoff artifacts, run events, and
    checkpoints. `/swarmdaddy:resume` is read-only; phase-session mutation happens
    through `bin/swarm phases ...`, `bin/swarm do --prepared ... --phase-sessions
-   auto`, or the recovery slash commands.
+   auto|fanout`, or the recovery slash commands.
 9. A clean full implementation run ends with one consolidated PR into `main`.
 
 ## Two-Step Prepare Gate
@@ -516,15 +522,17 @@ opt-in convenience path is:
 
 ```bash
 bin/swarm do docs/plan.md --prepare --continue --phase-sessions auto
+bin/swarm do docs/plan.md --prepare --continue --phase-sessions fanout
 ```
 
 It records the same prepared artifact, auto-accepts only when the deterministic
 safety checks pass, dispatches through the same `--prepared` verifier, and then
-runs the accepted phases sequentially in fresh `claude-print` sessions. Omit
-`--phase-sessions auto` when you want the command to stop at
+runs the accepted phases in fresh `claude-print` sessions. Use `auto` for the
+sequential compatibility path or `fanout` for controller-owned Agent fanout with
+unit-level redispatch. Omit `--phase-sessions auto|fanout` when you want the command to stop at
 `READY_FOR_DISPATCH`. If it returns `NEEDS_INPUT`, review the artifact and
 continue manually with `bin/swarm prepare --accept <run-id>` followed by
-`bin/swarm do --prepared <run-id> --phase-sessions auto`.
+`bin/swarm do --prepared <run-id> --phase-sessions auto|fanout`.
 
 ## Output-Only Profiles
 
@@ -564,8 +572,8 @@ bin/swarm prepare <plan-path> [--dry-run] [--json]
 bin/swarm prepare --accept <run-id> [--accepted-by <name>] [--json]
 bin/swarm prepare --reject <run-id> [--reason <text>] [--json]
 bin/swarm prepare refresh-base <run-id> [--to-head | --to-sha <sha>] [--phase <id>] [--dry-run] [--json]
-bin/swarm do <plan-path> --prepare --continue [--phase-sessions auto] [--json]
-bin/swarm do --prepared <run-id-or-artifact-path> [--phase-sessions auto] [--json]
+bin/swarm do <plan-path> --prepare --continue [--phase-sessions auto|fanout] [--json]
+bin/swarm do --prepared <run-id-or-artifact-path> [--phase-sessions auto|fanout] [--json]
 bin/swarm plan prepare <plan-path> [--dry-run] [--write] [--json]
 bin/swarm beads check [--repo <path>] [--json]
 

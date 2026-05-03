@@ -1046,6 +1046,37 @@ class ExecutionWorktreeTests(unittest.TestCase):
             state_unit = load_unit_sessions(RUN_ID, data_dir=data)["units"][0]
             self.assertEqual(state_unit["project_root"], str(project_root))
 
+    def test_materialize_unit_worktree_rolls_back_branch_on_add_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            git_root, project, data, prepared = _prepared_monorepo(root)
+            materialize_run_execution_worktree(
+                RUN_ID,
+                source_project_root=project,
+                data_dir=data,
+                prepared_plan=prepared,
+                sensitive_prefixes=[str(root / "home" / ".claude")],
+            )
+            phase_id, unit_id = _first_unit(prepared)
+            branch = unit_execution_branch_name(RUN_ID, phase_id, unit_id)
+            unit_root = unit_execution_worktree_root(data, RUN_ID, phase_id, unit_id).resolve(strict=False)
+            from swarm_do.pipeline import execution_worktree as ew
+
+            original_git = ew._git
+
+            def failing_git(repo: Path, *args: str):
+                if args[:2] == ("worktree", "add"):
+                    original_git(git_root, "branch", branch, prepared["git_base_sha"])
+                    raise RunExecutionWorktreeError("simulated add failure")
+                return original_git(repo, *args)
+
+            with mock.patch("swarm_do.pipeline.execution_worktree._git", side_effect=failing_git):
+                with self.assertRaisesRegex(RunExecutionWorktreeError, "simulated add failure"):
+                    materialize_unit_execution_worktree(RUN_ID, phase_id, unit_id, data_dir=data)
+
+            self.assertEqual(_git(git_root, "branch", "--list", branch), "")
+            self.assertFalse(unit_root.exists())
+
     def test_materialize_unit_worktree_can_branch_from_integration_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

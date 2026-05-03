@@ -864,6 +864,13 @@ def merge_unit_execution_worktree(
     with locked_unit_sessions(run_id, data_dir=data):
         state = load_unit_sessions(run_id, data_dir=data)
         unit = find_unit_session(state, phase_id, unit_id)
+        current_merge_state = str(unit.get("merge_state") or "")
+        if current_merge_state == "merged":
+            payload.update({"applied": True, "status": "merged", "merge_state": current_merge_state})
+            if integration_git.exists():
+                payload["integration_head_sha"] = _git_stdout(integration_git, "rev-parse", "HEAD")
+            payload["unit_session"] = unit
+            return payload
         unit_branch = str(unit["branch"])
         unit_git = Path(str(unit["worktree_root"]))
         blocker = _unit_merge_gate_blocker(unit_git, unit)

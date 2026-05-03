@@ -79,6 +79,7 @@
         "phase_pump_started",
         "phase_pump_stopped",
         "phase_pump_launcher_ineligible",
+        "phase_sessions_auto_warning",
         "worktree_rebuilt",
         "worktree_reset",
         "post_writer_report",

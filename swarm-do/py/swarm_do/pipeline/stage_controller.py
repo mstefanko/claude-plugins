@@ -11,10 +11,17 @@ from typing import Any, Literal, Mapping
 from .execution_worktree import RunExecutionWorktreeError, commit_stage_artifacts
 from .failure_taxonomy import failure_kind_details
 from .orchestrator_stream import StageMarker, parse_stage_markers
+from .paths import REPO_ROOT
 from .phase_beads import close_stage_child, mark_stage_blocked
 from .phase_sessions import PhaseSessionError
 from .post_writer import changed_files_from_worktree_diff
 from .run_state import append_run_event, utc_now, validate_run_event
+from .stage_adoption_journal import (
+    checkpoint_adoption_journal,
+    incomplete_adoption_journals,
+    marker_from_journal,
+    start_adoption_journal,
+)
 from .stage_invocation import StageInvocation
 from .stage_sessions import (
     STATUS_ADOPTED,
@@ -27,6 +34,7 @@ from .stage_sessions import (
     record_stage_retry_requested,
 )
 from .unit_session_adopter import adopt_unit_stage
+from .unit_sessions import UnitSessionError, find_unit_session, load_unit_sessions, write_unit_sessions
 
 
 PARTIAL_SUCCESS = "PARTIAL_SUCCESS"
@@ -45,6 +53,7 @@ class MarkerDecision:
         "rejected_unknown_stage",
         "rejected_invalid_path",
         "rejected_invalid_result",
+        "rejected_metadata_tampered",
         "adopted_with_concerns",
         "blocked_recorded",
         "needs_input_recorded",
@@ -61,6 +70,10 @@ class _PendingStageResult(FileNotFoundError):
 
 class _InvalidStageResultPath(ValueError):
     """Raised when a marker points outside the controller stage result area."""
+
+
+class _StageMetadataTampered(PhaseSessionError):
+    """Raised when marker/result metadata disagrees with controller bindings."""
 
 
 class StageMarkerProcessor:
@@ -99,6 +112,7 @@ class StageMarkerProcessor:
         self._rejected_unknown_stage = 0
         self._rejected_invalid_path = 0
         self._rejected_invalid_result = 0
+        self._rejected_metadata_tampered = 0
         self._failed_recorded_count = 0
         self._retry_requested_count = 0
         self._stage_result_missing_count = 0
@@ -139,6 +153,9 @@ class StageMarkerProcessor:
         commits = list(dict.fromkeys([*self._commits, *_ledger_commits(adopted_by_id, self.stage_invocations)]))
         changed = changed_files_from_worktree_diff(self._latest_diff or {}) if self._latest_diff else []
         completed_work_units = _work_units_for_status(adopted_by_id, self.stage_invocations, STATUS_ADOPTED)
+        preserved_work_units = _string_list(self.workspace_metadata.get("preserved_work_units"))
+        retry_target_work_units = _string_list(self.workspace_metadata.get("retry_target_work_units"))
+        stage_work_unit_map = _stage_work_unit_map(self.stage_invocations)
         failed_work_units = _failed_work_units(current, self.stage_invocations)
         retry_requested_work_units = _retry_requested_work_units(current, self.stage_invocations)
         failed_stage_ids = _failed_stage_ids(current)
@@ -159,6 +176,9 @@ class StageMarkerProcessor:
             "worktree_diff": _normalized_worktree_diff(self._latest_diff) if self._latest_diff else None,
             "changed_files": changed,
             "completed_work_units": completed_work_units,
+            "preserved_work_units": preserved_work_units,
+            "retry_target_work_units": retry_target_work_units,
+            "stage_work_unit_map": stage_work_unit_map,
             "failed_work_units": failed_work_units,
             "retry_requested_work_units": retry_requested_work_units,
             "failed_stage_ids": failed_stage_ids,
@@ -169,6 +189,7 @@ class StageMarkerProcessor:
             "rejected_unknown_stage": self._rejected_unknown_stage,
             "rejected_invalid_path": self._rejected_invalid_path,
             "rejected_invalid_result": self._rejected_invalid_result,
+            "rejected_metadata_tampered": self._rejected_metadata_tampered,
             "failed_recorded_count": self._failed_recorded_count,
             "retry_requested_count": self._retry_requested_count,
             "stage_result_missing_count": self._stage_result_missing_count,
@@ -199,14 +220,54 @@ class StageMarkerProcessor:
                 return MarkerDecision(marker, "amended", commit_sha=commit_sha)
             payload["controller_status"] = "duplicate"
             self._duplicate_marker_count += 1
+            self._repair_terminal_adoption(
+                marker.stage_id,
+                terminal,
+                commit_sha=_optional_str(terminal.get("commit_sha")),
+            )
             return MarkerDecision(marker, "duplicate", commit_sha=_optional_str(terminal.get("commit_sha")))
 
         if marker.kind == "failed":
             return self._record_stage_failure(marker, payload, failure_kind=marker.failure_kind or "stage_failed", notes=marker.notes)
 
-        claim_stage(self.run_id, self.phase_id, marker.stage_id, data_dir=self.data_dir)
         try:
-            stage_result = self._load_valid_stage_result(marker, expected_result_path=invocation.expected_result_path)
+            validated_result_path = self._validated_stage_result_path(
+                marker.result_path,
+                expected_result_path=invocation.expected_result_path,
+                stage_id=marker.stage_id,
+            )
+        except _InvalidStageResultPath as exc:
+            payload["controller_status"] = "stage_result_invalid"
+            record_stage_failed(
+                self.run_id,
+                self.phase_id,
+                marker.stage_id,
+                "stage_result_invalid",
+                str(exc),
+                data_dir=self.data_dir,
+            )
+            self._had_controller_failure = True
+            self._reject("invalid_path")
+            return MarkerDecision(marker, "rejected_invalid_path", reason=str(exc))
+        except _StageMetadataTampered as exc:
+            return self._record_metadata_tamper(marker, payload, reason=str(exc))
+
+        claim_stage(self.run_id, self.phase_id, marker.stage_id, data_dir=self.data_dir)
+        start_adoption_journal(
+            data_dir=self.data_dir,
+            run_id=self.run_id,
+            phase_id=self.phase_id,
+            phase_attempt=self.phase_attempt,
+            marker=marker,
+            invocation=invocation,
+        )
+        try:
+            stage_result = self._load_valid_stage_result(
+                marker,
+                expected_result_path=invocation.expected_result_path,
+                validated_result_path=validated_result_path,
+                invocation=invocation,
+            )
         except _PendingStageResult as exc:
             payload["controller_status"] = "pending"
             if append_pending:
@@ -225,6 +286,8 @@ class StageMarkerProcessor:
             self._had_controller_failure = True
             self._reject("invalid_path")
             return MarkerDecision(marker, "rejected_invalid_path", reason=str(exc))
+        except _StageMetadataTampered as exc:
+            return self._record_metadata_tamper(marker, payload, reason=str(exc))
         except PhaseSessionError as exc:
             payload["controller_status"] = "stage_result_invalid"
             record_stage_failed(
@@ -241,6 +304,11 @@ class StageMarkerProcessor:
 
         payload["validated_result_path"] = str(stage_result["path"])
         result_payload = stage_result["payload"]
+        self._checkpoint_adoption_journal(
+            marker.stage_id,
+            "result_validated",
+            {"result_path": str(stage_result["path"]), "status": _stage_result_status(result_payload)},
+        )
         result_status = _stage_result_status(result_payload)
         if result_status in {"blocked", "needs_input", "failed"}:
             failure_kind = _stage_result_failure_kind(result_payload, default=result_status)
@@ -309,6 +377,11 @@ class StageMarkerProcessor:
                 workspace_metadata=self.workspace_metadata,
                 commit_subject=marker.commit_subject or marker.summary or "stage artifacts",
                 writer_summary=marker.summary or str(result_payload.get("summary") or f"stage {marker.stage_id} completed"),
+                journal_checkpoint=lambda checkpoint, checkpoint_payload=None: self._checkpoint_adoption_journal(
+                    marker.stage_id,
+                    checkpoint,
+                    checkpoint_payload,
+                ),
             )
             if unit_adoption is not None and unit_adoption.get("status") == "merged":
                 self._latest_diff = unit_adoption.get("worktree_diff") if isinstance(unit_adoption.get("worktree_diff"), Mapping) else self._latest_diff
@@ -353,8 +426,15 @@ class StageMarkerProcessor:
             notes=adopted_notes,
             data_dir=self.data_dir,
         )
+        self._checkpoint_adoption_journal(
+            marker.stage_id,
+            "stage_recorded",
+            {"commit_sha": commit_sha, "result_path": marker.result_path},
+        )
         self._close_stage_bead(marker.stage_id, commit_sha=commit_sha)
+        self._checkpoint_adoption_journal(marker.stage_id, "bead_closed", {"commit_sha": commit_sha})
         self._append_stage_event(marker.stage_id, commit_sha=commit_sha, work_unit_id=invocation.work_unit_id, unit_adoption=unit_adoption)
+        self._checkpoint_adoption_journal(marker.stage_id, "event_appended", {"commit_sha": commit_sha}, completed=True)
         payload["controller_status"] = "adopted_with_concerns" if result_status == "complete_with_concerns" else "adopted"
         payload["stage_result_status"] = result_status
         return MarkerDecision(
@@ -477,18 +557,108 @@ class StageMarkerProcessor:
         payload["controller_status"] = "retry_cycle_cap_exceeded"
         return MarkerDecision(marker, "blocked_recorded", reason=capped_kind)
 
-    def _load_valid_stage_result(self, marker: StageMarker, *, expected_result_path: Path) -> dict[str, Any]:
-        result_path = self._validated_stage_result_path(marker.result_path, expected_result_path=expected_result_path)
+    def _record_metadata_tamper(self, marker: StageMarker, payload: dict[str, Any], *, reason: str) -> MarkerDecision:
+        failure_kind = "stage_metadata_tampered"
+        record_stage_blocked(
+            self.run_id,
+            self.phase_id,
+            marker.stage_id,
+            failure_kind,
+            reason,
+            data_dir=self.data_dir,
+        )
+        self._mark_stage_bead_blocked(marker, failure_kind=failure_kind, notes=reason)
+        self._append_human_gate_event(
+            marker.stage_id,
+            failure_kind=failure_kind,
+            work_unit_id=self._by_id.get(marker.stage_id).work_unit_id if marker.stage_id in self._by_id else None,
+        )
+        payload["controller_status"] = "stage_metadata_tampered"
+        payload["failure_kind"] = failure_kind
+        self._had_controller_failure = True
+        self._failed_recorded_count += 1
+        self._reject("metadata_tampered")
+        return MarkerDecision(marker, "rejected_metadata_tampered", reason=reason)
+
+    def _stage_binding_errors(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        result_path: Path,
+        marker: StageMarker,
+        invocation: StageInvocation,
+        stage: Mapping[str, Any],
+    ) -> list[str]:
+        errors: list[str] = []
+        expected_path = invocation.expected_result_path.expanduser().resolve(strict=False)
+        if result_path.resolve(strict=False) != expected_path:
+            errors.append(f"result_path resolved to {result_path.resolve(strict=False)}, expected {expected_path}")
+        session_stage_id = stage.get("stage_id")
+        if session_stage_id != marker.stage_id:
+            errors.append(f"stage session stage_id expected {marker.stage_id!r}, got {session_stage_id!r}")
+        for key, expected in (
+            ("work_unit_id", invocation.work_unit_id),
+            ("worktree_path", str(invocation.worktree_path) if invocation.worktree_path else None),
+            ("bead_id", invocation.bead_id),
+        ):
+            session_value = stage.get(key)
+            if session_value != expected:
+                errors.append(f"stage session {key} expected {expected!r}, got {session_value!r}")
+            if key in payload and payload.get(key) != expected:
+                errors.append(f"result {key} expected {expected!r}, got {payload.get(key)!r}")
+        expected_allowed = list(invocation.allowed_files)
+        session_allowed = [str(item) for item in stage.get("allowed_files") or [] if isinstance(item, str)]
+        if session_allowed != expected_allowed:
+            errors.append(f"stage session allowed_files expected {expected_allowed!r}, got {session_allowed!r}")
+        if "allowed_files" in payload:
+            result_allowed = [str(item) for item in payload.get("allowed_files") or [] if isinstance(item, str)]
+            if result_allowed != expected_allowed:
+                errors.append(f"result allowed_files expected {expected_allowed!r}, got {result_allowed!r}")
+        result_path_claim = payload.get("result_path")
+        if isinstance(result_path_claim, str) and Path(result_path_claim).expanduser().resolve(strict=False) != expected_path:
+            errors.append(f"result result_path expected {expected_path}, got {result_path_claim}")
+        errors.extend(self._unit_binding_errors(invocation, stage))
+        return errors
+
+    def _unit_binding_errors(self, invocation: StageInvocation, stage: Mapping[str, Any]) -> list[str]:
+        if invocation.work_unit_id is None:
+            return []
+        try:
+            units = load_unit_sessions(self.run_id, data_dir=self.data_dir)
+            unit = find_unit_session(units, self.phase_id, invocation.work_unit_id)
+        except UnitSessionError as exc:
+            return [f"unit session missing for {invocation.work_unit_id}: {exc}"]
+        errors: list[str] = []
+        project_root = str(unit.get("project_root") or "")
+        if invocation.worktree_path is None or str(invocation.worktree_path) != project_root:
+            errors.append(f"unit worktree_path expected {project_root!r}, got {str(invocation.worktree_path) if invocation.worktree_path else None!r}")
+        if stage.get("worktree_path") != project_root:
+            errors.append(f"stage session worktree_path expected {project_root!r}, got {stage.get('worktree_path')!r}")
+        return errors
+
+    def _load_valid_stage_result(
+        self,
+        marker: StageMarker,
+        *,
+        expected_result_path: Path,
+        validated_result_path: Path | None = None,
+        invocation: StageInvocation,
+    ) -> dict[str, Any]:
+        result_path = validated_result_path or self._validated_stage_result_path(
+            marker.result_path,
+            expected_result_path=expected_result_path,
+            stage_id=marker.stage_id,
+        )
         try:
             payload = json.loads(result_path.read_text(encoding="utf-8"))
         except FileNotFoundError as exc:
             raise _PendingStageResult(f"stage result pending: {result_path}") from exc
         except Exception as exc:
             raise PhaseSessionError(f"stage_result_unreadable: {result_path}: {exc}") from exc
-        self._validate_stage_result(payload, result_path=result_path, marker=marker)
+        self._validate_stage_result(payload, result_path=result_path, marker=marker, invocation=invocation)
         return {"path": result_path, "payload": payload}
 
-    def _validated_stage_result_path(self, raw_path: str | None, *, expected_result_path: Path) -> Path:
+    def _validated_stage_result_path(self, raw_path: str | None, *, expected_result_path: Path, stage_id: str) -> Path:
         if not isinstance(raw_path, str) or not raw_path.strip():
             raise _InvalidStageResultPath("stage_result_path_invalid: missing result_path")
         path = Path(raw_path).expanduser()
@@ -500,12 +670,38 @@ class StageMarkerProcessor:
             resolved.relative_to(root)
         except ValueError as exc:
             raise _InvalidStageResultPath(f"stage_result_path_invalid: result_path escapes stage_results: {raw_path}") from exc
+        expected = expected_result_path.expanduser().resolve(strict=False)
+        if resolved != expected:
+            raise _StageMetadataTampered(
+                f"stage_metadata_tampered: marker result_path {resolved} does not match expected {expected}"
+            )
+        stage = self._stage_session_record(stage_id)
+        session_result_path = _optional_str(stage.get("result_path")) if stage is not None else None
+        if stage is None:
+            raise _StageMetadataTampered(f"stage_metadata_tampered: stage session missing for {stage_id}")
+        if session_result_path is None:
+            raise _StageMetadataTampered(f"stage_metadata_tampered: stage session result_path missing for {stage_id}")
+        session_resolved = Path(session_result_path).expanduser().resolve(strict=False)
+        if session_resolved != expected:
+            raise _StageMetadataTampered(
+                f"stage_metadata_tampered: stage session result_path {session_resolved} does not match expected {expected}"
+            )
         return resolved
 
-    def _validate_stage_result(self, payload: Any, *, result_path: Path, marker: StageMarker) -> None:
+    def _validate_stage_result(
+        self,
+        payload: Any,
+        *,
+        result_path: Path,
+        marker: StageMarker,
+        invocation: StageInvocation,
+    ) -> None:
         if not isinstance(payload, Mapping):
             raise PhaseSessionError(f"stage_result_invalid: {result_path}: root must be an object")
         errors: list[str] = []
+        stage = self._stage_session_record(marker.stage_id)
+        if stage is None:
+            raise _StageMetadataTampered(f"stage_metadata_tampered: stage session missing for {marker.stage_id}")
         for key, expected in (
             ("run_id", self.run_id),
             ("phase_id", self.phase_id),
@@ -524,6 +720,9 @@ class StageMarkerProcessor:
                 + ", ".join(sorted(_STAGE_RESULT_STATUSES))
                 + f", got {payload.get('status')!r}"
             )
+        tamper_errors = self._stage_binding_errors(payload, result_path=result_path, marker=marker, invocation=invocation, stage=stage)
+        if tamper_errors:
+            raise _StageMetadataTampered(f"stage_metadata_tampered: {result_path}: {'; '.join(tamper_errors)}")
         if errors:
             raise PhaseSessionError(f"stage_result_invalid: {result_path}: {'; '.join(errors)}")
 
@@ -544,10 +743,27 @@ class StageMarkerProcessor:
         )
         return True
 
+    def _repair_terminal_adoption(self, stage_id: str, terminal: Mapping[str, Any], *, commit_sha: str | None) -> None:
+        if terminal.get("status") != STATUS_ADOPTED:
+            return
+        invocation = self._by_id.get(stage_id)
+        work_unit_id = invocation.work_unit_id if invocation is not None else _optional_str(terminal.get("work_unit_id"))
+        self._close_stage_bead(stage_id, commit_sha=commit_sha)
+        self._checkpoint_adoption_journal(stage_id, "bead_closed", {"commit_sha": commit_sha})
+        self._append_stage_event(stage_id, commit_sha=commit_sha, work_unit_id=work_unit_id, unit_adoption=None)
+        self._checkpoint_adoption_journal(stage_id, "event_appended", {"commit_sha": commit_sha}, completed=True)
+
     def _terminal_stage(self, stage_id: str) -> Mapping[str, Any] | None:
         state = self._load_current_state()
         for stage in state.get("stages") or []:
             if isinstance(stage, Mapping) and stage.get("stage_id") == stage_id and stage.get("status") in TERMINAL_STATUSES:
+                return stage
+        return None
+
+    def _stage_session_record(self, stage_id: str) -> Mapping[str, Any] | None:
+        state = self._load_current_state()
+        for stage in state.get("stages") or []:
+            if isinstance(stage, Mapping) and stage.get("stage_id") == stage_id:
                 return stage
         return None
 
@@ -563,6 +779,8 @@ class StageMarkerProcessor:
             self._rejected_invalid_path += 1
         elif kind == "invalid_result":
             self._rejected_invalid_result += 1
+        elif kind == "metadata_tampered":
+            self._rejected_metadata_tampered += 1
 
     def _mark_stage_bead_blocked(
         self,
@@ -588,6 +806,8 @@ class StageMarkerProcessor:
         work_unit_id: str | None,
         unit_adoption: Mapping[str, Any] | None,
     ) -> None:
+        if self._stage_event_exists(stage_id):
+            return
         row = {
             "run_id": self.run_id,
             "timestamp": utc_now(),
@@ -609,6 +829,47 @@ class StageMarkerProcessor:
         }
         validate_run_event(row, error_cls=PhaseSessionError)
         append_run_event(self.data_dir, row)
+
+    def _stage_event_exists(self, stage_id: str) -> bool:
+        path = self.data_dir / "telemetry" / "run_events.jsonl"
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return False
+        for line in lines:
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            details = row.get("details") if isinstance(row, Mapping) else None
+            if (
+                isinstance(details, Mapping)
+                and row.get("run_id") == self.run_id
+                and row.get("phase_id") == self.phase_id
+                and row.get("event_type") == "stage_adopted"
+                and details.get("stage_id") == stage_id
+            ):
+                return True
+        return False
+
+    def _checkpoint_adoption_journal(
+        self,
+        stage_id: str,
+        checkpoint: str,
+        payload: Mapping[str, Any] | None = None,
+        *,
+        completed: bool | None = None,
+    ) -> None:
+        checkpoint_adoption_journal(
+            data_dir=self.data_dir,
+            run_id=self.run_id,
+            phase_id=self.phase_id,
+            phase_attempt=self.phase_attempt,
+            stage_id=stage_id,
+            checkpoint=checkpoint,
+            payload=payload,
+            completed=completed,
+        )
 
     def _append_human_gate_event(self, stage_id: str, *, failure_kind: str, work_unit_id: str | None) -> None:
         row = {
@@ -646,6 +907,232 @@ def _ledger_commits(adopted_by_id: Mapping[str, Mapping[str, Any]], invocations:
         if commit_sha:
             commits.append(commit_sha)
     return commits
+
+
+def resume_stage_adoption_journals(
+    *,
+    run_id: str,
+    phase_id: str,
+    phase_attempt: int,
+    prepared: Mapping[str, Any],
+    workspace_metadata: Mapping[str, Any],
+    launch_dir: Path,
+    data_dir: Path,
+    stage_invocations: list[StageInvocation] | None = None,
+) -> dict[str, Any]:
+    """Replay incomplete stage adoption journals until they reach terminal checkpoints."""
+
+    journals = incomplete_adoption_journals(
+        data_dir=data_dir,
+        run_id=run_id,
+        phase_id=phase_id,
+        phase_attempt=phase_attempt,
+    )
+    if not journals:
+        return {"completed": False, "resumed_adoption_journals": []}
+    invocations = stage_invocations or _invocations_from_stage_state(run_id, phase_id, data_dir=data_dir)
+    processor = StageMarkerProcessor(
+        run_id=run_id,
+        phase_id=phase_id,
+        phase_attempt=phase_attempt,
+        stage_invocations=invocations,
+        prepared=prepared,
+        workspace_metadata=workspace_metadata,
+        launch_dir=launch_dir,
+        data_dir=data_dir,
+    )
+    resumed: list[dict[str, Any]] = []
+    for journal in journals:
+        marker = marker_from_journal(journal)
+        if marker is None:
+            continue
+        decision = processor.process_marker(marker)
+        resumed.append(
+            {
+                "stage_id": marker.stage_id,
+                "journal_path": journal.get("_path"),
+                "outcome": decision.outcome,
+                "reason": decision.reason,
+            }
+        )
+    summary = processor.finish()
+    summary["resumed_adoption_journals"] = resumed
+    return summary
+
+
+def retry_failed_units(
+    *,
+    run_id: str,
+    phase_id: str,
+    unit_ids: list[str] | None = None,
+    data_dir: Path,
+) -> dict[str, Any]:
+    """Prepare retryable failed/pending unit stages for a reduced fanout dispatch."""
+
+    state = load_stage_sessions(run_id, phase_id, data_dir=data_dir)
+    selected_units = set(unit_ids or [])
+    preserved_work_units: list[str] = []
+    retry_target_work_units: list[str] = []
+    retry_stage_ids: list[str] = []
+    blocked_stage_ids: list[str] = []
+    stage_to_work_unit_id: dict[str, str | None] = {}
+    now = utc_now()
+    for stage in state.get("stages") or []:
+        if not isinstance(stage, Mapping):
+            continue
+        stage_id = str(stage.get("stage_id") or "")
+        work_unit_id = _optional_str(stage.get("work_unit_id"))
+        stage_to_work_unit_id[stage_id] = work_unit_id
+        if work_unit_id and stage.get("status") == STATUS_ADOPTED and work_unit_id not in preserved_work_units:
+            preserved_work_units.append(work_unit_id)
+        if selected_units and work_unit_id not in selected_units:
+            continue
+        retryable = _failure_retry_class(_optional_str(stage.get("failure_kind"))) == "retry"
+        pending_retry = stage.get("status") == "pending" and bool(stage.get("fresh_reviewer_required"))
+        failed_retryable = stage.get("status") == "failed" and retryable
+        if not (pending_retry or failed_retryable):
+            continue
+        retry_cycle = int(stage.get("retry_cycle_count") or stage.get("attempt") or 0)
+        if retry_cycle > MAX_FRESH_REVIEWER_RETRY_CYCLES:
+            record_stage_blocked(
+                run_id,
+                phase_id,
+                stage_id,
+                "retry_cycle_cap_exceeded",
+                f"retry cycle cap exceeded after {MAX_FRESH_REVIEWER_RETRY_CYCLES} fresh-reviewer cycles",
+                data_dir=data_dir,
+            )
+            blocked_stage_ids.append(stage_id)
+            continue
+        if failed_retryable:
+            record_stage_retry_requested(
+                run_id,
+                phase_id,
+                stage_id,
+                _optional_str(stage.get("failure_kind")) or "sub_agent_error",
+                _optional_str(stage.get("notes")),
+                data_dir=data_dir,
+                fresh_reviewer=True,
+            )
+        if work_unit_id and work_unit_id not in retry_target_work_units:
+            retry_target_work_units.append(work_unit_id)
+        retry_stage_ids.append(stage_id)
+    _append_unit_retry_history(
+        run_id,
+        phase_id,
+        retry_target_work_units,
+        stage_ids=retry_stage_ids,
+        data_dir=data_dir,
+        recorded_at=now,
+    )
+    return {
+        "run_id": run_id,
+        "phase_id": phase_id,
+        "preserved_work_units": preserved_work_units,
+        "retry_target_work_units": retry_target_work_units,
+        "retry_stage_ids": retry_stage_ids,
+        "blocked_stage_ids": blocked_stage_ids,
+        "stage_to_work_unit_id": stage_to_work_unit_id,
+        "fresh_reviewer_required": bool(retry_target_work_units),
+    }
+
+
+def _invocations_from_stage_state(run_id: str, phase_id: str, *, data_dir: Path) -> list[StageInvocation]:
+    state = load_stage_sessions(run_id, phase_id, data_dir=data_dir)
+    invocations: list[StageInvocation] = []
+    for stage in state.get("stages") or []:
+        if not isinstance(stage, Mapping):
+            continue
+        agent_role = str(stage.get("agent_role") or "agent-writer")
+        stage_id = str(stage.get("stage_id") or "")
+        if not stage_id:
+            continue
+        result_path = Path(str(stage.get("result_path") or data_dir / "runs" / run_id / "phases" / phase_id / "stage_results" / f"{stage_id}.result.json"))
+        invocations.append(
+            StageInvocation(
+                stage_id=stage_id,
+                agent_role=agent_role,
+                layer_index=int(stage.get("layer_index") or 0),
+                fan_out_key=_optional_str(stage.get("fan_out_key")),
+                fan_out_index=stage.get("fan_out_index") if isinstance(stage.get("fan_out_index"), int) else None,
+                merge_target=_optional_str(stage.get("merge_target")),
+                is_provider_stage=bool(stage.get("is_provider_stage")),
+                lens_chain=tuple(str(item) for item in stage.get("lens_chain") or [] if isinstance(item, str)),
+                failure_tolerance=str(stage.get("failure_tolerance") or "strict"),
+                role_brief_path=_role_brief_path(agent_role),
+                expected_result_path=result_path,
+                upstream_stage_ids=tuple(str(item) for item in stage.get("upstream_stage_ids") or [] if isinstance(item, str)),
+                task_prompt_path=Path(str(stage["task_prompt_path"])) if isinstance(stage.get("task_prompt_path"), str) else None,
+                subagent_type=str(stage.get("subagent_type") or ""),
+                worktree_path=Path(str(stage["worktree_path"])) if isinstance(stage.get("worktree_path"), str) else None,
+                bead_id=_optional_str(stage.get("bead_id")),
+                allowed_files=tuple(str(item) for item in stage.get("allowed_files") or [] if isinstance(item, str)),
+                acceptance_criteria=str(stage.get("acceptance_criteria") or ""),
+                work_unit_id=_optional_str(stage.get("work_unit_id")),
+            )
+        )
+    return invocations
+
+
+def _append_unit_retry_history(
+    run_id: str,
+    phase_id: str,
+    unit_ids: list[str],
+    *,
+    stage_ids: list[str],
+    data_dir: Path,
+    recorded_at: str,
+) -> None:
+    if not unit_ids:
+        return
+    try:
+        state = load_unit_sessions(run_id, data_dir=data_dir)
+    except UnitSessionError:
+        return
+    units = []
+    changed = False
+    for unit in state.get("units") or []:
+        if not isinstance(unit, Mapping):
+            continue
+        current = dict(unit)
+        if current.get("phase_id") == phase_id and current.get("unit_id") in unit_ids:
+            history = [dict(item) for item in current.get("attempt_history") or [] if isinstance(item, Mapping)]
+            next_attempt = max(1, int(current.get("attempt") or 0) + 1)
+            row = {
+                "attempt": next_attempt,
+                "retry_requested_at": recorded_at,
+                "retry_stage_ids": list(stage_ids),
+                "retry_decision": "unit_redispatch",
+                "fresh_reviewer_required": True,
+            }
+            if not history or history[-1] != row:
+                history.append(row)
+            current["attempt"] = next_attempt
+            current["attempt_history"] = history
+            current["writer_status"] = "pending"
+            current["post_writer_status"] = "pending"
+            current["merge_state"] = "pending"
+            current["updated_at"] = recorded_at
+            changed = True
+        units.append(current)
+    if changed:
+        next_state = dict(state)
+        next_state["units"] = units
+        write_unit_sessions(next_state, data_dir=data_dir)
+
+
+def _role_brief_path(agent_role: str) -> Path:
+    if agent_role.startswith("provider:"):
+        return REPO_ROOT / "role-specs" / "agent-provider-review.md"
+    return REPO_ROOT / "role-specs" / f"{agent_role}.md"
+
+
+def _stage_work_unit_map(invocations: list[StageInvocation]) -> dict[str, str | None]:
+    return {invocation.stage_id: invocation.work_unit_id for invocation in invocations}
+
+
+def _string_list(value: Any) -> list[str]:
+    return [str(item) for item in value or [] if isinstance(item, str)]
 
 
 _STAGE_RESULT_STATUSES = {"complete", "complete_with_concerns", "blocked", "needs_input", "failed"}
@@ -835,4 +1322,4 @@ def _optional_str(value: Any) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-__all__ = ["MarkerDecision", "StageMarkerProcessor"]
+__all__ = ["MarkerDecision", "StageMarkerProcessor", "resume_stage_adoption_journals", "retry_failed_units"]

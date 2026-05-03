@@ -8,8 +8,10 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from swarm_do.pipeline.failure_taxonomy import failure_kind_details
 from swarm_do.pipeline.orchestrator_stream import StageMarker, parse_stage_marker_line
-from swarm_do.pipeline.stage_controller import StageMarkerProcessor
+from swarm_do.pipeline.stage_adoption_journal import adoption_journal_path, checkpoint_adoption_journal, start_adoption_journal
+from swarm_do.pipeline.stage_controller import StageMarkerProcessor, resume_stage_adoption_journals
 from swarm_do.pipeline.stage_invocation import StageInvocation, plan_stage_invocations
 from swarm_do.pipeline.stage_sessions import init_stage_sessions, load_stage_sessions, record_stage_adopted
 
@@ -154,6 +156,47 @@ class StageMarkerProcessorTests(unittest.TestCase):
         self.assertEqual(summary["phase_result_status"], "partial_success")
         self.assertEqual(summary["failed_stage_ids"], ["second-stage"])
 
+    def test_three_parallel_markers_adopt_once_each(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            data = tmp / "data"
+            data.mkdir()
+            invocations, snapshot = plan_stage_invocations(
+                {"name": "default", "pipeline": "default"},
+                {"run_id": RUN_ID, "phase_id": PHASE_ID, "phase_attempt": 1},
+                data_dir=data,
+            )
+            base = invocations[0]
+            stages = [
+                dataclasses.replace(
+                    base,
+                    stage_id=f"writer-{idx}",
+                    expected_result_path=base.expected_result_path.with_name(f"writer-{idx}.result.json"),
+                )
+                for idx in range(1, 4)
+            ]
+            init_stage_sessions(RUN_ID, PHASE_ID, stages, snapshot, data_dir=data)
+            processor = StageMarkerProcessor(
+                run_id=RUN_ID,
+                phase_id=PHASE_ID,
+                phase_attempt=1,
+                stage_invocations=stages,
+                prepared={},
+                workspace_metadata={},
+                launch_dir=tmp / "launch",
+                data_dir=data,
+            )
+            for stage in stages:
+                _write_stage_result(stage.expected_result_path, stage)
+
+            decisions = [processor.process_marker(_complete_marker(stage)) for stage in stages]
+            summary = processor.finish()
+            state = load_stage_sessions(RUN_ID, PHASE_ID, data_dir=data)
+
+        self.assertEqual([decision.outcome for decision in decisions], ["adopted", "adopted", "adopted"])
+        self.assertTrue(summary["completed"])
+        self.assertEqual([stage["status"] for stage in state["stages"]], ["adopted", "adopted", "adopted"])
+
     def test_marker_with_wrong_result_path_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             data, invocation, processor = _processor(Path(td))
@@ -166,6 +209,35 @@ class StageMarkerProcessorTests(unittest.TestCase):
         self.assertEqual(decision.outcome, "rejected_invalid_path")
         self.assertEqual(summary["rejected_invalid_path"], 1)
         self.assertEqual(state["stages"][0]["status"], "failed")
+
+    def test_in_root_wrong_result_path_is_human_gate_tamper(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            data, invocation, processor = _processor(Path(td))
+            wrong_path = invocation.expected_result_path.with_name("other.result.json")
+            _write_stage_result(wrong_path, invocation)
+            marker = StageMarker(kind="complete", stage_id=invocation.stage_id, result_path=str(wrong_path))
+
+            decision = processor.process_marker(marker)
+            summary = processor.finish()
+            state = load_stage_sessions(RUN_ID, PHASE_ID, data_dir=data)
+
+        self.assertEqual(decision.outcome, "rejected_metadata_tampered")
+        self.assertEqual(summary["rejected_metadata_tampered"], 1)
+        self.assertEqual(state["stages"][0]["status"], "blocked")
+        self.assertEqual(state["stages"][0]["failure_kind"], "stage_metadata_tampered")
+        self.assertEqual(failure_kind_details("stage_metadata_tampered")["failure_retry_class"], "human_gate")
+
+    def test_result_metadata_claims_cannot_change_unit_or_bead(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            data, invocation, processor = _processor(Path(td))
+            _write_stage_result(invocation.expected_result_path, invocation, extra={"work_unit_id": "unit-spoof"})
+            marker = _complete_marker(invocation)
+
+            decision = processor.process_marker(marker)
+            state = load_stage_sessions(RUN_ID, PHASE_ID, data_dir=data)
+
+        self.assertEqual(decision.outcome, "rejected_metadata_tampered")
+        self.assertEqual(state["stages"][0]["failure_kind"], "stage_metadata_tampered")
 
     def test_marker_before_result_file_adopted_at_finish(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -181,6 +253,69 @@ class StageMarkerProcessorTests(unittest.TestCase):
         self.assertTrue(summary["completed"])
         self.assertEqual(summary["pending_marker_count"], 0)
         self.assertEqual(state["stages"][0]["status"], "adopted")
+
+    def test_adoption_journal_resume_repairs_missing_event_once(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            data, invocation, _unused_processor = _processor(tmp)
+            marker = _complete_marker(invocation)
+            start_adoption_journal(
+                data_dir=data,
+                run_id=RUN_ID,
+                phase_id=PHASE_ID,
+                phase_attempt=1,
+                marker=marker,
+                invocation=invocation,
+            )
+            record_stage_adopted(
+                RUN_ID,
+                PHASE_ID,
+                invocation.stage_id,
+                commit_sha="a" * 40,
+                result_path=invocation.expected_result_path,
+                transcript_path=None,
+                data_dir=data,
+            )
+            checkpoint_adoption_journal(
+                data_dir=data,
+                run_id=RUN_ID,
+                phase_id=PHASE_ID,
+                phase_attempt=1,
+                stage_id=invocation.stage_id,
+                checkpoint="stage_recorded",
+                payload={"commit_sha": "a" * 40},
+            )
+
+            first = resume_stage_adoption_journals(
+                run_id=RUN_ID,
+                phase_id=PHASE_ID,
+                phase_attempt=1,
+                prepared={},
+                workspace_metadata={},
+                launch_dir=tmp / "launch",
+                data_dir=data,
+            )
+            second = resume_stage_adoption_journals(
+                run_id=RUN_ID,
+                phase_id=PHASE_ID,
+                phase_attempt=1,
+                prepared={},
+                workspace_metadata={},
+                launch_dir=tmp / "launch",
+                data_dir=data,
+            )
+            events = [
+                json.loads(line)
+                for line in (data / "telemetry" / "run_events.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+            journal = json.loads(
+                adoption_journal_path(data, RUN_ID, PHASE_ID, 1, invocation.stage_id).read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(first["resumed_adoption_journals"][0]["outcome"], "duplicate")
+        self.assertEqual(second["resumed_adoption_journals"], [])
+        self.assertEqual(sum(1 for event in events if event["event_type"] == "stage_adopted"), 1)
+        self.assertTrue(journal["completed"])
 
     def test_unknown_stage_marker_recorded_without_crash(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -278,22 +413,22 @@ def _complete_marker(invocation: StageInvocation) -> StageMarker:
     return marker
 
 
-def _write_stage_result(path: Path, invocation: StageInvocation) -> None:
+def _write_stage_result(path: Path, invocation: StageInvocation, *, extra: dict | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": 1,
+        "run_id": RUN_ID,
+        "phase_id": PHASE_ID,
+        "phase_attempt": 1,
+        "stage_id": invocation.stage_id,
+        "status": "complete",
+        "summary": "done",
+        "artifacts": [],
+    }
+    if extra:
+        payload.update(extra)
     path.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "run_id": RUN_ID,
-                "phase_id": PHASE_ID,
-                "phase_attempt": 1,
-                "stage_id": invocation.stage_id,
-                "status": "complete",
-                "summary": "done",
-                "artifacts": [],
-            },
-            sort_keys=True,
-        )
+        json.dumps(payload, sort_keys=True)
         + "\n",
         encoding="utf-8",
     )
