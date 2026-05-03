@@ -25,9 +25,18 @@
     "stage_id": { "type": "string" },
     "status": {
       "type": "string",
-      "enum": ["complete", "failed", "blocked", "needs_input"]
+      "enum": ["complete", "complete_with_concerns", "failed", "blocked", "needs_input", "done", "done_with_concerns", "needs_context"]
     },
     "summary": { "type": "string" },
+    "failure_kind": { "type": ["string", "null"] },
+    "needs_input": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "concerns": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
     "artifacts": {
       "type": "array",
       "items": { "type": "object" }

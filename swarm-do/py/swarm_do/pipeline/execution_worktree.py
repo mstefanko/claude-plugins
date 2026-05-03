@@ -1259,10 +1259,19 @@ def _ensure_unit_worktree(source_git: Path, *, unit_git: Path, branch: str, base
     if unit_git.exists() and any(unit_git.iterdir()):
         raise RunExecutionWorktreeError(f"unit worktree path already exists without a git checkout: {unit_git}")
     unit_git.parent.mkdir(parents=True, exist_ok=True)
-    if _branch_exists(source_git, branch):
-        _git(source_git, "worktree", "add", str(unit_git), branch)
-    else:
-        _git(source_git, "worktree", "add", "-b", branch, str(unit_git), base_ref)
+    branch_preexisting = _branch_exists(source_git, branch)
+    try:
+        if branch_preexisting:
+            _git(source_git, "worktree", "add", str(unit_git), branch)
+        else:
+            _git(source_git, "worktree", "add", "-b", branch, str(unit_git), base_ref)
+    except Exception:
+        _run_git(source_git, "worktree", "remove", "--force", str(unit_git), check=False)
+        if unit_git.exists():
+            shutil.rmtree(unit_git)
+        if not branch_preexisting and _branch_exists(source_git, branch):
+            _run_git(source_git, "branch", "-D", branch, check=False)
+        raise
 
 
 def _ensure_unit_sessions(

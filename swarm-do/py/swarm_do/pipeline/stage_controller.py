@@ -21,8 +21,10 @@ from .stage_sessions import (
     claim_stage,
     load_stage_sessions,
     record_stage_adopted,
+    record_stage_blocked,
     record_stage_failed,
 )
+from .unit_session_adopter import adopt_unit_stage
 
 
 @dataclass
@@ -36,6 +38,9 @@ class MarkerDecision:
         "rejected_unknown_stage",
         "rejected_invalid_path",
         "rejected_invalid_result",
+        "adopted_with_concerns",
+        "blocked_recorded",
+        "needs_input_recorded",
         "failed_recorded",
     ]
     commit_sha: str | None = None
@@ -122,6 +127,8 @@ class StageMarkerProcessor:
         )
         commits = list(dict.fromkeys([*self._commits, *_ledger_commits(adopted_by_id, self.stage_invocations)]))
         changed = changed_files_from_worktree_diff(self._latest_diff or {}) if self._latest_diff else []
+        completed_work_units = _work_units_for_status(adopted_by_id, self.stage_invocations, STATUS_ADOPTED)
+        failed_work_units = _failed_work_units(current, self.stage_invocations)
         return {
             "live": True,
             "completed": completed,
@@ -130,6 +137,8 @@ class StageMarkerProcessor:
             "commit_sha": commits[-1] if commits else None,
             "worktree_diff": _normalized_worktree_diff(self._latest_diff) if self._latest_diff else None,
             "changed_files": changed,
+            "completed_work_units": completed_work_units,
+            "failed_work_units": failed_work_units,
             "pending_marker_count": len(self._pending),
             "duplicate_marker_count": self._duplicate_marker_count,
             "amended_count": self._amended_count,
@@ -218,9 +227,69 @@ class StageMarkerProcessor:
             return MarkerDecision(marker, "rejected_invalid_result", reason=str(exc))
 
         payload["validated_result_path"] = str(stage_result["path"])
+        result_payload = stage_result["payload"]
+        result_status = _stage_result_status(result_payload)
+        if result_status in {"blocked", "needs_input", "failed"}:
+            failure_kind = _stage_result_failure_kind(result_payload, default=result_status)
+            notes = _stage_result_notes(result_payload)
+            if result_status == "blocked":
+                record_stage_blocked(
+                    self.run_id,
+                    self.phase_id,
+                    marker.stage_id,
+                    failure_kind,
+                    notes,
+                    data_dir=self.data_dir,
+                )
+                outcome = "blocked_recorded"
+            elif result_status == "needs_input":
+                record_stage_blocked(
+                    self.run_id,
+                    self.phase_id,
+                    marker.stage_id,
+                    failure_kind,
+                    notes,
+                    data_dir=self.data_dir,
+                )
+                outcome = "needs_input_recorded"
+            else:
+                record_stage_failed(
+                    self.run_id,
+                    self.phase_id,
+                    marker.stage_id,
+                    failure_kind,
+                    notes,
+                    data_dir=self.data_dir,
+                )
+                outcome = "failed_recorded"
+            self._mark_stage_bead_blocked(marker, failure_kind=failure_kind, notes=notes)
+            self._had_controller_failure = True
+            self._failed_recorded_count += 1
+            payload["controller_status"] = outcome
+            payload["stage_result_status"] = result_status
+            return MarkerDecision(marker, outcome, reason=failure_kind)
+
         commit_sha: str | None = None
+        adopted_notes = _stage_result_notes(result_payload) if result_status == "complete_with_concerns" else None
+        unit_adoption: Mapping[str, Any] | None = None
         try:
-            if _has_commit_target(self.workspace_metadata):
+            unit_adoption = adopt_unit_stage(
+                run_id=self.run_id,
+                phase_id=self.phase_id,
+                invocation=invocation,
+                stage_result=result_payload,
+                data_dir=self.data_dir,
+                workspace_metadata=self.workspace_metadata,
+                commit_subject=marker.commit_subject or marker.summary or "stage artifacts",
+                writer_summary=marker.summary or str(result_payload.get("summary") or f"stage {marker.stage_id} completed"),
+            )
+            if unit_adoption is not None and unit_adoption.get("status") == "merged":
+                self._latest_diff = unit_adoption.get("worktree_diff") if isinstance(unit_adoption.get("worktree_diff"), Mapping) else self._latest_diff
+                commit_sha = _optional_str(unit_adoption.get("integration_head_sha")) or _optional_str(unit_adoption.get("commit_sha"))
+                if commit_sha:
+                    self._commits.append(commit_sha)
+                payload["unit_adoption"] = dict(unit_adoption)
+            elif _has_commit_target(self.workspace_metadata):
                 record = commit_stage_artifacts(
                     _commit_target_from_workspace(self.prepared, self.workspace_metadata),
                     allowed_files=self._allowed_files,
@@ -254,12 +323,18 @@ class StageMarkerProcessor:
             commit_sha=commit_sha,
             result_path=marker.result_path,
             transcript_path=self.launch_dir / "stdout.txt",
+            notes=adopted_notes,
             data_dir=self.data_dir,
         )
         self._close_stage_bead(marker.stage_id, commit_sha=commit_sha)
-        self._append_stage_event(marker.stage_id, commit_sha=commit_sha)
-        payload["controller_status"] = "adopted"
-        return MarkerDecision(marker, "adopted", commit_sha=commit_sha)
+        self._append_stage_event(marker.stage_id, commit_sha=commit_sha, work_unit_id=invocation.work_unit_id, unit_adoption=unit_adoption)
+        payload["controller_status"] = "adopted_with_concerns" if result_status == "complete_with_concerns" else "adopted"
+        payload["stage_result_status"] = result_status
+        return MarkerDecision(
+            marker,
+            "adopted_with_concerns" if result_status == "complete_with_concerns" else "adopted",
+            commit_sha=commit_sha,
+        )
 
     def _retry_pending(self) -> list[MarkerDecision]:
         if not self._pending:
@@ -312,8 +387,12 @@ class StageMarkerProcessor:
                 errors.append(f"$.{key}: expected {expected!r}, got {payload.get(key)!r}")
         if "status" not in payload:
             errors.append("missing required property: status")
-        elif payload.get("status") != "complete":
-            errors.append(f"$.status: expected 'complete', got {payload.get('status')!r}")
+        elif _stage_result_status(payload) not in _STAGE_RESULT_STATUSES:
+            errors.append(
+                "$.status: expected one of "
+                + ", ".join(sorted(_STAGE_RESULT_STATUSES))
+                + f", got {payload.get('status')!r}"
+            )
         if errors:
             raise PhaseSessionError(f"stage_result_invalid: {result_path}: {'; '.join(errors)}")
 
@@ -354,30 +433,47 @@ class StageMarkerProcessor:
         elif kind == "invalid_result":
             self._rejected_invalid_result += 1
 
-    def _mark_stage_bead_blocked(self, marker: StageMarker) -> None:
+    def _mark_stage_bead_blocked(
+        self,
+        marker: StageMarker,
+        *,
+        failure_kind: str | None = None,
+        notes: str | None = None,
+    ) -> None:
         mark_stage_blocked(
             _stage_bead_id(self.run_id, self.phase_id, marker.stage_id, data_dir=self.data_dir),
-            failure_kind=marker.failure_kind or "stage_failed",
-            notes=marker.notes,
+            failure_kind=failure_kind or marker.failure_kind or "stage_failed",
+            notes=notes or marker.notes,
         )
 
     def _close_stage_bead(self, stage_id: str, *, commit_sha: str | None) -> None:
         close_stage_child(_stage_bead_id(self.run_id, self.phase_id, stage_id, data_dir=self.data_dir), commit_sha=commit_sha)
 
-    def _append_stage_event(self, stage_id: str, *, commit_sha: str | None) -> None:
+    def _append_stage_event(
+        self,
+        stage_id: str,
+        *,
+        commit_sha: str | None,
+        work_unit_id: str | None,
+        unit_adoption: Mapping[str, Any] | None,
+    ) -> None:
         row = {
             "run_id": self.run_id,
             "timestamp": utc_now(),
             "event_type": "stage_adopted",
             "bd_epic_id": None,
             "phase_id": self.phase_id,
-            "work_unit_id": None,
+            "work_unit_id": work_unit_id,
             "child_bead_ids": None,
             "reason": None,
             "retry_count": None,
             "handoff_count": None,
             "integration_branch_head": commit_sha,
-            "details": {"stage_id": stage_id, "commit_sha": commit_sha},
+            "details": {
+                "stage_id": stage_id,
+                "commit_sha": commit_sha,
+                "unit_adoption": dict(unit_adoption) if isinstance(unit_adoption, Mapping) else None,
+            },
             "schema_ok": True,
         }
         validate_run_event(row, error_cls=PhaseSessionError)
@@ -395,6 +491,73 @@ def _ledger_commits(adopted_by_id: Mapping[str, Mapping[str, Any]], invocations:
         if commit_sha:
             commits.append(commit_sha)
     return commits
+
+
+_STAGE_RESULT_STATUSES = {"complete", "complete_with_concerns", "blocked", "needs_input", "failed"}
+_STAGE_RESULT_STATUS_ALIASES = {
+    "done": "complete",
+    "done_with_concerns": "complete_with_concerns",
+    "needs_context": "needs_input",
+}
+
+
+def _stage_result_status(payload: Any) -> str:
+    if not isinstance(payload, Mapping):
+        return ""
+    value = payload.get("status")
+    if not isinstance(value, str):
+        return ""
+    normalized = value.strip().lower()
+    return _STAGE_RESULT_STATUS_ALIASES.get(normalized, normalized)
+
+
+def _stage_result_failure_kind(payload: Mapping[str, Any], *, default: str) -> str:
+    for key in ("failure_kind", "failure_reason", "blocked_reason"):
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return default
+
+
+def _stage_result_notes(payload: Mapping[str, Any]) -> str | None:
+    for key in ("notes", "summary", "blocked_reason"):
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            return value[:500]
+    needs = payload.get("needs_input")
+    if isinstance(needs, list):
+        text = "; ".join(str(item) for item in needs if isinstance(item, str))
+        return text[:500] if text else None
+    return None
+
+
+def _work_units_for_status(
+    stages_by_id: Mapping[str, Mapping[str, Any]],
+    invocations: list[StageInvocation],
+    status: str,
+) -> list[str]:
+    out: list[str] = []
+    for invocation in invocations:
+        if not invocation.work_unit_id:
+            continue
+        if stages_by_id.get(invocation.stage_id, {}).get("status") == status and invocation.work_unit_id not in out:
+            out.append(invocation.work_unit_id)
+    return out
+
+
+def _failed_work_units(current: Mapping[str, Any], invocations: list[StageInvocation]) -> list[str]:
+    stages_by_id = {
+        str(stage.get("stage_id")): stage
+        for stage in current.get("stages") or []
+        if isinstance(stage, Mapping)
+    }
+    out: list[str] = []
+    for invocation in invocations:
+        if not invocation.work_unit_id:
+            continue
+        if stages_by_id.get(invocation.stage_id, {}).get("status") in {"failed", "blocked"} and invocation.work_unit_id not in out:
+            out.append(invocation.work_unit_id)
+    return out
 
 
 def _stage_bead_id(run_id: str, phase_id: str, stage_id: str, *, data_dir: Path) -> str | None:

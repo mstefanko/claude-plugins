@@ -112,6 +112,7 @@ def create_execution_workspace(
     run_id: str | None = None,
     prepared_plan: Mapping[str, Any] | None = None,
     enabled: bool | None = None,
+    force_worktree: bool = False,
     home: Path | None = None,
     sensitive_roots: Iterable[Path] | None = None,
 ) -> ExecutionWorkspace:
@@ -132,16 +133,8 @@ def create_execution_workspace(
             safe_cwd_enabled=False,
             real_repo_spellings=real_repo_spellings,
         )
-    if not is_sensitive_path(real_repo_root, sensitive_prefixes=prefixes):
-        return ExecutionWorkspace(
-            real_repo_root=real_repo_root,
-            launcher_repo_root=real_repo_root,
-            launcher_cwd=real_repo_root,
-            mode="real",
-            sensitive_prefixes=prefixes,
-            real_repo_spellings=real_repo_spellings,
-        )
-    if run_id and prepared_plan is not None:
+    sensitive = is_sensitive_path(real_repo_root, sensitive_prefixes=prefixes)
+    if run_id and prepared_plan is not None and (force_worktree or sensitive):
         try:
             from .execution_worktree import materialize_run_execution_worktree
 
@@ -172,6 +165,15 @@ def create_execution_workspace(
             prompt_rewrite_pairs=rewrite_pairs,
             prompt_sensitive_spellings=tuple(dict.fromkeys(sensitive_spellings)),
             worktree_metadata=worktree.to_metadata(),
+        )
+    if not sensitive:
+        return ExecutionWorkspace(
+            real_repo_root=real_repo_root,
+            launcher_repo_root=real_repo_root,
+            launcher_cwd=real_repo_root,
+            mode="real",
+            sensitive_prefixes=prefixes,
+            real_repo_spellings=real_repo_spellings,
         )
     launcher_repo_root = _ensure_launcher_symlink(real_repo_root, data_dir=Path(data_dir), sensitive_prefixes=prefixes)
     return ExecutionWorkspace(

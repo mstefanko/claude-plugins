@@ -3,7 +3,7 @@
   "merge_policy": "deny-wins",
   "permissions": {
     "allow": [
-      "Task",
+      "Agent",
       "Read",
       "Bash(bd:*)",
       "Bash(git:diff)",

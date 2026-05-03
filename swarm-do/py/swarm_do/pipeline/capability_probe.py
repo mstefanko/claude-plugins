@@ -1,4 +1,4 @@
-"""Gated live probe for Claude Code Task dispatch under coordinator settings."""
+"""Gated live probe for Claude Code Agent dispatch under coordinator settings."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ def run_capability_probe() -> dict[str, Any]:
         settings_path = root / "coordinator-settings.json"
         settings = {"permissions": {"allow": _allowed_tools_arg("dispatcher"), "deny": []}}
         settings_path.write_text(json.dumps(settings, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        prompt = 'Call Task(subagent_type="general-purpose", prompt="echo OK") once, then stop.'
+        prompt = 'Call Agent(subagent_type="general-purpose", prompt="echo OK") once, then stop.'
         argv = [
             claude,
             "-p",
@@ -54,9 +54,9 @@ def run_capability_probe() -> dict[str, Any]:
             }
         combined = "\n".join([proc.stdout or "", proc.stderr or ""])
         return {
-            "status": "pass" if proc.returncode == 0 and "Task" in combined else "fail",
+            "status": "pass" if proc.returncode == 0 and ("Agent" in combined or "Task" in combined) else "fail",
             "returncode": proc.returncode,
-            "task_invocation_observed": "Task" in combined,
+            "task_invocation_observed": "Agent" in combined or "Task" in combined,
             "stdout": proc.stdout,
             "stderr": proc.stderr,
         }

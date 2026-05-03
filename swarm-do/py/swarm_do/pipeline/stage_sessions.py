@@ -159,6 +159,7 @@ def record_stage_adopted(
     commit_sha: str | None,
     result_path: str | Path | None,
     transcript_path: str | Path | None = None,
+    notes: str | None = None,
     data_dir: Path | None = None,
 ) -> dict[str, Any]:
     return _record_terminal(
@@ -170,7 +171,7 @@ def record_stage_adopted(
         result_path=str(result_path) if result_path else None,
         transcript_path=str(transcript_path) if transcript_path else None,
         failure_kind=None,
-        notes=None,
+        notes=notes,
         data_dir=data_dir,
     )
 
@@ -361,6 +362,11 @@ def _stage_record(stage: Any, now: str) -> dict[str, Any]:
     return {
         "stage_id": str(get("stage_id")),
         "agent_role": str(get("agent_role")),
+        "subagent_type": _str_or_none(get("subagent_type")),
+        "work_unit_id": _str_or_none(get("work_unit_id")),
+        "worktree_path": str(get("worktree_path")) if get("worktree_path") else None,
+        "allowed_files": [str(item) for item in (get("allowed_files", ()) or ())],
+        "acceptance_criteria": str(get("acceptance_criteria", "")),
         "layer_index": _int_or_none(get("layer_index")),
         "fan_out_key": _str_or_none(get("fan_out_key")),
         "fan_out_index": _int_or_none(get("fan_out_index")),

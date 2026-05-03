@@ -1129,7 +1129,7 @@ def _dispatch_prepared(
         preflight = _dispatch_preflight(args, result)
         payload = _prepared_dispatch_payload(args, result)
         payload["preflight"] = preflight.as_dict()
-        if _phase_sessions_mode(args) == "auto":
+        if _phase_sessions_mode(args) in {"auto", "fanout"}:
             return _dispatch_with_phase_sessions(args, payload)
         _print_prepared_dispatch(args, payload)
         return 0
@@ -1166,7 +1166,7 @@ def _dispatch_preflight(args: argparse.Namespace, result: Any):
     from .run_preflight import record_run_preflight_completed, run_preflight
 
     graph = _active_graph_source_summary()
-    launchers = ("claude-print",) if _phase_sessions_mode(args) == "auto" else ()
+    launchers = ("claude-print",) if _phase_sessions_mode(args) in {"auto", "fanout"} else ()
     report = run_preflight(
         run_id=result.run_id,
         target_repo=getattr(result, "repo_root", None),
@@ -1208,7 +1208,7 @@ def _active_graph_source_summary() -> dict[str, str | None]:
 
 def _phase_sessions_mode(args: argparse.Namespace) -> str:
     value = getattr(args, "phase_sessions", "off") or "off"
-    if value not in {"auto", "off"}:
+    if value not in {"auto", "fanout", "off"}:
         raise ValueError(f"unsupported phase-sessions mode: {value}")
     return value
 
@@ -1288,9 +1288,11 @@ def _dispatch_with_phase_sessions(args: argparse.Namespace, dispatch_payload: Ma
 
     launcher = "claude-print"
     run_id = str(dispatch_payload["run_id"])
+    mode = _phase_sessions_mode(args)
     pump_payload = pump_phases(
         run_id,
         launcher=launcher,
+        phase_sessions_mode=mode,
         max_phases=None,
         init_if_missing=True,
         max_budget_usd=_phase_attempt_budget_cli_value(args),
@@ -1298,7 +1300,7 @@ def _dispatch_with_phase_sessions(args: argparse.Namespace, dispatch_payload: Ma
     )
     payload = dict(dispatch_payload)
     payload["phase_sessions"] = {
-        "mode": "auto",
+        "mode": mode,
         "launcher": launcher,
         "status": pump_payload.get("status"),
         "completed_phase_count": len(pump_payload.get("completed_phases") or []),
@@ -3404,7 +3406,7 @@ def _build_parser() -> argparse.ArgumentParser:
     do.add_argument("--prepared", nargs="?", const=True, metavar="RUN_ID_OR_PATH")
     do.add_argument("--prepare", action="store_true", help="run the prepare gate before dispatch")
     do.add_argument("--continue", dest="prepare_continue", action="store_true", help="auto-accept safe prepared output and continue dispatch")
-    do.add_argument("--phase-sessions", choices=["auto", "off"], default="off", help="run accepted prepared phases through the fresh-session pump")
+    do.add_argument("--phase-sessions", choices=["auto", "fanout", "off"], default="off", help="run accepted prepared phases through the fresh-session pump")
     do.add_argument("--max-budget-usd", type=float, help="forwarded to the claude-print phase-session launcher")
     _add_phase_policy_flags(do)
     do.add_argument("--bd-epic-id")

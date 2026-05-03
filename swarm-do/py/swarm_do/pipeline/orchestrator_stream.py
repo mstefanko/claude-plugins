@@ -85,7 +85,7 @@ def parse_stage_marker_line(line: str) -> StageMarker | None:
 
 
 def parse_transcript_task_invocations(path: Path) -> list[dict[str, Any]]:
-    """Best-effort fallback: extract Task tool-use inputs from a JSONL transcript."""
+    """Best-effort fallback: extract Agent/Task tool-use inputs from a JSONL transcript."""
 
     invocations: list[dict[str, Any]] = []
     try:
@@ -102,7 +102,7 @@ def parse_transcript_task_invocations(path: Path) -> list[dict[str, Any]]:
         for block in _content_blocks(row):
             if not isinstance(block, Mapping):
                 continue
-            if block.get("type") != "tool_use" or block.get("name") != "Task":
+            if block.get("type") != "tool_use" or block.get("name") not in {"Agent", "Task"}:
                 continue
             payload = block.get("input")
             invocations.append(dict(payload) if isinstance(payload, Mapping) else {})

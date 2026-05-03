@@ -76,7 +76,7 @@ def phase_artifact_type_rules_markdown() -> str:
         [
             "Array-element type rules (the schemas reject other shapes):",
             "- `result.completed_work_units`, `result.failed_work_units`, `result.needs_input`: each item is a plain string.",
-            "- In phase-session mode, `result.completed_work_units` and `handoff.completed_work_units` must stay empty unless you are using a prepared unit id shown in the informational decomposition. Put semantic accomplishments in `summary`, `artifacts`, or `validation`.",
+            "- In phase-session auto mode, `result.completed_work_units` and `handoff.completed_work_units` must stay empty unless you are using a prepared unit id shown in the informational decomposition. In phase-session fanout mode, the dispatcher may leave them empty; the controller fills prepared unit ids from adopted stage markers.",
             "- `result.validation`: each item is a JSON object (e.g. `{\"command\": \"pytest\", \"status\": \"passed\"}`).",
             "- `result.artifacts`: each item is a JSON object (e.g. `{\"path\": \"docs/examples/x.json\", \"kind\": \"fixture\"}`).",
             "- `handoff.decisions`, `handoff.changed_files`, `handoff.completed_work_units`, `handoff.open_items`, `handoff.blockers`, `handoff.do_not_retry`, `handoff.validation_summary`, `handoff.next_phase_context`: each item is a plain string. Do NOT use objects.",

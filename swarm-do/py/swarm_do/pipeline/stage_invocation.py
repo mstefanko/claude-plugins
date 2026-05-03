@@ -1,4 +1,10 @@
-"""Plan and render per-stage orchestrator invocations."""
+"""Plan and render per-stage orchestrator invocations.
+
+``StageInvocation`` bridges preset graph stages to prepared work units. Writer
+fan-out stages may map one invocation per prepared work unit; merge/provider
+stages intentionally carry ``work_unit_id = None`` because they operate on the
+phase workspace rather than one unit worktree.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +17,7 @@ from typing import Any, Mapping
 from .engine import topological_layers
 from .graph_source import canonical_graph_hash, resolve_preset_graph
 from .paths import REPO_ROOT, resolve_data_dir
+from .work_units import unit_file_scope
 
 
 @dataclasses.dataclass(frozen=True)
@@ -28,11 +35,18 @@ class StageInvocation:
     expected_result_path: Path
     upstream_stage_ids: tuple[str, ...]
     task_prompt_path: Path | None = None
+    subagent_type: str = ""
+    worktree_path: Path | None = None
+    bead_id: str | None = None
+    allowed_files: tuple[str, ...] = ()
+    acceptance_criteria: str = ""
+    work_unit_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "stage_id": self.stage_id,
             "agent_role": self.agent_role,
+            "subagent_type": self.subagent_type or _subagent_type_for_role(self.agent_role),
             "layer_index": self.layer_index,
             "fan_out_key": self.fan_out_key,
             "fan_out_index": self.fan_out_index,
@@ -44,6 +58,11 @@ class StageInvocation:
             "expected_result_path": str(self.expected_result_path),
             "upstream_stage_ids": list(self.upstream_stage_ids),
             "task_prompt_path": str(self.task_prompt_path) if self.task_prompt_path else None,
+            "worktree_path": str(self.worktree_path) if self.worktree_path else None,
+            "bead_id": self.bead_id,
+            "allowed_files": list(self.allowed_files),
+            "acceptance_criteria": self.acceptance_criteria,
+            "work_unit_id": self.work_unit_id,
         }
 
 
@@ -52,6 +71,7 @@ def plan_stage_invocations(
     phase_context: Mapping[str, Any],
     *,
     data_dir: Path | None = None,
+    prepared: Mapping[str, Any] | None = None,
 ) -> tuple[list[StageInvocation], dict[str, Any]]:
     """Resolve the active preset graph into concrete per-agent stage calls."""
 
@@ -87,6 +107,8 @@ def plan_stage_invocations(
             materialized_by_source[source_stage_id] = [item.stage_id for item in planned]
             invocations.extend(planned)
 
+    invocations = _attach_work_unit_metadata(invocations, prepared or {}, phase_id=phase_id)
+
     graph_hash = canonical_graph_hash({"preset": preset.get("name"), "pipeline": pipeline})
     snapshot = {
         "graph_hash": graph_hash,
@@ -108,15 +130,28 @@ def render_orchestrator_brief(
     stage_invocations: list[StageInvocation],
     run_id: str,
     phase_id: str,
+    phase_sessions_mode: str = "auto",
+    parallelism_cap: int = 8,
+    status_protocol: str = "binary-structured",
 ) -> str:
     """Append the controller-owned stage dispatch contract to a phase brief."""
+
+    if phase_sessions_mode == "fanout":
+        return _render_fanout_orchestrator_brief(
+            base_prompt=base_prompt,
+            stage_invocations=stage_invocations,
+            run_id=run_id,
+            phase_id=phase_id,
+            parallelism_cap=parallelism_cap,
+            status_protocol=status_protocol,
+        )
 
     lines = [
         base_prompt.rstrip(),
         "",
         "## Controller-Owned Stage Dispatch",
         "",
-        "You are the foreground orchestrator. Dispatch stages with Task; do not edit files directly.",
+        "You are the foreground orchestrator. Dispatch stages with Agent; do not edit files directly.",
         "After each stage writes its result JSON, print exactly one marker line:",
         'STAGE_COMPLETE {"stage_id":"<stage_id>","result_path":"<absolute path>"}',
         'For failures, print: STAGE_FAILED {"stage_id":"<stage_id>","failure_kind":"<kind>","notes":"<short notes>"}',
@@ -156,7 +191,7 @@ def render_orchestrator_brief(
                 "",
                 "Dispatch form:",
                 "```text",
-                f'Task(subagent_type="general-purpose", prompt={json.dumps(prompt)})',
+                f'Agent(subagent_type="general-purpose", prompt={json.dumps(prompt)})',
                 "```",
                 "",
                 "Completion marker:",
@@ -296,7 +331,204 @@ def _invocation(
         role_brief_path=_role_brief_path(agent_role),
         expected_result_path=result_dir / f"{_safe_filename(stage_id)}.result.json",
         upstream_stage_ids=upstream_stage_ids,
+        subagent_type=_subagent_type_for_role(agent_role),
     )
+
+
+def with_runtime_fields(
+    invocations: list[StageInvocation],
+    *,
+    bead_ids: Mapping[str, str | None] | None = None,
+    worktree_paths: Mapping[str, Path | str] | None = None,
+) -> list[StageInvocation]:
+    """Return invocations enriched with controller-created runtime handles."""
+
+    bead_ids = bead_ids or {}
+    worktree_paths = worktree_paths or {}
+    enriched: list[StageInvocation] = []
+    for invocation in invocations:
+        path_value = worktree_paths.get(invocation.work_unit_id or "")
+        enriched.append(
+            dataclasses.replace(
+                invocation,
+                bead_id=bead_ids.get(invocation.stage_id, invocation.bead_id),
+                worktree_path=Path(path_value) if path_value is not None else invocation.worktree_path,
+            )
+        )
+    return enriched
+
+
+def _render_fanout_orchestrator_brief(
+    *,
+    base_prompt: str,
+    stage_invocations: list[StageInvocation],
+    run_id: str,
+    phase_id: str,
+    parallelism_cap: int,
+    status_protocol: str,
+) -> str:
+    lines = [
+        base_prompt.rstrip(),
+        "",
+        "## Role",
+        "",
+        _role_brief_excerpt(REPO_ROOT / "role-specs" / "agent-dispatcher.md").rstrip(),
+        "",
+        "## Work Units To Dispatch",
+        "",
+        f"- run_id: {run_id}",
+        f"- phase_id: {phase_id}",
+        f"- status_protocol: {status_protocol}",
+    ]
+    for invocation in stage_invocations:
+        result_path = invocation.expected_result_path
+        role_text = _role_brief_excerpt(invocation.role_brief_path)
+        allowed_files = list(invocation.allowed_files) or ["**/*"]
+        worktree_path = str(invocation.worktree_path) if invocation.worktree_path else None
+        bash_cwd = (
+            "Every Bash command for this unit must self-establish cwd with "
+            f"`cd {worktree_path} && ...`, use `git -C {worktree_path} ...`, "
+            "or use absolute paths. Do not rely on Bash cwd persisting between tool calls."
+            if worktree_path
+            else "This stage has no per-unit worktree; use only the controller-prescribed paths."
+        )
+        stage_payload = {
+            "stage_id": invocation.stage_id,
+            "work_unit_id": invocation.work_unit_id,
+            "agent_role": invocation.agent_role,
+            "subagent_type": invocation.subagent_type or _subagent_type_for_role(invocation.agent_role),
+            "worktree_path": worktree_path,
+            "result_path": str(result_path),
+            "allowed_files": allowed_files,
+            "acceptance_criteria": invocation.acceptance_criteria,
+            "bead_id": invocation.bead_id,
+            "upstream_stage_ids": list(invocation.upstream_stage_ids),
+            "failure_tolerance": invocation.failure_tolerance,
+            "lens_chain": list(invocation.lens_chain),
+        }
+        prompt = "\n".join(
+            [
+                f"Stage contract JSON: {json.dumps(stage_payload, sort_keys=True)}",
+                "",
+                "Before finishing, write a stage result JSON to the prescribed result_path exactly.",
+                "Use `status: complete` for success, `status: complete_with_concerns` for adopted work with follow-up notes, `status: blocked` for non-retryable blockers, or `status: needs_input` for missing context.",
+                bash_cwd,
+                "",
+                role_text,
+                "",
+                "Return a concise final summary after the result JSON exists on disk.",
+            ]
+        )
+        lines.extend(
+            [
+                "",
+                f"### {invocation.stage_id}",
+                f"- work_unit_id: {invocation.work_unit_id or '-'}",
+                f"- subagent_type: {stage_payload['subagent_type']}",
+                f"- worktree_path: {worktree_path or '-'}",
+                f"- expected_result_path: {result_path}",
+                f"- bead_id: {invocation.bead_id or '-'}",
+                f"- allowed_files: {', '.join(allowed_files)}",
+                f"- acceptance_criteria: {invocation.acceptance_criteria or '-'}",
+                f"- bash_cwd_discipline: {bash_cwd}",
+                "",
+                "Dispatch form:",
+                "```text",
+                f'Agent(subagent_type="{stage_payload["subagent_type"]}", prompt={json.dumps(prompt)})',
+                "```",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "## Marker Contract",
+            "",
+            "After each Agent tool_result, print exactly one controller marker on your assistant text channel.",
+            'Success marker: STAGE_COMPLETE {"stage_id":"<stage_id>","result_path":"<absolute path>"}',
+            'Failure marker: STAGE_FAILED {"stage_id":"<stage_id>","failure_kind":"<kind>","notes":"<short notes>"}',
+            "For the binary structured protocol, route complete_with_concerns, blocked, failed, and needs_input through the result JSON status field; keep marker parsing binary.",
+            "",
+            "## Parallelism Rules",
+            "",
+            f"- Dispatch at most {max(1, parallelism_cap)} Agent calls in one assistant message.",
+            "- Fan-out stages with no upstream dependency between them may run concurrently.",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _attach_work_unit_metadata(
+    invocations: list[StageInvocation],
+    prepared: Mapping[str, Any],
+    *,
+    phase_id: str,
+) -> list[StageInvocation]:
+    units = _phase_work_units(prepared, phase_id)
+    if not units:
+        return invocations
+    by_id = {str(unit.get("id")): unit for unit in units if isinstance(unit.get("id"), str)}
+    enriched: list[StageInvocation] = []
+    for invocation in invocations:
+        unit_id = _work_unit_id_for_invocation(invocation, units)
+        unit = by_id.get(unit_id or "")
+        if unit is None:
+            enriched.append(invocation)
+            continue
+        criteria = unit.get("acceptance_criteria")
+        acceptance = "\n".join(str(item) for item in criteria if isinstance(item, str)) if isinstance(criteria, list) else ""
+        enriched.append(
+            dataclasses.replace(
+                invocation,
+                work_unit_id=unit_id,
+                allowed_files=tuple(unit_file_scope(unit)),
+                acceptance_criteria=acceptance,
+            )
+        )
+    return enriched
+
+
+def _work_unit_id_for_invocation(invocation: StageInvocation, units: list[Mapping[str, Any]]) -> str | None:
+    if invocation.is_provider_stage or invocation.merge_target:
+        return None
+    unit_ids = [str(unit.get("id")) for unit in units if isinstance(unit.get("id"), str)]
+    if not unit_ids:
+        return None
+    if len(unit_ids) == 1:
+        return unit_ids[0]
+    if invocation.fan_out_index is not None and invocation.agent_role in _UNIT_WRITER_ROLES:
+        if 0 <= invocation.fan_out_index < len(unit_ids):
+            return unit_ids[invocation.fan_out_index]
+        raise ValueError(
+            f"stage {invocation.stage_id} fan_out_index {invocation.fan_out_index} has no matching work unit"
+        )
+    if invocation.agent_role in _UNIT_WRITER_ROLES:
+        raise ValueError(
+            f"stage {invocation.stage_id} is ambiguous across {len(unit_ids)} work units; use fan_out or explicit mapping"
+        )
+    return None
+
+
+def _phase_work_units(prepared: Mapping[str, Any], phase_id: str) -> list[Mapping[str, Any]]:
+    descriptor = (prepared.get("work_unit_artifacts") or {}).get(phase_id)
+    artifact = descriptor.get("artifact") if isinstance(descriptor, Mapping) and isinstance(descriptor.get("artifact"), Mapping) else None
+    if artifact is None and isinstance(descriptor, Mapping) and isinstance(descriptor.get("path"), str):
+        try:
+            artifact_path = Path(str(prepared.get("repo_root") or REPO_ROOT)) / str(descriptor["path"])
+            artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+        except Exception:
+            artifact = None
+    if not isinstance(artifact, Mapping):
+        return []
+    return [unit for unit in artifact.get("work_units") or [] if isinstance(unit, Mapping)]
+
+
+_UNIT_WRITER_ROLES = {"agent-writer"}
+
+
+def _subagent_type_for_role(agent_role: str) -> str:
+    if agent_role.startswith("provider:"):
+        return "general-purpose"
+    return f"swarmdaddy:{agent_role}"
 
 
 def _role_brief_path(agent_role: str) -> Path:
@@ -359,4 +591,4 @@ def _safe_filename(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "-", value).strip("-") or "stage"
 
 
-__all__ = ["StageInvocation", "plan_stage_invocations", "render_orchestrator_brief"]
+__all__ = ["StageInvocation", "plan_stage_invocations", "render_orchestrator_brief", "with_runtime_fields"]

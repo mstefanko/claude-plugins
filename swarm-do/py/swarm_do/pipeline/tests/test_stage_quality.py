@@ -43,7 +43,7 @@ class StageQualityTests(unittest.TestCase):
         self.assertEqual([stage.stage_id for stage in invocations[:4]], ["research", "analysis", "clarify", "writer"])
         self.assertIn(["analysis", "clarify"], snapshot["topological_layers"])
         prompt = render_orchestrator_brief(base_prompt="# Base\n", stage_invocations=invocations[:1], run_id=RUN_ID, phase_id="1")
-        self.assertIn('Task(subagent_type="general-purpose"', prompt)
+        self.assertIn('Agent(subagent_type="general-purpose"', prompt)
         self.assertIn("STAGE_COMPLETE", prompt)
 
     def test_stage_session_lifecycle_round_trips_schema(self) -> None:
