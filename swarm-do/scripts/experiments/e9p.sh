@@ -29,16 +29,22 @@ run_n_parallel_forcing() {
   printf '%s\n' "$prompt" > "$out_dir/prompt.txt"
 
   local t0 t1 rc
-  t0=$(date +%s)
-  printf '%s\n' "$prompt" | "$CLAUDE_BIN" -p \
-    --output-format stream-json \
-    --verbose \
-    --input-format text \
-    --dangerously-skip-permissions \
-    >"$out_dir/stream.jsonl" 2>"$out_dir/stderr.log"
-  rc=$?
-  t1=$(date +%s)
-  printf 'exit=%s\nwall_seconds=%s\n' "$rc" "$((t1 - t0))" > "$out_dir/meta.txt"
+  if reuse_stream_short_circuit "$out_dir"; then
+    rc=0
+    t0=0
+    t1=0
+  else
+    t0=$(date +%s)
+    printf '%s\n' "$prompt" | "$CLAUDE_BIN" -p \
+      --output-format stream-json \
+      --verbose \
+      --input-format text \
+      --dangerously-skip-permissions \
+      >"$out_dir/stream.jsonl" 2>"$out_dir/stderr.log"
+    rc=$?
+    t1=$(date +%s)
+    printf 'exit=%s\nwall_seconds=%s\n' "$rc" "$((t1 - t0))" > "$out_dir/meta.txt"
+  fi
 
   local stream="$out_dir/stream.jsonl"
   local cost; cost=$(extract_total_cost "$stream")
@@ -64,29 +70,7 @@ print(peak)
 PY
 )
   local done_count
-  done_count=$(python3 - "$stream" "$n" <<'PY'
-import json, sys
-n = int(sys.argv[2])
-seen = set()
-with open(sys.argv[1]) as f:
-    for ln in f:
-        try:
-            ev = json.loads(ln)
-        except Exception:
-            continue
-        def walk(o):
-            if isinstance(o, str):
-                for k in range(1, n + 1):
-                    if f"TAG_{k}_OK" in o:
-                        seen.add(k)
-            elif isinstance(o, dict):
-                for v in o.values(): walk(v)
-            elif isinstance(o, list):
-                for v in o: walk(v)
-        walk(ev)
-print(len(seen))
-PY
-)
+  done_count=$(count_unique_k_markers "$stream" "TAG_" "$n" "_OK")
   echo "[e9p n=$n] rc=$rc wall=${wall}s cost=$cost peak_parallel=$peak_parallel done=$done_count/$n"
   printf '%s\n' "$peak_parallel" > "$out_dir/peak_parallel.txt"
 }

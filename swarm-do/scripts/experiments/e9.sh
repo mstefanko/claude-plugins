@@ -22,33 +22,7 @@ run_n() {
   turns=$(extract_num_turns "$stream")
   wall=$(awk -F= '/wall_seconds/{print $2}' "$EXPERIMENT_ROOT/$exp_id/meta.txt")
   parent_done=$(count_response_text_hits "$stream" "PARENT_DONE_N${n}")
-  done_count=$(python3 - "$stream" "$n" <<'PY'
-import json, sys
-hits = 0
-import re
-n = int(sys.argv[2])
-seen = set()
-with open(sys.argv[1]) as f:
-    for ln in f:
-        try:
-            ev = json.loads(ln)
-        except Exception:
-            continue
-        def walk(o):
-            global hits
-            if isinstance(o, str):
-                for k in range(1, n + 1):
-                    needle = f"TOY_DONE_{k}"
-                    if needle in o and k not in seen:
-                        seen.add(k); hits += 1
-            elif isinstance(o, dict):
-                for v in o.values(): walk(v)
-            elif isinstance(o, list):
-                for v in o: walk(v)
-        walk(ev)
-print(hits)
-PY
-)
+  done_count=$(count_unique_k_markers "$stream" "TOY_DONE_" "$n")
   # Count Agent tool_uses inside a single assistant turn
   parallel_count=$(python3 - "$stream" <<'PY'
 import json, sys

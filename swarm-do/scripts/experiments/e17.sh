@@ -25,16 +25,22 @@ run_n() {
   printf '%s\n' "$prompt" > "$out_dir/prompt.txt"
 
   local t0 t1 rc
-  t0=$(date +%s)
-  ( cd "$workdir" && printf '%s\n' "$prompt" | "$CLAUDE_BIN" -p \
-      --output-format stream-json \
-      --verbose \
-      --input-format text \
-      --dangerously-skip-permissions \
-      >"$out_dir/stream.jsonl" 2>"$out_dir/stderr.log" )
-  rc=$?
-  t1=$(date +%s)
-  printf 'exit=%s\nwall_seconds=%s\n' "$rc" "$((t1 - t0))" > "$out_dir/meta.txt"
+  if reuse_stream_short_circuit "$out_dir"; then
+    rc=0
+    t0=0
+    t1=0
+  else
+    t0=$(date +%s)
+    ( cd "$workdir" && printf '%s\n' "$prompt" | "$CLAUDE_BIN" -p \
+        --output-format stream-json \
+        --verbose \
+        --input-format text \
+        --dangerously-skip-permissions \
+        >"$out_dir/stream.jsonl" 2>"$out_dir/stderr.log" )
+    rc=$?
+    t1=$(date +%s)
+    printf 'exit=%s\nwall_seconds=%s\n' "$rc" "$((t1 - t0))" > "$out_dir/meta.txt"
+  fi
 
   local stream="$out_dir/stream.jsonl"
   local cost; cost=$(extract_total_cost "$stream")
@@ -60,52 +66,52 @@ print(peak)
 PY
 )
   local done_count
-  done_count=$(python3 - "$stream" "$n" <<'PY'
-import json, sys
-n = int(sys.argv[2])
-seen = set()
-with open(sys.argv[1]) as f:
-    for ln in f:
-        try:
-            ev = json.loads(ln)
-        except Exception:
-            continue
-        def walk(o):
-            if isinstance(o, str):
-                for k in range(1, n + 1):
-                    if f"E17_DONE_{k}" in o:
-                        seen.add(k)
-            elif isinstance(o, dict):
-                for v in o.values(): walk(v)
-            elif isinstance(o, list):
-                for v in o: walk(v)
-        walk(ev)
-print(len(seen))
-PY
-)
-  # Marker order: extract assistant text containing E17_DONE_<k> in stream order
+  done_count=$(count_unique_k_markers "$stream" "E17_DONE_" "$n")
+  # Marker order: emission order of E17_DONE_<k> across PARENT-RESPONSE TEXT
+  # only (same scope as count_unique_k_markers — excludes the parent's own
+  # tool_use prompts that template the marker per sub-agent).
   local marker_order
   marker_order=$(python3 - "$stream" "$n" <<'PY'
-import json, sys, re
+import json, re, sys
 n = int(sys.argv[2])
+pat = re.compile(r'E17_DONE_(\d+)')
 order = []
+
+def scan(s):
+    if not isinstance(s, str):
+        return
+    for m in pat.finditer(s):
+        try:
+            k = int(m.group(1))
+        except ValueError:
+            continue
+        if 1 <= k <= n and k not in order:
+            order.append(k)
+
 with open(sys.argv[1]) as f:
     for ln in f:
         try:
             ev = json.loads(ln)
         except Exception:
             continue
-        def walk(o):
-            if isinstance(o, str):
-                for m in re.finditer(r'E17_DONE_(\d+)', o):
-                    k = int(m.group(1))
-                    if k not in order:
-                        order.append(k)
-            elif isinstance(o, dict):
-                for v in o.values(): walk(v)
-            elif isinstance(o, list):
-                for v in o: walk(v)
-        walk(ev)
+        t = ev.get("type")
+        if t == "assistant":
+            for blk in (ev.get("message", {}).get("content") or []):
+                if blk.get("type") == "text":
+                    scan(blk.get("text", ""))
+        elif t == "user":
+            for blk in (ev.get("message", {}).get("content") or []):
+                if blk.get("type") != "tool_result":
+                    continue
+                content = blk.get("content")
+                if isinstance(content, str):
+                    scan(content)
+                elif isinstance(content, list):
+                    for sub in content:
+                        if isinstance(sub, dict) and sub.get("type") == "text":
+                            scan(sub.get("text", ""))
+        elif t == "result":
+            scan(ev.get("result"))
 print(','.join(str(k) for k in order))
 PY
 )
