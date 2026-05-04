@@ -304,6 +304,8 @@ In `fanout` mode, the controller — not the dispatcher Claude — populates `co
 
 ### Phase 4 — Wire per-unit worktrees + adoption layer
 
+**STATUS 2026-05-04 — wiring landed; adoption layer (step 6) and idempotent-resume (step 7) verified by tests.** Step 1 ships at `phase_pump.py:_prepare_stage_controller` (line 506-514, branches on `phase_sessions_mode == "fanout"`) calling `_materialize_unit_worktrees` (line 545-565), which iterates `unit_ids` and invokes `materialize_unit_execution_worktree(run_id, phase_id, unit_id, data_dir=data_dir)` per unit. Step 6 adoption is wired through `StageMarkerProcessor` + per-unit commit/merge — covered by passing tests `test_unit_marker_commits_unit_worktree_then_merges` and `test_unit_adoption_resume_from_marker_before_merge_is_idempotent` (resolves CB-2 in favour of variant (a) "in-place adoption"). The full `pump_phases(... mode="fanout")` happy-path passes via `test_fanout_launch_contract_uses_bypass_and_agent_prompt` after a 2026-05-04 fixture-leak fix (`make_prepared_run` now pins `XDG_DATA_HOME` to tmp and pre-cleans `/tmp/swarmdaddy-worktrees/<run_id>`). Remaining open: kill-points (i) mid-spawn and (iii) mid-merge are exercised only by primitive-level tests, not end-to-end with real claude — captured as deferred E16 lanes.
+
 **Adoption path is load-bearing — do not skip step 6.** Wire existing helpers; do not re-implement.
 
 1. From `_prepare_stage_controller()` (in `phase_pump.py`), call `materialize_unit_execution_worktree()` per work unit (already shipped in `execution_worktree.py`), keyed by `StageInvocation.work_unit_id` (Decision 13).

@@ -1,13 +1,35 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 from swarm_do.pipeline.prepare import accept_prepared, prepare_plan_run
 
 
 RUN_ID = "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+
+
+def _purge_run_worktree_leaks(run_id: str) -> None:
+    """Remove any pre-existing worktree dir for this run_id at the safe-fallback paths.
+
+    `_safe_run_worktree_root` walks four candidates (data_dir → XDG → /tmp → tempdir).
+    Tests routinely fail candidates 1 and 2 (sensitive prefixes) and land on /tmp;
+    once a /tmp dir exists from a prior run, the next run trips on
+    "run worktree path already exists without a valid manifest". Clear leftovers
+    eagerly so every test invocation starts clean.
+    """
+    xdg = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+    candidates = [
+        Path(xdg).expanduser() / "swarmdaddy" / "worktrees" / run_id,
+        Path("/tmp") / "swarmdaddy-worktrees" / run_id,
+        Path(tempfile.gettempdir()) / "swarmdaddy-worktrees" / run_id,
+    ]
+    for path in candidates:
+        if path.exists():
+            shutil.rmtree(path, ignore_errors=True)
 
 
 def make_prepared_run(
@@ -24,6 +46,15 @@ def make_prepared_run(
     repo.parent.mkdir(parents=True, exist_ok=True)
     repo.mkdir()
     data.mkdir()
+    # Pin _default_worktree_data_dir() under tmp so a tmp-data_dir rejection
+    # (e.g., tmp resolving inside a sensitive prefix) can't fall back to
+    # ~/.local/share/swarmdaddy and leak per-run worktrees across test runs.
+    xdg = tmp / "xdg"
+    xdg.mkdir(exist_ok=True)
+    os.environ["XDG_DATA_HOME"] = str(xdg)
+    # Clear any pre-existing fallback worktree dirs for this run_id so we can't
+    # trip on "run worktree path already exists without a valid manifest".
+    _purge_run_worktree_leaks(run_id)
     _git_init(repo)
     if ignore_run_artifacts:
         (repo / ".gitignore").write_text("data/runs/\n", encoding="utf-8")
