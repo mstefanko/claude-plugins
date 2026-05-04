@@ -64,6 +64,10 @@ from .stage_sessions import (
 
 ENABLED_LAUNCHERS = {"manual", "fake-test", "claude-print"}
 ClaudeRunner = Callable[[Sequence[str], str], subprocess.CompletedProcess[str]]
+AUTO_PHASE_SESSIONS_WARNING = (
+    "--phase-sessions=auto is a temporary legacy/debug path; fanout is the default "
+    "full-pipeline mode with bypass-cascade and controller-owned unit redispatch."
+)
 
 RESULT_STATUS_FOR_COMMAND = {
     "complete": "complete",
@@ -107,6 +111,8 @@ def pump_phases(
         raise ValueError(f"unsupported launcher: {launcher}")
     if phase_sessions_mode not in {"auto", "fanout"}:
         raise ValueError(f"unsupported phase session mode: {phase_sessions_mode}")
+    if phase_sessions_mode == "auto":
+        append_phase_sessions_auto_warning_event(base, run_id=run_id)
     _append_pump_event(
         base,
         run_id=run_id,
@@ -266,6 +272,7 @@ def pump_phases(
             data_dir=base,
             base_prompt_path=Path(context["prompt_path"]),
             base_prompt_text=Path(context["prompt_path"]).read_text(encoding="utf-8"),
+            phase_sessions_mode=phase_sessions_mode,
         )
         launch = _prepare_phase_launch(
             run_id,
@@ -2415,6 +2422,15 @@ def _append_pump_event(
     append_run_event(data_dir, row)
 
 
+def append_phase_sessions_auto_warning_event(data_dir: Path, *, run_id: str) -> None:
+    _append_pump_event(
+        data_dir,
+        run_id=run_id,
+        event_type="phase_sessions_auto_warning",
+        details={"mode": "auto", "warning": AUTO_PHASE_SESSIONS_WARNING},
+    )
+
+
 def _append_stage_event(
     data_dir: Path,
     *,
@@ -2443,4 +2459,4 @@ def _append_stage_event(
     append_run_event(data_dir, row)
 
 
-__all__ = ["format_pump_result", "pump_phases"]
+__all__ = ["AUTO_PHASE_SESSIONS_WARNING", "append_phase_sessions_auto_warning_event", "format_pump_result", "pump_phases"]

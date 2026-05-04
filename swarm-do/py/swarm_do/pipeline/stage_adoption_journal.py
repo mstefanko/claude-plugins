@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from hashlib import sha256
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -28,8 +29,17 @@ def adoption_journal_dir(data_dir: Path, run_id: str, phase_id: str) -> Path:
     return Path(data_dir) / "runs" / run_id / "phases" / phase_id / "stage_adoptions"
 
 
-def adoption_journal_path(data_dir: Path, run_id: str, phase_id: str, phase_attempt: int, stage_id: str) -> Path:
-    name = f"attempt-{int(phase_attempt)}.{_safe_filename(stage_id)}.journal.json"
+def adoption_journal_path(
+    data_dir: Path,
+    run_id: str,
+    phase_id: str,
+    phase_attempt: int,
+    stage_id: str,
+    *,
+    result_path: str | None = None,
+) -> Path:
+    suffix = f".{_result_path_key(result_path)}" if result_path else ""
+    name = f"attempt-{int(phase_attempt)}.{_safe_filename(stage_id)}{suffix}.journal.json"
     return adoption_journal_dir(data_dir, run_id, phase_id) / name
 
 
@@ -42,7 +52,14 @@ def start_adoption_journal(
     marker: StageMarker,
     invocation: StageInvocation,
 ) -> dict[str, Any]:
-    path = adoption_journal_path(data_dir, run_id, phase_id, phase_attempt, marker.stage_id)
+    path = adoption_journal_path(
+        data_dir,
+        run_id,
+        phase_id,
+        phase_attempt,
+        marker.stage_id,
+        result_path=marker.result_path,
+    )
     existing = _read_journal(path)
     payload = {
         "schema_version": 1,
@@ -81,7 +98,14 @@ def checkpoint_adoption_journal(
 ) -> dict[str, Any]:
     if checkpoint not in CHECKPOINT_ORDER:
         raise ValueError(f"unknown adoption checkpoint: {checkpoint}")
-    path = adoption_journal_path(data_dir, run_id, phase_id, phase_attempt, stage_id)
+    path = _existing_journal_path(
+        data_dir,
+        run_id,
+        phase_id,
+        phase_attempt,
+        stage_id,
+        result_path=_optional_str(payload.get("result_path")) if payload is not None else None,
+    )
     journal = _read_journal(path)
     if not journal:
         journal = {
@@ -149,14 +173,51 @@ def marker_from_journal(journal: Mapping[str, Any]) -> StageMarker | None:
     )
 
 
+def _existing_journal_path(
+    data_dir: Path,
+    run_id: str,
+    phase_id: str,
+    phase_attempt: int,
+    stage_id: str,
+    *,
+    result_path: str | None = None,
+) -> Path:
+    if result_path:
+        path = adoption_journal_path(
+            data_dir,
+            run_id,
+            phase_id,
+            phase_attempt,
+            stage_id,
+            result_path=result_path,
+        )
+        if path.exists():
+            return path
+    root = adoption_journal_dir(data_dir, run_id, phase_id)
+    pattern = f"attempt-{int(phase_attempt)}.{_safe_filename(stage_id)}.*.journal.json"
+    matches = sorted(root.glob(pattern)) if root.is_dir() else []
+    if matches:
+        return matches[0]
+    return adoption_journal_path(
+        data_dir,
+        run_id,
+        phase_id,
+        phase_attempt,
+        stage_id,
+        result_path=result_path,
+    )
+
+
 def _read_journal(path: Path) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return {}
-    except Exception:
-        return {}
-    return value if isinstance(value, dict) else {}
+    except Exception as exc:
+        raise ValueError(f"adoption journal unreadable: {path}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise ValueError(f"adoption journal invalid: {path}: root must be an object")
+    return value
 
 
 def _optional_str(value: Any) -> str | None:
@@ -165,6 +226,10 @@ def _optional_str(value: Any) -> str | None:
 
 def _safe_filename(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "-", value).strip("-") or "stage"
+
+
+def _result_path_key(value: str | None) -> str:
+    return sha256(str(value or "").encode("utf-8")).hexdigest()[:16]
 
 
 __all__ = [

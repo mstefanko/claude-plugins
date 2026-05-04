@@ -11,7 +11,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from swarm_do.pipeline.cli import cmd_brainstorm, cmd_design, cmd_do, cmd_prepare, cmd_research, cmd_review
+from swarm_do.pipeline.cli import _build_parser, cmd_brainstorm, cmd_design, cmd_do, cmd_prepare, cmd_research, cmd_review
 from swarm_do.pipeline.prepare import (
     InvalidPreparedTransition,
     StalePreparedArtifactError,
@@ -19,6 +19,7 @@ from swarm_do.pipeline.prepare import (
     load_prepared_artifact,
     prepare_plan_run,
 )
+from swarm_do.pipeline.phase_pump import pump_phases
 from swarm_do.pipeline.run_state import active_run_path, load_active_run
 
 
@@ -161,6 +162,7 @@ class CommandProfileTests(unittest.TestCase):
         args = argparse.Namespace(
             target=None,
             prepared=RUN_ID,
+            phase_sessions="off",
             bd_epic_id="swarm-123",
             no_write_state=False,
             json=True,
@@ -176,6 +178,7 @@ class CommandProfileTests(unittest.TestCase):
         payload = json.loads(stdout.getvalue())
         self.assertTrue(payload["ready_for_dispatch"])
         self.assertEqual(payload["run_id"], RUN_ID)
+        self.assertNotIn("phase_sessions", payload)
         state = load_active_run(active_run_path(data))
         self.assertIsNotNone(state)
         self.assertEqual(state["status"], "prepared")
@@ -190,6 +193,7 @@ class CommandProfileTests(unittest.TestCase):
         args = argparse.Namespace(
             target=artifact_path,
             prepared=True,
+            phase_sessions="off",
             bd_epic_id=None,
             no_write_state=True,
             json=True,
@@ -232,6 +236,7 @@ class CommandProfileTests(unittest.TestCase):
             prepared=None,
             prepare=True,
             prepare_continue=True,
+            phase_sessions="off",
             bd_epic_id=None,
             no_write_state=False,
             json=True,
@@ -249,6 +254,53 @@ class CommandProfileTests(unittest.TestCase):
         artifact = load_prepared_artifact(payload["run_id"], data_dir=data, repo_root=repo)
         self.assertEqual(artifact["status"], "accepted")
         self.assertEqual(artifact["acceptance"]["accepted_by"], "auto-continue")
+        self.assertNotIn("phase_sessions", payload)
+
+    def test_do_prepare_continue_omitted_phase_sessions_defaults_to_fanout(self) -> None:
+        data = Path(self.td.name)
+        repo = data / "repo-fanout-default"
+        repo.mkdir()
+        self._write_ready_plan_repo(repo)
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        args = argparse.Namespace(
+            target="plan.md",
+            prepared=None,
+            prepare=True,
+            prepare_continue=True,
+            max_budget_usd=3.50,
+            bd_epic_id=None,
+            no_write_state=False,
+            json=True,
+        )
+        pump_result = {"status": "complete", "completed_phases": [{"phase_id": "1"}]}
+
+        with mock.patch("swarm_do.pipeline.prepare.REPO_ROOT", repo), mock.patch(
+            "swarm_do.pipeline.phase_pump.pump_phases",
+            return_value=pump_result,
+        ) as pump, redirect_stdout(stdout), redirect_stderr(stderr):
+            code = cmd_do(args)
+
+        self.assertEqual(code, 0, stderr.getvalue())
+        payload = json.loads(stdout.getvalue())
+        self.assertTrue(payload["ready_for_dispatch"])
+        self.assertEqual(payload["phase_sessions"]["mode"], "fanout")
+        self.assertEqual(payload["phase_sessions"]["launcher"], "claude-print")
+        self.assertEqual(payload["phase_sessions"]["status"], "complete")
+        self.assertEqual(payload["phase_sessions"]["warnings"], [])
+        self.assertEqual(payload["status_label"], "PHASES_COMPLETE")
+        pump.assert_called_once()
+        self.assertEqual(pump.call_args.args, (payload["run_id"],))
+        self.assertEqual(pump.call_args.kwargs["launcher"], "claude-print")
+        self.assertEqual(pump.call_args.kwargs["phase_sessions_mode"], "fanout")
+        self.assertIsNone(pump.call_args.kwargs["max_phases"])
+        self.assertTrue(pump.call_args.kwargs["init_if_missing"])
+        self.assertEqual(pump.call_args.kwargs["max_budget_usd"], 3.50)
+
+    def test_do_parser_defaults_phase_sessions_to_fanout(self) -> None:
+        args = _build_parser().parse_args(["do", "--prepared", RUN_ID])
+
+        self.assertEqual(args.phase_sessions, "fanout")
 
     def test_do_prepare_continue_phase_sessions_auto_runs_foreground_pump(self) -> None:
         data = Path(self.td.name)
@@ -282,14 +334,40 @@ class CommandProfileTests(unittest.TestCase):
         self.assertEqual(payload["phase_sessions"]["mode"], "auto")
         self.assertEqual(payload["phase_sessions"]["launcher"], "claude-print")
         self.assertEqual(payload["phase_sessions"]["status"], "complete")
+        self.assertEqual(len(payload["phase_sessions"]["warnings"]), 1)
+        self.assertIn("temporary legacy/debug path", payload["phase_sessions"]["warnings"][0])
         self.assertEqual(payload["status_label"], "PHASES_COMPLETE")
+        self.assertEqual(stderr.getvalue(), "")
         pump.assert_called_once()
         self.assertEqual(pump.call_args.args, (payload["run_id"],))
         self.assertEqual(pump.call_args.kwargs["launcher"], "claude-print")
+        self.assertEqual(pump.call_args.kwargs["phase_sessions_mode"], "auto")
         self.assertIsNone(pump.call_args.kwargs["max_phases"])
         self.assertTrue(pump.call_args.kwargs["init_if_missing"])
         self.assertEqual(pump.call_args.kwargs["max_budget_usd"], 3.50)
         self.assertEqual(pump.call_args.kwargs["policy_update"].forced_overrides["max_phase_attempt_budget_usd"], 3.50)
+
+    def test_pump_phases_auto_records_legacy_warning_event(self) -> None:
+        _repo, data, _artifact_path = self._accepted_prepared_run()
+
+        result = pump_phases(
+            RUN_ID,
+            launcher="fake-test",
+            phase_sessions_mode="auto",
+            max_phases=0,
+            init_if_missing=True,
+            data_dir=data,
+        )
+        events = [
+            event
+            for event in _read_run_events(data)
+            if event["event_type"] == "phase_sessions_auto_warning"
+        ]
+
+        self.assertEqual(result["status"], "max_phases")
+        self.assertTrue(events)
+        self.assertEqual(events[-1]["details"]["mode"], "auto")
+        self.assertIn("temporary legacy/debug path", events[-1]["details"]["warning"])
 
     def test_do_prepared_phase_sessions_auto_returns_nonzero_when_launcher_blocked(self) -> None:
         repo, _data, _artifact_path = self._accepted_prepared_run()

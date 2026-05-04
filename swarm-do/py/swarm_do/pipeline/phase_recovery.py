@@ -1166,7 +1166,7 @@ def _resume_adoption_journals_if_needed(
         resumed = resume_stage_adoption_journals(
             run_id=run_id,
             phase_id=phase_id,
-            phase_attempt=attempt,
+            phase_attempt=None,
             prepared=_prepared_artifact_for_recovery(run_id, data_dir=data_dir),
             workspace_metadata=command,
             launch_dir=launch_dir,

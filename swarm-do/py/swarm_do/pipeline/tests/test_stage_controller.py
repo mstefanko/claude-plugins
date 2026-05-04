@@ -11,9 +11,9 @@ from unittest import mock
 from swarm_do.pipeline.failure_taxonomy import failure_kind_details
 from swarm_do.pipeline.orchestrator_stream import StageMarker, parse_stage_marker_line
 from swarm_do.pipeline.stage_adoption_journal import adoption_journal_path, checkpoint_adoption_journal, start_adoption_journal
-from swarm_do.pipeline.stage_controller import StageMarkerProcessor, resume_stage_adoption_journals
+from swarm_do.pipeline.stage_controller import StageMarkerProcessor, resume_stage_adoption_journals, retry_failed_units
 from swarm_do.pipeline.stage_invocation import StageInvocation, plan_stage_invocations
-from swarm_do.pipeline.stage_sessions import init_stage_sessions, load_stage_sessions, record_stage_adopted
+from swarm_do.pipeline.stage_sessions import init_stage_sessions, load_stage_sessions, record_stage_adopted, stage_session_path
 
 
 RUN_ID = "01ARZ3NDEKTSV4RRFFQ69G5FAV"
@@ -227,10 +227,31 @@ class StageMarkerProcessorTests(unittest.TestCase):
         self.assertEqual(state["stages"][0]["failure_kind"], "stage_metadata_tampered")
         self.assertEqual(failure_kind_details("stage_metadata_tampered")["failure_retry_class"], "human_gate")
 
-    def test_result_metadata_claims_cannot_change_unit_or_bead(self) -> None:
+    def test_result_metadata_claims_cannot_change_unit_worktree_or_bead(self) -> None:
+        for key, value in (
+            ("work_unit_id", "unit-spoof"),
+            ("worktree_path", "/tmp/spoofed-worktree"),
+            ("bead_id", "bd-spoof"),
+        ):
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as td:
+                data, invocation, processor = _processor(Path(td))
+                _write_stage_result(invocation.expected_result_path, invocation, extra={key: value})
+                marker = _complete_marker(invocation)
+
+                decision = processor.process_marker(marker)
+                state = load_stage_sessions(RUN_ID, PHASE_ID, data_dir=data)
+
+            self.assertEqual(decision.outcome, "rejected_metadata_tampered")
+            self.assertEqual(state["stages"][0]["failure_kind"], "stage_metadata_tampered")
+
+    def test_result_human_gate_failure_kind_is_metadata_tamper(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             data, invocation, processor = _processor(Path(td))
-            _write_stage_result(invocation.expected_result_path, invocation, extra={"work_unit_id": "unit-spoof"})
+            _write_stage_result(
+                invocation.expected_result_path,
+                invocation,
+                extra={"status": "failed", "failure_kind": "NON_RETRYABLE_INVALID_INPUT"},
+            )
             marker = _complete_marker(invocation)
 
             decision = processor.process_marker(marker)
@@ -289,7 +310,7 @@ class StageMarkerProcessorTests(unittest.TestCase):
             first = resume_stage_adoption_journals(
                 run_id=RUN_ID,
                 phase_id=PHASE_ID,
-                phase_attempt=1,
+                phase_attempt=None,
                 prepared={},
                 workspace_metadata={},
                 launch_dir=tmp / "launch",
@@ -309,13 +330,88 @@ class StageMarkerProcessorTests(unittest.TestCase):
                 for line in (data / "telemetry" / "run_events.jsonl").read_text(encoding="utf-8").splitlines()
             ]
             journal = json.loads(
-                adoption_journal_path(data, RUN_ID, PHASE_ID, 1, invocation.stage_id).read_text(encoding="utf-8")
+                adoption_journal_path(
+                    data,
+                    RUN_ID,
+                    PHASE_ID,
+                    1,
+                    invocation.stage_id,
+                    result_path=str(invocation.expected_result_path),
+                ).read_text(encoding="utf-8")
             )
 
         self.assertEqual(first["resumed_adoption_journals"][0]["outcome"], "duplicate")
         self.assertEqual(second["resumed_adoption_journals"], [])
         self.assertEqual(sum(1 for event in events if event["event_type"] == "stage_adopted"), 1)
         self.assertTrue(journal["completed"])
+
+    def test_corrupt_adoption_journal_requires_repair_instead_of_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            data, invocation, _unused_processor = _processor(tmp)
+            journal_path = adoption_journal_path(
+                data,
+                RUN_ID,
+                PHASE_ID,
+                1,
+                invocation.stage_id,
+                result_path=str(invocation.expected_result_path),
+            )
+            journal_path.parent.mkdir(parents=True, exist_ok=True)
+            journal_path.write_text("{not-json", encoding="utf-8")
+
+            with self.assertRaises(ValueError):
+                resume_stage_adoption_journals(
+                    run_id=RUN_ID,
+                    phase_id=PHASE_ID,
+                    phase_attempt=None,
+                    prepared={},
+                    workspace_metadata={},
+                    launch_dir=tmp / "launch",
+                    data_dir=data,
+                )
+
+    def test_retry_failed_units_caps_failed_stage_at_three_cycles(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            data, invocation, _processor_unused = _processor(Path(td))
+            state = load_stage_sessions(RUN_ID, PHASE_ID, data_dir=data)
+            state["stages"][0].update(
+                {
+                    "status": "failed",
+                    "failure_kind": "RETRYABLE_TIMEOUT",
+                    "retry_cycle_count": 3,
+                    "attempt": 3,
+                }
+            )
+            _write_stage_state(data, state)
+
+            summary = retry_failed_units(run_id=RUN_ID, phase_id=PHASE_ID, data_dir=data)
+            state = load_stage_sessions(RUN_ID, PHASE_ID, data_dir=data)
+
+        self.assertEqual(summary["blocked_stage_ids"], [invocation.stage_id])
+        self.assertEqual(summary["retry_stage_ids"], [])
+        self.assertEqual(state["stages"][0]["status"], "blocked")
+        self.assertEqual(state["stages"][0]["failure_kind"], "retry_cycle_cap_exceeded")
+
+    def test_retry_failed_units_treats_zero_retry_cycle_as_zero_not_attempt_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            data, invocation, _processor_unused = _processor(Path(td))
+            state = load_stage_sessions(RUN_ID, PHASE_ID, data_dir=data)
+            state["stages"][0].update(
+                {
+                    "status": "pending",
+                    "failure_kind": "RETRYABLE_TIMEOUT",
+                    "fresh_reviewer_required": True,
+                    "retry_cycle_count": 0,
+                    "attempt": 99,
+                }
+            )
+            _write_stage_state(data, state)
+
+            summary = retry_failed_units(run_id=RUN_ID, phase_id=PHASE_ID, data_dir=data)
+
+        self.assertEqual(summary["blocked_stage_ids"], [])
+        self.assertEqual(summary["retry_stage_ids"], [invocation.stage_id])
 
     def test_unknown_stage_marker_recorded_without_crash(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -430,6 +526,13 @@ def _write_stage_result(path: Path, invocation: StageInvocation, *, extra: dict 
     path.write_text(
         json.dumps(payload, sort_keys=True)
         + "\n",
+        encoding="utf-8",
+    )
+
+
+def _write_stage_state(data: Path, state: dict) -> None:
+    stage_session_path(RUN_ID, PHASE_ID, data_dir=data).write_text(
+        json.dumps(state, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
 

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import json
+import inspect
 import tempfile
+import unittest
 from pathlib import Path
-
-import pytest
 
 from swarm_do.pipeline import phase_pump
 from swarm_do.pipeline.execution_worktree import materialize_run_execution_worktree, materialize_unit_execution_worktree
@@ -18,10 +18,54 @@ from swarm_do.pipeline.tests.phase_session_fixtures import make_prepared_run
 from swarm_do.pipeline.unit_sessions import load_unit_sessions
 
 
-pytestmark = pytest.mark.unit
-
-
 RUN_ID = "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+
+
+class _MonkeyPatch:
+    def __init__(self) -> None:
+        self._undo: list[tuple[object, str, object]] = []
+
+    def setattr(self, target: object, name: str, value: object) -> None:
+        old_value = getattr(target, name)
+        self._undo.append((target, name, old_value))
+        setattr(target, name, value)
+
+    def undo(self) -> None:
+        for target, name, old_value in reversed(self._undo):
+            setattr(target, name, old_value)
+        self._undo.clear()
+
+
+def load_tests(_loader, _tests, _pattern):
+    suite = unittest.TestSuite()
+    for name, value in sorted(globals().items()):
+        if name.startswith("test_") and inspect.isfunction(value) and value.__module__ == __name__:
+            suite.addTest(_function_test_case(value))
+    return suite
+
+
+def _function_test_case(func):
+    def run() -> None:
+        signature = inspect.signature(func)
+        kwargs: dict[str, object] = {}
+        temp_dirs: list[tempfile.TemporaryDirectory[str]] = []
+        monkeypatch = None
+        try:
+            if "tmp_path" in signature.parameters:
+                tmp = tempfile.TemporaryDirectory()
+                temp_dirs.append(tmp)
+                kwargs["tmp_path"] = Path(tmp.name)
+            if "monkeypatch" in signature.parameters:
+                monkeypatch = _MonkeyPatch()
+                kwargs["monkeypatch"] = monkeypatch
+            func(**kwargs)
+        finally:
+            if monkeypatch is not None:
+                monkeypatch.undo()
+            for tmp in reversed(temp_dirs):
+                tmp.cleanup()
+
+    return unittest.FunctionTestCase(run, description=func.__name__)
 
 
 def test_tool_name_agent_alias(tmp_path: Path) -> None:
@@ -99,7 +143,6 @@ def test_structured_status_blocked_records_blocked_without_adoption() -> None:
             invocation,
             status="blocked",
             summary="blocked by missing spec",
-            failure_kind="NON_RETRYABLE_INVALID_INPUT",
         )
         marker = _complete_marker(invocation)
 
@@ -110,7 +153,7 @@ def test_structured_status_blocked_records_blocked_without_adoption() -> None:
     assert decision.outcome == "blocked_recorded"
     assert not summary["completed"]
     assert state["stages"][0]["status"] == "blocked"
-    assert state["stages"][0]["failure_kind"] == "NON_RETRYABLE_INVALID_INPUT"
+    assert state["stages"][0]["failure_kind"] == "blocked"
 
 
 def test_structured_status_needs_input_and_failed_route_through_result_json() -> None:
@@ -137,27 +180,24 @@ def test_structured_status_needs_input_and_failed_route_through_result_json() ->
     assert state["stages"][0]["failure_kind"] == "failed"
 
 
-@pytest.mark.parametrize(
-    ("status", "outcome", "ledger_status"),
-    [
+def test_structured_status_aliases_route_from_result_json() -> None:
+    for status, outcome, ledger_status in [
         ("done", "adopted", "adopted"),
         ("done_with_concerns", "adopted_with_concerns", "adopted"),
         ("needs_context", "needs_input_recorded", "blocked"),
-    ],
-)
-def test_structured_status_aliases_route_from_result_json(status: str, outcome: str, ledger_status: str) -> None:
-    with tempfile.TemporaryDirectory() as td:
-        data, invocation, processor = _processor(Path(td))
-        _write_stage_result(invocation.expected_result_path, invocation, status=status, summary="alias")
+    ]:
+        with tempfile.TemporaryDirectory() as td:
+            data, invocation, processor = _processor(Path(td))
+            _write_stage_result(invocation.expected_result_path, invocation, status=status, summary="alias")
 
-        decision = processor.process_marker(_complete_marker(invocation))
-        state = load_stage_sessions(RUN_ID, "1", data_dir=data)
+            decision = processor.process_marker(_complete_marker(invocation))
+            state = load_stage_sessions(RUN_ID, "1", data_dir=data)
 
-    assert decision.outcome == outcome
-    assert state["stages"][0]["status"] == ledger_status
+        assert decision.outcome == outcome
+        assert state["stages"][0]["status"] == ledger_status
 
 
-def test_fanout_launch_contract_uses_bypass_and_agent_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_fanout_launch_contract_uses_bypass_and_agent_prompt(monkeypatch) -> None:
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
         repo, data, run_id = make_prepared_run(
@@ -327,13 +367,17 @@ def test_ambiguous_multi_unit_writer_mapping_is_rejected(tmp_path: Path) -> None
     data.mkdir()
     prepared = _prepared_with_units(tmp_path, ["unit-1", "unit-2"])
 
-    with pytest.raises(ValueError, match="ambiguous"):
+    try:
         plan_stage_invocations(
             {"name": "default", "pipeline": "default"},
             {"run_id": RUN_ID, "phase_id": "1", "phase_attempt": 1},
             data_dir=data,
             prepared=prepared,
         )
+    except ValueError as exc:
+        assert "ambiguous" in str(exc)
+    else:
+        raise AssertionError("ambiguous multi-unit writer mapping was accepted")
 
 
 def test_unit_marker_commits_unit_worktree_then_merges() -> None:

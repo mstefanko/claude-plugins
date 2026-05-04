@@ -1326,34 +1326,9 @@ def _dispatch_with_phase_sessions(args: argparse.Namespace, dispatch_payload: Ma
 def _phase_sessions_warnings(mode: str, *, run_id: str) -> list[str]:
     if mode != "auto":
         return []
-    warning = (
-        "--phase-sessions=auto is a temporary legacy/debug path; fanout is the default "
-        "full-pipeline mode with bypass-cascade and controller-owned unit redispatch."
-    )
-    try:
-        from .run_state import append_run_event, utc_now, validate_run_event
-        from .phase_sessions import PhaseSessionError
+    from .phase_pump import AUTO_PHASE_SESSIONS_WARNING
 
-        row = {
-            "run_id": run_id,
-            "timestamp": utc_now(),
-            "event_type": "phase_sessions_auto_warning",
-            "bd_epic_id": None,
-            "phase_id": None,
-            "work_unit_id": None,
-            "child_bead_ids": None,
-            "reason": "auto_compatibility_warning",
-            "retry_count": None,
-            "handoff_count": None,
-            "integration_branch_head": None,
-            "details": {"mode": mode, "warning": warning},
-            "schema_ok": True,
-        }
-        validate_run_event(row, error_cls=PhaseSessionError)
-        append_run_event(resolve_data_dir(), row)
-    except Exception:
-        pass
-    return [warning]
+    return [AUTO_PHASE_SESSIONS_WARNING]
 
 
 def _phase_session_status_label(status: str) -> str:
