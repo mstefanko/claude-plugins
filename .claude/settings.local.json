@@ -86,7 +86,9 @@
       "mcp__plugin_context-mode_context-mode__ctx_execute_file",
       "mcp__plugin_context-mode_context-mode__ctx_fetch_and_index",
       "mcp__plugin_context-mode_context-mode__ctx_index",
-      "mcp__plugin_context-mode_context-mode__ctx_search"
+      "mcp__plugin_context-mode_context-mode__ctx_search",
+      "Bash(mkdir -p /Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/swarm-do/scripts/experiments)",
+      "Bash(mkdir -p /tmp/swarmdaddy-experiments)"
     ],
     "deny": []
   },
