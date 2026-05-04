@@ -380,6 +380,97 @@ def test_ambiguous_multi_unit_writer_mapping_is_rejected(tmp_path: Path) -> None
         raise AssertionError("ambiguous multi-unit writer mapping was accepted")
 
 
+def test_default_preset_auto_expands_writer_per_unit_in_fanout_mode(tmp_path: Path) -> None:
+    """Decision 13's builder helper: in fanout mode the default preset
+    (writer with no explicit ``fan_out``) auto-expands to one writer
+    invocation per work unit. Downstream stages depending on ``writer``
+    fan-in across all replicas via ``materialized_by_source``."""
+    data = tmp_path / "data"
+    data.mkdir()
+    prepared = _prepared_with_units(tmp_path, ["unit-A", "unit-B", "unit-C"])
+
+    invocations, _snapshot = plan_stage_invocations(
+        {"name": "default", "pipeline": "default"},
+        {"run_id": RUN_ID, "phase_id": "1", "phase_attempt": 1},
+        data_dir=data,
+        prepared=prepared,
+        phase_sessions_mode="fanout",
+    )
+
+    writers = [stage for stage in invocations if stage.agent_role == "agent-writer"]
+    assert [stage.stage_id for stage in writers] == [
+        "writer:fanout-1",
+        "writer:fanout-2",
+        "writer:fanout-3",
+    ]
+    assert [stage.fan_out_index for stage in writers] == [0, 1, 2]
+    assert [stage.work_unit_id for stage in writers] == ["unit-A", "unit-B", "unit-C"]
+
+    spec_review = next(stage for stage in invocations if stage.agent_role == "agent-spec-review")
+    assert list(spec_review.upstream_stage_ids) == [
+        "writer:fanout-1",
+        "writer:fanout-2",
+        "writer:fanout-3",
+    ]
+
+
+def test_explicit_fan_out_preset_is_not_auto_expanded(tmp_path: Path) -> None:
+    """An explicit ``fan_out`` declaration carries competitive-variant
+    semantics (compete preset's two-model writer race), not
+    one-replica-per-unit. Auto-expansion must NOT touch a stage that
+    already declares ``fan_out`` even when N>1 work units are present —
+    the preset author's count wins."""
+    data = tmp_path / "data"
+    data.mkdir()
+    prepared = _prepared_with_units(tmp_path, ["unit-1", "unit-2", "unit-3"])
+    preset = {
+        "name": "compete-fixture",
+        "pipeline_inline": {
+            "pipeline_version": 1,
+            "name": "compete-fixture",
+            "stages": [
+                {
+                    "id": "writers",
+                    "fan_out": {"role": "agent-writer", "count": 2, "variant": "models"},
+                }
+            ],
+        },
+    }
+
+    invocations, _snapshot = plan_stage_invocations(
+        preset,
+        {"run_id": RUN_ID, "phase_id": "1", "phase_attempt": 1},
+        data_dir=data,
+        prepared=prepared,
+        phase_sessions_mode="fanout",
+    )
+    writers = [stage for stage in invocations if stage.agent_role == "agent-writer"]
+    assert len(writers) == 2  # explicit count wins, NOT auto-expanded to 3
+    assert [stage.fan_out_index for stage in writers] == [0, 1]
+
+
+def test_auto_mode_unaffected_by_phase_sessions_mode_default(tmp_path: Path) -> None:
+    """Backward-compat: legacy ``auto`` mode still raises the runtime
+    ambiguity error. Decision 13 wants the rejection to move to preflight,
+    but moving the gate is a separable change — this test pins the
+    no-regression behaviour while that lands."""
+    data = tmp_path / "data"
+    data.mkdir()
+    prepared = _prepared_with_units(tmp_path, ["unit-1", "unit-2"])
+    try:
+        plan_stage_invocations(
+            {"name": "default", "pipeline": "default"},
+            {"run_id": RUN_ID, "phase_id": "1", "phase_attempt": 1},
+            data_dir=data,
+            prepared=prepared,
+            phase_sessions_mode="auto",
+        )
+    except ValueError as exc:
+        assert "ambiguous" in str(exc)
+    else:
+        raise AssertionError("auto mode unexpectedly accepted ambiguous multi-unit writer mapping")
+
+
 def test_unit_marker_commits_unit_worktree_then_merges() -> None:
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)

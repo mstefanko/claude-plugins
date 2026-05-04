@@ -502,6 +502,7 @@ def _prepare_stage_controller(
         {"run_id": run_id, "phase_id": phase_id, "phase_attempt": phase.get("attempt")},
         data_dir=data_dir,
         prepared=prepared,
+        phase_sessions_mode=phase_sessions_mode,
     )
     if phase_sessions_mode == "fanout":
         worktree_paths = _materialize_unit_worktrees(

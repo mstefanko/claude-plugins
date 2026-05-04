@@ -72,8 +72,16 @@ def plan_stage_invocations(
     *,
     data_dir: Path | None = None,
     prepared: Mapping[str, Any] | None = None,
+    phase_sessions_mode: str = "auto",
 ) -> tuple[list[StageInvocation], dict[str, Any]]:
-    """Resolve the active preset graph into concrete per-agent stage calls."""
+    """Resolve the active preset graph into concrete per-agent stage calls.
+
+    When ``phase_sessions_mode == "fanout"`` and the phase has N>1 work units,
+    writer stages without an explicit ``fan_out`` declaration are auto-expanded
+    into N per-unit replicas (Decision 13's builder helper). This lets the
+    default preset (``agents: [agent-writer]``) drive a fanout run without
+    forcing every preset author to hand-pin ``fan_out: count: <unit_count>``.
+    """
 
     resolved = resolve_preset_graph(preset)
     pipeline = resolved.graph
@@ -87,6 +95,11 @@ def plan_stage_invocations(
     run_id = str(phase_context.get("run_id") or "")
     phase_id = str(phase_context.get("phase_id") or "")
     result_dir = base / "runs" / run_id / "phases" / phase_id / "stage_results"
+    work_units = (
+        _phase_work_units(prepared or {}, phase_id)
+        if phase_sessions_mode == "fanout"
+        else []
+    )
     invocations: list[StageInvocation] = []
     materialized_by_source: dict[str, list[str]] = {}
 
@@ -104,6 +117,15 @@ def plan_stage_invocations(
                 result_dir=result_dir,
                 upstream_stage_ids=upstream,
             )
+            if phase_sessions_mode == "fanout" and len(work_units) > 1:
+                planned = _auto_expand_writer_per_unit(
+                    planned,
+                    stage=stage,
+                    work_units=work_units,
+                    layer_index=layer_index,
+                    result_dir=result_dir,
+                    upstream_stage_ids=upstream,
+                )
             materialized_by_source[source_stage_id] = [item.stage_id for item in planned]
             invocations.extend(planned)
 
@@ -302,6 +324,58 @@ def _invocations_for_stage(
             )
         )
     return invocations
+
+
+def _auto_expand_writer_per_unit(
+    planned: list[StageInvocation],
+    *,
+    stage: Mapping[str, Any],
+    work_units: list[Mapping[str, Any]],
+    layer_index: int,
+    result_dir: Path,
+    upstream_stage_ids: tuple[str, ...],
+) -> list[StageInvocation]:
+    """Replicate writer invocations one-per-unit when the source stage has no
+    explicit ``fan_out`` declaration. Implements Decision 13's builder helper:
+    derives the per-unit invocation set from preset metadata + prepared-plan
+    work units rather than forcing the preset author to hand-pin a count that
+    matches each phase's unit count.
+
+    A stage with explicit ``fan_out`` is left alone — that fan-out semantic is
+    competitive variants of the same unit (e.g. compete preset's two-model
+    writer race), not one-replica-per-unit. Auto-expansion is opt-in through
+    the absence of ``fan_out`` plus N>1 units.
+    """
+    if isinstance(stage.get("fan_out"), Mapping):
+        return planned
+    expanded: list[StageInvocation] = []
+    for invocation in planned:
+        if (
+            invocation.agent_role in _UNIT_WRITER_ROLES
+            and invocation.fan_out_index is None
+            and not invocation.is_provider_stage
+            and invocation.merge_target is None
+        ):
+            base_stage_id = invocation.stage_id
+            for index in range(len(work_units)):
+                expanded.append(
+                    _invocation(
+                        f"{base_stage_id}:fanout-{index + 1}",
+                        invocation.agent_role,
+                        layer_index=invocation.layer_index,
+                        result_dir=result_dir,
+                        fan_out_key=f"unit-{index + 1}",
+                        fan_out_index=index,
+                        merge_target=None,
+                        is_provider_stage=False,
+                        lens_chain=invocation.lens_chain,
+                        failure_tolerance=invocation.failure_tolerance,
+                        upstream_stage_ids=upstream_stage_ids,
+                    )
+                )
+        else:
+            expanded.append(invocation)
+    return expanded
 
 
 def _invocation(

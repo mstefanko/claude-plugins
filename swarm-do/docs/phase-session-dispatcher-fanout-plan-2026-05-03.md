@@ -1,6 +1,6 @@
 # Phase Session Dispatcher Fan-Out Plan
 
-Status: research-complete; ready for design review and clarification pass before writing code
+Status: implementation in progress — Phases 0–4 substantially landed (see STATUS notes inline); Phases 2 reviewer-per-unit fan-out, 3, 5, 6, 6.5, 7, 8 still outstanding
 Date: 2026-05-03
 Companion plans:
 - `swarm-do/docs/phase-session-live-stage-marker-streaming-plan.md` (foundation; ~80% shipped)
@@ -305,6 +305,8 @@ In `fanout` mode, the controller — not the dispatcher Claude — populates `co
 ### Phase 4 — Wire per-unit worktrees + adoption layer
 
 **STATUS 2026-05-04 — wiring landed; adoption layer (step 6) and idempotent-resume (step 7) verified by tests.** Step 1 ships at `phase_pump.py:_prepare_stage_controller` (line 506-514, branches on `phase_sessions_mode == "fanout"`) calling `_materialize_unit_worktrees` (line 545-565), which iterates `unit_ids` and invokes `materialize_unit_execution_worktree(run_id, phase_id, unit_id, data_dir=data_dir)` per unit. Step 6 adoption is wired through `StageMarkerProcessor` + per-unit commit/merge — covered by passing tests `test_unit_marker_commits_unit_worktree_then_merges` and `test_unit_adoption_resume_from_marker_before_merge_is_idempotent` (resolves CB-2 in favour of variant (a) "in-place adoption"). The full `pump_phases(... mode="fanout")` happy-path passes via `test_fanout_launch_contract_uses_bypass_and_agent_prompt` after a 2026-05-04 fixture-leak fix (`make_prepared_run` now pins `XDG_DATA_HOME` to tmp and pre-cleans `/tmp/swarmdaddy-worktrees/<run_id>`). Remaining open: kill-points (i) mid-spawn and (iii) mid-merge are exercised only by primitive-level tests, not end-to-end with real claude — captured as deferred E16 lanes (v0 scaffold landed in `e16.py`; real-claude SIGTERM lane still TBD).
+
+**STATUS 2026-05-04 (very late) — Decision 13 builder helper (writer auto-expand) landed (closes `mstefanko-plugins-grcp`).** Real-world dogfood through `/swarmdaddy:do <plan>` exposed the gap: with `default.yaml` writer at `agents: [agent-writer]` (no explicit `fan_out`) and any phase with N>1 work units, `_work_unit_id_for_invocation` raised `stage writer is ambiguous across N work units` at runtime — exactly what Decision 13 named ("reject ambiguous cases at preflight rather than runtime") but the builder helper had not been wired. Fix: `plan_stage_invocations` now accepts `phase_sessions_mode`; in fanout mode `_auto_expand_writer_per_unit` replicates a writer stage (with no explicit `fan_out`) into N invocations keyed `<id>:fanout-1..N` with `fan_out_index=0..N-1` so `_attach_work_unit_metadata` can map each to a unit. Explicit `fan_out` declarations (compete preset's competitive-variant pattern) are NOT touched — auto-expansion is opt-in through the absence of `fan_out`. `_prepare_stage_controller` threads `phase_sessions_mode` through. Tests: `test_default_preset_auto_expands_writer_per_unit_in_fanout_mode`, `test_explicit_fan_out_preset_is_not_auto_expanded`, `test_auto_mode_unaffected_by_phase_sessions_mode_default`. **Reviewer-per-unit fan-out (Decision 13's "review stages share parent writer's `work_unit_id`") is a separable follow-up and not yet shipped.**
 
 **STATUS 2026-05-04 (late) — experiment-harness cleanup landed.** The four follow-ups flagged after the second sweep are in tree:
 
