@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 from swarm_do.pipeline.orchestrator_stream import parse_stage_marker_line, parse_stage_markers
+from swarm_do.pipeline.paths import REPO_ROOT
 from swarm_do.pipeline.phase_pump import _process_stage_markers
 from swarm_do.pipeline.stage_invocation import plan_stage_invocations, render_orchestrator_brief
 from swarm_do.pipeline.stage_sessions import (
@@ -31,6 +32,13 @@ class StageQualityTests(unittest.TestCase):
         self.assertEqual(failed.kind, "failed")
         self.assertEqual(failed.failure_kind, "spec_mismatch")
         self.assertEqual(parse_stage_markers("noise\nSTAGE_COMPLETE {}\n"), [])
+        self.assertIsNone(parse_stage_marker_line(' STAGE_COMPLETE {"stage_id":"writer","result_path":"/tmp/result.json"}'))
+        self.assertIsNone(parse_stage_marker_line('`STAGE_COMPLETE {"stage_id":"writer","result_path":"/tmp/result.json"}`'))
+
+    def test_marker_parser_rejects_readme_marker_prose(self) -> None:
+        readme_excerpt = "\n".join((REPO_ROOT / "README.md").read_text(encoding="utf-8").splitlines()[140:190])
+
+        self.assertEqual(parse_stage_markers(readme_excerpt), [])
 
     def test_stage_invocation_planner_expands_default_graph(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -187,8 +195,8 @@ class StageQualityTests(unittest.TestCase):
             state = load_stage_sessions(RUN_ID, "1", data_dir=data)
 
         self.assertFalse(processed["completed"])
-        self.assertEqual(state["stages"][0]["status"], "failed")
-        self.assertIn("missing required property", state["stages"][0]["notes"])
+        self.assertEqual(state["stages"][0]["status"], "blocked")
+        self.assertEqual(state["stages"][0]["failure_kind"], "stage_metadata_tampered")
 
 
 if __name__ == "__main__":

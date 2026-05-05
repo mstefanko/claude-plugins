@@ -11,6 +11,7 @@ from typing import Any, Mapping
 DEFAULT_MAX_WRITER_TOOL_CALLS = 60
 DEFAULT_MAX_WRITER_OUTPUT_BYTES = 60_000
 DEFAULT_MAX_HANDOFFS = 1
+DEFAULT_MAX_DISPATCHER_PROMPT_BYTES = 96_000
 
 
 @dataclass(frozen=True)
@@ -110,14 +111,15 @@ def evaluate_writer_budget(
         )
 
     self_reported_calls = _int_or_none(block.get("tool_calls"))
-    measured_calls = telemetry_tool_call_count if telemetry_tool_call_count is not None else self_reported_calls
-    self_reported_output = _int_or_none(block.get("output_bytes"))
-    output_bytes = (self_reported_output or len(writer_return.encode("utf-8"))) + max(0, diff_size_bytes)
+    measured_calls = telemetry_tool_call_count
+    output_bytes = len(writer_return.encode("utf-8", errors="replace")) + max(0, diff_size_bytes)
     handoff_count = _int_or_zero(block.get("handoff_count"))
     if bool(block.get("handoff")) and handoff_count == 0:
         handoff_count = 1
 
     warnings: list[str] = []
+    if telemetry_tool_call_count is None and self_reported_calls is not None:
+        warnings.append("writer self-reported tool_calls is advisory; structured stream telemetry was unavailable")
     if telemetry_tool_call_count is not None and self_reported_calls is not None:
         delta = abs(telemetry_tool_call_count - self_reported_calls)
         allowed = max(1, int(telemetry_tool_call_count * 0.10))
@@ -126,9 +128,7 @@ def evaluate_writer_budget(
 
     if handoff_count > max_handoffs:
         return WriterBudgetResult("escalated", "repeat_handoff", measured_calls, output_bytes, handoff_count, warnings)
-    if measured_calls is None:
-        return WriterBudgetResult("escalated", "other", None, output_bytes, handoff_count, warnings)
-    if measured_calls > max_writer_tool_calls:
+    if measured_calls is not None and measured_calls > max_writer_tool_calls:
         return WriterBudgetResult(
             "escalated",
             "budget_breach_tool_calls",

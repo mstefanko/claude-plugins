@@ -14,11 +14,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
+from .budget import DEFAULT_MAX_DISPATCHER_PROMPT_BYTES
 from .claude_stream import ClaudeStreamParser
 from .context_bundle import render_context_bundle
 from .execution_workspace import ExecutionWorkspaceError, create_execution_workspace, is_sensitive_path
 from .execution_worktree import RunExecutionWorktreeError, commit_stage_artifacts, materialize_unit_execution_worktree
-from .orchestrator_stream import StageMarker, parse_stage_markers
+from .orchestrator_stream import StageMarker, count_malformed_stage_marker_candidates, parse_stage_markers
 from .paths import REPO_ROOT, resolve_data_dir
 from .phase_artifact_contract import phase_artifact_contract_markdown
 from .phase_beads import close_stage_child, create_run_epic, create_stage_child, mark_stage_blocked
@@ -84,6 +85,15 @@ _PREFLIGHT_BLOCKING_FINDING_IDS = frozenset(
         "worktree_drift",
     }
 )
+
+
+class DispatcherPromptBudgetExceeded(PhaseSessionError):
+    def __init__(self, *, prompt_bytes: int, max_prompt_bytes: int) -> None:
+        self.prompt_bytes = int(prompt_bytes)
+        self.max_prompt_bytes = int(max_prompt_bytes)
+        super().__init__(
+            f"dispatcher prompt exceeds max_dispatcher_prompt_bytes: {prompt_bytes} > {max_prompt_bytes}"
+        )
 
 
 def pump_phases(
@@ -282,7 +292,7 @@ def pump_phases(
             source_prompt_path=Path(context["prompt_path"]),
             data_dir=base,
             prompt_text=stage_plan["prompt_text"],
-            workspace_metadata={"returncode": 0},
+            workspace_metadata={"returncode": 0, **dict(stage_plan.get("prompt_budget") or {})},
         )
         fake_controller = _run_fake_stage_controller(
             run_id,
@@ -533,8 +543,13 @@ def _prepare_stage_controller(
         stage_invocations=dispatch_invocations,
         run_id=run_id,
         phase_id=phase_id,
+        phase_attempt=int(phase.get("attempt") or 1),
         phase_sessions_mode=phase_sessions_mode,
     )
+    prompt_bytes = len(prompt_text.encode("utf-8", errors="replace"))
+    max_prompt_bytes = _dispatcher_prompt_byte_cap(preset)
+    if prompt_bytes > max_prompt_bytes:
+        raise DispatcherPromptBudgetExceeded(prompt_bytes=prompt_bytes, max_prompt_bytes=max_prompt_bytes)
     return {
         "preset": preset,
         "stage_invocations": invocations,
@@ -542,6 +557,11 @@ def _prepare_stage_controller(
         "dispatch_metadata": dispatch_metadata,
         "graph_snapshot": graph_snapshot,
         "prompt_text": prompt_text,
+        "prompt_budget": {
+            "dispatcher_prompt_bytes": prompt_bytes,
+            "max_dispatcher_prompt_bytes": max_prompt_bytes,
+            "status": "ok",
+        },
         "base_prompt_path": str(base_prompt_path),
     }
 
@@ -678,7 +698,9 @@ def _run_fake_stage_controller(
         (launch_dir / "stdout.txt").write_text(stdout + "\n", encoding="utf-8")
     if synthetic_task_dispatches:
         _write_synthetic_transcript(launch_dir / "synthetic-transcript.jsonl", synthetic_task_dispatches)
+    by_stage_id = {stage.stage_id: stage for stage in stage_invocations}
     for marker in markers:
+        invocation = by_stage_id.get(str(marker.get("stage_id") or ""))
         result_path = Path(str(marker["result_path"]))
         result_path.parent.mkdir(parents=True, exist_ok=True)
         if not result_path.exists():
@@ -690,6 +712,11 @@ def _run_fake_stage_controller(
                         "phase_id": phase_id,
                         "phase_attempt": int(phase["attempt"]),
                         "stage_id": marker["stage_id"],
+                        "result_path": str(result_path),
+                        "work_unit_id": invocation.work_unit_id if invocation is not None else None,
+                        "worktree_path": str(invocation.worktree_path) if invocation is not None and invocation.worktree_path else None,
+                        "bead_id": invocation.bead_id if invocation is not None else None,
+                        "allowed_files": list(invocation.allowed_files) if invocation is not None else [],
                         "status": "complete",
                         "summary": "synthetic fake-test stage complete",
                         "artifacts": artifacts,
@@ -773,12 +800,21 @@ def _write_controller_phase_result(
         if isinstance(key, str)
     } if isinstance(stage_controller.get("stage_work_unit_map"), Mapping) else {}
     failed_work_units = [str(item) for item in stage_controller.get("failed_work_units") or [] if isinstance(item, str)]
+    merge_status = {
+        str(key): str(value)
+        for key, value in (stage_controller.get("merge_status") or {}).items()
+        if isinstance(key, str) and isinstance(value, str)
+    } if isinstance(stage_controller.get("merge_status"), Mapping) else {}
     status = _phase_result_status_from_stage_controller(stage_controller)
     blockers = [f"blocked work unit: {unit}" for unit in failed_work_units]
     summary = (
         f"controller adopted {len(commits)} stage commit(s)"
         if status == "complete"
-        else f"controller partially adopted {len(completed_work_units)} work unit(s); {len(failed_work_units)} blocked"
+        else (
+            f"controller partially adopted {len(completed_work_units)} work unit(s); {len(failed_work_units)} blocked"
+            if status == "partial_success"
+            else f"controller finalized {status} from stage ledger; {len(failed_work_units)} failed work unit(s)"
+        )
     )
     handoff = {
         "schema_version": 1,
@@ -794,9 +830,10 @@ def _write_controller_phase_result(
         "preserved_work_units": preserved_work_units,
         "retry_target_work_units": retry_target_work_units,
         "stage_work_unit_map": stage_work_unit_map,
+        "merge_status": merge_status,
         "open_items": [],
         "blockers": blockers,
-        "do_not_retry": blockers if status == "partial_success" else [],
+        "do_not_retry": blockers if status in {"partial_success", "failed", "blocked"} else [],
         "validation_summary": [],
         "artifacts": [],
         "worktree_diff": diff,
@@ -821,15 +858,18 @@ def _write_controller_phase_result(
         "preserved_work_units": preserved_work_units,
         "retry_target_work_units": retry_target_work_units,
         "stage_work_unit_map": stage_work_unit_map,
+        "merge_status": merge_status,
         "failed_work_units": failed_work_units,
-        "blocked_reason": "partial_success" if status == "partial_success" else None,
-        "needs_input": [],
+        "blocked_reason": status if status in {"partial_success", "blocked"} else None,
+        "needs_input": blockers if status == "needs_input" else [],
         "validation": [],
         "artifacts": [],
-        "error": {"message": "partial success"} if status == "partial_success" else None,
+        "error": {"message": summary} if status != "complete" else None,
         "worktree_diff": diff,
         "commit_sha": commits[-1] if commits else None,
     }
+    if status != "complete":
+        result["failure_kind"] = "PARTIAL_SUCCESS" if status == "partial_success" else "stage_controller_failed"
     result_path.parent.mkdir(parents=True, exist_ok=True)
     handoff_path.parent.mkdir(parents=True, exist_ok=True)
     handoff_path.write_text(json.dumps(handoff, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -838,20 +878,26 @@ def _write_controller_phase_result(
 
 def _phase_result_status_from_stage_controller(stage_controller: Mapping[str, Any]) -> str:
     value = stage_controller.get("phase_result_status")
-    if value == "partial_success":
-        return "partial_success"
-    if value == "complete":
-        return "complete"
+    if value in {"complete", "partial_success", "failed", "blocked", "needs_input"}:
+        return str(value)
     terminal = stage_controller.get("terminal_state")
     if terminal == "PARTIAL_SUCCESS":
         return "partial_success"
-    return "complete"
+    if terminal in {"complete", "failed", "blocked", "needs_input"}:
+        return str(terminal)
+    return "pending"
 
 
 def _stage_controller_writes_phase_result(stage_controller: Mapping[str, Any]) -> bool:
     if stage_controller.get("completed"):
         return True
-    return _phase_result_status_from_stage_controller(stage_controller) == "partial_success"
+    return _phase_result_status_from_stage_controller(stage_controller) in {
+        "complete",
+        "partial_success",
+        "failed",
+        "blocked",
+        "needs_input",
+    }
 
 
 def _dispatcher_fanout_permission_failure(argv: Sequence[str], *, phase_sessions_mode: str) -> str | None:
@@ -1116,9 +1162,34 @@ def _run_claude_print_phase(
             },
         )
         return {"status": "launcher_error", "reason": reason, "launch_dir": str(launch["launch_dir"])}
+    except DispatcherPromptBudgetExceeded as exc:
+        fallback_prompt_path = prompt_path or Path(
+            render_context_bundle(run_id=run_id, phase_id=phase_id, role="dispatcher", data_dir=data_dir)["prompt_path"]
+        )
+        launch = _prepare_phase_launch(
+            run_id,
+            phase_id,
+            phase,
+            launcher="claude-print",
+            source_prompt_path=fallback_prompt_path,
+            data_dir=data_dir,
+            workspace_metadata={
+                "launcher_exception": str(exc),
+                "reason": "dispatcher_prompt_too_large",
+                "failure_kind": "dispatcher_prompt_too_large",
+                "dispatcher_prompt_budget": {
+                    "status": "fail",
+                    "reason": "dispatcher_prompt_too_large",
+                    "dispatcher_prompt_bytes": exc.prompt_bytes,
+                    "max_dispatcher_prompt_bytes": exc.max_prompt_bytes,
+                },
+            },
+        )
+        return {"status": "launcher_error", "reason": "dispatcher_prompt_too_large", "launch_dir": str(launch["launch_dir"])}
     workspace_metadata = workspace.to_metadata(prompt_rewrite_count=prompt_rewrite_count)
     workspace_metadata["phase_attempt"] = attempt
     workspace_metadata.update(dict(stage_plan.get("dispatch_metadata") or {}))
+    workspace_metadata.update(dict(stage_plan.get("prompt_budget") or {}))
 
     resolved_claude = claude_path or shutil.which("claude") or ("claude" if claude_runner is not None else None)
     if not resolved_claude:
@@ -1281,6 +1352,7 @@ def _run_claude_print_phase(
         stage_controller = dict(live_stage_controller)
     else:
         markers = parse_stage_markers(stdout)
+        malformed_marker_count = count_malformed_stage_marker_candidates(stdout)
         if markers:
             stage_controller = _process_stage_markers(
                 run_id,
@@ -1294,7 +1366,9 @@ def _run_claude_print_phase(
             )
         else:
             stage_controller = _initial_stage_controller_metadata(live=False)
-    if _stage_controller_writes_phase_result(stage_controller) and not result_path.is_file():
+        if malformed_marker_count:
+            stage_controller["malformed_marker_candidate_count"] = malformed_marker_count
+    if _stage_controller_writes_phase_result(stage_controller):
         _write_controller_phase_result(
             run_id,
             phase_id,
@@ -1977,6 +2051,7 @@ def _initial_stage_controller_metadata(*, live: bool) -> dict[str, Any]:
         "failed_work_units": [],
         "retry_requested_work_units": [],
         "failed_stage_ids": [],
+        "merge_status": {},
         "pending_marker_count": 0,
         "duplicate_marker_count": 0,
         "amended_count": 0,
@@ -1988,6 +2063,7 @@ def _initial_stage_controller_metadata(*, live: bool) -> dict[str, Any]:
         "failed_recorded_count": 0,
         "retry_requested_count": 0,
         "stage_result_missing_count": 0,
+        "malformed_marker_candidate_count": 0,
     }
 
 
@@ -2021,6 +2097,20 @@ def _resolve_phase_preset() -> dict[str, Any]:
     except Exception:
         pass
     return {"name": "default", "pipeline": "default", "budget": {}}
+
+
+def _dispatcher_prompt_byte_cap(preset: Mapping[str, Any]) -> int:
+    budget = preset.get("budget") if isinstance(preset.get("budget"), Mapping) else {}
+    return _positive_int(
+        budget.get("max_dispatcher_prompt_bytes"),
+        default=DEFAULT_MAX_DISPATCHER_PROMPT_BYTES,
+    )
+
+
+def _positive_int(value: Any, *, default: int) -> int:
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return default
 
 
 def _ensure_stage_beads(
@@ -2238,6 +2328,7 @@ def _normalized_worktree_diff(value: Any) -> dict[str, list[str]]:
 
 def _run_launch_preflights(prompt_path: Path, metadata: Mapping[str, Any]) -> dict[str, Any]:
     checks = {
+        "dispatcher_prompt_bytes": _dispatcher_prompt_bytes_check(prompt_path, metadata),
         "canonical_path_replay": _canonical_path_replay(prompt_path, metadata),
         "effective_permissions_check": _effective_permissions_check(metadata),
     }
@@ -2245,6 +2336,26 @@ def _run_launch_preflights(prompt_path: Path, metadata: Mapping[str, Any]) -> di
     if failures:
         raise PhaseSessionError("launcher preflight failed: " + ", ".join(failures))
     return checks
+
+
+def _dispatcher_prompt_bytes_check(prompt_path: Path, metadata: Mapping[str, Any]) -> dict[str, Any]:
+    max_bytes = _positive_int(metadata.get("max_dispatcher_prompt_bytes"), default=DEFAULT_MAX_DISPATCHER_PROMPT_BYTES)
+    try:
+        actual_bytes = prompt_path.stat().st_size
+    except OSError as exc:
+        return {"status": "fail", "reason": str(exc), "max_dispatcher_prompt_bytes": max_bytes}
+    if actual_bytes > max_bytes:
+        return {
+            "status": "fail",
+            "reason": "dispatcher_prompt_too_large",
+            "dispatcher_prompt_bytes": actual_bytes,
+            "max_dispatcher_prompt_bytes": max_bytes,
+        }
+    return {
+        "status": "pass",
+        "dispatcher_prompt_bytes": actual_bytes,
+        "max_dispatcher_prompt_bytes": max_bytes,
+    }
 
 
 def _canonical_path_replay(prompt_path: Path, metadata: Mapping[str, Any]) -> dict[str, Any]:

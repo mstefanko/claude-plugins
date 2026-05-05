@@ -51,6 +51,9 @@ class ClaudeStreamParserTests(unittest.TestCase):
 
         self.assertNotIn("assistant_text", [chunk.kind for chunk in chunks])
         self.assertGreaterEqual(parser.metadata()["ignored_frame_types"]["tool_use"], 1)
+        self.assertEqual(parser.metadata()["tool_use_counts"]["Task"], 1)
+        self.assertEqual(parser.metadata()["agent_tool_use_names"], ["Agent", "Task"])
+        self.assertEqual(parser.metadata()["agent_tool_use_count"], 1)
 
     def test_marker_in_assistant_text_round_trips_through_parse_stage_markers(self) -> None:
         parser = ClaudeStreamParser()

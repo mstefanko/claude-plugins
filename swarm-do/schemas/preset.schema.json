@@ -65,7 +65,8 @@
         "max_wall_clock_seconds": { "type": "integer", "minimum": 1 },
         "max_writer_tool_calls": { "type": "integer", "minimum": 0 },
         "max_writer_output_bytes": { "type": "integer", "minimum": 0 },
-        "max_handoffs": { "type": "integer", "minimum": 0 }
+        "max_handoffs": { "type": "integer", "minimum": 0 },
+        "max_dispatcher_prompt_bytes": { "type": "integer", "minimum": 1 }
       }
     },
     "decompose": {

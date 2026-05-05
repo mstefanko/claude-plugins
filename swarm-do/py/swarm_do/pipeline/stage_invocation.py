@@ -14,6 +14,7 @@ import re
 from pathlib import Path
 from typing import Any, Mapping
 
+from .budget import DEFAULT_MAX_HANDOFFS, DEFAULT_MAX_WRITER_OUTPUT_BYTES, DEFAULT_MAX_WRITER_TOOL_CALLS
 from .engine import topological_layers
 from .graph_source import canonical_graph_hash, resolve_preset_graph
 from .paths import REPO_ROOT, resolve_data_dir
@@ -41,6 +42,9 @@ class StageInvocation:
     allowed_files: tuple[str, ...] = ()
     acceptance_criteria: str = ""
     work_unit_id: str | None = None
+    max_writer_tool_calls: int = DEFAULT_MAX_WRITER_TOOL_CALLS
+    max_writer_output_bytes: int = DEFAULT_MAX_WRITER_OUTPUT_BYTES
+    max_handoffs: int = DEFAULT_MAX_HANDOFFS
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -63,6 +67,9 @@ class StageInvocation:
             "allowed_files": list(self.allowed_files),
             "acceptance_criteria": self.acceptance_criteria,
             "work_unit_id": self.work_unit_id,
+            "max_writer_tool_calls": self.max_writer_tool_calls,
+            "max_writer_output_bytes": self.max_writer_output_bytes,
+            "max_handoffs": self.max_handoffs,
         }
 
 
@@ -95,6 +102,7 @@ def plan_stage_invocations(
     run_id = str(phase_context.get("run_id") or "")
     phase_id = str(phase_context.get("phase_id") or "")
     result_dir = base / "runs" / run_id / "phases" / phase_id / "stage_results"
+    writer_budget = _writer_budget_from_preset(preset)
     work_units = (
         _phase_work_units(prepared or {}, phase_id)
         if phase_sessions_mode == "fanout"
@@ -116,6 +124,7 @@ def plan_stage_invocations(
                 layer_index=layer_index,
                 result_dir=result_dir,
                 upstream_stage_ids=upstream,
+                writer_budget=writer_budget,
             )
             if phase_sessions_mode == "fanout" and len(work_units) > 1:
                 planned = _auto_expand_writer_per_unit(
@@ -125,6 +134,7 @@ def plan_stage_invocations(
                     layer_index=layer_index,
                     result_dir=result_dir,
                     upstream_stage_ids=upstream,
+                    writer_budget=writer_budget,
                 )
             materialized_by_source[source_stage_id] = [item.stage_id for item in planned]
             invocations.extend(planned)
@@ -152,6 +162,7 @@ def render_orchestrator_brief(
     stage_invocations: list[StageInvocation],
     run_id: str,
     phase_id: str,
+    phase_attempt: int = 1,
     phase_sessions_mode: str = "auto",
     parallelism_cap: int = 8,
     status_protocol: str = "binary-structured",
@@ -164,6 +175,7 @@ def render_orchestrator_brief(
             stage_invocations=stage_invocations,
             run_id=run_id,
             phase_id=phase_id,
+            phase_attempt=phase_attempt,
             parallelism_cap=parallelism_cap,
             status_protocol=status_protocol,
         )
@@ -187,18 +199,24 @@ def render_orchestrator_brief(
         result_path = invocation.expected_result_path
         role_text = _role_brief_excerpt(invocation.role_brief_path)
         stage_payload = {
+            "run_id": run_id,
+            "phase_id": phase_id,
+            "phase_attempt": int(phase_attempt),
             "stage_id": invocation.stage_id,
             "agent_role": invocation.agent_role,
             "result_path": str(result_path),
             "upstream_stage_ids": list(invocation.upstream_stage_ids),
             "failure_tolerance": invocation.failure_tolerance,
             "lens_chain": list(invocation.lens_chain),
+            "max_writer_tool_calls": invocation.max_writer_tool_calls,
+            "max_writer_output_bytes": invocation.max_writer_output_bytes,
+            "max_handoffs": invocation.max_handoffs,
         }
         prompt = "\n".join(
             [
                 f"Stage contract JSON: {json.dumps(stage_payload, sort_keys=True)}",
                 "",
-                role_text,
+                _substitute_writer_placeholders(role_text, invocation),
                 "",
                 "Write a stage result JSON to the prescribed result_path. Then return a concise summary.",
             ]
@@ -232,6 +250,7 @@ def _invocations_for_stage(
     layer_index: int,
     result_dir: Path,
     upstream_stage_ids: tuple[str, ...],
+    writer_budget: Mapping[str, int],
 ) -> list[StageInvocation]:
     source_stage_id = str(stage["id"])
     tolerance = _failure_tolerance(stage)
@@ -261,6 +280,7 @@ def _invocations_for_stage(
                     lens_chain=(),
                     failure_tolerance=tolerance,
                     upstream_stage_ids=upstream_stage_ids,
+                    writer_budget=writer_budget,
                 )
             )
         merge = stage.get("merge") if isinstance(stage.get("merge"), Mapping) else None
@@ -279,6 +299,7 @@ def _invocations_for_stage(
                     lens_chain=(),
                     failure_tolerance=tolerance,
                     upstream_stage_ids=tuple(fanout_ids),
+                    writer_budget=writer_budget,
                 )
             )
         return invocations
@@ -298,6 +319,7 @@ def _invocations_for_stage(
                 lens_chain=(),
                 failure_tolerance=tolerance,
                 upstream_stage_ids=upstream_stage_ids,
+                writer_budget=writer_budget,
             )
         ]
     agents = stage.get("agents") if isinstance(stage.get("agents"), list) else []
@@ -321,6 +343,7 @@ def _invocations_for_stage(
                 lens_chain=(str(lens),) if isinstance(lens, str) and lens else (),
                 failure_tolerance=tolerance,
                 upstream_stage_ids=upstream_stage_ids,
+                writer_budget=writer_budget,
             )
         )
     return invocations
@@ -334,6 +357,7 @@ def _auto_expand_writer_per_unit(
     layer_index: int,
     result_dir: Path,
     upstream_stage_ids: tuple[str, ...],
+    writer_budget: Mapping[str, int],
 ) -> list[StageInvocation]:
     """Replicate writer invocations one-per-unit when the source stage has no
     explicit ``fan_out`` declaration. Implements Decision 13's builder helper:
@@ -371,6 +395,7 @@ def _auto_expand_writer_per_unit(
                         lens_chain=invocation.lens_chain,
                         failure_tolerance=invocation.failure_tolerance,
                         upstream_stage_ids=upstream_stage_ids,
+                        writer_budget=writer_budget,
                     )
                 )
         else:
@@ -391,7 +416,9 @@ def _invocation(
     lens_chain: tuple[str, ...],
     failure_tolerance: str,
     upstream_stage_ids: tuple[str, ...],
+    writer_budget: Mapping[str, int] | None = None,
 ) -> StageInvocation:
+    writer_budget = writer_budget or _default_writer_budget()
     return StageInvocation(
         stage_id=stage_id,
         agent_role=agent_role,
@@ -406,6 +433,9 @@ def _invocation(
         expected_result_path=result_dir / f"{_safe_filename(stage_id)}.result.json",
         upstream_stage_ids=upstream_stage_ids,
         subagent_type=_subagent_type_for_role(agent_role),
+        max_writer_tool_calls=int(writer_budget["max_writer_tool_calls"]),
+        max_writer_output_bytes=int(writer_budget["max_writer_output_bytes"]),
+        max_handoffs=int(writer_budget["max_handoffs"]),
     )
 
 
@@ -438,6 +468,7 @@ def _render_fanout_orchestrator_brief(
     stage_invocations: list[StageInvocation],
     run_id: str,
     phase_id: str,
+    phase_attempt: int,
     parallelism_cap: int,
     status_protocol: str,
 ) -> str:
@@ -452,12 +483,13 @@ def _render_fanout_orchestrator_brief(
         "",
         f"- run_id: {run_id}",
         f"- phase_id: {phase_id}",
+        f"- phase_attempt: {int(phase_attempt)}",
         f"- status_protocol: {status_protocol}",
     ]
     for invocation in stage_invocations:
         result_path = invocation.expected_result_path
-        role_text = _role_brief_excerpt(invocation.role_brief_path)
-        allowed_files = list(invocation.allowed_files) or ["**/*"]
+        allowed_files = list(invocation.allowed_files)
+        allowed_files_display = allowed_files or ["**/*"]
         worktree_path = str(invocation.worktree_path) if invocation.worktree_path else None
         bash_cwd = (
             "Every Bash command for this unit must self-establish cwd with "
@@ -467,18 +499,25 @@ def _render_fanout_orchestrator_brief(
             else "This stage has no per-unit worktree; use only the controller-prescribed paths."
         )
         stage_payload = {
+            "run_id": run_id,
+            "phase_id": phase_id,
+            "phase_attempt": int(phase_attempt),
             "stage_id": invocation.stage_id,
             "work_unit_id": invocation.work_unit_id,
             "agent_role": invocation.agent_role,
             "subagent_type": invocation.subagent_type or _subagent_type_for_role(invocation.agent_role),
             "worktree_path": worktree_path,
             "result_path": str(result_path),
+            "expected_result_path": str(result_path),
             "allowed_files": allowed_files,
             "acceptance_criteria": invocation.acceptance_criteria,
             "bead_id": invocation.bead_id,
             "upstream_stage_ids": list(invocation.upstream_stage_ids),
             "failure_tolerance": invocation.failure_tolerance,
             "lens_chain": list(invocation.lens_chain),
+            "max_writer_tool_calls": invocation.max_writer_tool_calls,
+            "max_writer_output_bytes": invocation.max_writer_output_bytes,
+            "max_handoffs": invocation.max_handoffs,
             "prompt_prefix": f"cd {worktree_path} && " if worktree_path else "",
             "fresh_reviewer": {
                 "required_on_retry": True,
@@ -492,11 +531,12 @@ def _render_fanout_orchestrator_brief(
                 "",
                 f"Prompt prefix for Bash commands: {stage_payload['prompt_prefix'] or '(none)'}",
                 "Before finishing, write a stage result JSON to the prescribed result_path exactly.",
+                "The result JSON must echo run_id, phase_id, phase_attempt, stage_id, result_path, status, and any non-null work_unit_id/worktree_path/bead_id from the Stage contract JSON.",
+                "The result JSON must echo allowed_files exactly as provided in the Stage contract JSON.",
                 "Use `status: complete` for success, `status: complete_with_concerns` for adopted work with follow-up notes, `status: blocked` for non-retryable blockers, or `status: needs_input` for missing context.",
+                f"Budget ceilings: max_writer_tool_calls={invocation.max_writer_tool_calls}, max_writer_output_bytes={invocation.max_writer_output_bytes}, max_handoffs={invocation.max_handoffs}.",
                 bash_cwd,
                 "On retry after a retryable failure, launch a fresh_reviewer sub-agent and do not include prior_findings from the failed attempt. Stop after 3 cycles and report blocked.",
-                "",
-                role_text,
                 "",
                 "Return a concise final summary after the result JSON exists on disk.",
             ]
@@ -510,7 +550,7 @@ def _render_fanout_orchestrator_brief(
                 f"- worktree_path: {worktree_path or '-'}",
                 f"- expected_result_path: {result_path}",
                 f"- bead_id: {invocation.bead_id or '-'}",
-                f"- allowed_files: {', '.join(allowed_files)}",
+                f"- allowed_files: {', '.join(allowed_files_display)}",
                 f"- acceptance_criteria: {invocation.acceptance_criteria or '-'}",
                 f"- prompt_prefix: {stage_payload['prompt_prefix'] or '-'}",
                 f"- bash_cwd_discipline: {bash_cwd}",
@@ -606,6 +646,8 @@ def _phase_work_units(prepared: Mapping[str, Any], phase_id: str) -> list[Mappin
     return [unit for unit in artifact.get("work_units") or [] if isinstance(unit, Mapping)]
 
 
+# Keep in lockstep with unit_session_adopter._UNIT_MUTATING_ROLES. Fanout v1
+# allows only agent-writer to mutate unit worktrees; review/merge roles are read-only.
 _UNIT_WRITER_ROLES = {"agent-writer"}
 
 
@@ -627,6 +669,41 @@ def _role_brief_excerpt(path: Path) -> str:
     except OSError:
         return f"(role brief unavailable: {path})"
     return text[:6000]
+
+
+def _default_writer_budget() -> dict[str, int]:
+    return {
+        "max_writer_tool_calls": DEFAULT_MAX_WRITER_TOOL_CALLS,
+        "max_writer_output_bytes": DEFAULT_MAX_WRITER_OUTPUT_BYTES,
+        "max_handoffs": DEFAULT_MAX_HANDOFFS,
+    }
+
+
+def _writer_budget_from_preset(preset: Mapping[str, Any]) -> dict[str, int]:
+    budget = preset.get("budget") if isinstance(preset.get("budget"), Mapping) else {}
+    defaults = _default_writer_budget()
+    return {key: _nonnegative_int(budget.get(key), default=value) for key, value in defaults.items()}
+
+
+def _nonnegative_int(value: Any, *, default: int) -> int:
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return default
+
+
+def _substitute_writer_placeholders(text: str, invocation: StageInvocation) -> str:
+    if invocation.agent_role not in _UNIT_WRITER_ROLES:
+        return text
+    replacements = {
+        "${MAX_TOOL_CALLS}": str(invocation.max_writer_tool_calls),
+        "${MAX_OUTPUT_BYTES}": str(invocation.max_writer_output_bytes),
+        "${MAX_HANDOFFS}": str(invocation.max_handoffs),
+        "${WORK_UNIT_ID}": invocation.work_unit_id or "",
+    }
+    out = text
+    for needle, replacement in replacements.items():
+        out = out.replace(needle, replacement)
+    return out
 
 
 def _failure_tolerance(stage: Mapping[str, Any]) -> str:

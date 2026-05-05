@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/07/schema#",
   "$id": "https://mstefanko-plugins/swarm-do/stage_result.schema.json#v1",
   "title": "swarm-do phase stage result",
+  "description": "Stage result schema for controller-owned stages. The schema stays permissive for backward compatibility; controller validation is binding for unit-backed stages and requires result_path plus exact work_unit_id, worktree_path, bead_id, and allowed_files echoes when those values are present in the stage contract.",
   "type": "object",
   "additionalProperties": true,
   "required": [
@@ -23,6 +24,27 @@
     "phase_id": { "type": "string" },
     "phase_attempt": { "type": "integer", "minimum": 1 },
     "stage_id": { "type": "string" },
+    "result_path": {
+      "type": "string",
+      "description": "Required by controller validation for every controller-owned stage result."
+    },
+    "work_unit_id": {
+      "type": ["string", "null"],
+      "description": "Permissive in schema for compatibility; required and matched by controller validation for unit-backed writer stages."
+    },
+    "worktree_path": {
+      "type": ["string", "null"],
+      "description": "Permissive in schema for compatibility; required and matched by controller validation when the stage contract includes a unit worktree."
+    },
+    "bead_id": {
+      "type": ["string", "null"],
+      "description": "Permissive in schema for compatibility; required and matched by controller validation when a stage bead is assigned."
+    },
+    "allowed_files": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Required and matched exactly by controller validation when the stage contract has allowed file scope."
+    },
     "status": {
       "type": "string",
       "enum": ["complete", "complete_with_concerns", "failed", "blocked", "needs_input", "done", "done_with_concerns", "needs_context"]

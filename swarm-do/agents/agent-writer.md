@@ -99,11 +99,22 @@ progress note and remaining acceptance criteria.
 
 When budget ceilings are provided, they are hard contract values:
 `max_writer_tool_calls=${MAX_TOOL_CALLS}`,
-`max_writer_output_bytes=${MAX_OUTPUT_BYTES}`, and
-`work_unit_id=${WORK_UNIT_ID}`. After every tool call, estimate your tool-call
-count and output bytes. If either crosses 80% of the ceiling, your next message
-must be `HANDOFF_REQUESTED` with a brief progress note. Do not make additional
-tool calls before handing off.
+`max_writer_output_bytes=${MAX_OUTPUT_BYTES}`,
+`max_handoffs=${MAX_HANDOFFS}`, and
+`work_unit_id=${WORK_UNIT_ID}`. Prefer concrete values from the Stage contract
+JSON when present. After every tool call, estimate your tool-call count and
+output bytes. If either crosses 80% of the ceiling, your next message must be
+`HANDOFF_REQUESTED` with a brief progress note. Do not make additional tool
+calls before handing off.
+
+## Stage Result Identity
+
+When a Stage contract JSON is provided, your result JSON must echo these
+controller-issued fields exactly: `run_id`, `phase_id`, `phase_attempt`,
+`stage_id`, `result_path`, and `status`. For unit-backed writer stages, also
+echo `work_unit_id`, `worktree_path`, `bead_id` when non-null, and
+`allowed_files` exactly as provided. Do not invent, omit, or rewrite controller
+identity fields.
 
 ## Grounding rules (non-negotiable)
 

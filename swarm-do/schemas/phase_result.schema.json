@@ -72,6 +72,10 @@
       "type": "object",
       "additionalProperties": { "type": ["string", "null"] }
     },
+    "merge_status": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
     "blocked_reason": { "type": ["string", "null"] },
     "needs_input": {
       "type": "array",

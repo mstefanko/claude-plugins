@@ -64,6 +64,9 @@
             "items": { "type": "string" }
           },
           "acceptance_criteria": { "type": "string" },
+          "max_writer_tool_calls": { "type": ["integer", "null"], "minimum": 0 },
+          "max_writer_output_bytes": { "type": ["integer", "null"], "minimum": 0 },
+          "max_handoffs": { "type": ["integer", "null"], "minimum": 0 },
           "layer_index": { "type": ["integer", "null"] },
           "fan_out_key": { "type": ["string", "null"] },
           "fan_out_index": { "type": ["integer", "null"] },

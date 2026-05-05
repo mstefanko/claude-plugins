@@ -14,11 +14,23 @@ class WriterBudgetTests(unittest.TestCase):
         self.assertEqual(status["status"], "escalated")
         self.assertEqual(status["failure_reason"], "other")
 
-    def test_tool_call_breach_escalates(self) -> None:
+    def test_self_reported_tool_call_breach_is_advisory_without_telemetry(self) -> None:
         status = writer_budget_status(
             {"id": "unit-a"},
             '{"work_unit_id":"unit-a","tool_calls":99,"output_bytes":1,"handoff":false,"summary":"done"}',
             max_writer_tool_calls=60,
+        )
+        self.assertEqual(status["status"], "ok")
+        self.assertIsNone(status["failure_reason"])
+        self.assertIsNone(status["tool_call_count"])
+        self.assertTrue(status["warnings"])
+
+    def test_structured_telemetry_tool_call_breach_escalates(self) -> None:
+        status = writer_budget_status(
+            {"id": "unit-a"},
+            '{"work_unit_id":"unit-a","tool_calls":3,"output_bytes":1,"handoff":false,"summary":"done"}',
+            max_writer_tool_calls=60,
+            telemetry_tool_call_count=99,
         )
         self.assertEqual(status["status"], "escalated")
         self.assertEqual(status["failure_reason"], "budget_breach_tool_calls")

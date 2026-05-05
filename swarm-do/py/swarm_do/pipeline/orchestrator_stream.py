@@ -9,8 +9,9 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 
-_MARKER_RE = re.compile(r"^(STAGE_COMPLETE|STAGE_FAILED)\s+(\{.*\})\s*$")
+_MARKER_RE = re.compile(r"^(STAGE_COMPLETE|STAGE_FAILED) (\{.*\})$")
 _MAX_MARKER_JSON_CHARS = 8192
+_STAGE_MARKER_TOKENS = ("STAGE_COMPLETE", "STAGE_FAILED")
 
 
 @dataclass(frozen=True)
@@ -46,8 +47,20 @@ def parse_stage_markers(text: str) -> list[StageMarker]:
     return markers
 
 
+def contains_stage_marker_token(line: str) -> bool:
+    return any(token in line for token in _STAGE_MARKER_TOKENS)
+
+
+def count_malformed_stage_marker_candidates(text: str) -> int:
+    return sum(
+        1
+        for line in text.splitlines()
+        if contains_stage_marker_token(line) and parse_stage_marker_line(line) is None
+    )
+
+
 def parse_stage_marker_line(line: str) -> StageMarker | None:
-    match = _MARKER_RE.match(line.strip())
+    match = _MARKER_RE.fullmatch(line.removesuffix("\n").removesuffix("\r"))
     if match is None:
         return None
     kind, payload_text = match.groups()
@@ -123,4 +136,11 @@ def _optional_str(value: Any) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-__all__ = ["StageMarker", "parse_stage_marker_line", "parse_stage_markers", "parse_transcript_task_invocations"]
+__all__ = [
+    "StageMarker",
+    "contains_stage_marker_token",
+    "count_malformed_stage_marker_candidates",
+    "parse_stage_marker_line",
+    "parse_stage_markers",
+    "parse_transcript_task_invocations",
+]

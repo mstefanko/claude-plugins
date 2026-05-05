@@ -151,8 +151,13 @@ result and handoff artifacts, then advances to the next phase only after a
 complete result. The default `--phase-sessions fanout` path keeps the v1
 bypass-cascade posture, uses binary `STAGE_COMPLETE`/`STAGE_FAILED` markers plus
 structured stage-result JSON, and retries only failed unit targets with a reduced
-prompt while preserving adopted units. `--phase-sessions off` is the explicit
-manual/prepare-only escape hatch that stops at `READY_FOR_DISPATCH`.
+prompt while preserving adopted units. Marker lines are intentionally strict:
+the marker token must begin at column 1, followed by one space and compact
+single-line JSON, with no surrounding prose, backticks, or leading whitespace.
+Rich statuses such as `complete_with_concerns`, `blocked`, `needs_input`, and
+`failed` live in the result JSON, not in marker tokens. `--phase-sessions off`
+is the explicit manual/prepare-only escape hatch that stops at
+`READY_FOR_DISPATCH`.
 `--phase-sessions auto` remains only as a temporary legacy/debug path and emits a
 warning when used.
 
@@ -488,9 +493,10 @@ State and evidence are intentionally split by responsibility:
    queue initializes or resumes, reconciles stale or abandoned attempts, renders
    phase-scoped context, and pumps controller-owned Agent fanout until completion
    or a terminal pause. Fanout keeps bypass-cascade permissions for v1, validates
-   exact stage metadata bindings, and retries only failed unit targets after
-   partial adoption. Use `--phase-sessions off` only for the manual prepare/verify
-   stop, and `--phase-sessions auto` only for the temporary legacy/debug path.
+   exact stage metadata bindings, records per-unit `merge_status`, and retries
+   only failed unit targets after partial adoption. Use `--phase-sessions off`
+   only for the manual prepare/verify stop, and `--phase-sessions auto` only for
+   the temporary legacy/debug path.
 5. The active preset graph resolves into topological layers. The dispatcher
    creates Beads issues and dependency edges for each stage, fan-out branch,
    merge agent, provider stage, or work unit.
@@ -508,8 +514,14 @@ State and evidence are intentionally split by responsibility:
 
 The v1 phase result and handoff schemas keep `schema_version: 1` for the fanout
 metadata fields (`preserved_work_units`, `retry_target_work_units`, and
-`stage_work_unit_map`) because they are optional, backward-compatible additions.
-No existing artifact migration is required.
+`stage_work_unit_map`, plus `merge_status`) because they are optional,
+backward-compatible additions. Stage result schemas also stay permissive for
+older producers, but controller validation is binding for fanout: each result
+must echo `run_id`, `phase_id`, `phase_attempt`, `stage_id`, `result_path`, and
+any controller-issued `work_unit_id`, `worktree_path`, `bead_id`, and
+`allowed_files` exactly. Presets may set
+`[budget].max_dispatcher_prompt_bytes`; overflow is recorded as a structured
+launcher error before dispatch. No existing artifact migration is required.
 
 ## Two-Step Prepare Gate
 

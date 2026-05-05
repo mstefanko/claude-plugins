@@ -7,6 +7,9 @@ from dataclasses import dataclass
 from typing import Any, Literal, Mapping
 
 
+_AGENT_TOOL_NAMES = {"Agent", "Task"}
+
+
 @dataclass
 class StreamChunk:
     kind: Literal["assistant_text", "result", "ignored", "malformed"]
@@ -23,6 +26,7 @@ class ClaudeStreamParser:
         self._first_parse_error: str | None = None
         self._final_result_seen = False
         self._ignored_frame_types: dict[str, int] = {}
+        self._tool_use_counts: dict[str, int] = {}
 
     def feed_line(self, line: str) -> StreamChunk:
         if not line.strip():
@@ -60,6 +64,11 @@ class ClaudeStreamParser:
             "first_parse_error": self._first_parse_error,
             "final_result_seen": self._final_result_seen,
             "ignored_frame_types": dict(self._ignored_frame_types),
+            "tool_use_counts": dict(self._tool_use_counts),
+            "agent_tool_use_names": sorted(_AGENT_TOOL_NAMES),
+            "agent_tool_use_count": sum(
+                count for name, count in self._tool_use_counts.items() if name in _AGENT_TOOL_NAMES
+            ),
         }
 
     def _next_assistant_text(self, frame: Mapping[str, Any]) -> str | None:
@@ -74,6 +83,10 @@ class ClaudeStreamParser:
             if block.get("type") == "text" and isinstance(block.get("text"), str):
                 texts.append(str(block["text"]))
             elif isinstance(block.get("type"), str):
+                if block.get("type") == "tool_use":
+                    tool_name = block.get("name")
+                    key = tool_name if isinstance(tool_name, str) and tool_name else "unknown"
+                    self._tool_use_counts[key] = self._tool_use_counts.get(key, 0) + 1
                 self._count_ignored(str(block["type"]))
         if not texts:
             return None

@@ -86,7 +86,7 @@ class _LegacyProc:
 
 def _write_stage_result(data: Path, run_id: str, phase_id: str, attempt: int, result_path: Path, stage_id: str) -> None:
     result_path.parent.mkdir(parents=True, exist_ok=True)
-    result_path.write_text(json.dumps({'schema_version': 1, 'run_id': run_id, 'phase_id': phase_id, 'phase_attempt': attempt, 'stage_id': stage_id, 'status': 'complete', 'summary': 'stage complete', 'artifacts': []}, sort_keys=True) + '\n', encoding='utf-8')
+    result_path.write_text(json.dumps({'schema_version': 1, 'run_id': run_id, 'phase_id': phase_id, 'phase_attempt': attempt, 'stage_id': stage_id, 'result_path': str(result_path), 'work_unit_id': None, 'worktree_path': None, 'bead_id': None, 'allowed_files': [], 'status': 'complete', 'summary': 'stage complete', 'artifacts': []}, sort_keys=True) + '\n', encoding='utf-8')
 
 def _claude_runner(data: Path, run_id: str, statuses: list[str], stdout_template: str | None=None, returncodes: list[int] | None=None):
     calls = {'count': 0}

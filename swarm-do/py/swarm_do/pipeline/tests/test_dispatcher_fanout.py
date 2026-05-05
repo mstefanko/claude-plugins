@@ -2,19 +2,26 @@ from __future__ import annotations
 
 import json
 import inspect
+import dataclasses
+import hashlib
+import re
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
 from swarm_do.pipeline import phase_pump
+from swarm_do.pipeline.budget import DEFAULT_MAX_HANDOFFS, DEFAULT_MAX_WRITER_OUTPUT_BYTES, DEFAULT_MAX_WRITER_TOOL_CALLS
 from swarm_do.pipeline.execution_worktree import materialize_run_execution_worktree, materialize_unit_execution_worktree
-from swarm_do.pipeline.orchestrator_stream import parse_stage_marker_line, parse_transcript_task_invocations
+from swarm_do.pipeline.orchestrator_stream import count_malformed_stage_marker_candidates, parse_stage_marker_line, parse_stage_markers, parse_transcript_task_invocations
 from swarm_do.pipeline.phase_pump import _dispatcher_fanout_permission_failure, pump_phases
+from swarm_do.pipeline.phase_sessions import claim_next_phase, init_phase_sessions, phase_handoff_path, phase_result_path, start_phase
 from swarm_do.pipeline.stage_controller import StageMarkerProcessor, resume_stage_adoption_journals, retry_failed_units
-from swarm_do.pipeline.stage_invocation import plan_stage_invocations, render_orchestrator_brief, with_runtime_fields
-from swarm_do.pipeline.stage_sessions import init_stage_sessions, load_stage_sessions, record_stage_adopted, record_stage_retry_requested
+from swarm_do.pipeline.stage_invocation import _UNIT_WRITER_ROLES, plan_stage_invocations, render_orchestrator_brief, with_runtime_fields
+from swarm_do.pipeline.stage_sessions import assign_stage_bead, init_stage_sessions, load_stage_sessions, record_stage_adopted, record_stage_retry_requested
 from swarm_do.pipeline.tests.phase_pump_test_helpers import _claude_runner, _eligible_claude_report
 from swarm_do.pipeline.tests.phase_session_fixtures import make_prepared_run
+from swarm_do.pipeline.unit_session_adopter import _UNIT_MUTATING_ROLES
 from swarm_do.pipeline.unit_sessions import load_unit_sessions
 
 
@@ -88,6 +95,17 @@ def test_four_token_stage_markers_are_not_part_of_v1_contract() -> None:
     assert parse_stage_marker_line(f"STAGE_NEEDS_CONTEXT {payload}") is None
 
 
+def test_malformed_stage_marker_candidate_is_counted_without_parsing() -> None:
+    pretty_printed = 'STAGE_COMPLETE {"stage_id":"writer",\n"result_path":"/tmp/result.json"}'
+
+    assert parse_stage_markers(pretty_printed) == []
+    assert count_malformed_stage_marker_candidates(pretty_printed) == 1
+
+
+def test_unit_writer_roles_match_unit_adopter_mutating_roles() -> None:
+    assert _UNIT_WRITER_ROLES == _UNIT_MUTATING_ROLES == {"agent-writer"}
+
+
 def test_fanout_prompt_includes_agent_worktree_and_status_protocol(tmp_path: Path) -> None:
     data = tmp_path / "data"
     data.mkdir()
@@ -117,6 +135,48 @@ def test_fanout_prompt_includes_agent_worktree_and_status_protocol(tmp_path: Pat
     assert "complete_with_concerns" in prompt
     assert f"cd {tmp_path / 'unit' / 'repo'} &&" in prompt
     assert "bead_id: bd-1" in prompt
+    assert "${MAX_TOOL_CALLS}" not in prompt
+    assert "${MAX_OUTPUT_BYTES}" not in prompt
+    assert "${MAX_HANDOFFS}" not in prompt
+    assert "${WORK_UNIT_ID}" not in prompt
+    assert f"max_writer_tool_calls={DEFAULT_MAX_WRITER_TOOL_CALLS}" in prompt
+    assert f"max_writer_output_bytes={DEFAULT_MAX_WRITER_OUTPUT_BYTES}" in prompt
+    assert f"max_handoffs={DEFAULT_MAX_HANDOFFS}" in prompt
+
+
+def test_fanout_prompt_does_not_inline_writer_role_per_unit(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    data.mkdir()
+    prepared = _prepared_with_units(tmp_path, [f"unit-{idx}" for idx in range(1, 7)])
+    invocations, _snapshot = plan_stage_invocations(
+        {"name": "default", "pipeline": "default"},
+        {"run_id": RUN_ID, "phase_id": "1", "phase_attempt": 1},
+        data_dir=data,
+        prepared=prepared,
+        phase_sessions_mode="fanout",
+    )
+    writers = [stage for stage in invocations if stage.agent_role == "agent-writer"]
+    writers = with_runtime_fields(
+        writers,
+        worktree_paths={stage.work_unit_id or "": tmp_path / str(stage.work_unit_id or "unit") for stage in writers},
+    )
+
+    prompt = render_orchestrator_brief(
+        base_prompt="# Base\n",
+        stage_invocations=writers,
+        run_id=RUN_ID,
+        phase_id="1",
+        phase_sessions_mode="fanout",
+    )
+
+    assert prompt.count("name: agent-writer") == 0
+    assert len(prompt.encode("utf-8")) < 30_000
+
+
+def test_readme_marker_documentation_does_not_parse_as_stage_markers() -> None:
+    readme = (Path(__file__).resolve().parents[4] / "README.md").read_text(encoding="utf-8")
+
+    assert parse_stage_markers(readme) == []
 
 
 def test_structured_status_complete_with_concerns_adopts() -> None:
@@ -525,6 +585,230 @@ def test_unit_marker_commits_unit_worktree_then_merges() -> None:
     assert integration_content == "unit adoption\n"
 
 
+def test_live_pump_two_unit_fanout_merges_both_units(monkeypatch) -> None:
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        repo, data, run_id = make_prepared_run(
+            root,
+            phase_count=1,
+            commit_plan=True,
+            ignore_run_artifacts=True,
+        )
+        init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+        _replace_prepared_units(data, run_id, "1", ["unit-1", "unit-2"])
+        seen: dict[str, object] = {}
+
+        def runner(argv, prompt_text):
+            contracts = _stage_contracts_from_dispatcher_prompt(prompt_text)
+            seen["contracts"] = contracts
+            markers: list[str] = []
+            for contract in contracts:
+                result_path = Path(str(contract["result_path"]))
+                worktree_path = contract.get("worktree_path")
+                if contract.get("agent_role") == "agent-writer" and isinstance(worktree_path, str):
+                    allowed = [str(item) for item in contract.get("allowed_files") or [] if isinstance(item, str)]
+                    rel = allowed[0] if allowed else f"docs/{contract['work_unit_id']}.md"
+                    target = Path(worktree_path) / rel
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(f"implemented {contract['work_unit_id']}\n", encoding="utf-8")
+                payload = {
+                    "schema_version": 1,
+                    "run_id": contract["run_id"],
+                    "phase_id": contract["phase_id"],
+                    "phase_attempt": contract["phase_attempt"],
+                    "stage_id": contract["stage_id"],
+                    "result_path": str(result_path),
+                    "work_unit_id": contract.get("work_unit_id"),
+                    "worktree_path": contract.get("worktree_path"),
+                    "bead_id": contract.get("bead_id"),
+                    "allowed_files": list(contract.get("allowed_files") or []),
+                    "status": "complete",
+                    "summary": f"{contract['stage_id']} done",
+                    "artifacts": [],
+                }
+                result_path.parent.mkdir(parents=True, exist_ok=True)
+                result_path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+                markers.append(
+                    "STAGE_COMPLETE "
+                    + json.dumps(
+                        {
+                            "stage_id": contract["stage_id"],
+                            "result_path": str(result_path),
+                            "summary": f"{contract['stage_id']} done",
+                            "commit_subject": f"{contract['stage_id']} complete",
+                        },
+                        sort_keys=True,
+                    )
+                )
+            return subprocess.CompletedProcess(argv, 0, stdout="\n".join(markers) + "\n", stderr="")
+
+        monkeypatch.setattr(phase_pump, "doctor_report", lambda: _eligible_claude_report())
+        monkeypatch.setattr(phase_pump, "run_phase_doctor", lambda *_args, **_kwargs: {"status": "ok", "findings": []})
+        monkeypatch.setattr(phase_pump, "_resolve_phase_preset", lambda: _two_unit_writer_preset())
+
+        result = pump_phases(
+            run_id,
+            launcher="claude-print",
+            phase_sessions_mode="fanout",
+            max_phases=1,
+            init_if_missing=True,
+            claude_runner=runner,
+            data_dir=data,
+        )
+
+        command = json.loads(
+            (data / "runs" / run_id / "phase_launches" / "1" / "attempt-1" / "command.json").read_text(encoding="utf-8")
+        )
+        phase_result = json.loads(phase_result_path(run_id, "1", 1, data_dir=data).read_text(encoding="utf-8"))
+        units = load_unit_sessions(run_id, data_dir=data)
+        markers = command["stage_controller"]["markers"]
+        integration_git = Path(markers[-1]["unit_adoption"]["merge"]["integration_git_worktree_root"])
+        log = subprocess.run(
+            ["git", "-C", str(integration_git), "log", "--format=%s"],
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        ).stdout.splitlines()
+
+    assert result["status"] == "complete"
+    assert [contract["work_unit_id"] for contract in seen["contracts"]] == ["unit-1", "unit-2"]
+    assert command["stage_controller"]["completed_work_units"] == ["unit-1", "unit-2"]
+    assert phase_result["merge_status"] == {"unit-1": "merged", "unit-2": "merged"}
+    assert {unit["unit_id"]: unit["merge_state"] for unit in units["units"]} == {"unit-1": "merged", "unit-2": "merged"}
+    assert "Merge work unit unit-1" in log
+    assert "Merge work unit unit-2" in log
+
+
+def test_dispatcher_prompt_overflow_records_structured_launcher_error(monkeypatch) -> None:
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        _repo, data, run_id = make_prepared_run(root, phase_count=1, commit_plan=True, ignore_run_artifacts=True)
+        init_phase_sessions(run_id, data_dir=data)
+        claim = claim_next_phase(run_id, data_dir=data, lease_owner="owner-1")
+        phase = start_phase(
+            run_id,
+            "1",
+            launcher="claude-print",
+            lease_owner=str(claim["lease_owner"]),
+            data_dir=data,
+        )["phase"]
+
+        monkeypatch.setattr(phase_pump, "_resolve_phase_preset", lambda: {**_two_unit_writer_preset(), "budget": {"max_dispatcher_prompt_bytes": 1}})
+
+        launch = phase_pump._run_claude_print_phase(
+            run_id,
+            "1",
+            phase,
+            lease_owner=str(claim["lease_owner"]),
+            claude_runner=lambda _argv, _prompt: subprocess.CompletedProcess(_argv, 0, stdout="", stderr=""),
+            claude_path="claude",
+            max_budget_usd=None,
+            phase_sessions_mode="fanout",
+            data_dir=data,
+        )
+
+        command = json.loads((Path(str(launch["launch_dir"])) / "command.json").read_text(encoding="utf-8"))
+
+    assert launch["status"] == "launcher_error"
+    assert launch["reason"] == "dispatcher_prompt_too_large"
+    assert command["reason"] == "dispatcher_prompt_too_large"
+    assert command["dispatcher_prompt_budget"]["status"] == "fail"
+    assert command["dispatcher_prompt_budget"]["max_dispatcher_prompt_bytes"] == 1
+    assert command["dispatcher_prompt_budget"]["dispatcher_prompt_bytes"] > 1
+
+
+def test_unit_stage_result_missing_identity_rejects_before_adoption() -> None:
+    for missing_key in ["result_path", "work_unit_id", "worktree_path", "bead_id", "allowed_files"]:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            repo, data, run_id = make_prepared_run(root, phase_count=1, commit_plan=True, ignore_run_artifacts=True)
+            prepared = json.loads((data / "runs" / run_id / "prepared_plan.v1.json").read_text(encoding="utf-8"))
+            run_worktree = materialize_run_execution_worktree(
+                run_id,
+                source_project_root=repo,
+                data_dir=data,
+                prepared_plan=prepared,
+                sensitive_prefixes=[str(root / "home" / ".claude")],
+            )
+            invocations, snapshot = plan_stage_invocations(
+                {"name": "default", "pipeline": "default"},
+                {"run_id": run_id, "phase_id": "1", "phase_attempt": 1},
+                data_dir=data,
+                prepared=prepared,
+            )
+            writer = next(stage for stage in invocations if stage.agent_role == "agent-writer")
+            assert writer.work_unit_id is not None
+            unit_payload = materialize_unit_execution_worktree(run_id, "1", writer.work_unit_id, data_dir=data)
+            writer = with_runtime_fields([writer], worktree_paths={writer.work_unit_id: unit_payload["project_root"]})[0]
+            writer = dataclasses.replace(writer, bead_id="bd-writer")
+            init_stage_sessions(run_id, "1", [writer], snapshot, data_dir=data)
+            assign_stage_bead(run_id, "1", writer.stage_id, "bd-writer", data_dir=data)
+            _write_stage_result(writer.expected_result_path, writer, run_id=run_id)
+            payload = json.loads(writer.expected_result_path.read_text(encoding="utf-8"))
+            payload.pop(missing_key)
+            writer.expected_result_path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+            processor = StageMarkerProcessor(
+                run_id=run_id,
+                phase_id="1",
+                phase_attempt=1,
+                stage_invocations=[writer],
+                prepared=prepared,
+                workspace_metadata={**run_worktree.to_metadata(), "phase_attempt": 1},
+                launch_dir=data / "launch",
+                data_dir=data,
+            )
+
+            decision = processor.process_marker(_complete_marker(writer))
+            summary = processor.finish()
+            state = load_stage_sessions(run_id, "1", data_dir=data)
+            units = load_unit_sessions(run_id, data_dir=data)
+
+        assert decision.outcome == "rejected_metadata_tampered"
+        assert summary["rejected_metadata_tampered"] == 1
+        assert state["stages"][0]["status"] == "blocked"
+        assert units["units"][0]["merge_state"] == "pending"
+
+
+def test_controller_phase_result_overwrites_stale_dispatcher_complete() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        repo, data, run_id = make_prepared_run(root, phase_count=1, commit_plan=True, ignore_run_artifacts=True)
+        init_phase_sessions(run_id, data_dir=data, repo_root=repo)
+        claim = claim_next_phase(run_id, data_dir=data, repo_root=repo, lease_owner="owner-1")
+        phase = start_phase(run_id, "1", launcher="claude-print", lease_owner=str(claim["lease_owner"]), data_dir=data)["phase"]
+        result_path = phase_result_path(run_id, "1", 1, data_dir=data)
+        handoff_path = phase_handoff_path(run_id, "1", 1, data_dir=data)
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+        result_path.write_text('{"status":"complete"}\n', encoding="utf-8")
+
+        phase_pump._write_controller_phase_result(
+            run_id,
+            "1",
+            phase,
+            data_dir=data,
+            result_path=result_path,
+            handoff_path=handoff_path,
+            stage_controller={
+                "phase_result_status": "failed",
+                "commits": [],
+                "completed_work_units": [],
+                "failed_work_units": ["unit-1"],
+                "merge_status": {"unit-1": "failed"},
+                "worktree_diff": None,
+            },
+            launcher="claude-print",
+        )
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+        handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
+
+    assert result["status"] == "failed"
+    assert result["completed_work_units"] == []
+    assert result["failed_work_units"] == ["unit-1"]
+    assert result["merge_status"] == {"unit-1": "failed"}
+    assert handoff["status"] == "failed"
+
+
 def test_unit_adoption_resume_from_marker_before_merge_is_idempotent() -> None:
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
@@ -647,6 +931,11 @@ def _write_stage_result(
         "phase_id": "1",
         "phase_attempt": 1,
         "stage_id": invocation.stage_id,
+        "result_path": str(path),
+        "work_unit_id": invocation.work_unit_id,
+        "worktree_path": str(invocation.worktree_path) if invocation.worktree_path else None,
+        "bead_id": invocation.bead_id,
+        "allowed_files": list(invocation.allowed_files),
         "status": status,
         "summary": summary,
         "artifacts": [],
@@ -683,3 +972,63 @@ def _prepared_with_units(tmp_path: Path, unit_ids: list[str]) -> dict:
             }
         },
     }
+
+
+def _two_unit_writer_preset() -> dict[str, object]:
+    return {
+        "name": "two-unit-writer-smoke",
+        "pipeline_inline": {
+            "pipeline_version": 1,
+            "name": "two-unit-writer-smoke",
+            "stages": [
+                {"id": "writer", "agents": [{"role": "agent-writer"}]},
+            ],
+        },
+        "budget": {},
+    }
+
+
+def _replace_prepared_units(data: Path, run_id: str, phase_id: str, unit_ids: list[str]) -> None:
+    prepared_path = data / "runs" / run_id / "prepared_plan.v1.json"
+    prepared = json.loads(prepared_path.read_text(encoding="utf-8"))
+    descriptor = dict(prepared["work_unit_artifacts"][phase_id])
+    artifact = dict(descriptor["artifact"])
+    template = dict((artifact.get("work_units") or [{}])[0])
+    artifact["work_units"] = [
+        {
+            **template,
+            "id": unit_id,
+            "title": unit_id,
+            "goal": f"Implement {unit_id}",
+            "allowed_files": [f"docs/{unit_id}.md"],
+            "acceptance_criteria": [f"{unit_id} implemented"],
+            "validation_commands": [],
+        }
+        for unit_id in unit_ids
+    ]
+    raw = (json.dumps(artifact, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    sidecar_path = Path(str(prepared["repo_root"])) / str(descriptor["path"])
+    sidecar_path.parent.mkdir(parents=True, exist_ok=True)
+    sidecar_path.write_bytes(raw)
+    descriptor["artifact"] = artifact
+    descriptor["sha"] = hashlib.sha256(raw).hexdigest()
+    prepared["work_unit_artifacts"][phase_id] = descriptor
+    prepared_path.write_text(json.dumps(prepared, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _stage_contracts_from_dispatcher_prompt(prompt_text: str) -> list[dict[str, object]]:
+    contracts: list[dict[str, object]] = []
+    for line in prompt_text.splitlines():
+        if not line.startswith("Agent("):
+            continue
+        match = re.search(r", prompt=(.*)\)$", line)
+        if match is None:
+            continue
+        agent_prompt = json.loads(match.group(1))
+        contract_match = re.search(r"^Stage contract JSON: (\{.*\})$", agent_prompt, re.MULTILINE)
+        if contract_match is None:
+            continue
+        payload = json.loads(contract_match.group(1))
+        if isinstance(payload, dict):
+            contracts.append(payload)
+    return contracts

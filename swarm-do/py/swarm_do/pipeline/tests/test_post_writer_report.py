@@ -102,8 +102,9 @@ class PostWriterReportTests(unittest.TestCase):
                 "unit-a",
                 repo=repo,
                 base_ref="HEAD",
-                writer_return=writer_return("unit-a", tool_calls=99),
+                writer_return=writer_return("unit-a", tool_calls=3),
                 max_writer_tool_calls=5,
+                telemetry_tool_call_count=99,
             )
 
         self.assertEqual(report["budget_status"]["failure_reason"], "budget_breach_tool_calls")

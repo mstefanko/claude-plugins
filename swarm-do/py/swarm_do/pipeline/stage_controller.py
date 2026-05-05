@@ -10,7 +10,7 @@ from typing import Any, Literal, Mapping
 
 from .execution_worktree import RunExecutionWorktreeError, commit_stage_artifacts
 from .failure_taxonomy import failure_kind_details
-from .orchestrator_stream import StageMarker, parse_stage_markers
+from .orchestrator_stream import StageMarker, contains_stage_marker_token, parse_stage_marker_line
 from .paths import REPO_ROOT
 from .phase_beads import close_stage_child, mark_stage_blocked
 from .phase_sessions import PhaseSessionError
@@ -116,6 +116,7 @@ class StageMarkerProcessor:
         self._failed_recorded_count = 0
         self._retry_requested_count = 0
         self._stage_result_missing_count = 0
+        self._malformed_marker_candidate_count = 0
 
     def process_text(self, text: str) -> list[MarkerDecision]:
         """Parse marker lines from text and process them on the owner thread."""
@@ -123,8 +124,12 @@ class StageMarkerProcessor:
         self._assert_owner_thread()
         decisions: list[MarkerDecision] = []
         decisions.extend(self._retry_pending())
-        for marker in parse_stage_markers(text):
-            decisions.append(self.process_marker(marker))
+        for line in text.splitlines():
+            marker = parse_stage_marker_line(line)
+            if marker is not None:
+                decisions.append(self.process_marker(marker))
+            elif contains_stage_marker_token(line):
+                self._malformed_marker_candidate_count += 1
         return decisions
 
     def process_marker(self, marker: StageMarker) -> MarkerDecision:
@@ -159,6 +164,13 @@ class StageMarkerProcessor:
         failed_work_units = _failed_work_units(current, self.stage_invocations)
         retry_requested_work_units = _retry_requested_work_units(current, self.stage_invocations)
         failed_stage_ids = _failed_stage_ids(current)
+        merge_status = _merge_status_by_work_unit(
+            self.run_id,
+            self.phase_id,
+            current,
+            self.stage_invocations,
+            data_dir=self.data_dir,
+        )
         terminal_state = _terminal_state_for_summary(
             completed=completed,
             adopted_stage_ids=set(adopted_by_id),
@@ -182,6 +194,7 @@ class StageMarkerProcessor:
             "failed_work_units": failed_work_units,
             "retry_requested_work_units": retry_requested_work_units,
             "failed_stage_ids": failed_stage_ids,
+            "merge_status": merge_status,
             "pending_marker_count": len(self._pending),
             "duplicate_marker_count": self._duplicate_marker_count,
             "amended_count": self._amended_count,
@@ -193,6 +206,7 @@ class StageMarkerProcessor:
             "failed_recorded_count": self._failed_recorded_count,
             "retry_requested_count": self._retry_requested_count,
             "stage_result_missing_count": self._stage_result_missing_count,
+            "malformed_marker_candidate_count": self._malformed_marker_candidate_count,
         }
 
     def _process_marker(
@@ -605,18 +619,24 @@ class StageMarkerProcessor:
             session_value = stage.get(key)
             if session_value != expected:
                 errors.append(f"stage session {key} expected {expected!r}, got {session_value!r}")
-            if key in payload and payload.get(key) != expected:
+            if expected is not None and key not in payload:
+                errors.append(f"missing required property: {key}")
+            elif key in payload and payload.get(key) != expected:
                 errors.append(f"result {key} expected {expected!r}, got {payload.get(key)!r}")
         expected_allowed = list(invocation.allowed_files)
         session_allowed = [str(item) for item in stage.get("allowed_files") or [] if isinstance(item, str)]
         if session_allowed != expected_allowed:
             errors.append(f"stage session allowed_files expected {expected_allowed!r}, got {session_allowed!r}")
-        if "allowed_files" in payload:
+        if expected_allowed and "allowed_files" not in payload:
+            errors.append("missing required property: allowed_files")
+        elif "allowed_files" in payload:
             result_allowed = [str(item) for item in payload.get("allowed_files") or [] if isinstance(item, str)]
             if result_allowed != expected_allowed:
                 errors.append(f"result allowed_files expected {expected_allowed!r}, got {result_allowed!r}")
         result_path_claim = payload.get("result_path")
-        if isinstance(result_path_claim, str) and Path(result_path_claim).expanduser().resolve(strict=False) != expected_path:
+        if not isinstance(result_path_claim, str) or not result_path_claim:
+            errors.append("missing required property: result_path")
+        elif Path(result_path_claim).expanduser().resolve(strict=False) != expected_path:
             errors.append(f"result result_path expected {expected_path}, got {result_path_claim}")
         errors.extend(self._unit_binding_errors(invocation, stage))
         return errors
@@ -1090,6 +1110,9 @@ def _invocations_from_stage_state(run_id: str, phase_id: str, *, data_dir: Path)
                 allowed_files=tuple(str(item) for item in stage.get("allowed_files") or [] if isinstance(item, str)),
                 acceptance_criteria=str(stage.get("acceptance_criteria") or ""),
                 work_unit_id=_optional_str(stage.get("work_unit_id")),
+                max_writer_tool_calls=_int_or_default(stage.get("max_writer_tool_calls"), 60),
+                max_writer_output_bytes=_int_or_default(stage.get("max_writer_output_bytes"), 60_000),
+                max_handoffs=_int_or_default(stage.get("max_handoffs"), 1),
             )
         )
     return invocations
@@ -1283,6 +1306,48 @@ def _failed_stage_ids(current: Mapping[str, Any]) -> list[str]:
     return out
 
 
+def _merge_status_by_work_unit(
+    run_id: str,
+    phase_id: str,
+    current: Mapping[str, Any],
+    invocations: list[StageInvocation],
+    *,
+    data_dir: Path,
+) -> dict[str, str]:
+    stages_by_id = {
+        str(stage.get("stage_id")): stage
+        for stage in current.get("stages") or []
+        if isinstance(stage, Mapping)
+    }
+    unit_merge_state: dict[str, str] = {}
+    try:
+        unit_state = load_unit_sessions(run_id, data_dir=data_dir)
+    except UnitSessionError:
+        unit_state = {}
+    for unit in unit_state.get("units") or []:
+        if not isinstance(unit, Mapping) or unit.get("phase_id") != phase_id:
+            continue
+        unit_id = _optional_str(unit.get("unit_id")) or _optional_str(unit.get("work_unit_id"))
+        merge_state = _optional_str(unit.get("merge_state"))
+        if unit_id and merge_state:
+            unit_merge_state[unit_id] = merge_state
+
+    out: dict[str, str] = {}
+    for invocation in invocations:
+        if not invocation.work_unit_id or invocation.work_unit_id in out:
+            continue
+        stage = stages_by_id.get(invocation.stage_id, {})
+        if invocation.work_unit_id in unit_merge_state:
+            out[invocation.work_unit_id] = unit_merge_state[invocation.work_unit_id]
+        elif stage.get("status") in {"failed", "blocked"}:
+            out[invocation.work_unit_id] = "failed"
+        elif stage.get("status") == STATUS_ADOPTED:
+            out[invocation.work_unit_id] = "skipped"
+        else:
+            out[invocation.work_unit_id] = "pending"
+    return out
+
+
 def _terminal_state_for_summary(
     *,
     completed: bool,
@@ -1313,6 +1378,10 @@ def _retry_cycle_count(stage: Mapping[str, Any]) -> int:
         return int(raw)
     except (TypeError, ValueError):
         return 0
+
+
+def _int_or_default(value: Any, default: int) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) else default
 
 
 def _stage_bead_id(run_id: str, phase_id: str, stage_id: str, *, data_dir: Path) -> str | None:
