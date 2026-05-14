@@ -1,0 +1,35 @@
+{
+  // bakeoff compare work order - edit id, goal, and background, then run:
+  //   bakeoff validate examples/compare.work-order.json
+  //   bakeoff research examples/compare.work-order.json
+  "schema_version": 1,
+  "id": "TODO-compare",
+  "type": "compare",
+  "goal": "TODO: describe the decision or competing approaches.",
+  "background": "TODO: include the evidence, constraints, and acceptance criteria.",
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "claude-sonnet-4-6",
+      "scope": "mixed",
+      "effort": "high"
+    },
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "scope": "mixed",
+      "effort": "high"
+    }
+  ],
+  "judge": {
+    "backend": "claude",
+    "model": "claude-opus-4-7",
+    "effort": "high"
+  },
+  "budgets": {
+    "wall_seconds": 900,
+    "max_output_bytes": 60000
+  }
+}

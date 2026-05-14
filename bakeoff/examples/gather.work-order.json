@@ -1,0 +1,35 @@
+{
+  // bakeoff gather work order - edit id, goal, and background, then run:
+  //   bakeoff validate examples/gather.work-order.json
+  //   bakeoff research examples/gather.work-order.json
+  "schema_version": 1,
+  "id": "TODO-gather",
+  "type": "gather",
+  "goal": "TODO: describe the coverage question.",
+  "background": "TODO: include repo paths, constraints, and known context.",
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "claude-sonnet-4-6",
+      "scope": "codebase",
+      "effort": "high"
+    },
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "scope": "web",
+      "effort": "high"
+    }
+  ],
+  "judge": {
+    "backend": "claude",
+    "model": "claude-opus-4-7",
+    "effort": "high"
+  },
+  "budgets": {
+    "wall_seconds": 900,
+    "max_output_bytes": 60000
+  }
+}

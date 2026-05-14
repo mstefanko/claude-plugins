@@ -144,6 +144,46 @@ def test_fanout_prompt_includes_agent_worktree_and_status_protocol(tmp_path: Pat
     assert f"max_handoffs={DEFAULT_MAX_HANDOFFS}" in prompt
 
 
+def test_non_unit_fanout_prompt_pins_null_result_binding(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    data.mkdir()
+    invocations, _snapshot = plan_stage_invocations(
+        {"name": "default", "pipeline": "default"},
+        {"run_id": RUN_ID, "phase_id": "1", "phase_attempt": 1},
+        data_dir=data,
+        prepared=_prepared_with_one_unit(tmp_path),
+        phase_sessions_mode="fanout",
+    )
+    provider = next(stage for stage in invocations if stage.is_provider_stage)
+
+    prompt = render_orchestrator_brief(
+        base_prompt="# Base\n",
+        stage_invocations=[provider],
+        run_id=RUN_ID,
+        phase_id="1",
+        phase_sessions_mode="fanout",
+    )
+    contracts = _stage_contracts_from_dispatcher_prompt(prompt)
+    agent_prompts = _agent_prompts_from_dispatcher_prompt(prompt)
+
+    assert len(contracts) == 1
+    assert contracts[0]["allowed_files"] == []
+    assert contracts[0]["work_unit_id"] is None
+    assert contracts[0]["worktree_path"] is None
+    expected_binding = {
+        "allowed_files": [],
+        "bead_id": None,
+        "work_unit_id": None,
+        "worktree_path": None,
+    }
+    assert len(agent_prompts) == 1
+    assert f"Result binding JSON: {json.dumps(expected_binding, sort_keys=True)}" in agent_prompts[0]
+    assert "Use JSON null for null values, [] for empty allowed_files" in agent_prompts[0]
+    assert "never copy bindings from other stages" in agent_prompts[0]
+    assert "- allowed_files: []" in prompt
+    assert "allowed_files: **/*" not in prompt
+
+
 def test_fanout_prompt_does_not_inline_writer_role_per_unit(tmp_path: Path) -> None:
     data = tmp_path / "data"
     data.mkdir()
@@ -1018,13 +1058,7 @@ def _replace_prepared_units(data: Path, run_id: str, phase_id: str, unit_ids: li
 
 def _stage_contracts_from_dispatcher_prompt(prompt_text: str) -> list[dict[str, object]]:
     contracts: list[dict[str, object]] = []
-    for line in prompt_text.splitlines():
-        if not line.startswith("Agent("):
-            continue
-        match = re.search(r", prompt=(.*)\)$", line)
-        if match is None:
-            continue
-        agent_prompt = json.loads(match.group(1))
+    for agent_prompt in _agent_prompts_from_dispatcher_prompt(prompt_text):
         contract_match = re.search(r"^Stage contract JSON: (\{.*\})$", agent_prompt, re.MULTILINE)
         if contract_match is None:
             continue
@@ -1032,3 +1066,17 @@ def _stage_contracts_from_dispatcher_prompt(prompt_text: str) -> list[dict[str, 
         if isinstance(payload, dict):
             contracts.append(payload)
     return contracts
+
+
+def _agent_prompts_from_dispatcher_prompt(prompt_text: str) -> list[str]:
+    prompts: list[str] = []
+    for line in prompt_text.splitlines():
+        if not line.startswith("Agent("):
+            continue
+        match = re.search(r", prompt=(.*)\)$", line)
+        if match is None:
+            continue
+        agent_prompt = json.loads(match.group(1))
+        if isinstance(agent_prompt, str):
+            prompts.append(agent_prompt)
+    return prompts

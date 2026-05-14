@@ -18,6 +18,12 @@
       "category": "discovery"
     },
     {
+      "name": "bakeoff",
+      "source": "./bakeoff",
+      "description": "Tiny CLI harness for two-provider research bakeoffs, with a future Claude Code launcher wrapper.",
+      "category": "orchestration"
+    },
+    {
       "name": "swarmdaddy",
       "source": "./swarm-do",
       "description": "SwarmDaddy: Beads-backed multi-agent orchestration for plans, reviews, research, and Claude+Codex routing.",

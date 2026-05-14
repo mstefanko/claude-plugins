@@ -1,0 +1,6 @@
+{
+  "name": "bakeoff",
+  "description": "Tiny CLI harness for running two-provider research bakeoffs with artifact-only judging.",
+  "author": { "name": "mstefanko" },
+  "keywords": ["bakeoff", "research", "judge", "claude", "codex", "multi-agent"]
+}

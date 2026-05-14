@@ -489,7 +489,7 @@ def _render_fanout_orchestrator_brief(
     for invocation in stage_invocations:
         result_path = invocation.expected_result_path
         allowed_files = list(invocation.allowed_files)
-        allowed_files_display = allowed_files or ["**/*"]
+        allowed_files_display = json.dumps(allowed_files, sort_keys=True)
         worktree_path = str(invocation.worktree_path) if invocation.worktree_path else None
         bash_cwd = (
             "Every Bash command for this unit must self-establish cwd with "
@@ -525,14 +525,27 @@ def _render_fanout_orchestrator_brief(
                 "prior_findings": "exclude from retry prompts",
             },
         }
+        result_binding = {
+            "work_unit_id": invocation.work_unit_id,
+            "worktree_path": worktree_path,
+            "bead_id": invocation.bead_id,
+            "allowed_files": allowed_files,
+        }
         prompt = "\n".join(
             [
                 f"Stage contract JSON: {json.dumps(stage_payload, sort_keys=True)}",
                 "",
                 f"Prompt prefix for Bash commands: {stage_payload['prompt_prefix'] or '(none)'}",
-                "Before finishing, write a stage result JSON to the prescribed result_path exactly.",
-                "The result JSON must echo run_id, phase_id, phase_attempt, stage_id, result_path, status, and any non-null work_unit_id/worktree_path/bead_id from the Stage contract JSON.",
-                "The result JSON must echo allowed_files exactly as provided in the Stage contract JSON.",
+                (
+                    "Before finishing, write a stage result JSON to result_path with "
+                    "run_id, phase_id, phase_attempt, stage_id, result_path, and status."
+                ),
+                f"Result binding JSON: {json.dumps(result_binding, sort_keys=True)}",
+                (
+                    "Copy binding fields exactly: work_unit_id, worktree_path, bead_id, "
+                    "allowed_files. Use JSON null for null values, [] for empty allowed_files, "
+                    "and never copy bindings from other stages, work units, handoffs, or paths."
+                ),
                 "Use `status: complete` for success, `status: complete_with_concerns` for adopted work with follow-up notes, `status: blocked` for non-retryable blockers, or `status: needs_input` for missing context.",
                 f"Budget ceilings: max_writer_tool_calls={invocation.max_writer_tool_calls}, max_writer_output_bytes={invocation.max_writer_output_bytes}, max_handoffs={invocation.max_handoffs}.",
                 bash_cwd,
@@ -550,7 +563,7 @@ def _render_fanout_orchestrator_brief(
                 f"- worktree_path: {worktree_path or '-'}",
                 f"- expected_result_path: {result_path}",
                 f"- bead_id: {invocation.bead_id or '-'}",
-                f"- allowed_files: {', '.join(allowed_files_display)}",
+                f"- allowed_files: {allowed_files_display}",
                 f"- acceptance_criteria: {invocation.acceptance_criteria or '-'}",
                 f"- prompt_prefix: {stage_payload['prompt_prefix'] or '-'}",
                 f"- bash_cwd_discipline: {bash_cwd}",
