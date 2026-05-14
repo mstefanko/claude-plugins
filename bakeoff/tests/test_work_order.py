@@ -2,7 +2,13 @@ import json
 
 import pytest
 
-from bakeoff.work_order import ValidationError, load_work_order, strip_jsonc_comments
+from bakeoff.work_order import (
+    ValidationError,
+    load_work_order,
+    strip_jsonc_comments,
+    validate_analyze_judge_result,
+    validate_compare_judge_result,
+)
 
 
 def test_jsonc_state_machine_preserves_comment_markers_in_strings():
@@ -88,3 +94,39 @@ def test_validation_errors_name_field(tmp_path, patch, message):
 
     with pytest.raises(ValidationError, match=message):
         load_work_order(path)
+
+
+def test_compare_judge_scores_must_match_rubric_shape():
+    result = {
+        "relation": "compare",
+        "scores_a": {"evidence": 5, "coherence": 5, "tradeoff_honesty": 5, "rebuttals": 5},
+        "scores_b": {"evidence": 4, "coherence": 4, "tradeoff_honesty": 4, "rebuttals": 4},
+        "winner": "A",
+        "rationale": "A is better evidenced.",
+        "kept_from_nonwinner": [],
+        "consensus_strongest": [],
+        "consensus_disagreements": [],
+    }
+
+    assert validate_compare_judge_result(result) == result
+
+    result["scores_a"]["evidence"] = 6
+    with pytest.raises(ValidationError, match="scores_a.evidence"):
+        validate_compare_judge_result(result)
+
+
+def test_analyze_judge_verdicts_must_match_overlay_shape():
+    result = {
+        "scores_a": {"step_atomicity": 5, "citation_grounding": 5, "assumption_transparency": 4, "coherence": 5},
+        "scores_b": {"step_atomicity": 4, "citation_grounding": 4, "assumption_transparency": 4, "coherence": 4},
+        "spine_winner": "A",
+        "spine_rationale": "A is clearer.",
+        "claim_verdicts": [{"claim_id": "R-001", "loser_position": "agrees", "loser_note": "same claim"}],
+        "additions_from_loser": [{"claim": "extra nuance", "evidence": ["fake:1"]}],
+    }
+
+    assert validate_analyze_judge_result(result) == result
+
+    result["claim_verdicts"][0]["loser_position"] = "maybe"
+    with pytest.raises(ValidationError, match="loser_position"):
+        validate_analyze_judge_result(result)

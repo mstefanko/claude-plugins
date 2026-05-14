@@ -88,6 +88,7 @@ async def run_provider(
                 keep = max(0, max_output_bytes - total)
                 if keep:
                     stdout_chunks.append(chunk[:keep])
+                    total += keep
                 stdout_chunks.append(f"\n[TRUNCATED at {max_output_bytes} bytes]\n".encode("utf-8"))
                 output_cap_hit = True
                 _terminate_process_group(process)

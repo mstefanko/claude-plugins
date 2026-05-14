@@ -448,7 +448,18 @@ def resolve_compare_decision(
             }
         )
     else:
-        decision.update({"decision_kind": "tie", "caveats": ["position swap did not produce a stable winner"]})
+        preserved = merge_items(
+            preserved_compare_material(pass1, pass1_order),
+            preserved_compare_material(pass2, pass2_order),
+        )
+        decision.update(
+            {
+                "decision_kind": "tie",
+                "caveats": ["position swap did not produce a stable winner"],
+            }
+        )
+        if preserved:
+            decision["kept_from_nonwinner"] = preserved
     return decision
 
 
@@ -498,7 +509,13 @@ def decision_base(work_order: dict[str, Any], worker_results: dict[str, dict[str
         status = status_without_payload(result)
         status["stderr_path"] = f"providers/{provider_id}/stderr.txt"
         statuses[provider_id] = status
-    return {"mode": work_order["type"], "provider_statuses": statuses}
+    return {
+        "mode": work_order["type"],
+        "provider_statuses": statuses,
+        "canonical_winner": None,
+        "judge_rationale": [],
+        "caveats": [],
+    }
 
 
 def print_validation_summary(work_order: dict[str, Any]) -> None:
@@ -550,6 +567,18 @@ def annotate_source(items: list[Any], source_provider: str) -> list[Any]:
         else:
             annotated.append({"claim": str(item), "source_provider": source_provider})
     return annotated
+
+
+def preserved_compare_material(result: dict[str, Any], order_map: dict[str, str]) -> list[Any]:
+    items = result.get("kept_from_nonwinner", [])
+    if not items:
+        return []
+    winner = canonical_winner(result.get("winner"), order_map)
+    if winner is None:
+        source_provider = "unknown"
+    else:
+        source_provider = next(provider for provider in order_map.values() if provider != winner)
+    return annotate_source(items, source_provider)
 
 
 def merge_items(*groups: list[Any]) -> list[Any]:
@@ -608,6 +637,22 @@ def write_meta(run_dir: Path, work_order: dict[str, Any], run_id: str, started_a
         "finished_at": utc_now(),
         "bakeoff_version": __version__,
         "provider_cli_versions": versions,
+        "resolved_models": {
+            "providers": {
+                provider["id"]: {
+                    "backend": provider["backend"],
+                    "model": provider["model"],
+                    "scope": provider["scope"],
+                    "effort": provider["effort"],
+                }
+                for provider in work_order["providers"]
+            },
+            "judge": {
+                "backend": work_order["judge"]["backend"],
+                "model": work_order["judge"]["model"],
+                "effort": work_order["judge"]["effort"],
+            },
+        },
     }
     write_json(run_dir / "meta.json", meta)
 
@@ -661,12 +706,13 @@ def resolve_run_dir(out_dir: Path, run_id: str) -> Path:
             target = latest.read_text(encoding="utf-8").strip()
             if target:
                 return resolve_run_dir(out_dir, target)
-    path = Path(run_id)
-    if path.exists() and path.is_dir():
-        return path
     candidate = out_dir / run_id
     if candidate.exists() and candidate.is_dir():
         return candidate
+    if os.sep in run_id or (os.altsep and os.altsep in run_id):
+        path = Path(run_id)
+        if path.exists() and path.is_dir():
+            return path
     raise ValidationError(f"run not found: {run_id}")
 
 

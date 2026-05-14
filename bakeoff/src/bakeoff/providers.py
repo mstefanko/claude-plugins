@@ -57,6 +57,7 @@ def build_worker_prompt(work_order: dict[str, Any], provider: dict[str, Any]) ->
         template.replace("{GOAL}", work_order["goal"])
         .replace("{BACKGROUND}", work_order["background"])
         .replace("{SCOPE_INSTRUCTIONS}", SCOPE_INSTRUCTIONS[provider["scope"]])
+        .replace("{WORKER_RESULT_SCHEMA}", WORKER_RESULT_SCHEMA)
     )
 
 
@@ -87,6 +88,32 @@ def anonymized_worker_output(result: dict[str, Any]) -> dict[str, Any]:
     return final_json
 
 
+WORKER_RESULT_SCHEMA = """\
+All worker <final_json> payloads MUST include this top-level shape:
+
+{
+  "status": "complete",
+  "claims": [
+    {
+      "id": "R-001",
+      "claim": "One factual assertion, defended position claim, or analysis step.",
+      "evidence": ["path/to/file.ext:line or https://example.com/source or doc heading"],
+      "confidence": "high"
+    }
+  ],
+  "conflicts": [],
+  "unknowns": [],
+  "recommended_next_checks": []
+}
+
+Allowed status values: "complete", "complete_with_concerns", "needs_context", "blocked".
+Allowed confidence values: "high", "medium", "low".
+Every claims[] item MUST include these required fields with these exact names: "id", "claim", "evidence", "confidence".
+Do not rename fields. Use "claim", not "finding", "summary", or "description". Use "evidence", not "citation", "citations", "source", or "sources".
+Put unverified material in unknowns[] as strings instead of adding uncited claims.
+"""
+
+
 GATHER_WORKER_PROMPT = """You are a research worker. Your job is to enumerate facts, references, and existing artifacts relevant to the question - NOT to synthesize, recommend, or pick a winner. A separate judge will deduplicate your output against a peer worker's output later.
 
 <question>
@@ -110,6 +137,10 @@ GATHER_WORKER_PROMPT = """You are a research worker. Your job is to enumerate fa
 - If you do not know, return `unknowns` rather than guessing.
 - Confidence is one of: high, medium, low. Default to medium when uncertain.
 </rules>
+
+<worker_result_schema>
+{WORKER_RESULT_SCHEMA}
+</worker_result_schema>
 
 <process>
 1. In <scratchpad> tags, list candidate findings and their sources. Cross out any you cannot cite.
@@ -148,6 +179,14 @@ COMPARE_WORKER_PROMPT = """You are answering a comparison question. Your job:
 - Confidence is one of: high, medium, low.
 </rules>
 
+<worker_result_schema>
+{WORKER_RESULT_SCHEMA}
+Compare mode MUST also include this top-level field:
+{
+  "position": "One declarative sentence naming the answer you defend."
+}
+</worker_result_schema>
+
 <process>
 1. In <scratchpad>, decide your position. List the 3-5 strongest claims for it and the 2-3 strongest counter-arguments you must address.
 2. For each claim, locate concrete evidence. Drop claims you cannot ground.
@@ -182,6 +221,11 @@ ANALYZE_WORKER_PROMPT = """You are producing an analysis/explanation of the subj
 - If a step depends on an assumption, surface the assumption explicitly as its own step.
 - Do not summarize at the end. The judge handles synthesis.
 </rules>
+
+<worker_result_schema>
+{WORKER_RESULT_SCHEMA}
+For analyze mode, the claims[] array IS your spine. Each claim object is one numbered, atomic analysis step.
+</worker_result_schema>
 
 <process>
 1. In <scratchpad>, sketch the spine: what is the minimum sequence of steps a reader needs to reach the conclusion?
@@ -269,7 +313,7 @@ Length is NOT a virtue. A concise, well-evidenced position beats a verbose, weak
 </process>
 
 <output_format>
-Reason in <scratchpad>...</scratchpad>, then emit one JSON object wrapped in <final_json>...</final_json>: relation in {"consensus","compare"}, scores_a {evidence, coherence, tradeoff_honesty, rebuttals}, scores_b {...}, winner in {"A","B","tie",null}, rationale (2-4 sentences citing rubric dimensions), kept_from_nonwinner[] (claims worth preserving - from the loser in `compare`, or one from each side in `consensus`), consensus_strongest[] (populated only when relation="consensus"), consensus_disagreements[] (populated only when relation="consensus"). No content after </final_json>.
+Reason in <scratchpad>...</scratchpad>, then emit one JSON object wrapped in <final_json>...</final_json>: relation in {"consensus","compare"}, scores_a {evidence, coherence, tradeoff_honesty, rebuttals} with integer values from 1 to 5, scores_b {...}, winner in {"A","B","tie",null}, rationale (2-4 sentences citing rubric dimensions), kept_from_nonwinner[] (claims worth preserving - from the loser in `compare`, or one from each side in `consensus`), consensus_strongest[] (populated only when relation="consensus"), consensus_disagreements[] (populated only when relation="consensus"). No content after </final_json>.
 </output_format>
 """
 
@@ -312,6 +356,6 @@ Length and verbosity do NOT favor a spine.
 </process>
 
 <output_format>
-Reason in <scratchpad>...</scratchpad>, then emit one JSON object wrapped in <final_json>...</final_json>: scores_a, scores_b, spine_winner in {"A","B"}, spine_rationale (2-3 sentences), claim_verdicts[] (each with claim_id, loser_position in {agrees, disagrees, not_covered, adds}, loser_note), additions_from_loser[] (each with claim, evidence[]). No content after </final_json>.
+Reason in <scratchpad>...</scratchpad>, then emit one JSON object wrapped in <final_json>...</final_json>: scores_a {step_atomicity, citation_grounding, assumption_transparency, coherence} with integer values from 1 to 5, scores_b {...}, spine_winner in {"A","B"}, spine_rationale (2-3 sentences), claim_verdicts[] (each with claim_id, loser_position in {agrees, disagrees, not_covered, adds}, loser_note), additions_from_loser[] (each with claim, evidence[]). No content after </final_json>.
 </output_format>
 """

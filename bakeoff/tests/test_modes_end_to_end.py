@@ -16,8 +16,12 @@ def test_gather_research_with_fake_providers(tmp_path, monkeypatch):
 
     run_dir = next(path for path in (tmp_path / "runs").iterdir() if path.is_dir())
     decision = json.loads((run_dir / "decision.json").read_text())
+    meta = json.loads((run_dir / "meta.json").read_text())
     report = (run_dir / "report.md").read_text()
     assert decision["decision_kind"] == "structured_union"
+    assert meta["resolved_models"]["providers"]["claude"]["model"] == "fake-claude"
+    assert meta["resolved_models"]["providers"]["codex"]["model"] == "fake-codex"
+    assert meta["resolved_models"]["judge"]["model"] == "fake-judge"
     assert "Fake merged claim" in report
 
 
@@ -43,7 +47,8 @@ def test_analyze_selects_spine_with_tiebreak_audit(tmp_path, monkeypatch):
     run_dir = next(path for path in (tmp_path / "runs").iterdir() if path.is_dir())
     decision = json.loads((run_dir / "decision.json").read_text())
     assert decision["decision_kind"] == "pick_winner"
-    assert decision["spine_tiebreak"] in {"swap_agreement", "atomic_count", "position_a"}
+    assert decision["spine_tiebreak"] == "position_a"
+    assert "spine chosen by position_a after swap disagreement" in decision["caveats"][0]
 
 
 def test_single_provider_only_mode_specific_caveat(tmp_path, monkeypatch):
@@ -56,6 +61,7 @@ def test_single_provider_only_mode_specific_caveat(tmp_path, monkeypatch):
     run_dir = next(path for path in (tmp_path / "runs").iterdir() if path.is_dir())
     decision = json.loads((run_dir / "decision.json").read_text())
     assert decision["decision_kind"] == "single_provider_only"
+    assert decision["judge_rationale"] == []
     assert "without dedupe" in decision["caveats"][0]
 
 
@@ -69,6 +75,7 @@ def test_both_failed_exits_two(tmp_path, monkeypatch):
     run_dir = next(path for path in (tmp_path / "runs").iterdir() if path.is_dir())
     decision = json.loads((run_dir / "decision.json").read_text())
     assert decision["decision_kind"] == "both_failed"
+    assert decision["judge_rationale"] == []
 
 
 def install_fake_providers(tmp_path, *, judge_mode, fail_providers=frozenset()):
@@ -80,6 +87,11 @@ def install_fake_providers(tmp_path, *, judge_mode, fail_providers=frozenset()):
             prompt = sys.stdin.read()
             name = os.environ.get("BAKEOFF_FAKE_PROVIDER_NAME", pathlib.Path(sys.argv[0]).name)
             fail_providers = {sorted(fail_providers)!r}
+            judge_mode = {judge_mode!r}
+            compare_scores_a = {{"evidence":5,"coherence":5,"tradeoff_honesty":5,"rebuttals":5}}
+            compare_scores_b = {{"evidence":4,"coherence":4,"tradeoff_honesty":4,"rebuttals":4}}
+            analyze_scores_a = {{"step_atomicity":5,"citation_grounding":5,"assumption_transparency":5,"coherence":5}}
+            analyze_scores_b = {{"step_atomicity":4,"citation_grounding":4,"assumption_transparency":4,"coherence":4}}
 
             def emit(obj):
                 print("<scratchpad>ok</scratchpad>")
@@ -93,9 +105,11 @@ def install_fake_providers(tmp_path, *, judge_mode, fail_providers=frozenset()):
             elif "deduplication and conflict-flagging judge" in prompt:
                 emit({{"merged_claims":[{{"claim":"Fake merged claim","evidence":["fake:1"],"sources":["A","B"],"confidence":"high"}}],"conflicts":[],"unknowns_union":[]}})
             elif "pairwise judge" in prompt:
-                emit({{"relation":"compare","scores_a":{{"evidence":5,"coherence":5,"tradeoff_honesty":5,"rebuttals":5}},"scores_b":{{"evidence":4,"coherence":4,"tradeoff_honesty":4,"rebuttals":4}},"winner":"A","rationale":"position A looked better","kept_from_nonwinner":[],"consensus_strongest":[],"consensus_disagreements":[]}})
+                winner = "B" if judge_mode == "compare_always_b" else "tie" if judge_mode == "compare_tie" else "A"
+                emit({{"relation":"compare","scores_a":compare_scores_a,"scores_b":compare_scores_b,"winner":winner,"rationale":"position " + str(winner) + " looked better","kept_from_nonwinner":[{{"claim":"useful material from loser"}}],"consensus_strongest":[],"consensus_disagreements":[]}})
             elif "synthesis judge" in prompt:
-                emit({{"scores_a":{{}},"scores_b":{{}},"spine_winner":"A","spine_rationale":"A is clearer","claim_verdicts":[],"additions_from_loser":[]}})
+                spine_winner = "B" if judge_mode == "analyze_always_b" else "A"
+                emit({{"scores_a":analyze_scores_a,"scores_b":analyze_scores_b,"spine_winner":spine_winner,"spine_rationale":spine_winner + " is clearer","claim_verdicts":[],"additions_from_loser":[]}})
             elif "comparison question" in prompt:
                 emit({{"status":"complete","position":name + " position","claims":[{{"id":"R-001","claim":name + " claim","evidence":["fake:1"],"confidence":"high"}}],"conflicts":[],"unknowns":[],"recommended_next_checks":[]}})
             else:

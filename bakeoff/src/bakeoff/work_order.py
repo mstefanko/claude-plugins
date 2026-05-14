@@ -11,6 +11,9 @@ SCOPES = ("codebase", "web", "mixed")
 EFFORTS = ("low", "medium", "high")
 WORKER_STATUSES = ("complete", "complete_with_concerns", "needs_context", "blocked")
 CONFIDENCES = ("high", "medium", "low")
+COMPARE_SCORE_FIELDS = ("evidence", "coherence", "tradeoff_honesty", "rebuttals")
+ANALYZE_SCORE_FIELDS = ("step_atomicity", "citation_grounding", "assumption_transparency", "coherence")
+ANALYZE_LOSER_POSITIONS = ("agrees", "disagrees", "not_covered", "adds")
 
 
 class ValidationError(ValueError):
@@ -265,6 +268,8 @@ def validate_compare_judge_result(data: Any) -> dict[str, Any]:
         raise ValidationError('compare judge final_json.relation must be one of: "consensus", "compare"')
     if data["winner"] not in ("A", "B", "tie", None):
         raise ValidationError('compare judge final_json.winner must be one of: "A", "B", "tie", null')
+    _validate_score_map(data["scores_a"], "compare judge final_json.scores_a", COMPARE_SCORE_FIELDS)
+    _validate_score_map(data["scores_b"], "compare judge final_json.scores_b", COMPARE_SCORE_FIELDS)
     _validate_string_or_list(data["rationale"], "compare judge final_json.rationale")
     for field in ("kept_from_nonwinner", "consensus_strongest", "consensus_disagreements"):
         if not isinstance(data[field], list):
@@ -280,10 +285,16 @@ def validate_analyze_judge_result(data: Any) -> dict[str, Any]:
             raise ValidationError(f"analyze judge final_json.{field} is required")
     if data["spine_winner"] not in ("A", "B"):
         raise ValidationError('analyze judge final_json.spine_winner must be one of: "A", "B"')
+    _validate_score_map(data["scores_a"], "analyze judge final_json.scores_a", ANALYZE_SCORE_FIELDS)
+    _validate_score_map(data["scores_b"], "analyze judge final_json.scores_b", ANALYZE_SCORE_FIELDS)
     if not isinstance(data["claim_verdicts"], list):
         raise ValidationError("analyze judge final_json.claim_verdicts must be an array")
+    for index, verdict in enumerate(data["claim_verdicts"]):
+        _validate_claim_verdict(verdict, f"analyze judge final_json.claim_verdicts[{index}]")
     if not isinstance(data["additions_from_loser"], list):
         raise ValidationError("analyze judge final_json.additions_from_loser must be an array")
+    for index, addition in enumerate(data["additions_from_loser"]):
+        _validate_loser_addition(addition, f"analyze judge final_json.additions_from_loser[{index}]")
     return data
 
 
@@ -313,6 +324,37 @@ def _validate_mapping_claim(value: Any, label: str, *, require_sources: bool) ->
     else:
         if "id" not in value or not isinstance(value["id"], str):
             raise ValidationError(f"{label}.id must be a string")
+
+
+def _validate_score_map(value: Any, label: str, fields: tuple[str, ...]) -> None:
+    if not isinstance(value, dict):
+        raise ValidationError(f"{label} must be an object")
+    for field in fields:
+        if field not in value:
+            raise ValidationError(f"{label}.{field} is required")
+        if not isinstance(value[field], int) or not 1 <= value[field] <= 5:
+            raise ValidationError(f"{label}.{field} must be an integer from 1 to 5")
+
+
+def _validate_claim_verdict(value: Any, label: str) -> None:
+    if not isinstance(value, dict):
+        raise ValidationError(f"{label} must be an object")
+    if "claim_id" not in value or not isinstance(value["claim_id"], str):
+        raise ValidationError(f"{label}.claim_id must be a string")
+    if value.get("loser_position") not in ANALYZE_LOSER_POSITIONS:
+        raise ValidationError(
+            f'{label}.loser_position must be one of: {", ".join(ANALYZE_LOSER_POSITIONS)}'
+        )
+    if "loser_note" in value and not isinstance(value["loser_note"], str):
+        raise ValidationError(f"{label}.loser_note must be a string")
+
+
+def _validate_loser_addition(value: Any, label: str) -> None:
+    if not isinstance(value, dict):
+        raise ValidationError(f"{label} must be an object")
+    if "claim" not in value or not isinstance(value["claim"], str):
+        raise ValidationError(f"{label}.claim must be a string")
+    _validate_string_list(value.get("evidence"), f"{label}.evidence")
 
 
 def _validate_string_list(value: Any, label: str) -> None:
