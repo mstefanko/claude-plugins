@@ -1,7 +1,7 @@
 # Bakeoff Tiny CLI Harness — Implementation Plan
 
 Date: 2026-05-14
-Status: project scaffolded — CLI-first subdirectory in `claude-plugins`; plugin launcher wrapper deferred until CLI verbs exist
+Status: implemented through Phase 2 in `claude-plugins/bakeoff`; Phase 3 live dogfood pending; plugin launcher wrapper deferred
 
 Related research:
 - `docs/multi-agent-orchestrator-architecture-research-2026-05-14.md`
@@ -69,7 +69,12 @@ No build mode. No worktrees. No diff gates. No DAG. No LangGraph. No TUI. No glo
 
 Implementation home is `bakeoff/` in `github.com/mstefanko/claude-plugins`, as a sibling of `swarm-do/` and `tech-radar/`.
 
-The first implementation target is the standalone Python CLI under `bakeoff/src/bakeoff`. The repository also contains Claude plugin metadata and `bin/bakeoff` now so a later plugin layer can stay a launcher. Slash commands may draft and approve work orders, then shell out to the CLI; they must not reimplement validation, provider execution, judging, or report rendering.
+The standalone Python CLI lives under `bakeoff/src/bakeoff`. The repository also contains Claude plugin metadata and `bin/bakeoff` now so a later plugin layer can stay a launcher. Slash commands may draft and approve work orders, then shell out to the CLI; they must not reimplement validation, provider execution, judging, or report rendering.
+
+Implementation marker (2026-05-14):
+- Phase 1 implemented: package, `init`, `doctor`, `validate`, JSONC loader, inline validation, process runner, `<final_json>` extraction, status taxonomy, examples, and focused tests.
+- Phase 2 implemented: `research` orchestration for gather/compare/analyze, fake-provider test path, position-swap resolution, partial-failure reports, decision/report artifacts, and prompt templates in `providers.py`.
+- Phase 3 implementation surface wired: `ls`, `show`, `rerun`, `runs/latest`, and `meta.json`. Live dogfood quota remains pending.
 
 ## Goals
 
@@ -326,7 +331,7 @@ Work orders are **JSONC** — JSON with `//` line comments and `/* ... */` block
 - Workers must differ on at least one of `backend`, `model`, or `scope`. Two providers with identical `backend + model + scope` are rejected — that's just running the same configuration twice. This rule is **uniform across all three modes**; there is no stricter rule for compare/analyze. The "same-backend, same-scope, different-model" pair (e.g., claude/sonnet + claude/opus on codebase) is legal everywhere but recommended only for cost-vs-quality comparisons within a family.
 - `budgets.wall_clock_seconds` and `budgets.max_output_bytes` positive.
 - No `decision` field — the mode determines judge behavior, not a per-run flag.
-- `providers[*].effort` is optional ∈ {`low`, `medium`, `high`}; defaults to `high`. Both Anthropic (extended-thinking budget) and OpenAI (reasoning effort) expose this knob at the API/CLI level; the harness passes it to the provider CLI's effort flag (`--effort` on `codex`, `--thinking-budget` mapping on `claude`). It also applies to `judge.effort` (default `high`).
+- `providers[*].effort` is optional ∈ {`low`, `medium`, `high`}; defaults to `high`. Both Anthropic and OpenAI expose this knob at the API/CLI level; the harness passes it through as `--effort` for Claude Code and `model_reasoning_effort` for Codex. It also applies to `judge.effort` (default `high`).
 - No `synthesize` decision exists. Anywhere.
 
 Inline dict validators only. No `jsonschema` dependency. No `schemas/` directory.
@@ -448,10 +453,8 @@ bakeoff/
   tests/
     test_work_order.py
     test_runner.py
-    test_modes_gather.py
-    test_modes_compare_position_swap.py
-    test_modes_analyze.py
-    test_partial_failure.py
+    test_modes_end_to_end.py
+    test_decisions.py
     test_report.py
   examples/
     gather.work-order.json

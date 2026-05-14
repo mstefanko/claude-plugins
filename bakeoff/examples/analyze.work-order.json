@@ -29,7 +29,7 @@
     "effort": "high"
   },
   "budgets": {
-    "wall_seconds": 900,
+    "wall_clock_seconds": 900,
     "max_output_bytes": 60000
   }
 }

@@ -37,15 +37,32 @@ For plugin dogfood, use the wrapper directly:
 "${CLAUDE_PLUGIN_ROOT:-$PWD}/bin/bakeoff" --help
 ```
 
-## Planned User Surface
+## User Surface
 
 ```text
 bakeoff
-bakeoff init {gather|compare|analyze}
+bakeoff init {gather|compare|analyze} [--force]
 bakeoff validate <work-order>
-bakeoff research <work-order>
+bakeoff research <work-order> [--out runs] [--run-id ID] [--force]
 bakeoff rerun <run-id>
-bakeoff ls
-bakeoff show <run-id>
-bakeoff doctor
+bakeoff ls [--out runs]
+bakeoff show <run-id> [--judge | --judge-prompt]
+bakeoff doctor [--skip-auth-probe]
 ```
+
+`bakeoff research` writes a replayable ledger under `runs/<run-id>/`:
+
+- `work-order.json`
+- `providers/<id>/{prompt,stdout,stderr,status,final}.json/txt`
+- `judge/` prompts and results
+- `decision.json`
+- `report.md`
+
+`runs/latest` points at the newest run.
+
+## Notes
+
+- Work orders are JSONC. `bakeoff init` writes commented templates.
+- `validate` rejects unedited `TODO-*` ids on purpose.
+- Scopes are prompt-advisory in v1; provider CLIs still control their own tools.
+- The plugin wrapper remains a launcher-only future layer.
