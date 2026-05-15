@@ -64,6 +64,10 @@ def _decision_audit(decision: dict[str, Any]) -> list[str]:
             f"{status.get('wall_seconds', 0)}s, stdout {status.get('stdout_bytes', status.get('output_bytes', 0))} bytes, "
             f"stderr {status.get('stderr_bytes', 0)} bytes"
         )
+        if status.get("stdout_observed_bytes") and status.get("stdout_observed_bytes") != status.get("stdout_bytes"):
+            detail += f", stdout observed {status['stdout_observed_bytes']} bytes"
+        if status.get("stderr_observed_bytes") and status.get("stderr_observed_bytes") != status.get("stderr_bytes"):
+            detail += f", stderr observed {status['stderr_observed_bytes']} bytes"
         if status.get("stdout_truncated"):
             detail += ", stdout truncated"
         if status.get("stderr_truncated"):
@@ -176,6 +180,9 @@ def _render_analyze(decision: dict[str, Any], worker_results: dict[str, dict[str
             lines.append(f"  Evidence: {evidence}")
     if not final.get("claims"):
         lines.append("No claims were available to render.")
+    if decision.get("actionable_followups"):
+        lines.extend(["", "## Actionable Follow-ups", ""])
+        lines.extend(_generic_item_lines(decision["actionable_followups"]))
     if decision.get("additions_from_loser"):
         lines.extend(["", "## Additions From Loser", ""])
         lines.extend(_generic_item_lines(decision["additions_from_loser"]))

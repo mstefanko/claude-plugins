@@ -19,6 +19,7 @@ SUCCESS_STATUSES = {"ok", "ok_after_format_retry"}
 MAX_REPAIR_PROMPT_CHARS = 24000
 MAX_REPAIR_STDOUT_CHARS = 32000
 MAX_REPAIR_STDERR_CHARS = 12000
+DEFAULT_OUTPUT_CAP_GRACE_SECONDS = 10
 
 
 def extract_final_json(text: str) -> dict[str, Any]:
@@ -77,13 +78,21 @@ async def run_provider(
     wall_seconds = int(budgets.get("wall_clock_seconds", budgets.get("wall_seconds", 900)))
     max_output_bytes = int(budgets.get("max_output_bytes", 60000))
     heartbeat_seconds = max(0, int(budgets.get("heartbeat_seconds", 60)))
+    output_cap_grace_seconds = max(
+        0,
+        int(budgets.get("output_cap_grace_seconds", DEFAULT_OUTPUT_CAP_GRACE_SECONDS)),
+    )
+    max_output_overrun_bytes = max(0, int(budgets.get("max_output_overrun_bytes", max_output_bytes)))
     quiet_threshold_seconds = heartbeat_seconds * 2 if heartbeat_seconds > 0 else 0
     stdout_total_bytes = 0
     stderr_total_bytes = 0
+    stdout_observed_bytes = 0
+    stderr_observed_bytes = 0
     last_stdout_at: float | None = None
     last_stderr_at: float | None = None
     heartbeat_count = 0
     quiet_tick_count = 0
+    output_cap_reason: str | None = None
 
     def current_io(now: float | None = None) -> dict[str, Any]:
         actual_now = time.monotonic() if now is None else now
@@ -94,12 +103,17 @@ async def run_provider(
         return {
             "stdout_bytes": stdout_total_bytes,
             "stderr_bytes": stderr_total_bytes,
+            "stdout_observed_bytes": stdout_observed_bytes,
+            "stderr_observed_bytes": stderr_observed_bytes,
+            "total_observed_bytes": stdout_observed_bytes + stderr_observed_bytes,
             "last_stdout_age": round(actual_now - last_stdout_at, 3) if last_stdout_at is not None else None,
             "last_stderr_age": round(actual_now - last_stderr_at, 3) if last_stderr_at is not None else None,
             "last_output_age": round(actual_now - last_output_at, 3) if last_output_at is not None else round(actual_now - started, 3),
             "heartbeat_count": heartbeat_count,
             "quiet_tick_count": quiet_tick_count,
             "quiet_threshold_seconds": quiet_threshold_seconds,
+            "output_cap_grace_seconds": output_cap_grace_seconds,
+            "max_output_overrun_bytes": max_output_overrun_bytes,
         }
 
     try:
@@ -122,11 +136,49 @@ async def run_provider(
             io=current_io(),
         )
 
-    stdout_chunks: list[bytes] = []
+    stdout_head = bytearray()
+    stdout_tail = bytearray()
     stderr_chunks: list[bytes] = []
     output_cap_hit = False
+    output_cap_hard_stop = False
     stderr_cap_hit = False
     stdin_error: str | None = None
+    output_cap_event = asyncio.Event()
+    output_cap_hard_stop_event = asyncio.Event()
+
+    def refresh_stdout_total_bytes() -> None:
+        nonlocal stdout_total_bytes
+        stdout_total_bytes = len(stdout_head) + len(stdout_tail)
+
+    def append_stdout_tail(chunk: bytes) -> None:
+        if not chunk or max_output_bytes <= 0:
+            refresh_stdout_total_bytes()
+            return
+        stdout_tail.extend(chunk)
+        excess = len(stdout_head) + len(stdout_tail) - max_output_bytes
+        if excess > 0:
+            trim_head = min(excess, len(stdout_head))
+            if trim_head:
+                del stdout_head[-trim_head:]
+                excess -= trim_head
+            if excess > 0:
+                del stdout_tail[:excess]
+        refresh_stdout_total_bytes()
+
+    def stdout_for_artifact() -> str:
+        if not output_cap_hit:
+            return _decode_bytes(bytes(stdout_head))
+        marker = f"\n[TRUNCATED at {max_output_bytes} bytes]\n".encode("utf-8")
+        return _decode_bytes(bytes(stdout_head) + marker + bytes(stdout_tail))
+
+    def output_cap_metadata() -> dict[str, Any]:
+        return {
+            "reason": output_cap_reason or "stdout_capture_limit",
+            "grace_seconds": output_cap_grace_seconds,
+            "max_output_overrun_bytes": max_output_overrun_bytes,
+            "stdout_observed_bytes": stdout_observed_bytes,
+            "stdout_captured_bytes": stdout_total_bytes,
+        }
 
     async def feed_prompt() -> None:
         nonlocal stdin_error
@@ -140,33 +192,49 @@ async def run_provider(
             stdin_error = f"provider closed stdin before reading prompt: {exc.__class__.__name__}"
 
     async def read_stdout() -> None:
-        nonlocal last_stdout_at, output_cap_hit, stdout_total_bytes
+        nonlocal last_stdout_at, output_cap_hit, output_cap_hard_stop, output_cap_reason
+        nonlocal stdout_observed_bytes
         assert process.stdout is not None
-        total = 0
         while True:
             chunk = await process.stdout.read(4096)
             if not chunk:
                 break
             now = time.monotonic()
-            if total + len(chunk) > max_output_bytes:
-                keep = max(0, max_output_bytes - total)
-                if keep:
-                    stdout_chunks.append(chunk[:keep])
-                    total += keep
-                    stdout_total_bytes += keep
-                marker = f"\n[TRUNCATED at {max_output_bytes} bytes]\n".encode("utf-8")
-                stdout_chunks.append(marker)
+            stdout_observed_bytes += len(chunk)
+            if output_cap_hit:
+                append_stdout_tail(chunk)
                 last_stdout_at = now
+                overrun_bytes = max(0, stdout_observed_bytes - max_output_bytes)
+                if overrun_bytes > max_output_overrun_bytes:
+                    output_cap_reason = "stdout_overrun_limit"
+                    output_cap_hard_stop = True
+                    output_cap_hard_stop_event.set()
+                    _terminate_process_group(process)
+                    break
+                continue
+            if len(stdout_head) + len(chunk) > max_output_bytes:
+                keep = max(0, max_output_bytes - len(stdout_head))
+                if keep:
+                    stdout_head.extend(chunk[:keep])
                 output_cap_hit = True
-                _terminate_process_group(process)
-                break
-            stdout_chunks.append(chunk)
-            total += len(chunk)
-            stdout_total_bytes += len(chunk)
+                output_cap_reason = "stdout_capture_limit"
+                output_cap_event.set()
+                append_stdout_tail(chunk[keep:])
+                last_stdout_at = now
+                overrun_bytes = max(0, stdout_observed_bytes - max_output_bytes)
+                if overrun_bytes > max_output_overrun_bytes:
+                    output_cap_reason = "stdout_overrun_limit"
+                    output_cap_hard_stop = True
+                    output_cap_hard_stop_event.set()
+                    _terminate_process_group(process)
+                    break
+                continue
+            stdout_head.extend(chunk)
+            refresh_stdout_total_bytes()
             last_stdout_at = now
 
     async def read_stderr() -> None:
-        nonlocal last_stderr_at, stderr_cap_hit, stderr_total_bytes
+        nonlocal last_stderr_at, stderr_cap_hit, stderr_total_bytes, stderr_observed_bytes
         assert process.stderr is not None
         total = 0
         while True:
@@ -174,6 +242,7 @@ async def run_provider(
             if not chunk:
                 break
             now = time.monotonic()
+            stderr_observed_bytes += len(chunk)
             if stderr_cap_hit:
                 last_stderr_at = now
                 continue
@@ -208,7 +277,10 @@ async def run_provider(
                 "elapsed": round(now - started, 3),
                 "stdout_bytes": stdout_total_bytes,
                 "stderr_bytes": stderr_total_bytes,
+                "stdout_observed_bytes": stdout_observed_bytes,
+                "stderr_observed_bytes": stderr_observed_bytes,
                 "total_bytes": stdout_total_bytes + stderr_total_bytes,
+                "total_observed_bytes": stdout_observed_bytes + stderr_observed_bytes,
                 "last_stdout_age": io["last_stdout_age"],
                 "last_stderr_age": io["last_stderr_age"],
                 "last_output_age": io["last_output_age"],
@@ -228,15 +300,44 @@ async def run_provider(
     tasks = [asyncio.create_task(coro()) for coro in (feed_prompt, read_stdout, read_stderr)]
     if heartbeat_seconds > 0:
         tasks.append(asyncio.create_task(tick()))
+    process_wait = asyncio.create_task(process.wait())
+    cap_wait = asyncio.create_task(output_cap_event.wait())
     try:
-        await asyncio.wait_for(process.wait(), timeout=wall_seconds)
+        done, _pending = await asyncio.wait(
+            {process_wait, cap_wait},
+            timeout=wall_seconds,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if not done:
+            raise asyncio.TimeoutError
+        if cap_wait in done and process_wait not in done:
+            grace_started = time.monotonic()
+            hard_stop_wait = asyncio.create_task(output_cap_hard_stop_event.wait())
+            try:
+                remaining_wall = max(0.0, wall_seconds - (grace_started - started))
+                grace_timeout = min(float(output_cap_grace_seconds), remaining_wall)
+                cap_done, _cap_pending = await asyncio.wait(
+                    {process_wait, hard_stop_wait},
+                    timeout=grace_timeout,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if process_wait not in cap_done:
+                    output_cap_hard_stop = True
+                    if not output_cap_reason or output_cap_reason == "stdout_capture_limit":
+                        output_cap_reason = "stdout_grace_timeout"
+                    _terminate_process_group(process)
+                    await _wait_or_kill(process)
+            finally:
+                if not hard_stop_wait.done():
+                    hard_stop_wait.cancel()
+                    await asyncio.gather(hard_stop_wait, return_exceptions=True)
     except asyncio.TimeoutError:
         _terminate_process_group(process)
         await _wait_or_kill(process)
         await _settle_tasks(tasks)
         if heartbeat_seconds > 0:
             emit_tick(time.monotonic())
-        stdout = _decode(stdout_chunks)
+        stdout = stdout_for_artifact()
         stderr = _append_diagnostic(_decode(stderr_chunks), stdin_error)
         if output_cap_hit:
             return _status(
@@ -249,6 +350,7 @@ async def run_provider(
                 io=current_io(),
                 stdout_truncated=output_cap_hit,
                 stderr_truncated=stderr_cap_hit,
+                output_cap=output_cap_metadata(),
             )
         return _status(
             "timeout",
@@ -265,23 +367,33 @@ async def run_provider(
         _terminate_process_group(process)
         await _wait_or_kill(process)
         await _settle_tasks(tasks)
+        if not process_wait.done():
+            process_wait.cancel()
+        if not cap_wait.done():
+            cap_wait.cancel()
+        await asyncio.gather(process_wait, cap_wait, return_exceptions=True)
         return _status(
             "cancelled",
             started,
             exit_code=process.returncode,
-            stdout=_decode(stdout_chunks),
+            stdout=stdout_for_artifact(),
             stderr=_append_diagnostic(_decode(stderr_chunks), stdin_error),
             final_json=None,
             io=current_io(),
             stdout_truncated=output_cap_hit,
             stderr_truncated=stderr_cap_hit,
+            output_cap=output_cap_metadata() if output_cap_hit else None,
         )
+    finally:
+        if not cap_wait.done():
+            cap_wait.cancel()
+            await asyncio.gather(cap_wait, return_exceptions=True)
 
     await _settle_tasks(tasks)
-    stdout = _decode(stdout_chunks)
+    stdout = stdout_for_artifact()
     stderr = _append_diagnostic(_decode(stderr_chunks), stdin_error)
 
-    if output_cap_hit:
+    if output_cap_hit and (output_cap_hard_stop or process.returncode != 0):
         return _status(
             "output_cap",
             started,
@@ -292,6 +404,7 @@ async def run_provider(
             io=current_io(),
             stdout_truncated=True,
             stderr_truncated=stderr_cap_hit,
+            output_cap=output_cap_metadata(),
         )
     if process.returncode != 0:
         return _status(
@@ -310,6 +423,20 @@ async def run_provider(
         if validator is not None:
             final_json = validator(final_json)
     except ValidationError as exc:
+        if output_cap_hit:
+            stderr = f"{stderr}\n{exc}".strip()
+            return _status(
+                "output_cap",
+                started,
+                exit_code=process.returncode,
+                stdout=stdout,
+                stderr=stderr,
+                final_json=None,
+                io=current_io(),
+                stdout_truncated=True,
+                stderr_truncated=stderr_cap_hit,
+                output_cap=output_cap_metadata(),
+            )
         stderr = f"{stderr}\n{exc}".strip()
         return _status(
             "schema_error",
@@ -330,7 +457,9 @@ async def run_provider(
         stderr=stderr,
         final_json=final_json,
         io=current_io(),
+        stdout_truncated=output_cap_hit,
         stderr_truncated=stderr_cap_hit,
+        output_cap=output_cap_metadata() if output_cap_hit else None,
     )
 
 
@@ -373,7 +502,7 @@ async def run_provider_with_format_retry(
     if retry["status"] != "ok":
         return with_retry
 
-    return {
+    combined = {
         **with_retry,
         "status": "ok_after_format_retry",
         "exit_code": retry["exit_code"],
@@ -384,10 +513,21 @@ async def run_provider_with_format_retry(
         ),
         "stderr_bytes": int(first.get("stderr_bytes", len(first.get("stderr", "").encode("utf-8"))))
         + int(retry.get("stderr_bytes", len(retry.get("stderr", "").encode("utf-8")))),
+        "stdout_observed_bytes": int(first.get("stdout_observed_bytes", first.get("stdout_bytes", first["output_bytes"])))
+        + int(retry.get("stdout_observed_bytes", retry.get("stdout_bytes", retry["output_bytes"]))),
+        "stderr_observed_bytes": int(
+            first.get("stderr_observed_bytes", first.get("stderr_bytes", len(first.get("stderr", "").encode("utf-8"))))
+        )
+        + int(
+            retry.get("stderr_observed_bytes", retry.get("stderr_bytes", len(retry.get("stderr", "").encode("utf-8"))))
+        ),
         "stdout_truncated": bool(first.get("stdout_truncated")) or bool(retry.get("stdout_truncated")),
         "stderr_truncated": bool(first.get("stderr_truncated")) or bool(retry.get("stderr_truncated")),
         "final_json": retry["final_json"],
     }
+    if retry.get("output_cap"):
+        combined["output_cap"] = retry["output_cap"]
+    return combined
 
 
 def provider_succeeded(result: dict[str, Any]) -> bool:
@@ -457,7 +597,11 @@ async def _settle_tasks(tasks: list[asyncio.Task[None]]) -> None:
 
 
 def _decode(chunks: list[bytes]) -> str:
-    return b"".join(chunks).decode("utf-8", errors="replace")
+    return _decode_bytes(b"".join(chunks))
+
+
+def _decode_bytes(data: bytes) -> str:
+    return data.decode("utf-8", errors="replace")
 
 
 def _append_diagnostic(stderr: str, diagnostic: str | None) -> str:
@@ -486,16 +630,19 @@ def _status(
     io: dict[str, Any],
     stdout_truncated: bool = False,
     stderr_truncated: bool = False,
+    output_cap: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     stdout_bytes = int(io.get("stdout_bytes", len(stdout.encode("utf-8"))))
     stderr_bytes = int(io.get("stderr_bytes", len(stderr.encode("utf-8"))))
-    return {
+    result = {
         "status": status,
         "exit_code": exit_code,
         "wall_seconds": round(time.monotonic() - started, 3),
         "output_bytes": stdout_bytes,
         "stdout_bytes": stdout_bytes,
         "stderr_bytes": stderr_bytes,
+        "stdout_observed_bytes": int(io.get("stdout_observed_bytes", stdout_bytes)),
+        "stderr_observed_bytes": int(io.get("stderr_observed_bytes", stderr_bytes)),
         "stdout_truncated": stdout_truncated,
         "stderr_truncated": stderr_truncated,
         "io": io,
@@ -503,6 +650,9 @@ def _status(
         "stderr": stderr,
         "final_json": final_json,
     }
+    if output_cap is not None:
+        result["output_cap"] = output_cap
+    return result
 
 
 def _attempt_status(result: dict[str, Any]) -> dict[str, Any]:
@@ -515,6 +665,8 @@ def _attempt_status(result: dict[str, Any]) -> dict[str, Any]:
             "output_bytes",
             "stdout_bytes",
             "stderr_bytes",
+            "stdout_observed_bytes",
+            "stderr_observed_bytes",
             "stdout_truncated",
             "stderr_truncated",
         )
@@ -522,6 +674,8 @@ def _attempt_status(result: dict[str, Any]) -> dict[str, Any]:
     }
     if "io" in result:
         status["io"] = result["io"]
+    if "output_cap" in result:
+        status["output_cap"] = result["output_cap"]
     return status
 
 

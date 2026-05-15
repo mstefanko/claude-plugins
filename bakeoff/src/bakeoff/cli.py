@@ -759,6 +759,7 @@ def resolve_analyze_decision(
         "judge_rationale": [_rationale(pass1), _rationale(pass2)],
         "claim_verdicts": chosen.get("claim_verdicts", []),
         "additions_from_loser": annotate_source(chosen.get("additions_from_loser", []), loser),
+        "actionable_followups": chosen.get("actionable_followups", []),
         "caveats": [] if tiebreak == "swap_agreement" else [f"spine chosen by {tiebreak} after swap disagreement"],
     }
 
@@ -796,7 +797,7 @@ def print_validation_summary(work_order: dict[str, Any]) -> None:
     print("valid work order")
     print(f"  id:      {work_order['id']}")
     print(f"  mode:    {work_order['type']}")
-    print(f"  budgets: {budgets['wall_clock_seconds']}s wall, {budgets['max_output_bytes']} bytes out")
+    print(f"  budgets: {format_budget_summary(budgets)}")
     print(f"  scope:   {work_order['scope_policy']['enforcement']}")
     print("  providers:")
     for provider in work_order["providers"]:
@@ -815,9 +816,16 @@ def print_run_header(work_order: dict[str, Any], run_dir: Path, run_id: str) -> 
     print(f"  mode:           {work_order['type']}")
     print(f"  run dir:        {run_dir}/")
     print(f"  providers:      {providers}")
-    print(f"  budgets:        {budgets['wall_clock_seconds']}s wall, {budgets['max_output_bytes']} bytes out")
+    print(f"  budgets:        {format_budget_summary(budgets)}")
     print(f"  scope policy:   {work_order['scope_policy']['enforcement']}")
     print(f"  judge:          {judge['backend']} {judge['model']}")
+
+
+def format_budget_summary(budgets: dict[str, Any]) -> str:
+    return (
+        f"{budgets['wall_clock_seconds']}s wall, {budgets['max_output_bytes']} bytes out, "
+        f"{budgets.get('output_cap_grace_seconds', 10)}s cap grace"
+    )
 
 
 def judge_validator(mode: str):
@@ -1042,6 +1050,8 @@ def status_without_payload(result: dict[str, Any]) -> dict[str, Any]:
             "output_bytes",
             "stdout_bytes",
             "stderr_bytes",
+            "stdout_observed_bytes",
+            "stderr_observed_bytes",
             "stdout_truncated",
             "stderr_truncated",
         )
@@ -1049,6 +1059,8 @@ def status_without_payload(result: dict[str, Any]) -> dict[str, Any]:
     }
     if "io" in result:
         status["io"] = result["io"]
+    if "output_cap" in result:
+        status["output_cap"] = result["output_cap"]
     if "format_retry" in result:
         status["format_retry"] = result["format_retry"]
     if "scope_enforcement" in result:

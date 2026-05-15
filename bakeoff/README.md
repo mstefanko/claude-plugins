@@ -54,7 +54,8 @@ bakeoff doctor [--skip-auth-probe] [--quiet] [--json]
 `bakeoff research` writes a replayable ledger under `runs/<run-id>/`:
 
 - `work-order.json`
-- `providers/<id>/{prompt,stdout,stderr,status,final}.json/txt`
+- `providers/<id>/{prompt,stdout,stderr,status}.json/txt`
+- optional `providers/<id>/final.json` when the provider returned a schema-valid result
 - optional `providers/<id>/repair-{prompt,stdout,stderr,status}.json/txt` after a one-shot format retry
 - `judge/` prompts and results
 - optional `judge/repair-{prompt,stdout,stderr,status}.json/txt` after a gather judge format retry
@@ -71,11 +72,20 @@ Provider status `ok_after_format_retry` means the original provider call exited
 successfully but failed final-json schema validation, then one format-only retry
 validated. The retry is auditable through `status.json.format_retry` and the
 `repair-*` artifacts. Retries are only attempted for zero-exit `schema_error`;
-`timeout`, `output_cap`, `scope_error`, and `exit_error` are terminal. Top-level
-`wall_seconds`/`output_bytes` include both attempts after a successful retry,
-while per-attempt costs live under `format_retry`. Provider status also records
-`stdout_bytes`, `stderr_bytes`, and explicit truncation flags; stderr truncation
-does not fail a run by itself.
+`timeout`, `output_cap`, `scope_error`, `missing_provider`, and `exit_error` are
+terminal. Top-level `wall_seconds`/`output_bytes` include both attempts after a
+successful retry, while per-attempt costs live under `format_retry`. Provider
+status also records `stdout_bytes`, `stderr_bytes`, observed byte counts, and
+explicit truncation flags; stderr truncation does not fail a run by itself.
+
+`budgets.max_output_bytes` caps retained stdout and stderr payload bytes. Stdout
+overflow starts a bounded salvage window controlled by
+`budgets.output_cap_grace_seconds` (default `10`) and
+`budgets.max_output_overrun_bytes` (default equal to `max_output_bytes`). If the
+provider exits during that window and the retained head/tail output contains a
+schema-valid final JSON block, the run can still succeed with
+`stdout_truncated: true`; otherwise the process group is terminated and, after a
+short kill grace, the status is `output_cap`.
 
 Gather reports render deterministic corroboration from the judge's `sources`
 array. `model confidence` reflects the worker/judge assessment of evidence
@@ -86,6 +96,11 @@ Provider runs emit compact heartbeat lines to stderr by default. Pass `--quiet`
 on `research`, `rerun`, `triage`, or `doctor` to suppress them. Set
 `budgets.heartbeat_seconds` in a work order to tune heartbeat frequency, or `0`
 to disable heartbeat ticks.
+
+Analyze reports keep descriptive reasoning under `Primary Explanation` and
+reserve finding IDs for actionable follow-ups, conflicts, unknowns, and other
+sections that should be eligible for triage. This keeps post-judge triage from
+spending provider calls on ordinary explanation inventory.
 
 ## Scope Policy
 

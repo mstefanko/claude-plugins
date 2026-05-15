@@ -20,6 +20,7 @@ CONFIDENCES = ("high", "medium", "low")
 COMPARE_SCORE_FIELDS = ("evidence", "coherence", "tradeoff_honesty", "rebuttals")
 ANALYZE_SCORE_FIELDS = ("step_atomicity", "citation_grounding", "assumption_transparency", "coherence")
 ANALYZE_LOSER_POSITIONS = ("agrees", "disagrees", "not_covered", "adds")
+ANALYZE_FOLLOWUP_KINDS = ("bug", "risk", "doc_drift", "test_gap", "follow_up")
 TRIAGE_CLASSIFICATIONS = ("real_issue", "false_positive", "plan_doc_drift", "product_decision", "needs_repro", "already_fixed", "evidence_gap")
 TRIAGE_ACTIONS = ("fix_now", "document", "defer", "ignore", "reproduce")
 TRIAGE_SEVERITIES = ("high", "medium", "low", "none")
@@ -229,10 +230,18 @@ def _validate_budgets(value: Any) -> dict[str, int]:
     heartbeat_seconds = value.get("heartbeat_seconds", 60)
     if not isinstance(heartbeat_seconds, int) or heartbeat_seconds < 0:
         raise ValidationError("budgets.heartbeat_seconds must be a non-negative integer")
+    output_cap_grace_seconds = value.get("output_cap_grace_seconds", 10)
+    if not isinstance(output_cap_grace_seconds, int) or output_cap_grace_seconds < 0:
+        raise ValidationError("budgets.output_cap_grace_seconds must be a non-negative integer")
+    max_output_overrun_bytes = value.get("max_output_overrun_bytes", value["max_output_bytes"])
+    if not isinstance(max_output_overrun_bytes, int) or max_output_overrun_bytes < 0:
+        raise ValidationError("budgets.max_output_overrun_bytes must be a non-negative integer")
     return {
         "wall_clock_seconds": value["wall_clock_seconds"],
         "max_output_bytes": value["max_output_bytes"],
         "heartbeat_seconds": heartbeat_seconds,
+        "output_cap_grace_seconds": output_cap_grace_seconds,
+        "max_output_overrun_bytes": max_output_overrun_bytes,
     }
 
 
@@ -332,6 +341,11 @@ def validate_analyze_judge_result(data: Any) -> dict[str, Any]:
         raise ValidationError("analyze judge final_json.additions_from_loser must be an array")
     for index, addition in enumerate(data["additions_from_loser"]):
         _validate_loser_addition(addition, f"analyze judge final_json.additions_from_loser[{index}]")
+    if "actionable_followups" in data:
+        if not isinstance(data["actionable_followups"], list):
+            raise ValidationError("analyze judge final_json.actionable_followups must be an array")
+        for index, followup in enumerate(data["actionable_followups"]):
+            _validate_analyze_followup(followup, f"analyze judge final_json.actionable_followups[{index}]")
     return data
 
 
@@ -429,6 +443,23 @@ def _validate_loser_addition(value: Any, label: str) -> None:
     _validate_string_list(value.get("evidence"), f"{label}.evidence")
 
 
+def _validate_analyze_followup(value: Any, label: str) -> None:
+    if not isinstance(value, dict):
+        raise ValidationError(f"{label} must be an object")
+    for field in ("claim", "kind", "severity", "evidence", "recommended_action"):
+        if field not in value:
+            raise ValidationError(f"{label}.{field} is required")
+    if not isinstance(value["claim"], str):
+        raise ValidationError(f"{label}.claim must be a string")
+    if value["kind"] not in ANALYZE_FOLLOWUP_KINDS:
+        raise ValidationError(f"{label}.kind must be one of: {', '.join(ANALYZE_FOLLOWUP_KINDS)}")
+    if value["severity"] not in TRIAGE_SEVERITIES:
+        raise ValidationError(f"{label}.severity must be one of: {', '.join(TRIAGE_SEVERITIES)}")
+    if value["recommended_action"] not in TRIAGE_ACTIONS:
+        raise ValidationError(f"{label}.recommended_action must be one of: {', '.join(TRIAGE_ACTIONS)}")
+    _validate_string_list(value["evidence"], f"{label}.evidence")
+
+
 def _validate_string_list(value: Any, label: str) -> None:
     if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
         raise ValidationError(f"{label} must be an array of strings")
@@ -472,6 +503,12 @@ def init_template(mode: str) -> str:
   ],
   "scope_policy": {{ "enforcement": "best_effort" }},
   "judge":   {{ "backend": "claude", "model": "claude-opus-4-7", "effort": "{effort["judge"]}" }},
-  "budgets": {{ "wall_clock_seconds": 900, "max_output_bytes": 60000, "heartbeat_seconds": 60 }}
+  "budgets": {{
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  }}
 }}
 """

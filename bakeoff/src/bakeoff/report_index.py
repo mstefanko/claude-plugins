@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 ACTIONABLE_REPORT_SECTIONS = {
+    "Actionable Follow-ups",
     "Findings",
     "Comparison",
-    "Primary Explanation",
     "Strongest Material",
     "Consensus Disagreements",
     "Kept From Nonwinner",

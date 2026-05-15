@@ -597,6 +597,7 @@ ANALYZE_JUDGE_PROMPT = """You are a synthesis judge. You receive two analyses (A
 1. Pick one analysis as the SPINE (the better backbone of reasoning).
 2. Walk through the spine step-by-step. For each spine step, find the closest matching step in the loser and emit an annotation: `agrees`, `disagrees` (with one-line reason), `adds` (with one-line addition), or `not_covered`.
 3. Append loser steps that do not map to any spine step as `additions_from_loser[]`.
+4. Separately list only concrete issues or follow-ups that a human should consider acting on as `actionable_followups[]`. Do not put ordinary descriptive explanation steps in this array.
 
 <analysis_a>
 {FINAL_JSON_A}
@@ -622,16 +623,18 @@ Length and verbosity do NOT favor a spine.
 - For each spine step, the annotation must reflect the LOSER's actual content. If the loser does not address a step, use `not_covered`.
 - Do not invent agreements or disagreements. If you cannot tell whether the loser agrees, use `not_covered` with a note.
 - `adds` annotations MUST cite the loser's claim id. `disagrees` annotations MUST cite both sides.
+- `actionable_followups[]` is only for bugs, correctness risks, documentation drift, test gaps, or explicit follow-up work. If there are none, emit an empty array.
 </rules>
 
 <process>
 1. In <scratchpad>, score both analyses on the rubric. Pick the spine.
 2. For each spine step, scan the loser for the closest semantic match. Decide: agrees, disagrees, adds, or not_covered.
 3. List loser steps with no spine match in additions_from_loser.
-4. Emit the JSON.
+4. Extract concrete actionable follow-ups separately from descriptive spine steps.
+5. Emit the JSON.
 </process>
 
 <output_format>
-Reason in <scratchpad>...</scratchpad>, then emit one JSON object wrapped in <final_json>...</final_json>: scores_a {step_atomicity, citation_grounding, assumption_transparency, coherence} with integer values from 1 to 5, scores_b {...}, spine_winner in {"A","B"}, spine_rationale (2-3 sentences), claim_verdicts[] (each with claim_id, loser_position in {agrees, disagrees, not_covered, adds}, loser_note), additions_from_loser[] (each with claim, evidence[]). No content after </final_json>.
+Reason in <scratchpad>...</scratchpad>, then emit one JSON object wrapped in <final_json>...</final_json>: scores_a {step_atomicity, citation_grounding, assumption_transparency, coherence} with integer values from 1 to 5, scores_b {...}, spine_winner in {"A","B"}, spine_rationale (2-3 sentences), claim_verdicts[] (each with claim_id, loser_position in {agrees, disagrees, not_covered, adds}, loser_note), additions_from_loser[] (each with claim, evidence[]), actionable_followups[] (each with claim, kind in {bug, risk, doc_drift, test_gap, follow_up}, severity in {high, medium, low, none}, evidence[], recommended_action in {fix_now, document, defer, ignore, reproduce}). No content after </final_json>.
 </output_format>
 """

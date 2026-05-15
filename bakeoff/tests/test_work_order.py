@@ -59,6 +59,8 @@ def test_validates_work_order_and_defaults_effort(tmp_path):
     assert work_order["providers"][0]["effort"] == "high"
     assert work_order["judge"]["effort"] == "high"
     assert work_order["budgets"]["heartbeat_seconds"] == 60
+    assert work_order["budgets"]["output_cap_grace_seconds"] == 10
+    assert work_order["budgets"]["max_output_overrun_bytes"] == 2000
     assert work_order["scope_policy"] == {"enforcement": "best_effort"}
 
 
@@ -117,6 +119,34 @@ def test_budget_heartbeat_seconds_must_not_be_negative(tmp_path):
     path.write_text(json.dumps(data), encoding="utf-8")
 
     with pytest.raises(ValidationError, match="budgets.heartbeat_seconds"):
+        load_work_order(path)
+
+
+@pytest.mark.parametrize(
+    ("field", "message"),
+    [
+        ("output_cap_grace_seconds", "budgets.output_cap_grace_seconds"),
+        ("max_output_overrun_bytes", "budgets.max_output_overrun_bytes"),
+    ],
+)
+def test_output_cap_budget_fields_must_not_be_negative(tmp_path, field, message):
+    data = {
+        "schema_version": 1,
+        "id": "routing",
+        "type": "gather",
+        "goal": "Find routing facts.",
+        "background": "",
+        "providers": [
+            {"id": "claude", "backend": "claude", "model": "same", "scope": "codebase"},
+            {"id": "codex", "backend": "codex", "model": "other", "scope": "web"},
+        ],
+        "judge": {"backend": "claude", "model": "judge"},
+        "budgets": {"wall_clock_seconds": 3, "max_output_bytes": 2000, field: -1},
+    }
+    path = tmp_path / f"bad-{field}.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(ValidationError, match=message):
         load_work_order(path)
 
 
@@ -195,6 +225,15 @@ def test_analyze_judge_verdicts_must_match_overlay_shape():
         "spine_rationale": "A is clearer.",
         "claim_verdicts": [{"claim_id": "R-001", "loser_position": "agrees", "loser_note": "same claim"}],
         "additions_from_loser": [{"claim": "extra nuance", "evidence": ["fake:1"]}],
+        "actionable_followups": [
+            {
+                "claim": "Add a regression test.",
+                "kind": "test_gap",
+                "severity": "low",
+                "evidence": ["tests/test_runner.py:1"],
+                "recommended_action": "defer",
+            }
+        ],
     }
 
     assert validate_analyze_judge_result(result) == result

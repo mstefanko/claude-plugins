@@ -31,6 +31,8 @@
   "budgets": {
     "wall_clock_seconds": 900,
     "max_output_bytes": 60000,
-    "heartbeat_seconds": 60
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
   }
 }

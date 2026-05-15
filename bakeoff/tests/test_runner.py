@@ -117,6 +117,67 @@ def test_run_provider_reports_output_cap():
     assert "[TRUNCATED at 100 bytes]" in result["stdout"]
     assert result["stdout_truncated"] is True
     assert result["stdout_bytes"] <= 100
+    assert result["stdout_observed_bytes"] > result["stdout_bytes"]
+    assert result["output_cap"]["reason"] in {"stdout_capture_limit", "stdout_overrun_limit"}
+
+
+def test_run_provider_salvages_final_json_after_stdout_cap():
+    result = asyncio.run(
+        run_provider(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import sys; "
+                    "sys.stdout.write('x' * 200); "
+                    "sys.stdout.write('<final_json>{\"ok\": true}</final_json>'); "
+                    "sys.stdout.flush()"
+                ),
+            ],
+            "",
+            {
+                "wall_clock_seconds": 3,
+                "max_output_bytes": 120,
+                "max_output_overrun_bytes": 500,
+                "output_cap_grace_seconds": 1,
+            },
+        )
+    )
+
+    assert result["status"] == "ok"
+    assert result["final_json"] == {"ok": True}
+    assert result["stdout_truncated"] is True
+    assert result["stdout_bytes"] <= 120
+    assert result["stdout_observed_bytes"] > result["stdout_bytes"]
+
+
+def test_run_provider_hard_stops_after_stdout_cap_grace():
+    result = asyncio.run(
+        run_provider(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import signal, sys, time; "
+                    "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                    "sys.stdout.write('x' * 5000); "
+                    "sys.stdout.flush(); "
+                    "time.sleep(5)"
+                ),
+            ],
+            "",
+            {
+                "wall_clock_seconds": 10,
+                "max_output_bytes": 100,
+                "max_output_overrun_bytes": 10000,
+                "output_cap_grace_seconds": 0,
+            },
+        )
+    )
+
+    assert result["status"] == "output_cap"
+    assert result["output_cap"]["reason"] in {"stdout_capture_limit", "stdout_grace_timeout"}
+    assert result["wall_seconds"] < 3
 
 
 def test_run_provider_reports_stderr_truncation_without_failing_success():
@@ -162,7 +223,7 @@ def test_run_provider_emits_heartbeat_ticks_for_quiet_process():
                 f"import sys, time; sys.stdout.write({payload!r}); sys.stdout.flush(); time.sleep(5)",
             ],
             "",
-            {"wall_clock_seconds": 3, "max_output_bytes": 2000, "heartbeat_seconds": 2},
+            {"wall_clock_seconds": 3, "max_output_bytes": 2000, "heartbeat_seconds": 1},
             on_tick=ticks.append,
         )
     )
@@ -172,8 +233,10 @@ def test_run_provider_emits_heartbeat_ticks_for_quiet_process():
     assert [tick["elapsed"] for tick in ticks] == sorted(tick["elapsed"] for tick in ticks)
     assert {tick["stdout_bytes"] for tick in ticks} == {len(payload.encode("utf-8"))}
     assert [tick["last_output_age"] for tick in ticks] == sorted(tick["last_output_age"] for tick in ticks)
+    assert any(tick["phase"] == "quiet" for tick in ticks)
+    assert result["io"]["quiet_tick_count"] == sum(1 for tick in ticks if tick["phase"] == "quiet")
     assert result["io"]["heartbeat_count"] == len(ticks)
-    assert result["io"]["quiet_threshold_seconds"] == 4
+    assert result["io"]["quiet_threshold_seconds"] == 2
 
 
 def test_run_provider_heartbeat_does_not_contaminate_stdout():

@@ -14,7 +14,16 @@ TRIAGE_ACTION_RE = re.compile(
     r"\b(?:bug|bugs|fix|fixes|fixed|gap|gaps|missing|invalid|schema_error|drift)\b",
     re.IGNORECASE,
 )
-TRIAGE_SOURCE_SECTIONS = {"Conflicts", "Unknowns"}
+PRIMARY_EXPLANATION_ACTION_RE = re.compile(
+    r"\b(?:bug|bugs|fix|fixes|gap|gaps|missing coverage|missing test|missing tests|"
+    r"no test|no tests|untested|incorrect|mismatch|drift|risk|risks|risky|omits?|should)\b",
+    re.IGNORECASE,
+)
+PRIMARY_EXPLANATION_DOC_DRIFT_RE = re.compile(
+    r"\b(?:README|docs?|documentation)\b.*\b(?:but|omits?|missing|drift|mismatch|incorrect)\b",
+    re.IGNORECASE,
+)
+TRIAGE_SOURCE_SECTIONS = {"Actionable Follow-ups", "Conflicts", "Unknowns"}
 PATH_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-/")
 
 
@@ -58,7 +67,14 @@ def select_triage_source_findings(findings: list[dict[str, str]]) -> tuple[list[
     for finding in findings:
         section = finding.get("section")
         text = finding.get("text", "")
-        if section in TRIAGE_SOURCE_SECTIONS or TRIAGE_ACTION_RE.search(text):
+        if section in TRIAGE_SOURCE_SECTIONS:
+            selected.append(finding)
+        elif section == "Primary Explanation":
+            if PRIMARY_EXPLANATION_ACTION_RE.search(text) or PRIMARY_EXPLANATION_DOC_DRIFT_RE.search(text):
+                selected.append(finding)
+            else:
+                skipped.append(finding)
+        elif TRIAGE_ACTION_RE.search(text):
             selected.append(finding)
         else:
             skipped.append(finding)
@@ -102,11 +118,12 @@ def should_recommend_triage(work_order: dict[str, Any], decision: dict[str, Any]
         return f"gather report with {len(findings)} findings - verify before fixing"
     if decision.get("decision_kind") in {"single_provider_only", "both_failed", "tie"}:
         return f"{decision.get('decision_kind')} decision - verify before fixing"
-    finding_text = "\n".join(finding.get("text", "") for finding in findings)
+    source_findings, _ = select_triage_source_findings(findings)
+    finding_text = "\n".join(finding.get("text", "") for finding in source_findings)
     match = TRIAGE_ACTION_RE.search(finding_text)
     if match:
         return f"report mentions {match.group(0).lower()} - verify before fixing"
-    if any(finding.get("section") == "Conflicts" for finding in findings):
+    if any(finding.get("section") == "Conflicts" for finding in source_findings):
         return "report contains conflicts - verify before fixing"
     return None
 

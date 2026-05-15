@@ -64,3 +64,43 @@ def test_gather_report_derives_corroboration_from_sources():
 
     assert "model confidence `high`, corroboration `multi-source`, sources `claude+codex`" in report
     assert "model confidence `high`, corroboration `single-source`, sources `claude`" in report
+
+
+def test_analyze_report_numbers_actionable_followups_not_explanation_inventory():
+    report = render_report(
+        {"id": "r", "type": "analyze"},
+        {
+            "mode": "analyze",
+            "decision_kind": "pick_winner",
+            "judge_ran": True,
+            "provider_statuses": {},
+            "canonical_winner": "codex",
+            "claim_verdicts": [],
+            "actionable_followups": [
+                {
+                    "claim": "Add a cancellation regression test.",
+                    "kind": "test_gap",
+                    "severity": "low",
+                    "evidence": ["tests/test_runner.py:1"],
+                    "recommended_action": "defer",
+                }
+            ],
+        },
+        {
+            "codex": {
+                "final_json": {
+                    "claims": [
+                        {
+                            "id": "R-001",
+                            "claim": "The runner records provider status.",
+                            "evidence": ["src/bakeoff/runner.py:1"],
+                            "confidence": "high",
+                        }
+                    ]
+                }
+            }
+        },
+    )
+
+    assert "- **R-001** The runner records provider status." in report
+    assert "- **F-001** Add a cancellation regression test." in report

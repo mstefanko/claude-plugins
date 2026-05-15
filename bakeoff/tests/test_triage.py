@@ -102,6 +102,42 @@ def test_select_triage_source_findings_skips_plain_findings():
     assert [finding["id"] for finding in skipped] == ["F-001"]
 
 
+def test_select_triage_source_findings_filters_analyze_inventory():
+    findings = [
+        {
+            "id": "F-001",
+            "section": "Primary Explanation",
+            "text": "For zero-exit processes, ValidationError becomes schema_error.",
+        },
+        {
+            "id": "F-002",
+            "section": "Primary Explanation",
+            "text": "README documentation names timeout statuses, but the runner also has missing_provider.",
+        },
+        {
+            "id": "F-003",
+            "section": "Primary Explanation",
+            "text": "Missing coverage: no test exercises cancellation.",
+        },
+        {
+            "id": "F-004",
+            "section": "Actionable Follow-ups",
+            "text": "Add an output-cap grace regression test.",
+        },
+    ]
+
+    selected, skipped = select_triage_source_findings(findings)
+
+    assert [finding["id"] for finding in selected] == ["F-002", "F-003", "F-004"]
+    assert [finding["id"] for finding in skipped] == ["F-001"]
+
+
+def test_should_recommend_triage_ignores_descriptive_analyze_inventory():
+    report = "## Primary Explanation\n\n- **F-001** For zero-exit processes, ValidationError becomes schema_error.\n"
+
+    assert should_recommend_triage({"type": "analyze"}, {"decision_kind": "pick_winner"}, report) is None
+
+
 def test_triage_markdown_renders_each_item_once_by_priority():
     final = {
         "run_id": "run",
