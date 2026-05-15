@@ -75,12 +75,12 @@ def _render_gather(
     for claim in merged:
         sources = [order_map.get(source, source) for source in claim.get("sources", [])]
         key = "+".join(sorted(sources)) if sources else "unknown"
-        grouped.setdefault(key, []).append(claim)
+        grouped.setdefault(key, []).append({**claim, "_source_providers": sources})
 
     lines = ["## Findings", ""]
     for key in sorted(grouped):
         lines.append(f"### {key}")
-        lines.extend(_claim_lines(grouped[key]))
+        lines.extend(_claim_lines(grouped[key], show_corroboration=True))
         lines.append("")
     lines.extend(["## Conflicts", ""])
     lines.extend(_conflict_lines(judge.get("conflicts", [])))
@@ -157,15 +157,31 @@ def _render_analyze(decision: dict[str, Any], worker_results: dict[str, dict[str
     return lines
 
 
-def _claim_lines(claims: list[dict[str, Any]], *, source: str | None = None) -> list[str]:
+def _claim_lines(
+    claims: list[dict[str, Any]],
+    *,
+    source: str | None = None,
+    show_corroboration: bool = False,
+) -> list[str]:
     if not claims:
         return ["- None reported."]
     lines: list[str] = []
     for claim in claims:
         confidence = claim.get("confidence", "unknown")
-        source_text = f" source `{source}`," if source else ""
+        details = []
+        if source:
+            details.append(f"source `{source}`")
+        details.append(f"model confidence `{confidence}`")
+        if show_corroboration:
+            source_providers = sorted({str(item) for item in claim.get("_source_providers", [])})
+            if source_providers:
+                corroboration = "multi-source" if len(source_providers) > 1 else "single-source"
+                details.append(f"corroboration `{corroboration}`")
+                details.append(f"sources `{'+'.join(source_providers)}`")
+            else:
+                details.append("corroboration `unknown`")
         evidence = ", ".join(claim.get("evidence", []))
-        lines.append(f"- {claim.get('claim', '')} ({source_text} confidence `{confidence}`)")
+        lines.append(f"- {claim.get('claim', '')} ({', '.join(details)})")
         if evidence:
             lines.append(f"  Evidence: {evidence}")
     return lines

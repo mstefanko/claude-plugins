@@ -27,3 +27,40 @@ def test_report_surfaces_compare_nonwinner_material():
     assert "**F-002** keep this" in report
     assert "keep this" in report
     assert "Source: `codex`" in report
+
+
+def test_gather_report_derives_corroboration_from_sources():
+    report = render_report(
+        {"id": "r", "type": "gather"},
+        {
+            "mode": "gather",
+            "decision_kind": "structured_union",
+            "judge_ran": True,
+            "provider_statuses": {},
+            "order_maps": {"pass1": {"A": "claude", "B": "codex"}},
+        },
+        {},
+        judge_results={
+            "pass1": {
+                "merged_claims": [
+                    {
+                        "claim": "Both found this.",
+                        "evidence": ["a:1", "b:2"],
+                        "sources": ["A", "B"],
+                        "confidence": "high",
+                    },
+                    {
+                        "claim": "Only one found this.",
+                        "evidence": ["a:3"],
+                        "sources": ["A"],
+                        "confidence": "high",
+                    },
+                ],
+                "conflicts": [],
+                "unknowns_union": [],
+            }
+        },
+    )
+
+    assert "model confidence `high`, corroboration `multi-source`, sources `claude+codex`" in report
+    assert "model confidence `high`, corroboration `single-source`, sources `claude`" in report

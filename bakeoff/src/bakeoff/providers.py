@@ -113,6 +113,7 @@ All worker <final_json> payloads MUST include this top-level shape:
 
 Allowed status values: "complete", "complete_with_concerns", "needs_context", "blocked".
 Allowed confidence values: "high", "medium", "low".
+Confidence reflects evidence strength, not agreement between providers: use "high" only when cited evidence directly proves the claim, "medium" when the citation supports the claim but requires interpretation or broader context, and "low" when evidence is indirect, incomplete, stale, or only partially supportive.
 Every claims[] item MUST include these required fields with these exact names: "id", "claim", "evidence", "confidence".
 Do not rename fields. Use "claim", not "finding", "summary", or "description". Use "evidence", not "citation", "citations", "source", or "sources".
 Put unverified material in unknowns[] as strings instead of adding uncited claims.
@@ -321,6 +322,7 @@ You do not know which model produced A or B. Use the positional labels "A" and "
 - Merge claims that make the SAME assertion about the SAME entity, regardless of wording. Preserve all citations from both sources on the merged claim, and tag `sources` using the positional labels: ["A"], ["B"], or ["A","B"].
 - If two claims make CONFLICTING assertions, do NOT pick a side. Emit a conflict entry listing both claims (`claim_a`, `claim_b`), both citations, and a one-line description of the disagreement.
 - Preserve confidence. If two merged claims have different confidences, take the lower.
+- Confidence reflects evidence strength, not corroboration. Do not raise confidence during judging. Use `sources` to show whether one or both workers found a claim.
 - Do not introduce new claims. You may only union, dedupe, and flag.
 - Leave near-duplicates separate when in doubt. Over-merging is the dominant failure mode of dedupe judges.
 </rules>

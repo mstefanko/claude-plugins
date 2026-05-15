@@ -21,13 +21,13 @@ not wired into `research --triage` in v1.
 ```text
 runs/<run-id>/triage/
   prompt.txt
-  stdout.txt
-  stderr.txt
   status.json
-  final.json
   finding_index.json
   citation_checks.json
-  triage.md
+  stdout.txt        # non-dry-run only
+  stderr.txt        # non-dry-run only
+  final.json        # non-dry-run success only
+  triage.md         # non-dry-run success only
 ```
 
 `finding_index.json` is written for legacy reports that need synthesized

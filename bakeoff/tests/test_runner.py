@@ -73,6 +73,37 @@ else:
     assert result["repair_artifacts"]["status"]["status"] == "ok"
 
 
+def test_run_provider_format_retry_preserves_schema_error_when_retry_fails(tmp_path):
+    script = tmp_path / "provider.py"
+    script.write_text(
+        """
+print('<final_json>{"ok": false}</final_json>')
+""",
+        encoding="utf-8",
+    )
+
+    def validator(data):
+        if data.get("ok") is not True:
+            raise ValidationError("ok must be true")
+        return data
+
+    result = asyncio.run(
+        run_provider_with_format_retry(
+            [sys.executable, str(script)],
+            "Return ok=true.",
+            {"wall_clock_seconds": 3, "max_output_bytes": 2000},
+            validator=validator,
+        )
+    )
+
+    assert result["status"] == "schema_error"
+    assert result["final_json"] is None
+    assert result["format_retry"]["initial_status"]["status"] == "schema_error"
+    assert result["format_retry"]["retry_status"]["status"] == "schema_error"
+    assert result["format_retry"]["reason"] == "ok must be true"
+    assert result["repair_artifacts"]["status"]["status"] == "schema_error"
+
+
 def test_run_provider_reports_output_cap():
     result = asyncio.run(
         run_provider(

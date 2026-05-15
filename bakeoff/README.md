@@ -44,7 +44,7 @@ bakeoff
 bakeoff init {gather|compare|analyze} [--force]
 bakeoff validate <work-order>
 bakeoff research <work-order> [--out runs] [--run-id ID] [--force] [--quiet]
-bakeoff rerun <run-id> [--quiet]
+bakeoff rerun <run-id> [--out runs] [--run-id ID] [--quiet]
 bakeoff triage <run-id> [--out runs] [--force] [--dry-run] [--quiet]
 bakeoff ls [--out runs]
 bakeoff show <run-id> [--judge | --judge-prompt | --triage]
@@ -57,13 +57,28 @@ bakeoff doctor [--skip-auth-probe] [--quiet]
 - `providers/<id>/{prompt,stdout,stderr,status,final}.json/txt`
 - optional `providers/<id>/repair-{prompt,stdout,stderr,status}.json/txt` after a one-shot format retry
 - `judge/` prompts and results
-- optional `judge/repair-*` artifacts after judge format retries
+- optional `judge/repair-{prompt,stdout,stderr,status}.json/txt` after a gather judge format retry
+- optional `judge/repair-{prompt,stdout,stderr,status}-{pass1,pass2}.json/txt` after compare/analyze judge format retries
 - `decision.json`
 - `report.md`
 - optional `triage/{prompt,stdout,stderr,status,final,citation_checks,triage}.json/txt/md`
+- optional `triage/finding_index.json` when legacy report bullets need synthesized finding ids
 - optional `triage/repair-{prompt,stdout,stderr,status}.json/txt` after a triage format retry
 
 `runs/latest` points at the newest run.
+
+Provider status `ok_after_format_retry` means the original provider call exited
+successfully but failed final-json schema validation, then one format-only retry
+validated. The retry is auditable through `status.json.format_retry` and the
+`repair-*` artifacts. Retries are only attempted for zero-exit `schema_error`;
+`timeout`, `output_cap`, and `exit_error` are terminal. Top-level
+`wall_seconds`/`output_bytes` include both attempts after a successful retry,
+while per-attempt costs live under `format_retry`.
+
+Gather reports render deterministic corroboration from the judge's `sources`
+array. `model confidence` reflects the worker/judge assessment of evidence
+strength; `corroboration` reflects whether one or both providers surfaced the
+claim.
 
 Provider runs emit compact heartbeat lines to stderr by default. Pass `--quiet`
 on `research`, `rerun`, `triage`, or `doctor` to suppress them. Set
