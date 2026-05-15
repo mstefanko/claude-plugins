@@ -249,6 +249,7 @@ async def cmd_doctor(args: argparse.Namespace) -> int:
         },
         "scope_capabilities": {},
         "auth_probes": {},
+        "warnings": [],
     }
     for tool in ("claude", "codex", "git"):
         path = shutil.which(tool)
@@ -261,6 +262,8 @@ async def cmd_doctor(args: argparse.Namespace) -> int:
 
     for backend in ("claude", "codex"):
         report["scope_capabilities"][backend] = detect_scope_capabilities(backend)
+        if not report["scope_capabilities"][backend].get("available"):
+            failed = True
 
     writable, writable_detail = check_cwd_writable()
     report["cwd_writable"] = {"ok": writable, "detail": writable_detail, "cwd": str(Path.cwd())}
@@ -314,10 +317,16 @@ async def cmd_doctor(args: argparse.Namespace) -> int:
                 budgets,
                 on_tick=make_tick_printer(f"{backend}:auth", quiet=args.quiet),
             )
-            report["auth_probes"][backend] = status_without_payload(result)
+            probe_status = auth_probe_status(result)
+            report["auth_probes"][backend] = probe_status
             if not args.json:
-                print(f"- {backend} auth probe: {result['status']}")
-            failed = failed or result["status"] != "ok"
+                suffix = f" (warning: {probe_status['reason']})" if probe_status.get("reason") else ""
+                print(f"- {backend} auth probe: {result['status']}{suffix}")
+            if result["status"] != "ok":
+                warning = f"{backend} auth probe failed with {result['status']}"
+                if probe_status.get("reason"):
+                    warning += f": {probe_status['reason']}"
+                report["warnings"].append(warning)
     report["status"] = "failed" if failed else "ok"
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
@@ -407,6 +416,10 @@ async def run_triage(run_dir: Path, *, force: bool, dry_run: bool, quiet: bool =
 
     finding_index, synthesized = build_finding_index(report_text)
     source_findings, skipped_findings = select_triage_source_findings(finding_index)
+    source_finding_filter = {
+        "included": len(source_findings),
+        "skipped_non_actionable": len(skipped_findings),
+    }
     if synthesized:
         caveats.append("source finding IDs were synthesized from report display order")
         write_json(triage_dir / "finding_index.json", {"schema_version": 1, "findings": finding_index})
@@ -421,10 +434,7 @@ async def run_triage(run_dir: Path, *, force: bool, dry_run: bool, quiet: bool =
         "decision": decision,
         "report_md": report_text,
         "source_findings": source_findings,
-        "source_finding_filter": {
-            "included": len(source_findings),
-            "skipped_non_actionable": len(skipped_findings),
-        },
+        "source_finding_filter": source_finding_filter,
         "citation_checks": citation_checks,
         "caveats": caveats,
         "input_hashes": input_hashes,
@@ -438,8 +448,21 @@ async def run_triage(run_dir: Path, *, force: bool, dry_run: bool, quiet: bool =
     }
     print(f"triage participant: {participant['backend']} {participant['model']} (effort {participant['effort']})")
     print("note: triage invokes one provider call; use --dry-run to inspect inputs only")
+    print(
+        "source findings: "
+        f"selected {source_finding_filter['included']}; "
+        f"skipped {source_finding_filter['skipped_non_actionable']} non-actionable"
+    )
     if dry_run:
-        write_json(triage_dir / "status.json", {"status": "dry_run", "triage_participant": participant, "input_hashes": input_hashes})
+        write_json(
+            triage_dir / "status.json",
+            {
+                "status": "dry_run",
+                "triage_participant": participant,
+                "input_hashes": input_hashes,
+                "source_finding_filter": source_finding_filter,
+            },
+        )
         return 0
 
     selected_source_ids = {finding["id"] for finding in source_findings}
@@ -459,6 +482,7 @@ async def run_triage(run_dir: Path, *, force: bool, dry_run: bool, quiet: bool =
         final["run_id"] = run_dir.name
         final["input_hashes"] = input_hashes
         final["triage_participant"] = participant
+        final["source_finding_filter"] = source_finding_filter
         return final
 
     result = await run_provider_with_format_retry(
@@ -475,6 +499,7 @@ async def run_triage(run_dir: Path, *, force: bool, dry_run: bool, quiet: bool =
     status = status_without_payload(result)
     status["triage_participant"] = participant
     status["input_hashes"] = input_hashes
+    status["source_finding_filter"] = source_finding_filter
     write_json(triage_dir / "status.json", status)
     if not provider_succeeded(result):
         return 2
@@ -1066,6 +1091,37 @@ def status_without_payload(result: dict[str, Any]) -> dict[str, Any]:
     if "scope_enforcement" in result:
         status["scope_enforcement"] = result["scope_enforcement"]
     return status
+
+
+def auth_probe_status(result: dict[str, Any]) -> dict[str, Any]:
+    status = status_without_payload(result)
+    if result.get("status") == "ok":
+        return status
+    reason = last_nonempty_line(result.get("stderr", "")) or last_nonempty_line(result.get("stdout", ""))
+    tail = diagnostic_tail(result.get("stderr", "") or result.get("stdout", ""))
+    if reason:
+        status["reason"] = reason
+    if tail:
+        status["diagnostic_tail"] = tail
+    return status
+
+
+def last_nonempty_line(text: str) -> str:
+    for line in reversed(text.splitlines()):
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return ""
+
+
+def diagnostic_tail(text: str, *, max_chars: int = 1000, max_lines: int = 5) -> str:
+    lines = [line.rstrip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return ""
+    tail = "\n".join(lines[-max_lines:])
+    if len(tail) > max_chars:
+        return tail[-max_chars:]
+    return tail
 
 
 def write_format_retry_artifacts(directory: Path, result: dict[str, Any], *, suffix: str | None = None) -> None:

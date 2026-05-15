@@ -31,20 +31,28 @@ def test_gather_research_with_fake_providers(tmp_path, monkeypatch):
     assert "Fake merged claim" in report
 
 
-def test_triage_writes_structured_artifacts(tmp_path, monkeypatch):
+def test_triage_writes_structured_artifacts(tmp_path, monkeypatch, capsys):
     install_fake_providers(tmp_path, judge_mode="gather")
     monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
     work_order = write_work_order(tmp_path, "gather")
     out_dir = tmp_path / "runs"
     assert main(["research", str(work_order), "--out", str(out_dir), "--run-id", "triage-run"]) == 0
+    capsys.readouterr()
 
     assert main(["triage", "triage-run", "--out", str(out_dir)]) == 0
+    output = capsys.readouterr().out
+    assert "source findings: selected 0; skipped 1 non-actionable" in output
 
     triage_dir = out_dir / "triage-run" / "triage"
     final = json.loads((triage_dir / "final.json").read_text())
     assert final["triage_participant"]["model"] == "fake-judge"
+    assert final["source_finding_filter"] == {"included": 0, "skipped_non_actionable": 1}
     assert final["items"] == []
     assert (triage_dir / "citation_checks.json").exists()
+    triage_report = (triage_dir / "triage.md").read_text()
+    assert "## Source Findings" in triage_report
+    assert "- Selected: `0`" in triage_report
+    assert "- Skipped non-actionable: `1`" in triage_report
 
 
 def test_triage_rejects_items_for_unselected_findings(tmp_path, monkeypatch):
@@ -72,6 +80,8 @@ def test_triage_dry_run_and_force(tmp_path, monkeypatch):
     assert main(["triage", "triage-dry", "--out", str(out_dir), "--dry-run"]) == 0
 
     triage_dir = out_dir / "triage-dry" / "triage"
+    status = json.loads((triage_dir / "status.json").read_text())
+    assert status["source_finding_filter"] == {"included": 0, "skipped_non_actionable": 1}
     assert (triage_dir / "prompt.txt").exists()
     prompt = (triage_dir / "prompt.txt").read_text()
     assert '"source_finding_filter":' in prompt

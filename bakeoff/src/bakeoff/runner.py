@@ -123,6 +123,8 @@ async def run_provider(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(cwd) if cwd is not None else None,
+            # Process-group termination below relies on start_new_session making
+            # the child process group id match the child pid.
             start_new_session=True,
         )
     except FileNotFoundError as exc:
@@ -157,6 +159,8 @@ async def run_provider(
         stdout_tail.extend(chunk)
         excess = len(stdout_head) + len(stdout_tail) - max_output_bytes
         if excess > 0:
+            # Keep retained stdout bounded while preserving the newest suffix
+            # where a late final_json block is most likely to appear.
             trim_head = min(excess, len(stdout_head))
             if trim_head:
                 del stdout_head[-trim_head:]
@@ -569,6 +573,8 @@ def _terminate_process_group(process: asyncio.subprocess.Process) -> None:
     if process.returncode is not None:
         return
     try:
+        # Relies on create_subprocess_exec(start_new_session=True), where pid is
+        # also the process group id. Keep these coupled if launch semantics move.
         os.killpg(process.pid, signal.SIGTERM)
     except ProcessLookupError:
         return

@@ -1,6 +1,8 @@
 import asyncio
+import signal
 import sys
 
+import bakeoff.runner as runner
 from bakeoff.runner import extract_final_json, run_provider, run_provider_with_format_retry
 from bakeoff.work_order import ValidationError
 
@@ -151,7 +153,16 @@ def test_run_provider_salvages_final_json_after_stdout_cap():
     assert result["stdout_observed_bytes"] > result["stdout_bytes"]
 
 
-def test_run_provider_hard_stops_after_stdout_cap_grace():
+def test_run_provider_hard_stops_after_stdout_cap_grace(monkeypatch):
+    signals = []
+    original_killpg = runner.os.killpg
+
+    def recording_killpg(pgid, sig):
+        signals.append(sig)
+        return original_killpg(pgid, sig)
+
+    monkeypatch.setattr(runner.os, "killpg", recording_killpg)
+
     result = asyncio.run(
         run_provider(
             [
@@ -177,6 +188,31 @@ def test_run_provider_hard_stops_after_stdout_cap_grace():
 
     assert result["status"] == "output_cap"
     assert result["output_cap"]["reason"] in {"stdout_capture_limit", "stdout_grace_timeout"}
+    assert signal.SIGTERM in signals
+    assert signal.SIGKILL in signals
+    assert result["wall_seconds"] < 3
+
+
+def test_run_provider_hard_stops_on_stdout_overrun_limit():
+    result = asyncio.run(
+        run_provider(
+            [
+                sys.executable,
+                "-c",
+                "import sys, time; sys.stdout.write('x' * 5000); sys.stdout.flush(); time.sleep(5)",
+            ],
+            "",
+            {
+                "wall_clock_seconds": 10,
+                "max_output_bytes": 100,
+                "max_output_overrun_bytes": 1,
+                "output_cap_grace_seconds": 30,
+            },
+        )
+    )
+
+    assert result["status"] == "output_cap"
+    assert result["output_cap"]["reason"] == "stdout_overrun_limit"
     assert result["wall_seconds"] < 3
 
 

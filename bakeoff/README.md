@@ -85,7 +85,9 @@ overflow starts a bounded salvage window controlled by
 provider exits during that window and the retained head/tail output contains a
 schema-valid final JSON block, the run can still succeed with
 `stdout_truncated: true`; otherwise the process group is terminated and, after a
-short kill grace, the status is `output_cap`.
+short kill grace, the status is `output_cap`. `max_output_overrun_bytes` is the
+number of bytes allowed beyond the capture cap before the salvage window is cut
+short; `0` means the first observed stdout byte past the cap hard-stops salvage.
 
 Gather reports render deterministic corroboration from the judge's `sources`
 array. `model confidence` reflects the worker/judge assessment of evidence

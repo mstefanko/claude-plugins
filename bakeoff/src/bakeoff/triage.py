@@ -271,6 +271,19 @@ def is_relative_to(path: Path, parent: Path) -> bool:
 
 def render_triage_markdown(final: dict[str, Any], caveats: list[str]) -> str:
     lines = [f"# Bakeoff Triage: {final.get('run_id')}", "", "## Summary", "", str(final.get("summary", ""))]
+    source_filter = final.get("source_finding_filter")
+    if isinstance(source_filter, dict):
+        included = source_filter.get("included", 0)
+        skipped = source_filter.get("skipped_non_actionable", 0)
+        lines.extend(
+            [
+                "",
+                "## Source Findings",
+                "",
+                f"- Selected: `{included}`",
+                f"- Skipped non-actionable: `{skipped}`",
+            ]
+        )
     if caveats:
         lines.extend(["", "## Caveats"])
         lines.extend(f"- {caveat}" for caveat in caveats)
