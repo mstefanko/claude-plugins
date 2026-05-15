@@ -66,7 +66,13 @@ def test_code_review_facet_auto_triages_successful_research(tmp_path, monkeypatc
     assert main(["show", "review-run", "--out", str(out_dir)]) == 0
     show_output = capsys.readouterr().out
     assert "triage available: bakeoff show review-run --triage" in show_output
+    assert f"--out {out_dir}" in show_output
     assert "triage not yet run" not in show_output
+
+    assert main(["ls", "--out", str(out_dir)]) == 0
+    ls_output = capsys.readouterr().out
+    assert "run_id\ttype\tfacet\tdecision\ttriage\tfinished_at" in ls_output
+    assert "review-run\tgather\tcode-review\tstructured_union\ttriage:yes\t" in ls_output
 
 
 def test_code_review_facet_can_skip_auto_triage(tmp_path, monkeypatch, capsys):
@@ -78,7 +84,8 @@ def test_code_review_facet_can_skip_auto_triage(tmp_path, monkeypatch, capsys):
     assert main(["research", str(work_order), "--out", str(out_dir), "--run-id", "review-skip", "--no-triage"]) == 0
 
     output = capsys.readouterr().out
-    assert "recommended: bakeoff triage review-skip" in output
+    assert "recommended: bakeoff triage review-skip" not in output
+    assert "auto-triage" not in output
     assert not (out_dir / "review-skip" / "triage").exists()
 
 
@@ -93,7 +100,8 @@ def test_rerun_can_skip_code_review_auto_triage(tmp_path, monkeypatch, capsys):
     assert main(["rerun", "review-source", "--out", str(out_dir), "--run-id", "review-rerun", "--no-triage"]) == 0
 
     output = capsys.readouterr().out
-    assert "recommended: bakeoff triage review-rerun" in output
+    assert "recommended: bakeoff triage review-rerun" not in output
+    assert "auto-triage" not in output
     assert not (out_dir / "review-rerun" / "triage").exists()
 
 
@@ -125,8 +133,15 @@ def test_show_labels_stale_triage(tmp_path, monkeypatch, capsys):
     assert main(["show", "review-stale", "--out", str(out_dir)]) == 0
 
     output = capsys.readouterr().out
-    assert "triage stale: bakeoff triage review-stale --force" in output
+    assert "triage stale (report.md changed): bakeoff triage review-stale --force" in output
+    assert f"--out {out_dir}" in output
     assert "triage not yet run" not in output
+
+    assert main(["show", "review-stale", "--out", str(out_dir), "--triage"]) == 2
+    error = capsys.readouterr().err
+    assert "triage is stale for review-stale (report.md changed)" in error
+    assert "bakeoff triage review-stale --force" in error
+    assert f"--out {out_dir}" in error
 
 
 def test_show_recommendation_uses_current_work_order_facet(tmp_path, monkeypatch, capsys):
@@ -170,6 +185,8 @@ def test_triage_writes_structured_artifacts(tmp_path, monkeypatch, capsys):
     assert main(["triage", "triage-run", "--out", str(out_dir)]) == 0
     output = capsys.readouterr().out
     assert "source findings: selected 0; skipped 1 non-actionable; skipped 0 out-of-facet" in output
+    assert f"source filter: {out_dir / 'triage-run' / 'triage' / 'source_finding_filter.json'}" in output
+    assert f"next:   bakeoff show triage-run --triage --out {out_dir}" in output
 
     triage_dir = out_dir / "triage-run" / "triage"
     final = json.loads((triage_dir / "final.json").read_text())
@@ -207,7 +224,7 @@ def test_triage_rejects_items_for_unselected_findings(tmp_path, monkeypatch):
     assert "selected source_findings" in (triage_dir / "stderr.txt").read_text()
 
 
-def test_triage_dry_run_and_force(tmp_path, monkeypatch):
+def test_triage_dry_run_and_force(tmp_path, monkeypatch, capsys):
     install_fake_providers(tmp_path, judge_mode="gather")
     monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
     work_order = write_work_order(tmp_path, "gather")
@@ -215,6 +232,7 @@ def test_triage_dry_run_and_force(tmp_path, monkeypatch):
     assert main(["research", str(work_order), "--out", str(out_dir), "--run-id", "triage-dry"]) == 0
 
     assert main(["triage", "triage-dry", "--out", str(out_dir), "--dry-run"]) == 0
+    output = capsys.readouterr().out
 
     triage_dir = out_dir / "triage-dry" / "triage"
     status = json.loads((triage_dir / "status.json").read_text())
@@ -230,8 +248,44 @@ def test_triage_dry_run_and_force(tmp_path, monkeypatch):
     assert '"skipped_non_actionable": 1' in prompt
     assert '"skipped_out_of_facet": 0' in prompt
     assert not (triage_dir / "final.json").exists()
+    assert f"source filter: {triage_dir / 'source_finding_filter.json'}" in output
+    assert f"triage dry run: {triage_dir / 'prompt.txt'}" in output
+    assert f"triage status:  {triage_dir / 'status.json'}" in output
+    assert f"next:           bakeoff triage triage-dry --force --out {out_dir}" in output
+
+    assert main(["ls", "--out", str(out_dir)]) == 0
+    ls_output = capsys.readouterr().out
+    assert "run_id\ttype\tfacet\tdecision\ttriage\tfinished_at" in ls_output
+    assert "triage-dry\tgather\t-\tstructured_union\ttriage:dry_run\t" in ls_output
+
     assert main(["triage", "triage-dry", "--out", str(out_dir)]) == 2
+    error = capsys.readouterr().err
+    assert f"bakeoff triage triage-dry --force --out {out_dir}" in error
     assert main(["triage", "triage-dry", "--out", str(out_dir), "--force"]) == 0
+
+
+def test_ls_reports_empty_out_dir(tmp_path, capsys):
+    out_dir = tmp_path / "missing-runs"
+
+    assert main(["ls", "--out", str(out_dir)]) == 0
+
+    assert f"no runs found under {out_dir}" in capsys.readouterr().out
+
+
+def test_show_judge_artifacts_empty_state_names_decision(tmp_path, monkeypatch, capsys):
+    install_fake_providers(tmp_path, judge_mode="gather", fail_providers={"codex"})
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    work_order = write_work_order(tmp_path, "gather")
+    out_dir = tmp_path / "runs"
+    assert main(["research", str(work_order), "--out", str(out_dir), "--run-id", "single-provider"]) == 0
+    capsys.readouterr()
+
+    assert main(["show", "single-provider", "--out", str(out_dir), "--judge"]) == 0
+
+    output = capsys.readouterr().out
+    assert "no judge result artifacts for single-provider" in output
+    assert "decision: single_provider_only" in output
+    assert "judge_ran: false" in output
 
 
 def test_compare_position_swap_catches_position_bias(tmp_path, monkeypatch):

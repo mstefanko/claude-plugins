@@ -125,24 +125,34 @@ def facet_id(work_order: dict[str, Any]) -> str | None:
 
 
 def triage_state(run_dir: Path) -> str:
+    state, _ = triage_state_detail(run_dir)
+    return state
+
+
+def triage_state_detail(run_dir: Path) -> tuple[str, list[str]]:
     final = read_json(run_dir / "triage" / "final.json")
     if not isinstance(final, dict) or not (run_dir / "triage" / "triage.md").exists():
-        return "no"
+        status = read_json(run_dir / "triage" / "status.json")
+        if isinstance(status, dict) and status.get("status") == "dry_run":
+            return "dry_run", []
+        return "no", []
     hashes = final.get("input_hashes")
     if not isinstance(hashes, dict):
-        return "stale"
+        return "stale", ["input_hashes"]
     try:
         current = compute_input_hashes(run_dir)
     except ValidationError:
-        return "stale"
-    if (
-        hashes.get("decision_sha256") != current["decision_sha256"]
-        or hashes.get("report_sha256") != current["report_sha256"]
-    ):
-        return "stale"
+        return "stale", ["current inputs"]
+    changed = []
+    if hashes.get("decision_sha256") != current["decision_sha256"]:
+        changed.append("decision.json")
+    if hashes.get("report_sha256") != current["report_sha256"]:
+        changed.append("report.md")
     if "work_order_sha256" in hashes and hashes.get("work_order_sha256") != current["work_order_sha256"]:
-        return "stale"
-    return "yes"
+        changed.append("work-order.json")
+    if changed:
+        return "stale", changed
+    return "yes", []
 
 
 def should_auto_triage(work_order: dict[str, Any], decision: dict[str, Any]) -> str | None:
@@ -156,7 +166,12 @@ def should_auto_triage(work_order: dict[str, Any], decision: dict[str, Any]) -> 
 def should_recommend_triage(work_order: dict[str, Any], decision: dict[str, Any], report_text: str) -> str | None:
     findings, _ = build_finding_index(report_text)
     if decision.get("decision_kind") in {"single_provider_only", "both_failed", "tie"}:
-        return f"{decision.get('decision_kind')} decision - verify before fixing"
+        reasons = {
+            "single_provider_only": "only one provider completed; inspect decision.json and verify before fixing",
+            "both_failed": "both providers failed; inspect decision.json before acting",
+            "tie": "no stable winner after judging; inspect decision.json and verify before fixing",
+        }
+        return reasons[str(decision.get("decision_kind"))]
     if work_order.get("type") == "gather" and facet_id(work_order) == CODE_REVIEW_FACET_ID:
         return "code-review facet - verify actionable findings before fixing"
     if work_order.get("type") == "gather" and len(findings) >= 5:
@@ -335,13 +350,13 @@ def render_triage_markdown(final: dict[str, Any], caveats: list[str]) -> str:
     buckets = {
         "Fix Now": [],
         "False Positives": [],
+        "Already Fixed": [],
         "Needs Reproduction": [],
         "Defer / Product Decision": [],
+        "Other Valid Items": [],
     }
     for item in final.get("items", []):
-        bucket = triage_markdown_bucket(item)
-        if bucket:
-            buckets[bucket].append(item)
+        buckets[triage_markdown_bucket(item) or "Other Valid Items"].append(item)
     for title, selected in buckets.items():
         lines.extend(["", f"## {title}", ""])
         lines.extend(format_triage_item(item) for item in selected)
@@ -360,8 +375,10 @@ def triage_markdown_bucket(item: dict[str, Any]) -> str | None:
     action = item.get("recommended_action")
     if action == "fix_now":
         return "Fix Now"
-    if classification in {"false_positive", "already_fixed"}:
+    if classification == "false_positive":
         return "False Positives"
+    if classification == "already_fixed":
+        return "Already Fixed"
     if action == "reproduce" or classification in {"needs_repro", "evidence_gap"}:
         return "Needs Reproduction"
     if action in {"document", "defer"} or classification in {"plan_doc_drift", "product_decision"}:

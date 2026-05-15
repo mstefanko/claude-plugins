@@ -111,8 +111,10 @@ def test_faceted_gather_report_labels_facet_and_out_of_facet_claims_without_find
 
     assert "Facet: `security`" in report
     assert "Facet Focus: Find concrete security risks." in report
+    assert "Provider-set headings name the worker set that surfaced each claim." in report
     assert "within the shared `security` facet; it is not proof of correctness" in report
     assert "## Out-of-Facet Claims" in report
+    assert "excluded from triage source selection" in report
     assert "Out-of-facet bug should not be triaged." in report
     assert "**F-001** Security finding." in report
     assert "**F-002** Out-of-facet bug" not in report

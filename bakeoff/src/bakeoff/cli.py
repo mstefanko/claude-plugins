@@ -5,6 +5,7 @@ import asyncio
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -43,6 +44,7 @@ from bakeoff.triage import (
     should_recommend_triage,
     summarize_source_finding_filter,
     triage_state,
+    triage_state_detail,
 )
 from bakeoff.work_order import (
     INIT_KINDS,
@@ -61,10 +63,11 @@ from bakeoff.work_order import (
 ORIENTATION = """\
 bakeoff - run the same research task across multiple agents, then judge.
 
-Three modes. Pick one based on what you want:
+Four starts. Pick one based on what you want:
   gather   coverage research
   compare  defended pick
   analyze  thorough explanation
+  review   code-review recipe
 
 Get started:
   bakeoff init gather
@@ -186,6 +189,39 @@ def cmd_validate(args: argparse.Namespace) -> int:
     return 0
 
 
+def bakeoff_show_command(run_id: str, out_dir: Path, flag: str | None = None) -> str:
+    parts = ["bakeoff", "show", shlex.quote(run_id)]
+    if flag:
+        parts.append(flag)
+    return " ".join(parts) + out_dir_suffix(out_dir)
+
+
+def bakeoff_triage_command(run_id: str, out_dir: Path, *, force: bool = False) -> str:
+    parts = ["bakeoff", "triage", shlex.quote(run_id)]
+    if force:
+        parts.append("--force")
+    return " ".join(parts) + out_dir_suffix(out_dir)
+
+
+def out_dir_suffix(out_dir: Path) -> str:
+    if out_dir == Path("runs"):
+        return ""
+    return f" --out {shlex.quote(str(out_dir))}"
+
+
+def format_stale_inputs(stale_inputs: list[str]) -> str:
+    if not stale_inputs:
+        return ""
+    return f" ({', '.join(stale_inputs)} changed)"
+
+
+def print_missing_judge_artifacts(run_dir: Path, artifact_label: str) -> None:
+    decision = read_json(run_dir / "decision.json") or {}
+    decision_kind = decision.get("decision_kind", "?")
+    judge_ran = str(decision.get("judge_ran", False)).lower()
+    print(f"no {artifact_label} artifacts for {run_dir.name} (decision: {decision_kind}, judge_ran: {judge_ran})")
+
+
 async def cmd_research(args: argparse.Namespace) -> int:
     return await run_research(
         Path(args.work_order),
@@ -215,14 +251,18 @@ async def cmd_rerun(args: argparse.Namespace) -> int:
 def cmd_ls(args: argparse.Namespace) -> int:
     out_dir = Path(args.out)
     if not out_dir.exists():
+        print(f"no runs found under {out_dir}")
         return 0
+    print("run_id\ttype\tfacet\tdecision\ttriage\tfinished_at")
     for run_dir in sorted((path for path in out_dir.iterdir() if path.is_dir()), reverse=True):
         if run_dir.name == "latest":
             continue
         meta = read_json(run_dir / "meta.json") or {}
         decision = read_json(run_dir / "decision.json") or {}
+        facet = meta.get("facet")
+        facet_label = facet.get("id") if isinstance(facet, dict) and isinstance(facet.get("id"), str) else "-"
         print(
-            f"{run_dir.name}\t{meta.get('type', '?')}\t{decision.get('decision_kind', '?')}\t"
+            f"{run_dir.name}\t{meta.get('type', '?')}\t{facet_label}\t{decision.get('decision_kind', '?')}\t"
             f"triage:{triage_state(run_dir)}\t{meta.get('finished_at', '-')}"
         )
     return 0
@@ -231,20 +271,42 @@ def cmd_ls(args: argparse.Namespace) -> int:
 def cmd_show(args: argparse.Namespace) -> int:
     if sum(1 for value in (args.judge, args.judge_prompt, args.triage) if value) > 1:
         raise ValidationError("show artifact flags are mutually exclusive: --judge, --judge-prompt, --triage")
-    run_dir = resolve_run_dir(Path(args.out), args.run_id)
+    out_dir = Path(args.out)
+    run_dir = resolve_run_dir(out_dir, args.run_id)
     if args.triage:
         triage_report = run_dir / "triage" / "triage.md"
-        if not triage_report.exists():
-            raise ValidationError(f"triage has not been run for {run_dir.name}")
+        state, stale_inputs = triage_state_detail(run_dir)
+        if state == "stale":
+            raise ValidationError(
+                f"triage is stale for {run_dir.name}{format_stale_inputs(stale_inputs)}; "
+                f"run {bakeoff_triage_command(args.run_id, out_dir, force=True)}"
+            )
+        if state == "dry_run":
+            raise ValidationError(
+                f"triage has only a dry run for {run_dir.name}; run "
+                f"{bakeoff_triage_command(args.run_id, out_dir, force=True)}"
+            )
+        if state != "yes" or not triage_report.exists():
+            raise ValidationError(
+                f"triage has not been run for {run_dir.name}; run {bakeoff_triage_command(args.run_id, out_dir)}"
+            )
         print(triage_report.read_text(encoding="utf-8"), end="")
         return 0
     if args.judge_prompt:
-        for path in sorted((run_dir / "judge").glob("prompt*.txt")):
+        paths = sorted((run_dir / "judge").glob("prompt*.txt"))
+        if not paths:
+            print_missing_judge_artifacts(run_dir, "judge prompt")
+            return 0
+        for path in paths:
             print(f"===== {path.relative_to(run_dir)} =====")
             print(path.read_text(encoding="utf-8"))
         return 0
     if args.judge:
-        for path in sorted((run_dir / "judge").glob("result*.json")):
+        paths = sorted((run_dir / "judge").glob("result*.json"))
+        if not paths:
+            print_missing_judge_artifacts(run_dir, "judge result")
+            return 0
+        for path in paths:
             print(f"===== {path.relative_to(run_dir)} =====")
             print(path.read_text(encoding="utf-8"))
         return 0
@@ -253,12 +315,15 @@ def cmd_show(args: argparse.Namespace) -> int:
         raise ValidationError(f"{run_dir} has no report.md")
     report_text = report.read_text(encoding="utf-8")
     print(report_text, end="")
-    state = triage_state(run_dir)
+    state, stale_inputs = triage_state_detail(run_dir)
     if state == "yes":
-        print(f"\ntriage available: bakeoff show {args.run_id} --triage")
+        print(f"\ntriage available: {bakeoff_show_command(args.run_id, out_dir, '--triage')}")
         return 0
     if state == "stale":
-        print(f"\ntriage stale: bakeoff triage {args.run_id} --force")
+        print(f"\ntriage stale{format_stale_inputs(stale_inputs)}: {bakeoff_triage_command(args.run_id, out_dir, force=True)}")
+        return 0
+    if state == "dry_run":
+        print(f"\ntriage dry run only: {bakeoff_triage_command(args.run_id, out_dir, force=True)}")
         return 0
     try:
         work_order_like = load_work_order(run_dir / "work-order.json")
@@ -267,12 +332,20 @@ def cmd_show(args: argparse.Namespace) -> int:
         work_order_like = {"type": meta.get("type"), "facet": meta.get("facet")}
     recommendation = should_recommend_triage(work_order_like, read_json(run_dir / "decision.json") or {}, report_text)
     if recommendation:
-        print(f"\ntriage not yet run: bakeoff triage {args.run_id}")
+        print(f"\ntriage not yet run: {bakeoff_triage_command(args.run_id, out_dir)}")
     return 0
 
 
 async def cmd_triage(args: argparse.Namespace) -> int:
-    return await run_triage(resolve_run_dir(Path(args.out), args.run_id), force=args.force, dry_run=args.dry_run, quiet=args.quiet)
+    out_dir = Path(args.out)
+    return await run_triage(
+        resolve_run_dir(out_dir, args.run_id),
+        force=args.force,
+        dry_run=args.dry_run,
+        quiet=args.quiet,
+        out_dir=out_dir,
+        display_run_id=args.run_id,
+    )
 
 
 async def cmd_doctor(args: argparse.Namespace) -> int:
@@ -432,19 +505,37 @@ async def run_research(
     (run_dir / "report.md").write_text(report, encoding="utf-8")
     write_meta(run_dir, work_order, actual_run_id, started_at, worker_results=worker_results)
     print(f"report: {run_dir / 'report.md'}")
-    print(f"next:   bakeoff show {actual_run_id}")
+    print(f"next:   {bakeoff_show_command(actual_run_id, out_dir)}")
     auto_triage_reason = None if no_triage or exit_code != 0 else should_auto_triage(work_order, decision)
     if auto_triage_reason:
-        print(f"auto-triage: {auto_triage_reason}")
-        triage_exit_code = await run_triage(run_dir, force=False, dry_run=False, quiet=quiet)
+        print(f"auto-triage starting: {auto_triage_reason}")
+        triage_exit_code = await run_triage(
+            run_dir,
+            force=False,
+            dry_run=False,
+            quiet=quiet,
+            out_dir=out_dir,
+            display_run_id=actual_run_id,
+        )
         return triage_exit_code if triage_exit_code != 0 else exit_code
-    recommendation = should_recommend_triage(work_order, decision, report)
-    if recommendation:
-        print(f"recommended: bakeoff triage {actual_run_id}  ({recommendation})")
+    if not no_triage:
+        recommendation = should_recommend_triage(work_order, decision, report)
+        if recommendation:
+            print(f"recommended: {bakeoff_triage_command(actual_run_id, out_dir)}  ({recommendation})")
     return exit_code
 
 
-async def run_triage(run_dir: Path, *, force: bool, dry_run: bool, quiet: bool = False) -> int:
+async def run_triage(
+    run_dir: Path,
+    *,
+    force: bool,
+    dry_run: bool,
+    quiet: bool = False,
+    out_dir: Path | None = None,
+    display_run_id: str | None = None,
+) -> int:
+    display_out_dir = out_dir or run_dir.parent
+    command_run_id = display_run_id or run_dir.name
     work_order = load_work_order(run_dir / "work-order.json")
     decision = read_json(run_dir / "decision.json")
     if not isinstance(decision, dict):
@@ -460,7 +551,10 @@ async def run_triage(run_dir: Path, *, force: bool, dry_run: bool, quiet: bool =
     triage_dir = run_dir / "triage"
     if triage_dir.exists():
         if not force:
-            raise ValidationError(f"{triage_dir} already exists; use --force to replace")
+            raise ValidationError(
+                f"{triage_dir} already exists; run "
+                f"{bakeoff_triage_command(command_run_id, display_out_dir, force=True)} to replace"
+            )
         ensure_child_path(run_dir, triage_dir)
         shutil.rmtree(triage_dir)
     triage_dir.mkdir(parents=True)
@@ -512,6 +606,7 @@ async def run_triage(run_dir: Path, *, force: bool, dry_run: bool, quiet: bool =
         f"skipped {source_finding_filter['skipped_non_actionable']} non-actionable; "
         f"skipped {source_finding_filter['skipped_out_of_facet']} out-of-facet"
     )
+    print(f"source filter: {triage_dir / 'source_finding_filter.json'}")
     if dry_run:
         write_json(
             triage_dir / "status.json",
@@ -522,6 +617,9 @@ async def run_triage(run_dir: Path, *, force: bool, dry_run: bool, quiet: bool =
                 "source_finding_filter": source_finding_filter,
             },
         )
+        print(f"triage dry run: {triage_dir / 'prompt.txt'}")
+        print(f"triage status:  {triage_dir / 'status.json'}")
+        print(f"next:           {bakeoff_triage_command(command_run_id, display_out_dir, force=True)}")
         return 0
 
     selected_source_ids = {finding["id"] for finding in source_findings}
@@ -561,11 +659,13 @@ async def run_triage(run_dir: Path, *, force: bool, dry_run: bool, quiet: bool =
     status["source_finding_filter"] = source_finding_filter
     write_json(triage_dir / "status.json", status)
     if not provider_succeeded(result):
+        print(f"triage failed: {status.get('status')}")
+        print(f"retry:  {bakeoff_triage_command(command_run_id, display_out_dir, force=True)}")
         return 2
     write_json(triage_dir / "final.json", result["final_json"])
     (triage_dir / "triage.md").write_text(render_triage_markdown(result["final_json"], caveats), encoding="utf-8")
     print(f"triage: {triage_dir / 'triage.md'}")
-    print(f"next:   bakeoff show {run_dir.name} --triage")
+    print(f"next:   {bakeoff_show_command(command_run_id, display_out_dir, '--triage')}")
     return 0
 
 

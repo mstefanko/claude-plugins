@@ -114,6 +114,12 @@ def _render_gather(
         grouped.setdefault(key, []).append({**claim, "_source_providers": sources})
 
     lines = ["## Findings", ""]
+    lines.extend(
+        [
+            "Provider-set headings name the worker set that surfaced each claim. `single-source` means one worker surfaced it; `multi-source` means both workers surfaced materially similar claims.",
+            "",
+        ]
+    )
     if work_order.get("facet"):
         lines.extend(
             [
@@ -134,7 +140,14 @@ def _render_gather(
         lines.append("- None reported.")
     lines.append("")
     if judge.get("out_of_facet_claims"):
-        lines.extend(["## Out-of-Facet Claims", ""])
+        lines.extend(
+            [
+                "## Out-of-Facet Claims",
+                "",
+                "These claims are observability-only and are excluded from triage source selection.",
+                "",
+            ]
+        )
         lines.extend(_out_of_facet_lines(judge.get("out_of_facet_claims", [])))
         lines.append("")
     return lines

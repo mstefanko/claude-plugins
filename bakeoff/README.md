@@ -47,7 +47,7 @@ bakeoff research <work-order> [--out runs] [--run-id ID] [--force] [--quiet] [--
 bakeoff rerun <run-id> [--out runs] [--run-id ID] [--quiet] [--no-triage]
 bakeoff triage <run-id> [--out runs] [--force] [--dry-run] [--quiet]
 bakeoff ls [--out runs]
-bakeoff show <run-id> [--judge | --judge-prompt | --triage]
+bakeoff show <run-id> [--out runs] [--judge | --judge-prompt | --triage]
 bakeoff doctor [--skip-auth-probe] [--quiet] [--json]
 ```
 
@@ -122,6 +122,10 @@ Facet gather runs send all `Findings` entries into triage source selection,
 except `Out-of-Facet Claims`, so focused lenses such as `code-review` and
 operator UX get verified before humans act on them.
 
+`bakeoff ls` prints a headered table with each run's type, facet, decision, and
+triage state. Triage states are `triage:no`, `triage:dry_run`, `triage:yes`,
+and `triage:stale`.
+
 ## Scope Policy
 
 Worker scopes default to best-effort enforcement with advisory fallback:
@@ -148,8 +152,9 @@ detect; pass `--json` for a parseable readiness report.
 
 `bakeoff triage` is an explicit post-judge verification pass. It writes
 advisory artifacts under `runs/<run-id>/triage/`, including harness-side
-citation checks against the original run directory, a triage prompt, structured
-`final.json`, and `triage.md`.
+citation checks against the original working directory recorded in `meta.json`
+(falling back to the current working directory with a caveat), a source finding
+filter artifact, a triage prompt, structured `final.json`, and `triage.md`.
 
 ## Effort Defaults
 

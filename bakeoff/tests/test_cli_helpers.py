@@ -4,6 +4,13 @@ from bakeoff import cli as cli_module
 from bakeoff.cli import main, merge_items
 
 
+def test_orientation_lists_review_mode(capsys):
+    assert main([]) == 0
+
+    output = capsys.readouterr().out
+    assert "review   code-review recipe" in output
+
+
 def test_merge_items_dedupes_normalized_duplicate_preserved_claims_from_same_source():
     items = merge_items(
         [
