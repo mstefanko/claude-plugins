@@ -116,6 +116,7 @@ def test_run_provider_reports_output_cap():
     assert result["status"] == "output_cap"
     assert "[TRUNCATED at 100 bytes]" in result["stdout"]
     assert result["stdout_truncated"] is True
+    assert result["stdout_bytes"] <= 100
 
 
 def test_run_provider_reports_stderr_truncation_without_failing_success():
@@ -134,6 +135,7 @@ def test_run_provider_reports_stderr_truncation_without_failing_success():
     assert result["status"] == "ok"
     assert result["stderr_truncated"] is True
     assert "[STDERR TRUNCATED at 100 bytes]" in result["stderr"]
+    assert result["stderr_bytes"] <= 100
 
 
 def test_run_provider_reports_closed_stdin_diagnostic():

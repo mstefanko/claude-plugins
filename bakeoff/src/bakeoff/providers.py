@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 import subprocess
 import tempfile
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +25,10 @@ SCOPE_INSTRUCTIONS = {
 
 SCOPE_POLICY_DEFAULT = "best_effort"
 SCOPE_POLICY_VALUES = ("advisory", "best_effort", "required")
+
+
+class ScopeEnforcementError(ValueError):
+    """Raised when required scope controls cannot be applied."""
 
 
 def build_participant_argv(
@@ -55,6 +62,7 @@ def version_argv(backend: str) -> list[str]:
     raise ValueError(f"unsupported tool: {backend}")
 
 
+@lru_cache(maxsize=None)
 def detect_scope_capabilities(backend: str) -> dict[str, Any]:
     """Best-effort local capability probe from installed CLI help text."""
     argv = scope_help_argv(backend)
@@ -79,24 +87,33 @@ def scope_help_argv(backend: str) -> list[str]:
 
 
 def scope_capabilities_from_help(backend: str, help_text: str) -> dict[str, Any]:
+    options = help_option_tokens(help_text)
     supports: dict[str, bool]
     if backend == "claude":
         supports = {
-            "allowed_tools": "--allowedTools" in help_text or "--allowed-tools" in help_text,
-            "disallowed_tools": "--disallowedTools" in help_text or "--disallowed-tools" in help_text,
-            "tools": "--tools" in help_text,
-            "permission_mode": "--permission-mode" in help_text,
+            "allowed_tools": has_help_option(options, "--allowedTools", "--allowed-tools"),
+            "disallowed_tools": has_help_option(options, "--disallowedTools", "--disallowed-tools"),
+            "tools": has_help_option(options, "--tools"),
+            "permission_mode": has_help_option(options, "--permission-mode"),
         }
     elif backend == "codex":
         supports = {
-            "sandbox": "--sandbox" in help_text,
-            "disable_feature": "--disable" in help_text,
-            "profile": "--profile" in help_text,
-            "config": "--config" in help_text or "-c, --config" in help_text,
+            "sandbox": has_help_option(options, "--sandbox"),
+            "disable_feature": has_help_option(options, "--disable"),
+            "profile": has_help_option(options, "--profile"),
+            "config": has_help_option(options, "--config"),
         }
     else:
         raise ValueError(f"unsupported backend: {backend}")
     return {"backend": backend, "available": True, "supports": supports}
+
+
+def help_option_tokens(help_text: str) -> set[str]:
+    return set(re.findall(r"--[A-Za-z0-9][A-Za-z0-9-]*", help_text))
+
+
+def has_help_option(options: set[str], *names: str) -> bool:
+    return any(name in options for name in names)
 
 
 def build_scope_execution(
@@ -110,18 +127,18 @@ def build_scope_execution(
     requested_scope = participant.get("scope", "mixed")
     policy = scope_policy.get("enforcement", SCOPE_POLICY_DEFAULT)
     backend = participant["backend"]
-    caps = capabilities or detect_scope_capabilities(backend)
-    supports = caps.get("supports") if isinstance(caps.get("supports"), dict) else {}
     execution_cwd = workspace_cwd
     mechanisms: list[str] = []
     fallback_reasons: list[str] = []
     extra_args: list[str] = []
+    cleanup_paths: list[Path] = []
 
     if policy == "advisory":
         return _scope_execution_result(
             participant,
             execution_cwd=execution_cwd,
             extra_args=extra_args,
+            cleanup_paths=cleanup_paths,
             policy=policy,
             requested_scope=requested_scope,
             effective_scope="advisory",
@@ -130,8 +147,10 @@ def build_scope_execution(
             fallback_reasons=[],
         )
 
+    caps = capabilities or detect_scope_capabilities(backend)
+    supports = caps.get("supports") if isinstance(caps.get("supports"), dict) else {}
+    needs_isolated_cwd = requested_scope == "web"
     if requested_scope == "web":
-        execution_cwd = Path(tempfile.gettempdir()) / "bakeoff-scope-workspaces" / run_dir.name / participant["id"]
         mechanisms.append("isolated_cwd")
 
     if requested_scope == "mixed":
@@ -167,12 +186,17 @@ def build_scope_execution(
     if not mechanisms:
         enforcement_level = "advisory"
     if fallback_reasons and policy == "required":
-        raise ValueError("; ".join(fallback_reasons))
+        raise ScopeEnforcementError("; ".join(fallback_reasons))
+
+    if needs_isolated_cwd:
+        execution_cwd = make_scope_workspace(run_dir.name, participant["id"])
+        cleanup_paths.append(execution_cwd)
 
     return _scope_execution_result(
         participant,
         execution_cwd=execution_cwd,
         extra_args=extra_args,
+        cleanup_paths=cleanup_paths,
         policy=policy,
         requested_scope=requested_scope,
         effective_scope=requested_scope if enforcement_level != "advisory" else "advisory",
@@ -187,6 +211,7 @@ def _scope_execution_result(
     *,
     execution_cwd: Path,
     extra_args: list[str],
+    cleanup_paths: list[Path],
     policy: str,
     requested_scope: str,
     effective_scope: str,
@@ -202,12 +227,25 @@ def _scope_execution_result(
         "mechanisms": mechanisms,
         "fallback_reason": "; ".join(fallback_reasons) if fallback_reasons else None,
         "cwd": str(execution_cwd),
+        "temporary_cwd": bool(cleanup_paths),
     }
     return {
         "argv": build_participant_argv(participant, cwd=execution_cwd, extra_args=extra_args),
         "cwd": execution_cwd,
+        "cleanup_paths": cleanup_paths,
         "metadata": metadata,
     }
+
+
+def make_scope_workspace(run_id: str, provider_id: str) -> Path:
+    prefix = f"bakeoff-{safe_temp_prefix(run_id)}-{safe_temp_prefix(provider_id)}-"
+    path = Path(tempfile.mkdtemp(prefix=prefix))
+    os.chmod(path, 0o700)
+    return path
+
+
+def safe_temp_prefix(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]+", "-", value)[:80] or "scope"
 
 
 def build_worker_prompt(work_order: dict[str, Any], provider: dict[str, Any]) -> str:

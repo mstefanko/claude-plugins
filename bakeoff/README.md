@@ -48,7 +48,7 @@ bakeoff rerun <run-id> [--out runs] [--run-id ID] [--quiet]
 bakeoff triage <run-id> [--out runs] [--force] [--dry-run] [--quiet]
 bakeoff ls [--out runs]
 bakeoff show <run-id> [--judge | --judge-prompt | --triage]
-bakeoff doctor [--skip-auth-probe] [--quiet]
+bakeoff doctor [--skip-auth-probe] [--quiet] [--json]
 ```
 
 `bakeoff research` writes a replayable ledger under `runs/<run-id>/`:
@@ -105,10 +105,11 @@ Allowed values are:
 
 Best-effort enforcement is intentionally staged. For `codebase`, Bakeoff tries
 to disable web search/fetch controls and uses read-only Codex sandboxing where
-available. For `web`, Bakeoff runs the provider from an isolated per-run working
-directory under the system temp directory and applies web-tool allowlisting
-where available. `mixed` scope is recorded but not narrowed. `bakeoff doctor`
-prints the installed CLI controls that Bakeoff can detect.
+available. For `web`, Bakeoff runs the provider from a private temporary
+working directory and cleans it up after the provider exits while applying
+web-tool allowlisting where available. `mixed` scope is recorded but not
+narrowed. `bakeoff doctor` prints the installed CLI controls that Bakeoff can
+detect; pass `--json` for a parseable readiness report.
 
 `bakeoff triage` is an explicit post-judge verification pass. It writes
 advisory artifacts under `runs/<run-id>/triage/`, including harness-side

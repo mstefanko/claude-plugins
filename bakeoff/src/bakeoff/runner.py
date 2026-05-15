@@ -156,7 +156,6 @@ async def run_provider(
                     stdout_total_bytes += keep
                 marker = f"\n[TRUNCATED at {max_output_bytes} bytes]\n".encode("utf-8")
                 stdout_chunks.append(marker)
-                stdout_total_bytes += len(marker)
                 last_stdout_at = now
                 output_cap_hit = True
                 _terminate_process_group(process)
@@ -175,6 +174,9 @@ async def run_provider(
             if not chunk:
                 break
             now = time.monotonic()
+            if stderr_cap_hit:
+                last_stderr_at = now
+                continue
             if total + len(chunk) > max_output_bytes:
                 keep = max(0, max_output_bytes - total)
                 if keep:
@@ -184,16 +186,14 @@ async def run_provider(
                 if not stderr_cap_hit:
                     marker = f"\n[STDERR TRUNCATED at {max_output_bytes} bytes]\n".encode("utf-8")
                     stderr_chunks.append(marker)
-                    stderr_total_bytes += len(marker)
                 stderr_cap_hit = True
                 last_stderr_at = now
                 continue
-            if not stderr_cap_hit:
-                keep = len(chunk)
-                stderr_chunks.append(chunk[:keep])
-                total += keep
-                stderr_total_bytes += keep
-                last_stderr_at = now
+            keep = len(chunk)
+            stderr_chunks.append(chunk[:keep])
+            total += keep
+            stderr_total_bytes += keep
+            last_stderr_at = now
 
     def emit_tick(now: float) -> None:
         nonlocal heartbeat_count, quiet_tick_count
@@ -487,8 +487,8 @@ def _status(
     stdout_truncated: bool = False,
     stderr_truncated: bool = False,
 ) -> dict[str, Any]:
-    stdout_bytes = len(stdout.encode("utf-8"))
-    stderr_bytes = len(stderr.encode("utf-8"))
+    stdout_bytes = int(io.get("stdout_bytes", len(stdout.encode("utf-8"))))
+    stderr_bytes = int(io.get("stderr_bytes", len(stderr.encode("utf-8"))))
     return {
         "status": status,
         "exit_code": exit_code,

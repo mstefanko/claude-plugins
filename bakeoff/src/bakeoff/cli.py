@@ -22,6 +22,7 @@ from bakeoff.providers import (
     build_participant_argv,
     build_scope_execution,
     detect_scope_capabilities,
+    ScopeEnforcementError,
     build_triage_prompt,
     build_worker_prompt,
     version_argv,
@@ -119,6 +120,7 @@ def build_parser() -> argparse.ArgumentParser:
     doctor = subcommands.add_parser("doctor", help="check provider CLIs, auth, and local readiness")
     doctor.add_argument("--skip-auth-probe", action="store_true", help="skip spendful provider auth probes")
     doctor.add_argument("--quiet", action="store_true", help="suppress provider heartbeat lines")
+    doctor.add_argument("--json", action="store_true", help="emit a parseable JSON readiness report")
 
     return parser
 
@@ -236,39 +238,63 @@ async def cmd_triage(args: argparse.Namespace) -> int:
 
 
 async def cmd_doctor(args: argparse.Namespace) -> int:
-    print("bakeoff doctor")
     failed = False
+    report: dict[str, Any] = {
+        "status": "ok",
+        "tools": {},
+        "defaults": DEFAULT_MODEL_IDS,
+        "scope_policy": {
+            "default_enforcement": "best_effort",
+            "status_artifacts": ["provider status.json", "meta.json"],
+        },
+        "scope_capabilities": {},
+        "auth_probes": {},
+    }
     for tool in ("claude", "codex", "git"):
         path = shutil.which(tool)
         if path is None:
-            print(f"- {tool}: missing")
+            report["tools"][tool] = {"ok": False, "path": None, "version": None}
             failed = True
             continue
         version = tool_version(tool)
-        print(f"- {tool}: {path} ({version})")
+        report["tools"][tool] = {"ok": True, "path": path, "version": version}
 
-    print("- defaults:")
-    for key, value in DEFAULT_MODEL_IDS.items():
-        print(f"  {key}: {value}")
-    print("- scope policy: best_effort by default; provider status records enforcement and advisory fallback.")
-    print("- scope capabilities:")
     for backend in ("claude", "codex"):
-        caps = detect_scope_capabilities(backend)
-        if not caps.get("available"):
-            print(f"  {backend}: unavailable ({caps.get('probe_error', 'probe failed')})")
-            continue
-        supported = [name for name, ok in caps.get("supports", {}).items() if ok]
-        missing = [name for name, ok in caps.get("supports", {}).items() if not ok]
-        print(f"  {backend}: supports {', '.join(supported) if supported else 'none'}")
-        if missing:
-            print(f"    missing: {', '.join(missing)}")
+        report["scope_capabilities"][backend] = detect_scope_capabilities(backend)
+
     writable, writable_detail = check_cwd_writable()
-    print(f"- cwd writable: {'ok' if writable else 'failed'} ({writable_detail})")
+    report["cwd_writable"] = {"ok": writable, "detail": writable_detail, "cwd": str(Path.cwd())}
     failed = failed or not writable
-    print(
-        "- bias: Default judge is claude/opus alongside claude/sonnet workers. "
+    report["bias"] = (
+        "Default judge is claude/opus alongside claude/sonnet workers. "
         "Position-swap is the primary bias mitigation; same-family bias is an accepted v1 risk."
     )
+
+    if not args.json:
+        print("bakeoff doctor")
+        for tool in ("claude", "codex", "git"):
+            tool_status = report["tools"][tool]
+            if not tool_status["ok"]:
+                print(f"- {tool}: missing")
+            else:
+                print(f"- {tool}: {tool_status['path']} ({tool_status['version']})")
+        print("- defaults:")
+        for key, value in DEFAULT_MODEL_IDS.items():
+            print(f"  {key}: {value}")
+        print("- scope policy: best_effort by default; provider status records enforcement and advisory fallback.")
+        print("- scope capabilities:")
+        for backend in ("claude", "codex"):
+            caps = report["scope_capabilities"][backend]
+            if not caps.get("available"):
+                print(f"  {backend}: unavailable ({caps.get('probe_error', 'probe failed')})")
+                continue
+            supported = [name for name, ok in caps.get("supports", {}).items() if ok]
+            missing = [name for name, ok in caps.get("supports", {}).items() if not ok]
+            print(f"  {backend}: supports {', '.join(supported) if supported else 'none'}")
+            if missing:
+                print(f"    missing: {', '.join(missing)}")
+        print(f"- cwd writable: {'ok' if writable else 'failed'} ({writable_detail})")
+        print(f"- bias: {report['bias']}")
 
     if not args.skip_auth_probe and not failed:
         budgets = {"wall_clock_seconds": 30, "max_output_bytes": 10000}
@@ -288,8 +314,13 @@ async def cmd_doctor(args: argparse.Namespace) -> int:
                 budgets,
                 on_tick=make_tick_printer(f"{backend}:auth", quiet=args.quiet),
             )
-            print(f"- {backend} auth probe: {result['status']}")
+            report["auth_probes"][backend] = status_without_payload(result)
+            if not args.json:
+                print(f"- {backend} auth probe: {result['status']}")
             failed = failed or result["status"] != "ok"
+    report["status"] = "failed" if failed else "ok"
+    if args.json:
+        print(json.dumps(report, indent=2, sort_keys=True))
     return 1 if failed else 0
 
 
@@ -455,14 +486,17 @@ async def run_triage(run_dir: Path, *, force: bool, dry_run: bool, quiet: bool =
 
 
 async def run_workers(work_order: dict[str, Any], run_dir: Path, *, quiet: bool = False) -> dict[str, dict[str, Any]]:
-    capabilities = {
-        backend: detect_scope_capabilities(backend)
-        for backend in sorted({provider["backend"] for provider in work_order["providers"]})
-    }
+    capabilities = {}
+    if work_order["scope_policy"]["enforcement"] != "advisory":
+        capabilities = {
+            backend: detect_scope_capabilities(backend)
+            for backend in sorted({provider["backend"] for provider in work_order["providers"]})
+        }
 
     async def run_one(provider: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         provider_id = provider["id"]
         prompt = build_worker_prompt(work_order, provider)
+        cleanup_paths: list[Path] = []
         try:
             scope_execution = build_scope_execution(
                 provider,
@@ -471,9 +505,9 @@ async def run_workers(work_order: dict[str, Any], run_dir: Path, *, quiet: bool 
                 run_dir=run_dir,
                 capabilities=capabilities.get(provider["backend"]),
             )
-        except ValueError as exc:
+        except ScopeEnforcementError as exc:
             provider_dir = run_dir / "providers" / provider_id
-            provider_dir.mkdir(parents=True)
+            provider_dir.mkdir(parents=True, exist_ok=True)
             (provider_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
             result = scope_error_result(exc, provider, work_order["scope_policy"])
             write_provider_artifacts(provider_dir, result)
@@ -481,24 +515,27 @@ async def run_workers(work_order: dict[str, Any], run_dir: Path, *, quiet: bool 
             return provider_id, result
         argv = scope_execution["argv"]
         execution_cwd = Path(scope_execution["cwd"])
-        execution_cwd.mkdir(parents=True, exist_ok=True)
+        cleanup_paths = [Path(path) for path in scope_execution.get("cleanup_paths", [])]
         provider_dir = run_dir / "providers" / provider_id
-        provider_dir.mkdir(parents=True)
-        (provider_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
-        print(f"[{provider_id}] launching...")
-        validator = lambda data: validate_worker_result(data, mode=work_order["type"])
-        result = await run_provider_with_format_retry(
-            argv,
-            prompt,
-            work_order["budgets"],
-            cwd=execution_cwd,
-            validator=validator,
-            on_tick=make_tick_printer(provider_id, quiet=quiet),
-        )
-        result["scope_enforcement"] = scope_execution["metadata"]
-        write_provider_artifacts(provider_dir, result)
-        print(f"[{provider_id}] {result['status']} {result['wall_seconds']}s {result['output_bytes']} bytes")
-        return provider_id, result
+        try:
+            provider_dir.mkdir(parents=True, exist_ok=True)
+            (provider_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
+            print(f"[{provider_id}] launching...")
+            validator = lambda data: validate_worker_result(data, mode=work_order["type"])
+            result = await run_provider_with_format_retry(
+                argv,
+                prompt,
+                work_order["budgets"],
+                cwd=execution_cwd,
+                validator=validator,
+                on_tick=make_tick_printer(provider_id, quiet=quiet),
+            )
+            result["scope_enforcement"] = scope_execution["metadata"]
+            write_provider_artifacts(provider_dir, result)
+            print(f"[{provider_id}] {result['status']} {result['wall_seconds']}s {result['output_bytes']} bytes")
+            return provider_id, result
+        finally:
+            cleanup_scope_paths(cleanup_paths)
 
     raw_results = await asyncio.gather(*(run_one(provider) for provider in work_order["providers"]), return_exceptions=True)
     pairs: list[tuple[str, dict[str, Any]]] = []
@@ -513,6 +550,16 @@ async def run_workers(work_order: dict[str, Any], run_dir: Path, *, quiet: bool 
         else:
             pairs.append(raw)
     return dict(pairs)
+
+
+def cleanup_scope_paths(paths: list[Path]) -> None:
+    for path in paths:
+        try:
+            shutil.rmtree(path)
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            print(f"warning: failed to clean scope workspace {path}: {exc}", file=sys.stderr)
 
 
 async def run_judge_phase(
@@ -847,7 +894,9 @@ def is_near_duplicate(text: str, source: str | None, seen_texts: list[tuple[str,
     for existing, existing_source in seen_texts:
         if source != existing_source:
             continue
-        if token_similarity(text, existing) >= 0.82:
+        if numeric_tokens(text) != numeric_tokens(existing):
+            continue
+        if token_similarity(text, existing) >= 0.95:
             return True
     return False
 
@@ -866,10 +915,12 @@ def merge_tokens(text: str) -> set[str]:
     for token in normalize_merge_text(text).split():
         if token in stopwords:
             continue
-        if len(token) > 4 and token.endswith("s"):
-            token = token[:-1]
         tokens.add(token)
     return tokens
+
+
+def numeric_tokens(text: str) -> set[str]:
+    return set(re.findall(r"\d+(?:\.\d+)?", text))
 
 
 def normalize_merge_text(text: str) -> str:

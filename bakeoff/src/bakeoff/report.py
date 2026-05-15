@@ -71,8 +71,8 @@ def _decision_audit(decision: dict[str, Any]) -> list[str]:
         stderr_path = status.get("stderr_path")
         suffix = f", stderr: `{stderr_path}`" if stderr_path else ""
         lines.append(f"- `{provider_id}`: `{status.get('status')}` ({detail}{suffix})")
-        if status.get("scope_enforcement"):
-            scope = status["scope_enforcement"]
+        scope = status.get("scope_enforcement")
+        if isinstance(scope, dict):
             level = scope.get("enforcement_level", "unknown")
             requested = scope.get("requested_scope", "unknown")
             effective = scope.get("effective_scope", "unknown")

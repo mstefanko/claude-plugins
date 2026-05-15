@@ -1,5 +1,6 @@
 import json
 import os
+from pathlib import Path
 import stat
 import sys
 import textwrap
@@ -24,6 +25,8 @@ def test_gather_research_with_fake_providers(tmp_path, monkeypatch):
     assert meta["scope_policy"] == {"enforcement": "best_effort"}
     assert meta["resolved_models"]["providers"]["claude"]["scope_enforcement"]["requested_scope"] == "codebase"
     assert meta["resolved_models"]["providers"]["codex"]["scope_enforcement"]["effective_scope"] == "web"
+    assert meta["resolved_models"]["providers"]["codex"]["scope_enforcement"]["temporary_cwd"] is True
+    assert not Path(meta["resolved_models"]["providers"]["codex"]["scope_enforcement"]["cwd"]).exists()
     assert meta["resolved_models"]["judge"]["model"] == "fake-judge"
     assert "Fake merged claim" in report
 
