@@ -55,10 +55,13 @@ bakeoff doctor [--skip-auth-probe] [--quiet]
 
 - `work-order.json`
 - `providers/<id>/{prompt,stdout,stderr,status,final}.json/txt`
+- optional `providers/<id>/repair-{prompt,stdout,stderr,status}.json/txt` after a one-shot format retry
 - `judge/` prompts and results
+- optional `judge/repair-*` artifacts after judge format retries
 - `decision.json`
 - `report.md`
 - optional `triage/{prompt,stdout,stderr,status,final,citation_checks,triage}.json/txt/md`
+- optional `triage/repair-{prompt,stdout,stderr,status}.json/txt` after a triage format retry
 
 `runs/latest` points at the newest run.
 

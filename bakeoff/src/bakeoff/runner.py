@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import re
 import signal
 import sys
 import time
@@ -13,20 +12,55 @@ from typing import Any
 
 from bakeoff.work_order import ValidationError
 
-FINAL_JSON_RE = re.compile(r"<final_json>\s*(.*?)\s*</final_json>", re.DOTALL)
+FINAL_JSON_OPEN = "<final_json>"
+FINAL_JSON_CLOSE = "</final_json>"
+FORMAT_RETRY_MARKER = "BAKEOFF_FORMAT_RETRY_V1"
+SUCCESS_STATUSES = {"ok", "ok_after_format_retry"}
+MAX_REPAIR_PROMPT_CHARS = 24000
+MAX_REPAIR_STDOUT_CHARS = 32000
+MAX_REPAIR_STDERR_CHARS = 12000
 
 
 def extract_final_json(text: str) -> dict[str, Any]:
-    matches = FINAL_JSON_RE.findall(text)
-    if not matches:
-        raise ValidationError("stdout is missing a <final_json>...</final_json> block")
-    try:
-        payload = json.loads(matches[-1])
-    except json.JSONDecodeError as exc:
-        raise ValidationError(f"last <final_json> block is not valid JSON: {exc.msg}") from exc
+    blocks = _extract_tagged_json_values(text)
+    if not blocks:
+        if FINAL_JSON_OPEN not in text:
+            raise ValidationError("stdout is missing a <final_json>...</final_json> block")
+        raise ValidationError("stdout does not contain a valid <final_json> JSON value followed by </final_json>")
+    payload = blocks[-1]
     if not isinstance(payload, dict):
         raise ValidationError("last <final_json> block must decode to a JSON object")
     return payload
+
+
+def _extract_tagged_json_values(text: str) -> list[Any]:
+    decoder = json.JSONDecoder()
+    values: list[Any] = []
+    search_from = 0
+    while True:
+        start = text.find(FINAL_JSON_OPEN, search_from)
+        if start == -1:
+            return values
+
+        json_start = _skip_whitespace(text, start + len(FINAL_JSON_OPEN))
+        try:
+            payload, json_end = decoder.raw_decode(text, json_start)
+        except json.JSONDecodeError:
+            search_from = start + len(FINAL_JSON_OPEN)
+            continue
+
+        close_start = _skip_whitespace(text, json_end)
+        if text.startswith(FINAL_JSON_CLOSE, close_start):
+            values.append(payload)
+            search_from = close_start + len(FINAL_JSON_CLOSE)
+        else:
+            search_from = start + len(FINAL_JSON_OPEN)
+
+
+def _skip_whitespace(text: str, start: int) -> int:
+    while start < len(text) and text[start].isspace():
+        start += 1
+    return start
 
 
 async def run_provider(
@@ -242,6 +276,81 @@ async def run_provider(
     return _status("ok", started, exit_code=process.returncode, stdout=stdout, stderr=stderr, final_json=final_json, io=current_io())
 
 
+async def run_provider_with_format_retry(
+    argv: Sequence[str],
+    prompt: str,
+    budgets: dict[str, Any],
+    *,
+    cwd: str | Path | None = None,
+    validator: Callable[[Any], dict[str, Any]] | None = None,
+    on_tick: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
+    """Run a provider once, then retry one zero-exit schema error as a format-only repair."""
+    first = await run_provider(argv, prompt, budgets, cwd=cwd, validator=validator, on_tick=on_tick)
+    if first["status"] != "schema_error" or first.get("exit_code") != 0:
+        return first
+
+    retry_prompt = build_format_retry_prompt(prompt, first)
+    retry = await run_provider(argv, retry_prompt, budgets, cwd=cwd, validator=validator, on_tick=on_tick)
+    retry_summary = {
+        "attempted": True,
+        "reason": _last_nonempty_line(first.get("stderr", "")) or first["status"],
+        "initial_status": _attempt_status(first),
+        "retry_status": _attempt_status(retry),
+    }
+    first["format_retry"] = retry_summary
+    first["repair_artifacts"] = {
+        "prompt": retry_prompt,
+        "stdout": retry["stdout"],
+        "stderr": retry["stderr"],
+        "status": _attempt_status(retry),
+    }
+    if retry["status"] != "ok":
+        return first
+
+    first["status"] = "ok_after_format_retry"
+    first["exit_code"] = retry["exit_code"]
+    first["wall_seconds"] = round(float(first["wall_seconds"]) + float(retry["wall_seconds"]), 3)
+    first["output_bytes"] = int(first["output_bytes"]) + int(retry["output_bytes"])
+    first["final_json"] = retry["final_json"]
+    return first
+
+
+def provider_succeeded(result: dict[str, Any]) -> bool:
+    return result.get("status") in SUCCESS_STATUSES
+
+
+def build_format_retry_prompt(original_prompt: str, previous_result: dict[str, Any]) -> str:
+    return f"""\
+{FORMAT_RETRY_MARKER}
+
+Your previous response to a Bakeoff provider task exited successfully, but the harness rejected its final JSON:
+
+{_last_nonempty_line(previous_result.get("stderr", "")) or previous_result.get("status", "schema_error")}
+
+This is a format-only retry. Do not redo research. Do not add new substantive claims, evidence, rationale, or findings. Use the original task prompt only to recover the required schema, and use your previous stdout as the source of truth for content.
+
+<original_task_prompt_tail>
+{_tail_text(original_prompt, MAX_REPAIR_PROMPT_CHARS)}
+</original_task_prompt_tail>
+
+<previous_stdout>
+{_tail_text(previous_result.get("stdout", ""), MAX_REPAIR_STDOUT_CHARS)}
+</previous_stdout>
+
+<previous_stderr_tail>
+{_tail_text(previous_result.get("stderr", ""), MAX_REPAIR_STDERR_CHARS)}
+</previous_stderr_tail>
+
+<output_format>
+Emit exactly one JSON object wrapped in <final_json>...</final_json>.
+No scratchpad. No markdown. No prose before or after the final_json block.
+The JSON object must match the schema required by the original task prompt.
+If the previous stdout cannot be repaired faithfully, emit the closest schema-valid object that explicitly records the uncertainty in the schema's unknowns/caveats field when such a field exists.
+</output_format>
+"""
+
+
 def _terminate_process_group(process: asyncio.subprocess.Process) -> None:
     if process.returncode is not None:
         return
@@ -312,3 +421,24 @@ def _status(
         "stderr": stderr,
         "final_json": final_json,
     }
+
+
+def _attempt_status(result: dict[str, Any]) -> dict[str, Any]:
+    status = {key: result[key] for key in ("status", "exit_code", "wall_seconds", "output_bytes")}
+    if "io" in result:
+        status["io"] = result["io"]
+    return status
+
+
+def _last_nonempty_line(text: str) -> str:
+    for line in reversed(text.splitlines()):
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return ""
+
+
+def _tail_text(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    return f"[TRUNCATED to last {max_chars} chars]\n{text[-max_chars:]}"

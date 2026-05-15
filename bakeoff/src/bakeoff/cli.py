@@ -25,7 +25,7 @@ from bakeoff.providers import (
     version_argv,
 )
 from bakeoff.report import render_report
-from bakeoff.runner import run_provider
+from bakeoff.runner import provider_succeeded, run_provider, run_provider_with_format_retry
 from bakeoff.triage import (
     build_finding_index,
     check_citations,
@@ -297,7 +297,7 @@ async def run_research(work_order_path: Path, *, out_dir: Path, run_id: str | No
     print_run_header(work_order, run_dir, actual_run_id)
 
     worker_results = await run_workers(work_order, run_dir, quiet=quiet)
-    ok_results = {pid: result for pid, result in worker_results.items() if result["status"] == "ok"}
+    ok_results = {pid: result for pid, result in worker_results.items() if provider_succeeded(result)}
 
     judge_results: dict[str, dict[str, Any]] = {}
     exit_code = 0
@@ -399,7 +399,7 @@ async def run_triage(run_dir: Path, *, force: bool, dry_run: bool, quiet: bool =
         final["triage_participant"] = participant
         return final
 
-    result = await run_provider(
+    result = await run_provider_with_format_retry(
         build_participant_argv(work_order["judge"], cwd=citation_cwd),
         prompt,
         work_order["budgets"],
@@ -409,11 +409,12 @@ async def run_triage(run_dir: Path, *, force: bool, dry_run: bool, quiet: bool =
     )
     (triage_dir / "stdout.txt").write_text(result["stdout"], encoding="utf-8")
     (triage_dir / "stderr.txt").write_text(result["stderr"], encoding="utf-8")
+    write_format_retry_artifacts(triage_dir, result)
     status = status_without_payload(result)
     status["triage_participant"] = participant
     status["input_hashes"] = input_hashes
     write_json(triage_dir / "status.json", status)
-    if result["status"] != "ok":
+    if not provider_succeeded(result):
         return 2
     write_json(triage_dir / "final.json", result["final_json"])
     (triage_dir / "triage.md").write_text(render_triage_markdown(result["final_json"], caveats), encoding="utf-8")
@@ -432,7 +433,7 @@ async def run_workers(work_order: dict[str, Any], run_dir: Path, *, quiet: bool 
         (provider_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
         print(f"[{provider_id}] launching...")
         validator = lambda data: validate_worker_result(data, mode=work_order["type"])
-        result = await run_provider(
+        result = await run_provider_with_format_retry(
             argv,
             prompt,
             work_order["budgets"],
@@ -478,7 +479,7 @@ async def run_judge_phase(
             "judge_rationale": [],
             "caveats": [],
         }
-        if judge_result["status"] != "ok":
+        if not provider_succeeded(judge_result):
             decision["caveats"] = [f"gather judge failed with {judge_result['status']}"]
             return decision, judge_results, 2
         return decision, judge_results, 0
@@ -488,7 +489,7 @@ async def run_judge_phase(
     pass1 = await run_single_judge(work_order, worker_results, pass1_order, run_dir, "pass1", quiet=quiet)
     pass2 = await run_single_judge(work_order, worker_results, pass2_order, run_dir, "pass2", quiet=quiet)
     judge_results = {"pass1": pass1.get("final_json") or {}, "pass2": pass2.get("final_json") or {}}
-    if pass1["status"] != "ok" or pass2["status"] != "ok":
+    if not provider_succeeded(pass1) or not provider_succeeded(pass2):
         decision = {
             **base,
             "decision_kind": "tie",
@@ -534,7 +535,7 @@ async def run_single_judge(
     prompt_path.write_text(prompt, encoding="utf-8")
     validator = judge_validator(mode)
     print(f"[judge:{label}] running...")
-    result = await run_provider(
+    result = await run_provider_with_format_retry(
         build_participant_argv(work_order["judge"], cwd=Path.cwd()),
         prompt,
         work_order["budgets"],
@@ -544,8 +545,9 @@ async def run_single_judge(
     )
     stdout_path.write_text(result["stdout"], encoding="utf-8")
     stderr_path.write_text(result["stderr"], encoding="utf-8")
+    write_format_retry_artifacts(judge_dir, result, suffix=None if label == "gather" else label)
     write_json(status_path, status_without_payload(result))
-    if result["status"] == "ok":
+    if provider_succeeded(result):
         write_json(result_path, result["final_json"])
     print(f"[judge:{label}] {result['status']} {result['wall_seconds']}s")
     return result
@@ -771,8 +773,9 @@ def _rationale(result: dict[str, Any]) -> str:
 def write_provider_artifacts(provider_dir: Path, result: dict[str, Any]) -> None:
     (provider_dir / "stdout.txt").write_text(result["stdout"], encoding="utf-8")
     (provider_dir / "stderr.txt").write_text(result["stderr"], encoding="utf-8")
+    write_format_retry_artifacts(provider_dir, result)
     write_json(provider_dir / "status.json", status_without_payload(result))
-    if result["status"] == "ok":
+    if provider_succeeded(result):
         write_json(provider_dir / "final.json", result["final_json"])
 
 
@@ -811,7 +814,20 @@ def status_without_payload(result: dict[str, Any]) -> dict[str, Any]:
     status = {key: result[key] for key in ("status", "exit_code", "wall_seconds", "output_bytes")}
     if "io" in result:
         status["io"] = result["io"]
+    if "format_retry" in result:
+        status["format_retry"] = result["format_retry"]
     return status
+
+
+def write_format_retry_artifacts(directory: Path, result: dict[str, Any], *, suffix: str | None = None) -> None:
+    artifacts = result.get("repair_artifacts")
+    if not isinstance(artifacts, dict):
+        return
+    suffix_part = f"-{suffix}" if suffix else ""
+    (directory / f"repair-prompt{suffix_part}.txt").write_text(str(artifacts.get("prompt", "")), encoding="utf-8")
+    (directory / f"repair-stdout{suffix_part}.txt").write_text(str(artifacts.get("stdout", "")), encoding="utf-8")
+    (directory / f"repair-stderr{suffix_part}.txt").write_text(str(artifacts.get("stderr", "")), encoding="utf-8")
+    write_json(directory / f"repair-status{suffix_part}.json", artifacts.get("status", {}))
 
 
 def make_tick_printer(label: str, *, quiet: bool) -> Callable[[dict[str, Any]], None] | None:

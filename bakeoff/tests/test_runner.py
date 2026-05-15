@@ -1,7 +1,8 @@
 import asyncio
 import sys
 
-from bakeoff.runner import extract_final_json, run_provider
+from bakeoff.runner import extract_final_json, run_provider, run_provider_with_format_retry
+from bakeoff.work_order import ValidationError
 
 
 def test_extract_final_json_uses_last_block():
@@ -10,6 +11,17 @@ def test_extract_final_json_uses_last_block():
     )
 
     assert payload == {"second": True}
+
+
+def test_extract_final_json_allows_tag_text_inside_json_strings():
+    payload = extract_final_json(
+        '<final_json>{"claim": "The extractor accepts literal <final_json>{}</final_json> text inside strings.", "ok": true}</final_json>'
+    )
+
+    assert payload == {
+        "claim": "The extractor accepts literal <final_json>{}</final_json> text inside strings.",
+        "ok": True,
+    }
 
 
 def test_run_provider_reports_schema_error_for_missing_final_json():
@@ -22,6 +34,43 @@ def test_run_provider_reports_schema_error_for_missing_final_json():
     )
 
     assert result["status"] == "schema_error"
+
+
+def test_run_provider_format_retry_recovers_zero_exit_schema_error(tmp_path):
+    script = tmp_path / "provider.py"
+    script.write_text(
+        """
+import sys
+
+prompt = sys.stdin.read()
+if "BAKEOFF_FORMAT_RETRY_V1" in prompt:
+    print('<final_json>{"ok": true}</final_json>')
+else:
+    print('<final_json>{"ok": false}</final_json>')
+""",
+        encoding="utf-8",
+    )
+
+    def validator(data):
+        if data.get("ok") is not True:
+            raise ValidationError("ok must be true")
+        return data
+
+    result = asyncio.run(
+        run_provider_with_format_retry(
+            [sys.executable, str(script)],
+            "Return ok=true.",
+            {"wall_clock_seconds": 3, "max_output_bytes": 2000},
+            validator=validator,
+        )
+    )
+
+    assert result["status"] == "ok_after_format_retry"
+    assert result["final_json"] == {"ok": True}
+    assert result["format_retry"]["initial_status"]["status"] == "schema_error"
+    assert result["format_retry"]["retry_status"]["status"] == "ok"
+    assert "BAKEOFF_FORMAT_RETRY_V1" in result["repair_artifacts"]["prompt"]
+    assert result["repair_artifacts"]["status"]["status"] == "ok"
 
 
 def test_run_provider_reports_output_cap():

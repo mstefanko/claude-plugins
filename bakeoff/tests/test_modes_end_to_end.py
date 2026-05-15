@@ -97,6 +97,31 @@ def test_single_provider_only_mode_specific_caveat(tmp_path, monkeypatch):
     assert "without dedupe" in decision["caveats"][0]
 
 
+def test_format_retry_writes_provider_audit_artifacts(tmp_path, monkeypatch):
+    install_fake_providers(tmp_path, judge_mode="gather", repair_providers={"codex"})
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    work_order = write_work_order(tmp_path, "gather")
+    out_dir = tmp_path / "runs"
+
+    assert main(["research", str(work_order), "--out", str(out_dir), "--run-id", "repair-run"]) == 0
+
+    run_dir = out_dir / "repair-run"
+    decision = json.loads((run_dir / "decision.json").read_text())
+    codex_dir = run_dir / "providers" / "codex"
+    codex_status = json.loads((codex_dir / "status.json").read_text())
+    repair_status = json.loads((codex_dir / "repair-status.json").read_text())
+
+    assert decision["decision_kind"] == "structured_union"
+    assert decision["provider_statuses"]["codex"]["status"] == "ok_after_format_retry"
+    assert codex_status["format_retry"]["initial_status"]["status"] == "schema_error"
+    assert codex_status["format_retry"]["retry_status"]["status"] == "ok"
+    assert repair_status["status"] == "ok"
+    assert (codex_dir / "repair-prompt.txt").exists()
+    assert (codex_dir / "repair-stdout.txt").exists()
+    assert (codex_dir / "repair-stderr.txt").exists()
+    assert (codex_dir / "final.json").exists()
+
+
 def test_both_failed_exits_two(tmp_path, monkeypatch):
     install_fake_providers(tmp_path, judge_mode="gather", fail_providers={"claude", "codex"})
     monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
@@ -110,7 +135,7 @@ def test_both_failed_exits_two(tmp_path, monkeypatch):
     assert decision["judge_rationale"] == []
 
 
-def install_fake_providers(tmp_path, *, judge_mode, fail_providers=frozenset()):
+def install_fake_providers(tmp_path, *, judge_mode, fail_providers=frozenset(), repair_providers=frozenset()):
     script = tmp_path / "fake_provider.py"
     script.write_text(
         textwrap.dedent(
@@ -119,6 +144,7 @@ def install_fake_providers(tmp_path, *, judge_mode, fail_providers=frozenset()):
             prompt = sys.stdin.read()
             name = os.environ.get("BAKEOFF_FAKE_PROVIDER_NAME", pathlib.Path(sys.argv[0]).name)
             fail_providers = {sorted(fail_providers)!r}
+            repair_providers = {sorted(repair_providers)!r}
             judge_mode = {judge_mode!r}
             compare_scores_a = {{"evidence":5,"coherence":5,"tradeoff_honesty":5,"rebuttals":5}}
             compare_scores_b = {{"evidence":4,"coherence":4,"tradeoff_honesty":4,"rebuttals":4}}
@@ -134,6 +160,8 @@ def install_fake_providers(tmp_path, *, judge_mode, fail_providers=frozenset()):
             elif name in fail_providers:
                 print("provider failed before final json", file=sys.stderr)
                 sys.exit(9)
+            elif name in repair_providers and "BAKEOFF_FORMAT_RETRY_V1" not in prompt:
+                emit({{"status":"complete","claims":[{{"id":"R-001","finding":name + " malformed claim"}}],"conflicts":[],"unknowns":[],"recommended_next_checks":[]}})
             elif "evidence-grounded triage of a Bakeoff report" in prompt:
                 emit({{"schema_version":1,"status":"complete","summary":"checked","items":[{{"id":"T-001","source_finding_id":"F-001","source_finding":"Fake merged claim","classification":"real_issue","severity":"medium","confidence":"high","supporting_evidence":["src/fake.py:1"],"counterevidence":[],"citation_check_ids":[],"recommended_action":"fix_now","rationale":"actionable"}}],"unknowns":[]}})
             elif "deduplication and conflict-flagging judge" in prompt:
