@@ -59,6 +59,33 @@ def test_validates_work_order_and_defaults_effort(tmp_path):
     assert work_order["providers"][0]["effort"] == "high"
     assert work_order["judge"]["effort"] == "high"
     assert work_order["budgets"]["heartbeat_seconds"] == 60
+    assert work_order["scope_policy"] == {"enforcement": "best_effort"}
+
+
+def test_validates_scope_policy(tmp_path):
+    data = {
+        "schema_version": 1,
+        "id": "routing",
+        "type": "gather",
+        "goal": "Find routing facts.",
+        "background": "",
+        "providers": [
+            {"id": "claude", "backend": "claude", "model": "same", "scope": "codebase"},
+            {"id": "codex", "backend": "codex", "model": "other", "scope": "web"},
+        ],
+        "scope_policy": {"enforcement": "required"},
+        "judge": {"backend": "claude", "model": "judge"},
+        "budgets": {"wall_clock_seconds": 3, "max_output_bytes": 2000},
+    }
+    path = tmp_path / "wo.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    assert load_work_order(path)["scope_policy"] == {"enforcement": "required"}
+
+    data["scope_policy"] = {"enforcement": "strict"}
+    path.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(ValidationError, match="scope_policy.enforcement"):
+        load_work_order(path)
 
 
 @pytest.mark.parametrize("mode", sorted(MODE_EFFORT_DEFAULTS))

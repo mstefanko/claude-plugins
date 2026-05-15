@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -18,15 +20,25 @@ SCOPE_INSTRUCTIONS = {
     "mixed": "Use both the codebase and web search. Cite as `path:line` for code, full URLs for web.",
 }
 
+SCOPE_POLICY_DEFAULT = "best_effort"
+SCOPE_POLICY_VALUES = ("advisory", "best_effort", "required")
 
-def build_participant_argv(participant: dict[str, Any], *, cwd: str | Path | None = None) -> list[str]:
+
+def build_participant_argv(
+    participant: dict[str, Any],
+    *,
+    cwd: str | Path | None = None,
+    extra_args: list[str] | None = None,
+) -> list[str]:
     backend = participant["backend"]
     model = participant["model"]
     effort = participant.get("effort", "high")
+    extras = list(extra_args or [])
     if backend == "claude":
-        return ["claude", "-p", "--model", model, "--effort", effort]
+        return ["claude", "-p", "--model", model, "--effort", effort, *extras]
     if backend == "codex":
         argv = ["codex", "exec", "-m", model, "-c", f'model_reasoning_effort="{effort}"', "--skip-git-repo-check"]
+        argv.extend(extras)
         if cwd is not None:
             argv.extend(["-C", str(cwd)])
         return argv
@@ -41,6 +53,161 @@ def version_argv(backend: str) -> list[str]:
     if backend == "git":
         return ["git", "--version"]
     raise ValueError(f"unsupported tool: {backend}")
+
+
+def detect_scope_capabilities(backend: str) -> dict[str, Any]:
+    """Best-effort local capability probe from installed CLI help text."""
+    argv = scope_help_argv(backend)
+    try:
+        result = subprocess.run(argv, capture_output=True, text=True, timeout=10, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {
+            "backend": backend,
+            "available": False,
+            "supports": {},
+            "probe_error": f"{exc.__class__.__name__}: {exc}",
+        }
+    return scope_capabilities_from_help(backend, f"{result.stdout}\n{result.stderr}")
+
+
+def scope_help_argv(backend: str) -> list[str]:
+    if backend == "claude":
+        return ["claude", "-p", "--help"]
+    if backend == "codex":
+        return ["codex", "exec", "--help"]
+    raise ValueError(f"unsupported backend: {backend}")
+
+
+def scope_capabilities_from_help(backend: str, help_text: str) -> dict[str, Any]:
+    supports: dict[str, bool]
+    if backend == "claude":
+        supports = {
+            "allowed_tools": "--allowedTools" in help_text or "--allowed-tools" in help_text,
+            "disallowed_tools": "--disallowedTools" in help_text or "--disallowed-tools" in help_text,
+            "tools": "--tools" in help_text,
+            "permission_mode": "--permission-mode" in help_text,
+        }
+    elif backend == "codex":
+        supports = {
+            "sandbox": "--sandbox" in help_text,
+            "disable_feature": "--disable" in help_text,
+            "profile": "--profile" in help_text,
+            "config": "--config" in help_text or "-c, --config" in help_text,
+        }
+    else:
+        raise ValueError(f"unsupported backend: {backend}")
+    return {"backend": backend, "available": True, "supports": supports}
+
+
+def build_scope_execution(
+    participant: dict[str, Any],
+    scope_policy: dict[str, Any],
+    *,
+    workspace_cwd: Path,
+    run_dir: Path,
+    capabilities: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    requested_scope = participant.get("scope", "mixed")
+    policy = scope_policy.get("enforcement", SCOPE_POLICY_DEFAULT)
+    backend = participant["backend"]
+    caps = capabilities or detect_scope_capabilities(backend)
+    supports = caps.get("supports") if isinstance(caps.get("supports"), dict) else {}
+    execution_cwd = workspace_cwd
+    mechanisms: list[str] = []
+    fallback_reasons: list[str] = []
+    extra_args: list[str] = []
+
+    if policy == "advisory":
+        return _scope_execution_result(
+            participant,
+            execution_cwd=execution_cwd,
+            extra_args=extra_args,
+            policy=policy,
+            requested_scope=requested_scope,
+            effective_scope="advisory",
+            enforcement_level="advisory",
+            mechanisms=mechanisms,
+            fallback_reasons=[],
+        )
+
+    if requested_scope == "web":
+        execution_cwd = Path(tempfile.gettempdir()) / "bakeoff-scope-workspaces" / run_dir.name / participant["id"]
+        mechanisms.append("isolated_cwd")
+
+    if requested_scope == "mixed":
+        mechanisms.append("mixed_scope_no_restriction")
+    elif backend == "claude":
+        if requested_scope == "codebase":
+            if supports.get("disallowed_tools"):
+                extra_args.extend(["--disallowedTools", "WebFetch", "WebSearch"])
+                mechanisms.append("claude:disallowedTools=WebFetch,WebSearch")
+            else:
+                fallback_reasons.append("claude CLI did not advertise --disallowedTools")
+        elif requested_scope == "web":
+            if supports.get("allowed_tools"):
+                extra_args.extend(["--allowedTools", "WebFetch", "WebSearch"])
+                mechanisms.append("claude:allowedTools=WebFetch,WebSearch")
+            else:
+                fallback_reasons.append("claude CLI did not advertise --allowedTools")
+    elif backend == "codex":
+        if requested_scope in {"codebase", "web"}:
+            if supports.get("sandbox"):
+                extra_args.extend(["--sandbox", "read-only"])
+                mechanisms.append("codex:sandbox=read-only")
+            else:
+                fallback_reasons.append("codex CLI did not advertise --sandbox")
+        if requested_scope == "codebase":
+            if supports.get("disable_feature"):
+                extra_args.extend(["--disable", "web_search"])
+                mechanisms.append("codex:disable=web_search")
+            else:
+                fallback_reasons.append("codex CLI did not advertise --disable")
+
+    enforcement_level = "enforced" if requested_scope == "mixed" else "partial"
+    if not mechanisms:
+        enforcement_level = "advisory"
+    if fallback_reasons and policy == "required":
+        raise ValueError("; ".join(fallback_reasons))
+
+    return _scope_execution_result(
+        participant,
+        execution_cwd=execution_cwd,
+        extra_args=extra_args,
+        policy=policy,
+        requested_scope=requested_scope,
+        effective_scope=requested_scope if enforcement_level != "advisory" else "advisory",
+        enforcement_level=enforcement_level,
+        mechanisms=mechanisms,
+        fallback_reasons=fallback_reasons,
+    )
+
+
+def _scope_execution_result(
+    participant: dict[str, Any],
+    *,
+    execution_cwd: Path,
+    extra_args: list[str],
+    policy: str,
+    requested_scope: str,
+    effective_scope: str,
+    enforcement_level: str,
+    mechanisms: list[str],
+    fallback_reasons: list[str],
+) -> dict[str, Any]:
+    metadata = {
+        "requested_scope": requested_scope,
+        "policy": policy,
+        "effective_scope": effective_scope,
+        "enforcement_level": enforcement_level,
+        "mechanisms": mechanisms,
+        "fallback_reason": "; ".join(fallback_reasons) if fallback_reasons else None,
+        "cwd": str(execution_cwd),
+    }
+    return {
+        "argv": build_participant_argv(participant, cwd=execution_cwd, extra_args=extra_args),
+        "cwd": execution_cwd,
+        "metadata": metadata,
+    }
 
 
 def build_worker_prompt(work_order: dict[str, Any], provider: dict[str, Any]) -> str:

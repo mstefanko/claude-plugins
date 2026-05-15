@@ -125,6 +125,7 @@ async def run_provider(
     stdout_chunks: list[bytes] = []
     stderr_chunks: list[bytes] = []
     output_cap_hit = False
+    stderr_cap_hit = False
     stdin_error: str | None = None
 
     async def feed_prompt() -> None:
@@ -166,19 +167,33 @@ async def run_provider(
             last_stdout_at = now
 
     async def read_stderr() -> None:
-        nonlocal last_stderr_at, stderr_total_bytes
+        nonlocal last_stderr_at, stderr_cap_hit, stderr_total_bytes
         assert process.stderr is not None
         total = 0
         while True:
             chunk = await process.stderr.read(4096)
             if not chunk:
                 break
-            if total < max_output_bytes:
-                keep = min(len(chunk), max_output_bytes - total)
+            now = time.monotonic()
+            if total + len(chunk) > max_output_bytes:
+                keep = max(0, max_output_bytes - total)
+                if keep:
+                    stderr_chunks.append(chunk[:keep])
+                    total += keep
+                    stderr_total_bytes += keep
+                if not stderr_cap_hit:
+                    marker = f"\n[STDERR TRUNCATED at {max_output_bytes} bytes]\n".encode("utf-8")
+                    stderr_chunks.append(marker)
+                    stderr_total_bytes += len(marker)
+                stderr_cap_hit = True
+                last_stderr_at = now
+                continue
+            if not stderr_cap_hit:
+                keep = len(chunk)
                 stderr_chunks.append(chunk[:keep])
                 total += keep
                 stderr_total_bytes += keep
-                last_stderr_at = time.monotonic()
+                last_stderr_at = now
 
     def emit_tick(now: float) -> None:
         nonlocal heartbeat_count, quiet_tick_count
@@ -232,6 +247,8 @@ async def run_provider(
                 stderr=stderr,
                 final_json=None,
                 io=current_io(),
+                stdout_truncated=output_cap_hit,
+                stderr_truncated=stderr_cap_hit,
             )
         return _status(
             "timeout",
@@ -241,6 +258,8 @@ async def run_provider(
             stderr=stderr,
             final_json=None,
             io=current_io(),
+            stdout_truncated=output_cap_hit,
+            stderr_truncated=stderr_cap_hit,
         )
     except asyncio.CancelledError:
         _terminate_process_group(process)
@@ -254,6 +273,8 @@ async def run_provider(
             stderr=_append_diagnostic(_decode(stderr_chunks), stdin_error),
             final_json=None,
             io=current_io(),
+            stdout_truncated=output_cap_hit,
+            stderr_truncated=stderr_cap_hit,
         )
 
     await _settle_tasks(tasks)
@@ -261,9 +282,28 @@ async def run_provider(
     stderr = _append_diagnostic(_decode(stderr_chunks), stdin_error)
 
     if output_cap_hit:
-        return _status("output_cap", started, exit_code=process.returncode, stdout=stdout, stderr=stderr, final_json=None, io=current_io())
+        return _status(
+            "output_cap",
+            started,
+            exit_code=process.returncode,
+            stdout=stdout,
+            stderr=stderr,
+            final_json=None,
+            io=current_io(),
+            stdout_truncated=True,
+            stderr_truncated=stderr_cap_hit,
+        )
     if process.returncode != 0:
-        return _status("exit_error", started, exit_code=process.returncode, stdout=stdout, stderr=stderr, final_json=None, io=current_io())
+        return _status(
+            "exit_error",
+            started,
+            exit_code=process.returncode,
+            stdout=stdout,
+            stderr=stderr,
+            final_json=None,
+            io=current_io(),
+            stderr_truncated=stderr_cap_hit,
+        )
 
     try:
         final_json = extract_final_json(stdout)
@@ -271,9 +311,27 @@ async def run_provider(
             final_json = validator(final_json)
     except ValidationError as exc:
         stderr = f"{stderr}\n{exc}".strip()
-        return _status("schema_error", started, exit_code=process.returncode, stdout=stdout, stderr=stderr, final_json=None, io=current_io())
+        return _status(
+            "schema_error",
+            started,
+            exit_code=process.returncode,
+            stdout=stdout,
+            stderr=stderr,
+            final_json=None,
+            io=current_io(),
+            stderr_truncated=stderr_cap_hit,
+        )
 
-    return _status("ok", started, exit_code=process.returncode, stdout=stdout, stderr=stderr, final_json=final_json, io=current_io())
+    return _status(
+        "ok",
+        started,
+        exit_code=process.returncode,
+        stdout=stdout,
+        stderr=stderr,
+        final_json=final_json,
+        io=current_io(),
+        stderr_truncated=stderr_cap_hit,
+    )
 
 
 async def run_provider_with_format_retry(
@@ -321,6 +379,13 @@ async def run_provider_with_format_retry(
         "exit_code": retry["exit_code"],
         "wall_seconds": round(float(first["wall_seconds"]) + float(retry["wall_seconds"]), 3),
         "output_bytes": int(first["output_bytes"]) + int(retry["output_bytes"]),
+        "stdout_bytes": int(first.get("stdout_bytes", first["output_bytes"])) + int(
+            retry.get("stdout_bytes", retry["output_bytes"])
+        ),
+        "stderr_bytes": int(first.get("stderr_bytes", len(first.get("stderr", "").encode("utf-8"))))
+        + int(retry.get("stderr_bytes", len(retry.get("stderr", "").encode("utf-8")))),
+        "stdout_truncated": bool(first.get("stdout_truncated")) or bool(retry.get("stdout_truncated")),
+        "stderr_truncated": bool(first.get("stderr_truncated")) or bool(retry.get("stderr_truncated")),
         "final_json": retry["final_json"],
     }
 
@@ -419,12 +484,20 @@ def _status(
     stderr: str,
     final_json: dict[str, Any] | None,
     io: dict[str, Any],
+    stdout_truncated: bool = False,
+    stderr_truncated: bool = False,
 ) -> dict[str, Any]:
+    stdout_bytes = len(stdout.encode("utf-8"))
+    stderr_bytes = len(stderr.encode("utf-8"))
     return {
         "status": status,
         "exit_code": exit_code,
         "wall_seconds": round(time.monotonic() - started, 3),
-        "output_bytes": len(stdout.encode("utf-8")),
+        "output_bytes": stdout_bytes,
+        "stdout_bytes": stdout_bytes,
+        "stderr_bytes": stderr_bytes,
+        "stdout_truncated": stdout_truncated,
+        "stderr_truncated": stderr_truncated,
         "io": io,
         "stdout": stdout,
         "stderr": stderr,
@@ -433,7 +506,20 @@ def _status(
 
 
 def _attempt_status(result: dict[str, Any]) -> dict[str, Any]:
-    status = {key: result[key] for key in ("status", "exit_code", "wall_seconds", "output_bytes")}
+    status = {
+        key: result[key]
+        for key in (
+            "status",
+            "exit_code",
+            "wall_seconds",
+            "output_bytes",
+            "stdout_bytes",
+            "stderr_bytes",
+            "stdout_truncated",
+            "stderr_truncated",
+        )
+        if key in result
+    }
     if "io" in result:
         status["io"] = result["io"]
     return status

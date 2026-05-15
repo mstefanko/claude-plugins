@@ -71,9 +71,11 @@ Provider status `ok_after_format_retry` means the original provider call exited
 successfully but failed final-json schema validation, then one format-only retry
 validated. The retry is auditable through `status.json.format_retry` and the
 `repair-*` artifacts. Retries are only attempted for zero-exit `schema_error`;
-`timeout`, `output_cap`, and `exit_error` are terminal. Top-level
+`timeout`, `output_cap`, `scope_error`, and `exit_error` are terminal. Top-level
 `wall_seconds`/`output_bytes` include both attempts after a successful retry,
-while per-attempt costs live under `format_retry`.
+while per-attempt costs live under `format_retry`. Provider status also records
+`stdout_bytes`, `stderr_bytes`, and explicit truncation flags; stderr truncation
+does not fail a run by itself.
 
 Gather reports render deterministic corroboration from the judge's `sources`
 array. `model confidence` reflects the worker/judge assessment of evidence
@@ -84,6 +86,29 @@ Provider runs emit compact heartbeat lines to stderr by default. Pass `--quiet`
 on `research`, `rerun`, `triage`, or `doctor` to suppress them. Set
 `budgets.heartbeat_seconds` in a work order to tune heartbeat frequency, or `0`
 to disable heartbeat ticks.
+
+## Scope Policy
+
+Worker scopes default to best-effort enforcement with advisory fallback:
+
+```json
+"scope_policy": { "enforcement": "best_effort" }
+```
+
+Allowed values are:
+
+- `advisory`: prompt instructions only.
+- `best_effort`: apply local provider controls where the installed CLI exposes
+  them, and record any fallback in provider status and `meta.json`.
+- `required`: fail the provider with `scope_error` if a requested scope cannot
+  apply its expected local controls.
+
+Best-effort enforcement is intentionally staged. For `codebase`, Bakeoff tries
+to disable web search/fetch controls and uses read-only Codex sandboxing where
+available. For `web`, Bakeoff runs the provider from an isolated per-run working
+directory under the system temp directory and applies web-tool allowlisting
+where available. `mixed` scope is recorded but not narrowed. `bakeoff doctor`
+prints the installed CLI controls that Bakeoff can detect.
 
 `bakeoff triage` is an explicit post-judge verification pass. It writes
 advisory artifacts under `runs/<run-id>/triage/`, including harness-side
@@ -105,5 +130,6 @@ orders that omit `effort` still validate to `high`.
 
 - Work orders are JSONC. `bakeoff init` writes commented templates.
 - `validate` rejects unedited `TODO-*` ids on purpose.
-- Scopes are prompt-advisory in v1; provider CLIs still control their own tools.
+- Scope enforcement is best-effort unless a work order sets `advisory` or
+  `required`.
 - The plugin wrapper remains a launcher-only future layer.

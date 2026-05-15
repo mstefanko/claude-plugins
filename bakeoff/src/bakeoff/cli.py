@@ -20,6 +20,8 @@ from bakeoff.providers import (
     anonymized_worker_output,
     build_judge_prompt,
     build_participant_argv,
+    build_scope_execution,
+    detect_scope_capabilities,
     build_triage_prompt,
     build_worker_prompt,
     version_argv,
@@ -248,7 +250,18 @@ async def cmd_doctor(args: argparse.Namespace) -> int:
     print("- defaults:")
     for key, value in DEFAULT_MODEL_IDS.items():
         print(f"  {key}: {value}")
-    print("- scope: advisory; providers may use any tool their CLI permits.")
+    print("- scope policy: best_effort by default; provider status records enforcement and advisory fallback.")
+    print("- scope capabilities:")
+    for backend in ("claude", "codex"):
+        caps = detect_scope_capabilities(backend)
+        if not caps.get("available"):
+            print(f"  {backend}: unavailable ({caps.get('probe_error', 'probe failed')})")
+            continue
+        supported = [name for name, ok in caps.get("supports", {}).items() if ok]
+        missing = [name for name, ok in caps.get("supports", {}).items() if not ok]
+        print(f"  {backend}: supports {', '.join(supported) if supported else 'none'}")
+        if missing:
+            print(f"    missing: {', '.join(missing)}")
     writable, writable_detail = check_cwd_writable()
     print(f"- cwd writable: {'ok' if writable else 'failed'} ({writable_detail})")
     failed = failed or not writable
@@ -331,7 +344,7 @@ async def run_research(work_order_path: Path, *, out_dir: Path, run_id: str | No
     write_json(run_dir / "decision.json", decision)
     report = render_report(work_order, decision, worker_results, judge_results=judge_results)
     (run_dir / "report.md").write_text(report, encoding="utf-8")
-    write_meta(run_dir, work_order, actual_run_id, started_at)
+    write_meta(run_dir, work_order, actual_run_id, started_at, worker_results=worker_results)
     print(f"report: {run_dir / 'report.md'}")
     print(f"next:   bakeoff show {actual_run_id}")
     recommendation = should_recommend_triage(work_order, decision, report)
@@ -442,10 +455,33 @@ async def run_triage(run_dir: Path, *, force: bool, dry_run: bool, quiet: bool =
 
 
 async def run_workers(work_order: dict[str, Any], run_dir: Path, *, quiet: bool = False) -> dict[str, dict[str, Any]]:
+    capabilities = {
+        backend: detect_scope_capabilities(backend)
+        for backend in sorted({provider["backend"] for provider in work_order["providers"]})
+    }
+
     async def run_one(provider: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         provider_id = provider["id"]
         prompt = build_worker_prompt(work_order, provider)
-        argv = build_participant_argv(provider, cwd=Path.cwd())
+        try:
+            scope_execution = build_scope_execution(
+                provider,
+                work_order["scope_policy"],
+                workspace_cwd=Path.cwd(),
+                run_dir=run_dir,
+                capabilities=capabilities.get(provider["backend"]),
+            )
+        except ValueError as exc:
+            provider_dir = run_dir / "providers" / provider_id
+            provider_dir.mkdir(parents=True)
+            (provider_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
+            result = scope_error_result(exc, provider, work_order["scope_policy"])
+            write_provider_artifacts(provider_dir, result)
+            print(f"[{provider_id}] {result['status']} {result['wall_seconds']}s {result['output_bytes']} bytes")
+            return provider_id, result
+        argv = scope_execution["argv"]
+        execution_cwd = Path(scope_execution["cwd"])
+        execution_cwd.mkdir(parents=True, exist_ok=True)
         provider_dir = run_dir / "providers" / provider_id
         provider_dir.mkdir(parents=True)
         (provider_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
@@ -455,10 +491,11 @@ async def run_workers(work_order: dict[str, Any], run_dir: Path, *, quiet: bool 
             argv,
             prompt,
             work_order["budgets"],
-            cwd=Path.cwd(),
+            cwd=execution_cwd,
             validator=validator,
             on_tick=make_tick_printer(provider_id, quiet=quiet),
         )
+        result["scope_enforcement"] = scope_execution["metadata"]
         write_provider_artifacts(provider_dir, result)
         print(f"[{provider_id}] {result['status']} {result['wall_seconds']}s {result['output_bytes']} bytes")
         return provider_id, result
@@ -583,6 +620,10 @@ def resolve_compare_decision(
         **base,
         "judge_ran": True,
         "order_maps": {"pass1": pass1_order, "pass2": pass2_order},
+        "judge_passes": {
+            "pass1": judge_pass_summary(pass1, pass1_order, verdict_key="winner"),
+            "pass2": judge_pass_summary(pass2, pass2_order, verdict_key="winner"),
+        },
         "canonical_winner": None,
         "judge_rationale": [_rationale(pass1), _rationale(pass2)],
         "caveats": [],
@@ -662,6 +703,10 @@ def resolve_analyze_decision(
         "decision_kind": "pick_winner",
         "judge_ran": True,
         "order_maps": {"pass1": pass1_order, "pass2": pass2_order},
+        "judge_passes": {
+            "pass1": judge_pass_summary(pass1, pass1_order, verdict_key="spine_winner"),
+            "pass2": judge_pass_summary(pass2, pass2_order, verdict_key="spine_winner"),
+        },
         "canonical_winner": spine,
         "spine_tiebreak": tiebreak,
         "judge_rationale": [_rationale(pass1), _rationale(pass2)],
@@ -686,12 +731,26 @@ def decision_base(work_order: dict[str, Any], worker_results: dict[str, dict[str
     }
 
 
+def judge_pass_summary(result: dict[str, Any], order_map: dict[str, str], *, verdict_key: str) -> dict[str, Any]:
+    positional = result.get(verdict_key)
+    summary = {
+        "A": order_map.get("A"),
+        "B": order_map.get("B"),
+        "positional_winner": positional,
+        "canonical_winner": canonical_winner(positional, order_map),
+    }
+    if result.get("relation"):
+        summary["relation"] = result["relation"]
+    return summary
+
+
 def print_validation_summary(work_order: dict[str, Any]) -> None:
     budgets = work_order["budgets"]
     print("valid work order")
     print(f"  id:      {work_order['id']}")
     print(f"  mode:    {work_order['type']}")
     print(f"  budgets: {budgets['wall_clock_seconds']}s wall, {budgets['max_output_bytes']} bytes out")
+    print(f"  scope:   {work_order['scope_policy']['enforcement']}")
     print("  providers:")
     for provider in work_order["providers"]:
         print(f"    - {provider['id']}: {provider['backend']} {provider['model']} ({provider['scope']}, {provider['effort']})")
@@ -710,6 +769,7 @@ def print_run_header(work_order: dict[str, Any], run_dir: Path, run_id: str) -> 
     print(f"  run dir:        {run_dir}/")
     print(f"  providers:      {providers}")
     print(f"  budgets:        {budgets['wall_clock_seconds']}s wall, {budgets['max_output_bytes']} bytes out")
+    print(f"  scope policy:   {work_order['scope_policy']['enforcement']}")
     print(f"  judge:          {judge['backend']} {judge['model']}")
 
 
@@ -751,14 +811,71 @@ def preserved_compare_material(result: dict[str, Any], order_map: dict[str, str]
 
 def merge_items(*groups: list[Any]) -> list[Any]:
     merged: list[Any] = []
-    seen: set[str] = set()
+    seen_keys: set[str] = set()
+    seen_texts: list[tuple[str, str | None]] = []
     for group in groups:
         for item in group:
-            key = json.dumps(item, sort_keys=True) if isinstance(item, (dict, list)) else str(item)
-            if key not in seen:
-                seen.add(key)
-                merged.append(item)
+            key = merge_item_key(item)
+            text, source = merge_item_text_and_source(item)
+            if key in seen_keys or is_near_duplicate(text, source, seen_texts):
+                continue
+            seen_keys.add(key)
+            if text:
+                seen_texts.append((text, source))
+            merged.append(item)
     return merged
+
+
+def merge_item_key(item: Any) -> str:
+    if isinstance(item, dict):
+        text, source = merge_item_text_and_source(item)
+        return json.dumps({"text": normalize_merge_text(text), "source": source}, sort_keys=True)
+    return normalize_merge_text(str(item))
+
+
+def merge_item_text_and_source(item: Any) -> tuple[str, str | None]:
+    if isinstance(item, dict):
+        text = item.get("claim") or item.get("description") or item.get("loser_note") or str(item)
+        source = item.get("source_provider")
+        return str(text), str(source) if source else None
+    return str(item), None
+
+
+def is_near_duplicate(text: str, source: str | None, seen_texts: list[tuple[str, str | None]]) -> bool:
+    if not text:
+        return False
+    for existing, existing_source in seen_texts:
+        if source != existing_source:
+            continue
+        if token_similarity(text, existing) >= 0.82:
+            return True
+    return False
+
+
+def token_similarity(left: str, right: str) -> float:
+    left_tokens = merge_tokens(left)
+    right_tokens = merge_tokens(right)
+    if not left_tokens or not right_tokens:
+        return 0
+    return len(left_tokens & right_tokens) / len(left_tokens | right_tokens)
+
+
+def merge_tokens(text: str) -> set[str]:
+    stopwords = {"a", "an", "are", "can", "is", "s", "the", "to", "via", "while", "with"}
+    tokens = set()
+    for token in normalize_merge_text(text).split():
+        if token in stopwords:
+            continue
+        if len(token) > 4 and token.endswith("s"):
+            token = token[:-1]
+        tokens.add(token)
+    return tokens
+
+
+def normalize_merge_text(text: str) -> str:
+    normalized = re.sub(r"\([AB]/R-\d{3}\)", "", text.lower())
+    normalized = re.sub(r"[^a-z0-9]+", " ", normalized)
+    return " ".join(normalized.split())
 
 
 def single_provider_caveat(mode: str, survivor: str, failed: str, status: str) -> str:
@@ -781,6 +898,32 @@ def internal_error_result(exc: BaseException) -> dict[str, Any]:
     }
 
 
+def scope_error_result(exc: BaseException, provider: dict[str, Any], scope_policy: dict[str, Any]) -> dict[str, Any]:
+    requested_scope = provider.get("scope", "mixed")
+    return {
+        "status": "scope_error",
+        "exit_code": None,
+        "wall_seconds": 0,
+        "output_bytes": 0,
+        "stdout_bytes": 0,
+        "stderr_bytes": len(str(exc).encode("utf-8")),
+        "stdout_truncated": False,
+        "stderr_truncated": False,
+        "stdout": "",
+        "stderr": str(exc),
+        "final_json": None,
+        "scope_enforcement": {
+            "requested_scope": requested_scope,
+            "policy": scope_policy.get("enforcement", "best_effort"),
+            "effective_scope": "advisory",
+            "enforcement_level": "failed",
+            "mechanisms": [],
+            "fallback_reason": str(exc),
+            "cwd": str(Path.cwd()),
+        },
+    }
+
+
 def _rationale(result: dict[str, Any]) -> str:
     value = result.get("rationale") or result.get("spine_rationale") or ""
     if isinstance(value, list):
@@ -797,8 +940,16 @@ def write_provider_artifacts(provider_dir: Path, result: dict[str, Any]) -> None
         write_json(provider_dir / "final.json", result["final_json"])
 
 
-def write_meta(run_dir: Path, work_order: dict[str, Any], run_id: str, started_at: str) -> None:
+def write_meta(
+    run_dir: Path,
+    work_order: dict[str, Any],
+    run_id: str,
+    started_at: str,
+    *,
+    worker_results: dict[str, dict[str, Any]] | None = None,
+) -> None:
     versions = {backend: tool_version(backend) for backend in ("claude", "codex", "git")}
+    worker_results = worker_results or {}
     meta = {
         "run_id": run_id,
         "type": work_order["type"],
@@ -806,6 +957,7 @@ def write_meta(run_dir: Path, work_order: dict[str, Any], run_id: str, started_a
         "finished_at": utc_now(),
         "cwd": str(Path.cwd()),
         "bakeoff_version": __version__,
+        "scope_policy": work_order["scope_policy"],
         "provider_cli_versions": versions,
         "input_hashes": compute_input_hashes(run_dir),
         "resolved_models": {
@@ -815,6 +967,7 @@ def write_meta(run_dir: Path, work_order: dict[str, Any], run_id: str, started_a
                     "model": provider["model"],
                     "scope": provider["scope"],
                     "effort": provider["effort"],
+                    "scope_enforcement": worker_results.get(provider["id"], {}).get("scope_enforcement"),
                 }
                 for provider in work_order["providers"]
             },
@@ -829,11 +982,26 @@ def write_meta(run_dir: Path, work_order: dict[str, Any], run_id: str, started_a
 
 
 def status_without_payload(result: dict[str, Any]) -> dict[str, Any]:
-    status = {key: result[key] for key in ("status", "exit_code", "wall_seconds", "output_bytes")}
+    status = {
+        key: result[key]
+        for key in (
+            "status",
+            "exit_code",
+            "wall_seconds",
+            "output_bytes",
+            "stdout_bytes",
+            "stderr_bytes",
+            "stdout_truncated",
+            "stderr_truncated",
+        )
+        if key in result
+    }
     if "io" in result:
         status["io"] = result["io"]
     if "format_retry" in result:
         status["format_retry"] = result["format_retry"]
+    if "scope_enforcement" in result:
+        status["scope_enforcement"] = result["scope_enforcement"]
     return status
 
 

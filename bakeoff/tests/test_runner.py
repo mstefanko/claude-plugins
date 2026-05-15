@@ -115,6 +115,25 @@ def test_run_provider_reports_output_cap():
 
     assert result["status"] == "output_cap"
     assert "[TRUNCATED at 100 bytes]" in result["stdout"]
+    assert result["stdout_truncated"] is True
+
+
+def test_run_provider_reports_stderr_truncation_without_failing_success():
+    result = asyncio.run(
+        run_provider(
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.stderr.write('e' * 5000); print('<final_json>{\"ok\": true}</final_json>')",
+            ],
+            "",
+            {"wall_clock_seconds": 3, "max_output_bytes": 100},
+        )
+    )
+
+    assert result["status"] == "ok"
+    assert result["stderr_truncated"] is True
+    assert "[STDERR TRUNCATED at 100 bytes]" in result["stderr"]
 
 
 def test_run_provider_reports_closed_stdin_diagnostic():

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 MODES = ("gather", "compare", "analyze")
+SCOPE_ENFORCEMENTS = ("advisory", "best_effort", "required")
 MODE_EFFORT_DEFAULTS = {
     "gather": {"worker": "low", "judge": "low"},
     "compare": {"worker": "high", "judge": "medium"},
@@ -129,11 +130,13 @@ def validate_work_order(data: dict[str, Any]) -> dict[str, Any]:
     providers = _validate_providers(data["providers"])
     judge = _validate_judge(data["judge"], providers)
     budgets = _validate_budgets(data["budgets"])
+    scope_policy = _validate_scope_policy(data.get("scope_policy"))
 
     normalized = dict(data)
     normalized["providers"] = providers
     normalized["judge"] = judge
     normalized["budgets"] = budgets
+    normalized["scope_policy"] = scope_policy
     return normalized
 
 
@@ -231,6 +234,22 @@ def _validate_budgets(value: Any) -> dict[str, int]:
         "max_output_bytes": value["max_output_bytes"],
         "heartbeat_seconds": heartbeat_seconds,
     }
+
+
+def _validate_scope_policy(value: Any) -> dict[str, str]:
+    if value is None:
+        return {"enforcement": "best_effort"}
+    if isinstance(value, str):
+        enforcement = value
+    elif isinstance(value, dict):
+        enforcement = value.get("enforcement", "best_effort")
+    else:
+        raise ValidationError("scope_policy must be an object or one of: advisory, best_effort, required")
+    if enforcement not in SCOPE_ENFORCEMENTS:
+        raise ValidationError(
+            f'scope_policy.enforcement must be one of: {", ".join(SCOPE_ENFORCEMENTS)} (got {enforcement!r})'
+        )
+    return {"enforcement": enforcement}
 
 
 def validate_worker_result(data: Any, *, mode: str) -> dict[str, Any]:
@@ -451,6 +470,7 @@ def init_template(mode: str) -> str:
     {{ "id": "claude", "backend": "claude", "model": "claude-sonnet-4-6", "effort": "{effort["worker"]}", "scope": "{scopes[0]}" }},
     {{ "id": "codex",  "backend": "codex",  "model": "gpt-5.5",           "effort": "{effort["worker"]}", "scope": "{scopes[1]}" }}
   ],
+  "scope_policy": {{ "enforcement": "best_effort" }},
   "judge":   {{ "backend": "claude", "model": "claude-opus-4-7", "effort": "{effort["judge"]}" }},
   "budgets": {{ "wall_clock_seconds": 900, "max_output_bytes": 60000, "heartbeat_seconds": 60 }}
 }}

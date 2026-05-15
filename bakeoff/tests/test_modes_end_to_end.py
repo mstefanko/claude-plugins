@@ -21,6 +21,9 @@ def test_gather_research_with_fake_providers(tmp_path, monkeypatch):
     assert decision["decision_kind"] == "structured_union"
     assert meta["resolved_models"]["providers"]["claude"]["model"] == "fake-claude"
     assert meta["resolved_models"]["providers"]["codex"]["model"] == "fake-codex"
+    assert meta["scope_policy"] == {"enforcement": "best_effort"}
+    assert meta["resolved_models"]["providers"]["claude"]["scope_enforcement"]["requested_scope"] == "codebase"
+    assert meta["resolved_models"]["providers"]["codex"]["scope_enforcement"]["effective_scope"] == "web"
     assert meta["resolved_models"]["judge"]["model"] == "fake-judge"
     assert "Fake merged claim" in report
 
@@ -85,7 +88,10 @@ def test_compare_position_swap_catches_position_bias(tmp_path, monkeypatch):
 
     run_dir = next(path for path in (tmp_path / "runs").iterdir() if path.is_dir())
     decision = json.loads((run_dir / "decision.json").read_text())
+    report = (run_dir / "report.md").read_text()
     assert decision["decision_kind"] == "tie"
+    assert "Judge passes:" in report
+    assert "pass2: A=`codex`, B=`claude`" in report
 
 
 def test_analyze_selects_spine_with_tiebreak_audit(tmp_path, monkeypatch):

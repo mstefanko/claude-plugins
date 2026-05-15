@@ -42,16 +42,42 @@ def _decision_audit(decision: dict[str, Any]) -> list[str]:
     if decision.get("order_maps"):
         for name, mapping in decision["order_maps"].items():
             lines.append(f"- {name}: A=`{mapping.get('A')}`, B=`{mapping.get('B')}`")
+    if decision.get("judge_passes"):
+        lines.append("- Judge passes:")
+        for name, summary in decision["judge_passes"].items():
+            verdict = summary.get("canonical_winner") or summary.get("positional_winner") or "none"
+            positional = summary.get("positional_winner")
+            relation = f", relation=`{summary['relation']}`" if summary.get("relation") else ""
+            lines.append(
+                f"  - {name}: A=`{summary.get('A')}`, B=`{summary.get('B')}`, "
+                f"winner=`{verdict}` (positional `{positional}`{relation})"
+            )
     if decision.get("judge_rationale"):
         lines.append("- Judge rationale:")
-        for item in _as_list(decision["judge_rationale"]):
-            lines.append(f"  - {item}")
+        pass_names = list((decision.get("judge_passes") or decision.get("order_maps") or {}).keys())
+        for index, item in enumerate(_as_list(decision["judge_rationale"])):
+            prefix = f"{pass_names[index]}: " if index < len(pass_names) else ""
+            lines.append(f"  - {prefix}{item}")
     lines.extend(["", "## Provider Status", ""])
     for provider_id, status in decision.get("provider_statuses", {}).items():
-        detail = f"{status.get('wall_seconds', 0)}s, {status.get('output_bytes', 0)} bytes"
+        detail = (
+            f"{status.get('wall_seconds', 0)}s, stdout {status.get('stdout_bytes', status.get('output_bytes', 0))} bytes, "
+            f"stderr {status.get('stderr_bytes', 0)} bytes"
+        )
+        if status.get("stdout_truncated"):
+            detail += ", stdout truncated"
+        if status.get("stderr_truncated"):
+            detail += ", stderr truncated"
         stderr_path = status.get("stderr_path")
         suffix = f", stderr: `{stderr_path}`" if stderr_path else ""
         lines.append(f"- `{provider_id}`: `{status.get('status')}` ({detail}{suffix})")
+        if status.get("scope_enforcement"):
+            scope = status["scope_enforcement"]
+            level = scope.get("enforcement_level", "unknown")
+            requested = scope.get("requested_scope", "unknown")
+            effective = scope.get("effective_scope", "unknown")
+            fallback = f", fallback: {scope['fallback_reason']}" if scope.get("fallback_reason") else ""
+            lines.append(f"  Scope: `{requested}` -> `{effective}` ({level}{fallback})")
     lines.append("")
     return lines
 
