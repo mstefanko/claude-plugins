@@ -37,8 +37,23 @@ def test_triage_writes_structured_artifacts(tmp_path, monkeypatch):
     triage_dir = out_dir / "triage-run" / "triage"
     final = json.loads((triage_dir / "final.json").read_text())
     assert final["triage_participant"]["model"] == "fake-judge"
-    assert final["items"][0]["classification"] == "real_issue"
+    assert final["items"] == []
     assert (triage_dir / "citation_checks.json").exists()
+
+
+def test_triage_rejects_items_for_unselected_findings(tmp_path, monkeypatch):
+    install_fake_providers(tmp_path, judge_mode="gather", triage_source_id="F-001")
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    work_order = write_work_order(tmp_path, "gather")
+    out_dir = tmp_path / "runs"
+    assert main(["research", str(work_order), "--out", str(out_dir), "--run-id", "triage-unselected"]) == 0
+
+    assert main(["triage", "triage-unselected", "--out", str(out_dir)]) == 2
+
+    triage_dir = out_dir / "triage-unselected" / "triage"
+    status = json.loads((triage_dir / "status.json").read_text())
+    assert status["status"] == "schema_error"
+    assert "selected source_findings" in (triage_dir / "stderr.txt").read_text()
 
 
 def test_triage_dry_run_and_force(tmp_path, monkeypatch):
@@ -52,6 +67,10 @@ def test_triage_dry_run_and_force(tmp_path, monkeypatch):
 
     triage_dir = out_dir / "triage-dry" / "triage"
     assert (triage_dir / "prompt.txt").exists()
+    prompt = (triage_dir / "prompt.txt").read_text()
+    assert '"source_finding_filter":' in prompt
+    assert '"included": 0' in prompt
+    assert '"skipped_non_actionable": 1' in prompt
     assert not (triage_dir / "final.json").exists()
     assert main(["triage", "triage-dry", "--out", str(out_dir)]) == 2
     assert main(["triage", "triage-dry", "--out", str(out_dir), "--force"]) == 0
@@ -135,7 +154,14 @@ def test_both_failed_exits_two(tmp_path, monkeypatch):
     assert decision["judge_rationale"] == []
 
 
-def install_fake_providers(tmp_path, *, judge_mode, fail_providers=frozenset(), repair_providers=frozenset()):
+def install_fake_providers(
+    tmp_path,
+    *,
+    judge_mode,
+    fail_providers=frozenset(),
+    repair_providers=frozenset(),
+    triage_source_id=None,
+):
     script = tmp_path / "fake_provider.py"
     script.write_text(
         textwrap.dedent(
@@ -146,6 +172,7 @@ def install_fake_providers(tmp_path, *, judge_mode, fail_providers=frozenset(), 
             fail_providers = {sorted(fail_providers)!r}
             repair_providers = {sorted(repair_providers)!r}
             judge_mode = {judge_mode!r}
+            triage_source_id = {triage_source_id!r}
             compare_scores_a = {{"evidence":5,"coherence":5,"tradeoff_honesty":5,"rebuttals":5}}
             compare_scores_b = {{"evidence":4,"coherence":4,"tradeoff_honesty":4,"rebuttals":4}}
             analyze_scores_a = {{"step_atomicity":5,"citation_grounding":5,"assumption_transparency":5,"coherence":5}}
@@ -163,7 +190,10 @@ def install_fake_providers(tmp_path, *, judge_mode, fail_providers=frozenset(), 
             elif name in repair_providers and "BAKEOFF_FORMAT_RETRY_V1" not in prompt:
                 emit({{"status":"complete","claims":[{{"id":"R-001","finding":name + " malformed claim"}}],"conflicts":[],"unknowns":[],"recommended_next_checks":[]}})
             elif "evidence-grounded triage of a Bakeoff report" in prompt:
-                emit({{"schema_version":1,"status":"complete","summary":"checked","items":[{{"id":"T-001","source_finding_id":"F-001","source_finding":"Fake merged claim","classification":"real_issue","severity":"medium","confidence":"high","supporting_evidence":["src/fake.py:1"],"counterevidence":[],"citation_check_ids":[],"recommended_action":"fix_now","rationale":"actionable"}}],"unknowns":[]}})
+                if triage_source_id is None:
+                    emit({{"schema_version":1,"status":"complete","summary":"no selected findings","items":[],"unknowns":[]}})
+                else:
+                    emit({{"schema_version":1,"status":"complete","summary":"checked","items":[{{"id":"T-001","source_finding_id":triage_source_id,"source_finding":"Fake merged claim","classification":"real_issue","severity":"medium","confidence":"high","supporting_evidence":["src/fake.py:1"],"counterevidence":[],"citation_check_ids":[],"recommended_action":"fix_now","rationale":"actionable"}}],"unknowns":[]}})
             elif "deduplication and conflict-flagging judge" in prompt:
                 emit({{"merged_claims":[{{"claim":"Fake merged claim","evidence":["fake:1"],"sources":["A","B"],"confidence":"high"}}],"conflicts":[],"unknowns_union":[]}})
             elif "pairwise judge" in prompt:

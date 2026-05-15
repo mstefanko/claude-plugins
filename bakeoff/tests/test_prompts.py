@@ -1,4 +1,4 @@
-from bakeoff.providers import build_judge_prompt, build_worker_prompt
+from bakeoff.providers import build_judge_prompt, build_triage_prompt, build_worker_prompt
 
 
 def _work_order(mode):
@@ -42,3 +42,12 @@ def test_gather_judge_prompt_separates_confidence_from_corroboration():
 
     assert "Confidence reflects evidence strength, not corroboration" in prompt
     assert "Use `sources` to show whether one or both workers found a claim" in prompt
+
+
+def test_triage_prompt_limits_items_to_selected_source_findings():
+    prompt = build_triage_prompt({"source_findings": [], "report_md": "- **F-001** ordinary fact"})
+
+    assert "classify only the provided actionable-looking source_findings" in prompt
+    assert "Do not create items for findings that are only present in report_md" in prompt
+    assert "citation_checks prove location existence, not semantic accuracy" in prompt
+    assert "Keep summary consistent with item classifications and rationales" in prompt

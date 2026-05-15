@@ -34,6 +34,7 @@ from bakeoff.triage import (
     extract_citations_from_text,
     render_triage_markdown,
     resolve_citation_cwd,
+    select_triage_source_findings,
     should_recommend_triage,
     triage_state,
 )
@@ -361,6 +362,7 @@ async def run_triage(run_dir: Path, *, force: bool, dry_run: bool, quiet: bool =
     triage_dir.mkdir(parents=True)
 
     finding_index, synthesized = build_finding_index(report_text)
+    source_findings, skipped_findings = select_triage_source_findings(finding_index)
     if synthesized:
         caveats.append("source finding IDs were synthesized from report display order")
         write_json(triage_dir / "finding_index.json", {"schema_version": 1, "findings": finding_index})
@@ -374,7 +376,11 @@ async def run_triage(run_dir: Path, *, force: bool, dry_run: bool, quiet: bool =
         "meta": meta,
         "decision": decision,
         "report_md": report_text,
-        "source_findings": finding_index,
+        "source_findings": source_findings,
+        "source_finding_filter": {
+            "included": len(source_findings),
+            "skipped_non_actionable": len(skipped_findings),
+        },
         "citation_checks": citation_checks,
         "caveats": caveats,
         "input_hashes": input_hashes,
@@ -392,8 +398,20 @@ async def run_triage(run_dir: Path, *, force: bool, dry_run: bool, quiet: bool =
         write_json(triage_dir / "status.json", {"status": "dry_run", "triage_participant": participant, "input_hashes": input_hashes})
         return 0
 
+    selected_source_ids = {finding["id"] for finding in source_findings}
+
     def validator(data: Any) -> dict[str, Any]:
         final = dict(validate_triage_result(data))
+        unknown_source_ids = sorted(
+            item["source_finding_id"]
+            for item in final.get("items", [])
+            if item.get("source_finding_id") not in selected_source_ids
+        )
+        if unknown_source_ids:
+            raise ValidationError(
+                "triage final_json.items source_finding_id must reference selected source_findings "
+                f"(unknown: {', '.join(unknown_source_ids)})"
+            )
         final["run_id"] = run_dir.name
         final["input_hashes"] = input_hashes
         final["triage_participant"] = participant

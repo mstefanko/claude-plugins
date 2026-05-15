@@ -3,7 +3,9 @@ from bakeoff.triage import (
     check_citations,
     compute_input_hashes,
     extract_citations_from_text,
+    render_triage_markdown,
     resolve_citation_cwd,
+    select_triage_source_findings,
     should_recommend_triage,
     triage_state,
 )
@@ -84,3 +86,48 @@ def test_recommendation_uses_word_boundaries():
         )
         is None
     )
+
+
+def test_select_triage_source_findings_skips_plain_findings():
+    findings = [
+        {"id": "F-001", "section": "Findings", "text": "Provider status is stored in status.json."},
+        {"id": "F-002", "section": "Findings", "text": "Report mentions a missing citation."},
+        {"id": "F-003", "section": "Conflicts", "text": "Workers disagree about exit codes."},
+        {"id": "F-004", "section": "Unknowns", "text": "Whether tests cover triage."},
+    ]
+
+    selected, skipped = select_triage_source_findings(findings)
+
+    assert [finding["id"] for finding in selected] == ["F-002", "F-003", "F-004"]
+    assert [finding["id"] for finding in skipped] == ["F-001"]
+
+
+def test_triage_markdown_renders_each_item_once_by_priority():
+    final = {
+        "run_id": "run",
+        "summary": "checked",
+        "items": [
+            {
+                "id": "T-001",
+                "source_finding": "conflict",
+                "classification": "false_positive",
+                "recommended_action": "document",
+                "rationale": "not a bug",
+            },
+            {
+                "id": "T-002",
+                "source_finding": "unknown",
+                "classification": "evidence_gap",
+                "recommended_action": "defer",
+                "rationale": "needs evidence",
+            },
+        ],
+        "unknowns": [],
+    }
+
+    markdown = render_triage_markdown(final, [])
+
+    assert markdown.count("[T-001]") == 1
+    assert markdown.count("[T-002]") == 1
+    assert "## False Positives\n\n- [T-001]" in markdown
+    assert "## Needs Reproduction\n\n- [T-002]" in markdown

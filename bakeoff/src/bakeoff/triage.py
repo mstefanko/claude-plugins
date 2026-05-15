@@ -14,6 +14,7 @@ TRIAGE_ACTION_RE = re.compile(
     r"\b(?:bug|bugs|fix|fixes|fixed|gap|gaps|missing|invalid|schema_error|drift)\b",
     re.IGNORECASE,
 )
+TRIAGE_SOURCE_SECTIONS = {"Conflicts", "Unknowns"}
 PATH_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-/")
 
 
@@ -48,6 +49,20 @@ def build_finding_index(report_text: str) -> tuple[list[dict[str, str]], bool]:
         if text not in SKIP_REPORT_BULLETS:
             entries.append({"id": f"LEGACY-F-{len(entries) + 1:03d}", "text": text, "section": section})
     return entries, bool(entries)
+
+
+def select_triage_source_findings(findings: list[dict[str, str]]) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """Return findings worth sending to triage, skipping ordinary factual report entries."""
+    selected = []
+    skipped = []
+    for finding in findings:
+        section = finding.get("section")
+        text = finding.get("text", "")
+        if section in TRIAGE_SOURCE_SECTIONS or TRIAGE_ACTION_RE.search(text):
+            selected.append(finding)
+        else:
+            skipped.append(finding)
+    return selected, skipped
 
 
 def compute_input_hashes(run_dir: Path) -> dict[str, str]:
@@ -242,22 +257,18 @@ def render_triage_markdown(final: dict[str, Any], caveats: list[str]) -> str:
     if caveats:
         lines.extend(["", "## Caveats"])
         lines.extend(f"- {caveat}" for caveat in caveats)
-    for title, predicate in (
-        ("Fix Now", lambda item: item.get("recommended_action") == "fix_now"),
-        (
-            "Defer / Product Decision",
-            lambda item: item.get("recommended_action") in {"document", "defer"}
-            or item.get("classification") in {"plan_doc_drift", "product_decision"},
-        ),
-        ("False Positives", lambda item: item.get("classification") in {"false_positive", "already_fixed"}),
-        (
-            "Needs Reproduction",
-            lambda item: item.get("recommended_action") == "reproduce"
-            or item.get("classification") in {"needs_repro", "evidence_gap"},
-        ),
-    ):
+    buckets = {
+        "Fix Now": [],
+        "False Positives": [],
+        "Needs Reproduction": [],
+        "Defer / Product Decision": [],
+    }
+    for item in final.get("items", []):
+        bucket = triage_markdown_bucket(item)
+        if bucket:
+            buckets[bucket].append(item)
+    for title, selected in buckets.items():
         lines.extend(["", f"## {title}", ""])
-        selected = [item for item in final.get("items", []) if predicate(item)]
         lines.extend(format_triage_item(item) for item in selected)
         if not selected:
             lines.append("- None.")
@@ -267,6 +278,20 @@ def render_triage_markdown(final: dict[str, Any], caveats: list[str]) -> str:
     if not unknowns:
         lines.append("- None.")
     return "\n".join(lines) + "\n"
+
+
+def triage_markdown_bucket(item: dict[str, Any]) -> str | None:
+    classification = item.get("classification")
+    action = item.get("recommended_action")
+    if action == "fix_now":
+        return "Fix Now"
+    if classification in {"false_positive", "already_fixed"}:
+        return "False Positives"
+    if action == "reproduce" or classification in {"needs_repro", "evidence_gap"}:
+        return "Needs Reproduction"
+    if action in {"document", "defer"} or classification in {"plan_doc_drift", "product_decision"}:
+        return "Defer / Product Decision"
+    return None
 
 
 def format_triage_item(item: dict[str, Any]) -> str:

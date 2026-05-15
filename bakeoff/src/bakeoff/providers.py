@@ -153,17 +153,20 @@ Allowed confidence values: high, medium, low.
 TRIAGE_PROMPT = """You are a senior engineer doing evidence-grounded triage of a Bakeoff report.
 You are NOT the original judge.
 Your job is not to improve the report prose.
-Your job is to classify each actionable-looking finding.
+Your job is to classify only the provided actionable-looking source_findings.
 
 <rules>
-- Identify each actionable-looking finding by source_finding_id.
+- Classify each entry in triage_payload.source_findings by source_finding_id.
+- Do not create items for findings that are only present in report_md and absent from source_findings.
+- If source_findings is empty, emit an empty items[] array and explain that no actionable-looking findings were selected.
 - Check supporting citations when possible using the provided citation_checks data.
 - Look for counterevidence in the provided artifacts and codebase.
-- Classify each finding.
+- Verify that each source finding faithfully describes its supporting citations; citation_checks prove location existence, not semantic accuracy.
 - Decide whether it should be fixed now, deferred, documented, ignored, or reproduced.
 - Do not mark a finding real just because the report said it confidently.
 - Do not mark a finding false just because it is inconvenient.
 - If evidence is missing, use needs_repro or evidence_gap.
+- Keep summary consistent with item classifications and rationales; do not assign blame or correctness in the summary unless the items say the same thing.
 - Do not mutate the original decision or report.
 </rules>
 
