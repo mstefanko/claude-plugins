@@ -79,10 +79,11 @@ factual accuracy.
   improve accuracy over a no-persona baseline on difficult objective benchmarks,
   while low-knowledge personas were often harmful. Source: [Prompting Science
   Report 4: Playing Pretend](https://arxiv.org/abs/2512.05858).
-- PRISM reports that persona prompts can steer tone/alignment, but that expert
-  personas can damage factual accuracy on knowledge-retrieval tasks. Source:
-  [Expert Personas Improve LLM Alignment but Damage
-  Accuracy](https://arxiv.org/abs/2603.18507).
+- Zheng et al. evaluated 162 persona roles across 2,410 factual questions and
+  found that adding personas did not improve performance over no-persona
+  controls; automatically selecting the best persona was also unreliable.
+  Source: [When "A Helpful Assistant" Is Not Really
+  Helpful](https://arxiv.org/abs/2311.10054).
 
 Implication: The new concept should be called `facet`, not `persona` or
 `role`. It should define a narrow evidence/rubric focus such as "security" or
@@ -94,9 +95,15 @@ schema, or scope rules.
 Multiple calls can improve reasoning, but debate/swarm setups are not free wins.
 
 - Self-consistency improves some reasoning tasks by sampling multiple reasoning
-  paths and aggregating the most consistent answer. Source:
+  paths and aggregating the most consistent answer. Treat this as the cheap
+  robustness alternative before adding debate/swarm topology. Source:
   [Self-Consistency Improves Chain of Thought Reasoning in Language
   Models](https://arxiv.org/abs/2203.11171).
+- Anthropic's production multi-agent research writeup supports multi-agent
+  systems for breadth-first research with independent search trajectories, but
+  also reports high token cost and warns that most coding tasks have fewer truly
+  parallelizable subtasks than research. Source: [How we built our multi-agent
+  research system](https://www.anthropic.com/engineering/multi-agent-research-system).
 - NeurIPS 2024 work on multi-LLM debate warns that similar model capabilities or
   similar responses can produce static debate dynamics that converge on a
   majority view, including a shared misconception. Source: [Multi-LLM Debate:
@@ -117,8 +124,8 @@ not be folded into the three core modes.
 Use `bakeoff init review`, which produces a `type: "gather"` work order with a
 shared `code-review` facet. Both providers get the same branch/diff context and
 the same review filter. The gather judge deduplicates actionable findings and
-preserves citations. `bakeoff triage` remains the verification step before any
-fix work.
+preserves citations. `bakeoff research` auto-runs triage for this recipe unless
+the caller passes `--no-triage`.
 
 This improves the code-review workflow without adding a new mode or making
 review-specific claims first-class before we know the generic claim schema is
@@ -159,6 +166,7 @@ Add an optional top-level `facet` object:
   "background": "Base branch: main. Review branch: feature/auth-cache. Focus on changed files and directly coupled call sites.",
   "facet": {
     "id": "code-review",
+    "kind": "generic",
     "focus": "Find actionable defects introduced or exposed by the change.",
     "include": [
       "correctness bugs and edge cases",
@@ -174,10 +182,10 @@ Add an optional top-level `facet` object:
     ]
   },
   "providers": [
-    { "id": "claude", "backend": "claude", "model": "claude-sonnet-4-6", "scope": "codebase", "effort": "low" },
-    { "id": "codex", "backend": "codex", "model": "gpt-5.5", "scope": "codebase", "effort": "low" }
+    { "id": "claude", "backend": "claude", "model": "claude-sonnet-4-6", "scope": "codebase", "effort": "high" },
+    { "id": "codex", "backend": "codex", "model": "gpt-5.5", "scope": "codebase", "effort": "high" }
   ],
-  "judge": { "backend": "claude", "model": "claude-opus-4-7", "effort": "low" },
+  "judge": { "backend": "claude", "model": "claude-opus-4-7", "effort": "xhigh" },
   "budgets": { "wall_clock_seconds": 900, "max_output_bytes": 60000 }
 }
 ```
@@ -191,6 +199,8 @@ A facet is:
   architecture review more explicit.
 - Audit metadata that should appear in `work-order.json`, `meta.json`, prompts,
   and reports.
+- A flat, singular object. v1 intentionally has no composition, no provider-level
+  facets, and no branching by facet kind.
 
 A facet is not:
 
@@ -206,12 +216,21 @@ Keep validation strict enough that facets guide rather than distract:
 
 - `facet` is optional.
 - When present, it must be an object.
+- `facet` is closed-schema in v1. Allowed keys are `id`, `kind`, `focus`,
+  `include`, `exclude`, and `notes`.
 - `facet.id` is required and must use the same slug rules as provider ids.
+- `facet.id` must not collide with any provider id in the same work order.
+- `facet.kind` is reserved for future compatibility. It may be absent or
+  `"generic"`; reject every other value.
 - `facet.focus` is required, non-empty, and should be one sentence.
 - `facet.include` is required and must contain 1-8 non-empty strings.
 - `facet.exclude` is optional and must contain 0-8 non-empty strings.
 - `facet.notes` is optional and should be reserved for concrete project
   constraints, not extra role-play.
+- Validation errors should name the precise field, for example
+  `facet.id must be a slug matching ^[A-Za-z0-9][A-Za-z0-9._-]*$`,
+  `facet.id must not duplicate a provider id`, or
+  `facet.kind must be "generic" when present`.
 
 Do not allow provider-level facets in v1. If providers have different facets in
 the same gather run, `corroboration` stops meaning "two independent workers
@@ -257,6 +276,15 @@ Judge prompt rules should add:
   out-of-facet next checks.
 - Do not reward a worker for broadening beyond the facet.
 - Do not penalize a worker for omitting material that the facet excluded.
+- For gather only, when a claim is dropped solely because it is out of facet,
+  include it in optional `out_of_facet_claims[]` with source labels, evidence,
+  and a short reason. This is observability only; do not put these claims in
+  `merged_claims`.
+
+The gather validator can accept this optional field without changing the
+required judge schema because extra fields are already tolerated. The report
+should render an `Out-of-Facet Claims` section when the field is present, but
+that section should not be included in triage source selection.
 
 ## Code Review Recipe
 
@@ -266,11 +294,22 @@ Add a recipe, not a new mode:
 bakeoff init review [--force]
 ```
 
+Implementation details:
+
+- Keep `MODES = ("gather", "compare", "analyze")` unchanged.
+- Add `INIT_KINDS = (*MODES, "review")` for the init parser choices only.
+- In `cmd_init`, branch before indexing `MODE_EFFORT_DEFAULTS`:
+  - `review` writes `review.work-order.json`.
+  - The serialized work order has `"type": "gather"`.
+  - Defaults come from `MODE_EFFORT_DEFAULTS["gather"]`, so no
+    `MODE_EFFORT_DEFAULTS["review"]` mapping is needed.
+- Print `recipe: review (mode gather)` after writing the file.
+
 It writes `review.work-order.json` with:
 
 - `"type": "gather"`.
 - `scope: "codebase"` for both providers.
-- low worker and low judge effort by default.
+- high worker and xhigh judge effort by default while dogfooding quality.
 - a top-level `facet.id` of `code-review`.
 - background placeholders for base branch, review branch, diff command, changed
   files, acceptance criteria, and known risk areas.
@@ -279,47 +318,106 @@ The recipe should say that Bakeoff does not compute branch diffs in v1. The user
 provides the branch/diff context in `background`. Automatic GitHub/PR/Gerrit
 integration stays out of scope.
 
+## Triage Policy
+
+Keep the existing recommendation-only behavior for normal gather/compare/analyze
+runs. For `facet.id == "code-review"`, auto-run triage after a successful
+research run unless the caller passes `--no-triage`.
+
+Reasoning:
+
+- Code-review findings are meant to drive immediate fixes, so untriaged false
+  positives are more expensive than in ordinary research reports.
+- Auto-triage costs one additional provider call, but the review recipe is
+  already an explicitly higher-stakes workflow.
+- The escape hatch keeps exploratory or low-budget runs cheap.
+
+Implementation details:
+
+- Add `--no-triage` to `bakeoff research`.
+- Add `should_auto_triage(work_order, decision) -> str | None` in
+  `src/bakeoff/triage.py`.
+- Return a reason for `facet.id == "code-review"` when the research phase
+  produced a report and did not already fail.
+- If auto-triage runs and fails, keep the research report and triage artifacts,
+  but return the triage exit code unless the research phase already failed.
+- `should_recommend_triage` should also return a code-review-specific reason so
+  `bakeoff show` can still guide users when auto-triage was skipped or stale.
+- `run_triage` should include parsed `facet` metadata in the triage payload in
+  addition to the raw `work_order_json`. The triage prompt should treat the
+  facet as context for actionability, not as a new schema.
+- `triage_state` should compare the existing `work_order_sha256` from
+  `compute_input_hashes`, not only `decision_sha256` and `report_sha256`. That
+  makes changing only the facet invalidate stale triage.
+
 ## Implementation Steps
 
 1. Update `src/bakeoff/work_order.py`.
    - Add `_validate_facet`.
    - Normalize optional `facet` in `validate_work_order`.
-   - Add `facet` to init templates where appropriate.
+   - Reject unknown facet keys, invalid `facet.kind`, duplicate provider/facet
+     ids, and invalid `facet.id` with precise `ValidationError` messages.
+   - Add a dedicated `review_template()` for the review recipe.
+   - Do not add commented facet stubs to the regular gather/compare/analyze
+     templates. Only the review recipe carries a facet by default.
    - Keep `schema_version` at 1 because this is an optional backward-compatible
      field.
 
 2. Update `src/bakeoff/providers.py`.
-   - Add `format_facet_instructions(work_order)`.
+   - Add one seam: `render_facet_block(facet)`.
    - Insert a `{FACET_INSTRUCTIONS}` placeholder into worker prompts after
      `<scope>`.
    - Add facet-aware judge guidance to gather, compare, and analyze prompts.
+   - Add optional gather judge `out_of_facet_claims[]` instructions for
+     observability.
    - Keep all existing output schemas unchanged.
 
 3. Update `src/bakeoff/cli.py`.
-   - Let `bakeoff init review` write a gather work order from a review recipe.
-   - Print `facet: <id>` in validation and run headers when present.
+   - Add `INIT_KINDS = (*MODES, "review")` for init parser choices.
+   - Let `bakeoff init review` write a gather work order from a review recipe
+     without adding `"review"` to `MODES`.
+   - Add `--no-triage` to `bakeoff research`.
+   - Auto-run triage after successful `code-review` research unless
+     `--no-triage` is set.
+   - Print `facet: <id>` in `print_validation_summary` and `print_run_header`
+     when present.
    - Store facet metadata in `meta.json`.
-   - Do not change `research`, `rerun`, `triage`, or provider execution
-     topology.
+   - Keep provider execution topology unchanged.
 
 4. Update `src/bakeoff/report.py`.
    - Render `Facet: <id>` near the report mode/decision.
    - Optionally render `Facet Focus: <focus>` if present.
-   - Keep gather corroboration wording unchanged because v1 facets are shared
-     across both providers.
+   - For faceted gather reports, explicitly say corroboration is worker overlap
+     within the shared facet, not proof of correctness.
+   - Render optional gather judge `out_of_facet_claims[]` under a non-actionable
+     section.
 
-5. Add examples and docs.
+5. Update `src/bakeoff/triage.py`.
+   - Add `should_auto_triage`.
+   - Make `should_recommend_triage` facet-aware for `code-review`.
+   - Compare `work_order_sha256` in `triage_state`.
+   - Keep facet handling opaque: triage receives it in payload and prompt, but
+     does not branch on facet internals except for recommendation and
+     auto-triage policy.
+
+6. Add examples and docs.
    - Add `examples/review.work-order.json`.
    - Document facets in `README.md`.
    - Keep wording clear that facets are task filters, not personas.
 
-6. Add tests.
+7. Add tests.
    - Work-order validation accepts a valid facet and rejects invalid shape.
+   - Validation rejects `facet.id` collisions with provider ids.
    - Prompt tests verify facet wording says "not a persona" and preserves
      citation/schema priority.
    - Init tests verify `init review` writes `type: "gather"`.
    - End-to-end fake-provider tests verify facet metadata lands in `meta.json`
      and the report header.
+   - Rerun tests verify facet metadata and work-order hashes round-trip.
+   - Triage tests verify `code-review` auto-triage policy, `--no-triage`, and
+     stale detection when only `work-order.json`/facet changes.
+   - Gather report tests verify single-worker corroboration wording under a
+     shared facet and rendering of optional `out_of_facet_claims[]`.
 
 ## Rejected Alternatives
 
@@ -329,6 +427,19 @@ Rejected for v1. Code review is a strong use case, but it is still mostly
 coverage research plus post-judge triage. A new mode would require new schemas,
 new judge contracts, new report rendering, and new triage logic before repeated
 usage proves the generic claim model is insufficient.
+
+### Add `--recipe review` Instead Of `init review`
+
+Rejected for v1. A recipe flag is technically tidy, but it makes the common path
+less discoverable and introduces a second init dispatch concept. `init review`
+is clear as long as `review` is kept out of `MODES` and handled as an init-only
+kind.
+
+### Add A Separate `bakeoff review` Subcommand
+
+Rejected for v1. It would imply a separate execution path. The recipe should
+produce an ordinary gather work order so validation, rerun, reports, and triage
+stay on the existing ledger model.
 
 ### Add Provider-Level Lenses
 
@@ -369,6 +480,7 @@ Only consider these after several real review runs:
   schemas or citation requirements.
 - `review` gives users a useful code-review starting point without creating a
   new module.
+- `code-review` runs auto-triage by default and can skip it with `--no-triage`.
 - Reports and meta artifacts make the facet auditable.
-- Triage remains the recommended verification path for actionable review
-  findings.
+- Stale triage detection catches changes to decision, report, or work order
+  facet.

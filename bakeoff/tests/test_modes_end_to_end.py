@@ -6,6 +6,19 @@ import sys
 import textwrap
 
 from bakeoff.cli import main
+from bakeoff.work_order import strip_jsonc_comments
+
+
+def test_init_review_writes_gather_recipe(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+
+    assert main(["init", "review"]) == 0
+
+    output = capsys.readouterr().out
+    data = json.loads(strip_jsonc_comments((tmp_path / "review.work-order.json").read_text()))
+    assert "recipe: review (mode gather)" in output
+    assert data["type"] == "gather"
+    assert data["facet"]["id"] == "code-review"
 
 
 def test_gather_research_with_fake_providers(tmp_path, monkeypatch):
@@ -31,6 +44,121 @@ def test_gather_research_with_fake_providers(tmp_path, monkeypatch):
     assert "Fake merged claim" in report
 
 
+def test_code_review_facet_auto_triages_successful_research(tmp_path, monkeypatch, capsys):
+    install_fake_providers(tmp_path, judge_mode="gather")
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    work_order = write_work_order(tmp_path, "gather", facet={"id": "code-review"})
+    out_dir = tmp_path / "runs"
+
+    assert main(["research", str(work_order), "--out", str(out_dir), "--run-id", "review-run"]) == 0
+
+    run_dir = out_dir / "review-run"
+    meta = json.loads((run_dir / "meta.json").read_text())
+    report = (run_dir / "report.md").read_text()
+    triage_dir = run_dir / "triage"
+    triage_prompt = (triage_dir / "prompt.txt").read_text()
+    assert meta["facet"]["id"] == "code-review"
+    assert "Facet: `code-review`" in report
+    assert (triage_dir / "final.json").exists()
+    assert '"facet": {' in triage_prompt
+    assert '"id": "code-review"' in triage_prompt
+
+    assert main(["show", "review-run", "--out", str(out_dir)]) == 0
+    show_output = capsys.readouterr().out
+    assert "triage available: bakeoff show review-run --triage" in show_output
+    assert "triage not yet run" not in show_output
+
+
+def test_code_review_facet_can_skip_auto_triage(tmp_path, monkeypatch, capsys):
+    install_fake_providers(tmp_path, judge_mode="gather")
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    work_order = write_work_order(tmp_path, "gather", facet={"id": "code-review"})
+    out_dir = tmp_path / "runs"
+
+    assert main(["research", str(work_order), "--out", str(out_dir), "--run-id", "review-skip", "--no-triage"]) == 0
+
+    output = capsys.readouterr().out
+    assert "recommended: bakeoff triage review-skip" in output
+    assert not (out_dir / "review-skip" / "triage").exists()
+
+
+def test_rerun_can_skip_code_review_auto_triage(tmp_path, monkeypatch, capsys):
+    install_fake_providers(tmp_path, judge_mode="gather")
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    work_order = write_work_order(tmp_path, "gather", facet={"id": "code-review"})
+    out_dir = tmp_path / "runs"
+    assert main(["research", str(work_order), "--out", str(out_dir), "--run-id", "review-source"]) == 0
+    capsys.readouterr()
+
+    assert main(["rerun", "review-source", "--out", str(out_dir), "--run-id", "review-rerun", "--no-triage"]) == 0
+
+    output = capsys.readouterr().out
+    assert "recommended: bakeoff triage review-rerun" in output
+    assert not (out_dir / "review-rerun" / "triage").exists()
+
+
+def test_code_review_facet_does_not_auto_triage_single_provider_run(tmp_path, monkeypatch, capsys):
+    install_fake_providers(tmp_path, judge_mode="gather", fail_providers={"codex"})
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    work_order = write_work_order(tmp_path, "gather", facet={"id": "code-review"})
+    out_dir = tmp_path / "runs"
+
+    assert main(["research", str(work_order), "--out", str(out_dir), "--run-id", "review-partial"]) == 0
+
+    output = capsys.readouterr().out
+    assert "auto-triage:" not in output
+    assert "recommended: bakeoff triage review-partial" in output
+    assert not (out_dir / "review-partial" / "triage").exists()
+
+
+def test_show_labels_stale_triage(tmp_path, monkeypatch, capsys):
+    install_fake_providers(tmp_path, judge_mode="gather")
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    work_order = write_work_order(tmp_path, "gather", facet={"id": "code-review"})
+    out_dir = tmp_path / "runs"
+    assert main(["research", str(work_order), "--out", str(out_dir), "--run-id", "review-stale"]) == 0
+    capsys.readouterr()
+
+    report_path = out_dir / "review-stale" / "report.md"
+    report_path.write_text(report_path.read_text() + "\nchanged after triage\n", encoding="utf-8")
+
+    assert main(["show", "review-stale", "--out", str(out_dir)]) == 0
+
+    output = capsys.readouterr().out
+    assert "triage stale: bakeoff triage review-stale --force" in output
+    assert "triage not yet run" not in output
+
+
+def test_show_recommendation_uses_current_work_order_facet(tmp_path, monkeypatch, capsys):
+    install_fake_providers(tmp_path, judge_mode="gather")
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    work_order = write_work_order(tmp_path, "gather", facet={"id": "code-review"})
+    out_dir = tmp_path / "runs"
+    assert main(["research", str(work_order), "--out", str(out_dir), "--run-id", "review-current", "--no-triage"]) == 0
+    capsys.readouterr()
+
+    run_work_order_path = out_dir / "review-current" / "work-order.json"
+    run_work_order = json.loads(run_work_order_path.read_text())
+    run_work_order["facet"]["id"] = "security"
+    run_work_order_path.write_text(json.dumps(run_work_order), encoding="utf-8")
+
+    assert main(["show", "review-current", "--out", str(out_dir)]) == 0
+
+    output = capsys.readouterr().out
+    assert "triage not yet run" not in output
+
+
+def test_no_triage_is_noop_for_non_code_review_facet(tmp_path, monkeypatch):
+    install_fake_providers(tmp_path, judge_mode="gather")
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    work_order = write_work_order(tmp_path, "gather", facet={"id": "security"})
+    out_dir = tmp_path / "runs"
+
+    assert main(["research", str(work_order), "--out", str(out_dir), "--run-id", "security-run", "--no-triage"]) == 0
+
+    assert not (out_dir / "security-run" / "triage").exists()
+
+
 def test_triage_writes_structured_artifacts(tmp_path, monkeypatch, capsys):
     install_fake_providers(tmp_path, judge_mode="gather")
     monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
@@ -41,18 +169,27 @@ def test_triage_writes_structured_artifacts(tmp_path, monkeypatch, capsys):
 
     assert main(["triage", "triage-run", "--out", str(out_dir)]) == 0
     output = capsys.readouterr().out
-    assert "source findings: selected 0; skipped 1 non-actionable" in output
+    assert "source findings: selected 0; skipped 1 non-actionable; skipped 0 out-of-facet" in output
 
     triage_dir = out_dir / "triage-run" / "triage"
     final = json.loads((triage_dir / "final.json").read_text())
     assert final["triage_participant"]["model"] == "fake-judge"
-    assert final["source_finding_filter"] == {"included": 0, "skipped_non_actionable": 1}
+    assert final["source_finding_filter"] == {
+        "included": 0,
+        "skipped_non_actionable": 1,
+        "skipped_out_of_facet": 0,
+    }
     assert final["items"] == []
     assert (triage_dir / "citation_checks.json").exists()
+    source_filter_artifact = json.loads((triage_dir / "source_finding_filter.json").read_text())
+    assert source_filter_artifact["summary"] == final["source_finding_filter"]
+    assert source_filter_artifact["selected"] == []
+    assert source_filter_artifact["skipped"][0]["skip_reason"] == "non_actionable"
     triage_report = (triage_dir / "triage.md").read_text()
     assert "## Source Findings" in triage_report
     assert "- Selected: `0`" in triage_report
     assert "- Skipped non-actionable: `1`" in triage_report
+    assert "- Skipped out-of-facet: `0`" in triage_report
 
 
 def test_triage_rejects_items_for_unselected_findings(tmp_path, monkeypatch):
@@ -81,12 +218,17 @@ def test_triage_dry_run_and_force(tmp_path, monkeypatch):
 
     triage_dir = out_dir / "triage-dry" / "triage"
     status = json.loads((triage_dir / "status.json").read_text())
-    assert status["source_finding_filter"] == {"included": 0, "skipped_non_actionable": 1}
+    assert status["source_finding_filter"] == {
+        "included": 0,
+        "skipped_non_actionable": 1,
+        "skipped_out_of_facet": 0,
+    }
     assert (triage_dir / "prompt.txt").exists()
     prompt = (triage_dir / "prompt.txt").read_text()
     assert '"source_finding_filter":' in prompt
     assert '"included": 0' in prompt
     assert '"skipped_non_actionable": 1' in prompt
+    assert '"skipped_out_of_facet": 0' in prompt
     assert not (triage_dir / "final.json").exists()
     assert main(["triage", "triage-dry", "--out", str(out_dir)]) == 2
     assert main(["triage", "triage-dry", "--out", str(out_dir), "--force"]) == 0
@@ -238,25 +380,39 @@ def install_fake_providers(
         path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
 
-def write_work_order(tmp_path, mode):
+def write_work_order(tmp_path, mode, *, facet=None):
     scopes = ["codebase", "web"] if mode == "gather" else ["mixed", "mixed"]
+    if facet and facet.get("id") == "code-review":
+        scopes = ["codebase", "codebase"]
+        facet = {
+            "id": "code-review",
+            "kind": "generic",
+            "focus": "Find actionable defects introduced or exposed by the change.",
+            "include": ["correctness bugs and edge cases"],
+            "exclude": ["style-only preferences"],
+        }
+    elif facet:
+        facet = {
+            "id": facet["id"],
+            "kind": "generic",
+            "focus": "Find relevant facet evidence.",
+            "include": ["relevant evidence"],
+        }
     path = tmp_path / f"{mode}.json"
-    path.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "id": f"{mode}-fake",
-                "type": mode,
-                "goal": "Run fake bakeoff.",
-                "background": "Fake context.",
-                "providers": [
-                    {"id": "claude", "backend": "claude", "model": "fake-claude", "scope": scopes[0]},
-                    {"id": "codex", "backend": "codex", "model": "fake-codex", "scope": scopes[1]},
-                ],
-                "judge": {"backend": "claude", "model": "fake-judge"},
-                "budgets": {"wall_clock_seconds": 3, "max_output_bytes": 20000},
-            }
-        ),
-        encoding="utf-8",
-    )
+    data = {
+        "schema_version": 1,
+        "id": f"{mode}-fake",
+        "type": mode,
+        "goal": "Run fake bakeoff.",
+        "background": "Fake context.",
+        "providers": [
+            {"id": "claude", "backend": "claude", "model": "fake-claude", "scope": scopes[0]},
+            {"id": "codex", "backend": "codex", "model": "fake-codex", "scope": scopes[1]},
+        ],
+        "judge": {"backend": "claude", "model": "fake-judge"},
+        "budgets": {"wall_clock_seconds": 3, "max_output_bytes": 20000},
+    }
+    if facet:
+        data["facet"] = facet
+    path.write_text(json.dumps(data), encoding="utf-8")
     return path

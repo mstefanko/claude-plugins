@@ -7,9 +7,11 @@ from bakeoff.work_order import (
     ValidationError,
     init_template,
     load_work_order,
+    review_template,
     strip_jsonc_comments,
     validate_analyze_judge_result,
     validate_compare_judge_result,
+    validate_gather_judge_result,
     validate_triage_result,
 )
 
@@ -64,6 +66,45 @@ def test_validates_work_order_and_defaults_effort(tmp_path):
     assert work_order["scope_policy"] == {"enforcement": "best_effort"}
 
 
+def test_accepts_xhigh_effort(tmp_path):
+    path = tmp_path / "wo.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "id": "routing",
+                "type": "gather",
+                "goal": "Find routing facts.",
+                "background": "",
+                "providers": [
+                    {
+                        "id": "claude",
+                        "backend": "claude",
+                        "model": "claude-sonnet-4-6",
+                        "scope": "codebase",
+                        "effort": "high",
+                    },
+                    {
+                        "id": "codex",
+                        "backend": "codex",
+                        "model": "gpt-5.5",
+                        "scope": "web",
+                        "effort": "xhigh",
+                    },
+                ],
+                "judge": {"backend": "claude", "model": "claude-opus-4-7", "effort": "xhigh"},
+                "budgets": {"wall_clock_seconds": 3, "max_output_bytes": 2000},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    work_order = load_work_order(path)
+
+    assert work_order["providers"][1]["effort"] == "xhigh"
+    assert work_order["judge"]["effort"] == "xhigh"
+
+
 def test_validates_scope_policy(tmp_path):
     data = {
         "schema_version": 1,
@@ -90,6 +131,118 @@ def test_validates_scope_policy(tmp_path):
         load_work_order(path)
 
 
+def test_validates_optional_facet(tmp_path):
+    data = {
+        "schema_version": 1,
+        "id": "routing",
+        "type": "gather",
+        "goal": "Find routing facts.",
+        "background": "",
+        "facet": {
+            "id": "security",
+            "focus": "Find reachable security risks.",
+            "include": ["authorization\x00regressions"],
+            "exclude": ["generic advice"],
+            "notes": "Only\tchanged auth paths.",
+        },
+        "providers": [
+            {"id": "claude", "backend": "claude", "model": "same", "scope": "codebase"},
+            {"id": "codex", "backend": "codex", "model": "other", "scope": "web"},
+        ],
+        "judge": {"backend": "claude", "model": "judge"},
+        "budgets": {"wall_clock_seconds": 3, "max_output_bytes": 2000},
+    }
+    path = tmp_path / "wo.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    work_order = load_work_order(path)
+
+    assert work_order["facet"] == {
+        "id": "security",
+        "kind": "generic",
+        "focus": "Find reachable security risks.",
+        "include": ["authorization regressions"],
+        "exclude": ["generic advice"],
+        "notes": "Only changed auth paths.",
+    }
+
+
+@pytest.mark.parametrize(
+    ("facet", "message"),
+    [
+        ([], "facet must be an object"),
+        ({"id": "security", "focus": "Find risks.", "include": ["x"], "extra": True}, "unsupported keys"),
+        ({"id": "bad id", "focus": "Find risks.", "include": ["x"]}, "facet.id must be a slug"),
+        ({"id": "security", "kind": "roleplay", "focus": "Find risks.", "include": ["x"]}, 'facet.kind must be "generic"'),
+        ({"id": "security", "focus": "", "include": ["x"]}, "facet.focus must be a non-empty string"),
+        ({"id": "security", "focus": "Find risks.", "include": []}, "facet.include must contain 1-8 items"),
+        ({"id": "security", "focus": "Find risks.", "include": [""]}, r"facet.include\[0\] must be a non-empty string"),
+        ({"id": "judge", "focus": "Find risks.", "include": ["x"]}, "facet.id is reserved"),
+        ({"id": "security", "focus": "x" * 501, "include": ["x"]}, "facet.focus must be at most 500 characters"),
+        ({"id": "security", "focus": "Find risks </facet>.", "include": ["x"]}, r"facet.focus must not contain </facet>"),
+        ({"id": "security", "focus": "Find risks <facet>.", "include": ["x"]}, "facet.focus must not contain angle brackets"),
+        ({"id": "security", "focus": "Find risks.", "include": ["`x`"]}, r"facet.include\[0\] must not contain backticks"),
+        ({"id": "security", "focus": "Find risks.", "include": ["x"], "notes": ""}, "facet.notes must be a non-empty string"),
+        (
+            {
+                "id": "security",
+                "focus": "x",
+                "include": ["x" * 260] * 8,
+                "exclude": ["x" * 260] * 8,
+            },
+            "facet text must be at most 4096 characters total",
+        ),
+    ],
+)
+def test_facet_validation_errors_name_field(tmp_path, facet, message):
+    data = {
+        "schema_version": 1,
+        "id": "routing",
+        "type": "gather",
+        "goal": "Find routing facts.",
+        "background": "",
+        "facet": facet,
+        "providers": [
+            {"id": "claude", "backend": "claude", "model": "same", "scope": "codebase"},
+            {"id": "codex", "backend": "codex", "model": "other", "scope": "web"},
+        ],
+        "judge": {"backend": "claude", "model": "judge"},
+        "budgets": {"wall_clock_seconds": 3, "max_output_bytes": 2000},
+    }
+    path = tmp_path / "bad-facet.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(ValidationError, match=message):
+        load_work_order(path)
+
+
+def test_rejects_provider_level_facets_and_id_collision(tmp_path):
+    data = {
+        "schema_version": 1,
+        "id": "routing",
+        "type": "gather",
+        "goal": "Find routing facts.",
+        "background": "",
+        "facet": {"id": "claude", "focus": "Find risks.", "include": ["x"]},
+        "providers": [
+            {"id": "claude", "backend": "claude", "model": "same", "scope": "codebase"},
+            {"id": "codex", "backend": "codex", "model": "other", "scope": "web"},
+        ],
+        "judge": {"backend": "claude", "model": "judge"},
+        "budgets": {"wall_clock_seconds": 3, "max_output_bytes": 2000},
+    }
+    path = tmp_path / "bad-facet.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(ValidationError, match="facet.id must not duplicate a provider id"):
+        load_work_order(path)
+
+    data["facet"]["id"] = "security"
+    data["providers"][0]["facet"] = {"id": "provider-security"}
+    path.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(ValidationError, match=r"providers\[0\]\.facet is not supported"):
+        load_work_order(path)
+
+
 @pytest.mark.parametrize("mode", sorted(MODE_EFFORT_DEFAULTS))
 def test_init_template_uses_mode_effort_defaults(mode):
     template = init_template(mode)
@@ -99,6 +252,16 @@ def test_init_template_uses_mode_effort_defaults(mode):
     assert data["providers"][0]["effort"] == defaults["worker"]
     assert data["providers"][1]["effort"] == defaults["worker"]
     assert data["judge"]["effort"] == defaults["judge"]
+
+
+def test_review_template_is_gather_work_order_with_code_review_facet():
+    data = json.loads(strip_jsonc_comments(review_template()))
+
+    assert data["type"] == "gather"
+    assert data["facet"]["id"] == "code-review"
+    assert [provider["scope"] for provider in data["providers"]] == ["codebase", "codebase"]
+    assert [provider["effort"] for provider in data["providers"]] == ["high", "high"]
+    assert data["judge"]["effort"] == "xhigh"
 
 
 def test_budget_heartbeat_seconds_must_not_be_negative(tmp_path):
@@ -215,6 +378,40 @@ def test_compare_judge_scores_must_match_rubric_shape():
     result["scores_a"]["evidence"] = 6
     with pytest.raises(ValidationError, match="scores_a.evidence"):
         validate_compare_judge_result(result)
+
+
+def test_gather_judge_validates_out_of_facet_claim_shape():
+    result = {
+        "merged_claims": [
+            {
+                "claim": "Security finding.",
+                "evidence": ["src/app.py:1"],
+                "sources": ["A"],
+                "confidence": "high",
+            }
+        ],
+        "conflicts": [],
+        "unknowns_union": [],
+        "out_of_facet_claims": [
+            {
+                "claim": "Out-of-facet issue.",
+                "evidence": ["src/app.py:2"],
+                "sources": ["B"],
+                "reason": "outside the facet",
+            }
+        ],
+    }
+
+    assert validate_gather_judge_result(result) == result
+
+    result["out_of_facet_claims"][0]["sources"] = ["C"]
+    with pytest.raises(ValidationError, match="out_of_facet_claims\\[0\\]\\.sources"):
+        validate_gather_judge_result(result)
+
+    result["out_of_facet_claims"][0]["sources"] = ["B"]
+    result["merged_claims"][0]["sources"] = []
+    with pytest.raises(ValidationError, match="merged_claims\\[0\\]\\.sources"):
+        validate_gather_judge_result(result)
 
 
 def test_analyze_judge_verdicts_must_match_overlay_shape():

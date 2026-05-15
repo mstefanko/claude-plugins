@@ -35,18 +35,22 @@ from bakeoff.triage import (
     collect_citation_text,
     compute_input_hashes,
     extract_citations_from_text,
+    facet_id,
     render_triage_markdown,
     resolve_citation_cwd,
     select_triage_source_findings,
+    should_auto_triage,
     should_recommend_triage,
+    summarize_source_finding_filter,
     triage_state,
 )
 from bakeoff.work_order import (
+    INIT_KINDS,
     MODE_EFFORT_DEFAULTS,
-    MODES,
     ValidationError,
     init_template,
     load_work_order,
+    review_template,
     validate_analyze_judge_result,
     validate_compare_judge_result,
     validate_gather_judge_result,
@@ -81,7 +85,7 @@ def build_parser() -> argparse.ArgumentParser:
     subcommands = parser.add_subparsers(dest="command")
 
     init = subcommands.add_parser("init", help="write an example work order")
-    init.add_argument("type", choices=MODES)
+    init.add_argument("type", choices=INIT_KINDS)
     init.add_argument("--force", action="store_true", help="overwrite an existing template")
 
     validate = subcommands.add_parser("validate", help="validate and dry-run a work order")
@@ -93,12 +97,14 @@ def build_parser() -> argparse.ArgumentParser:
     research.add_argument("--run-id", help="explicit run id")
     research.add_argument("--force", action="store_true", help="replace an existing run directory")
     research.add_argument("--quiet", action="store_true", help="suppress provider heartbeat lines")
+    research.add_argument("--no-triage", action="store_true", help="skip automatic triage for code-review runs")
 
     rerun = subcommands.add_parser("rerun", help="replay a previous work order with a fresh run id")
     rerun.add_argument("source_run_id")
     rerun.add_argument("--out", default="runs", help="run ledger directory (default: runs)")
     rerun.add_argument("--run-id", dest="new_run_id", help="explicit new run id")
     rerun.add_argument("--quiet", action="store_true", help="suppress provider heartbeat lines")
+    rerun.add_argument("--no-triage", action="store_true", help="skip automatic triage for code-review runs")
 
     triage = subcommands.add_parser("triage", help="triage a completed bakeoff report")
     triage.add_argument("run_id")
@@ -160,6 +166,13 @@ def cmd_init(args: argparse.Namespace) -> int:
     path = Path(f"{args.type}.work-order.json")
     if path.exists() and not args.force:
         raise ValidationError(f"{path} already exists; use --force to overwrite")
+    if args.type == "review":
+        path.write_text(review_template(), encoding="utf-8")
+        defaults = MODE_EFFORT_DEFAULTS["gather"]
+        print(f"wrote {path}")
+        print("recipe: review (mode gather)")
+        print(f"effort defaults: workers={defaults['worker']}, judge={defaults['judge']}")
+        return 0
     path.write_text(init_template(args.type), encoding="utf-8")
     print(f"wrote {path}")
     defaults = MODE_EFFORT_DEFAULTS[args.type]
@@ -174,7 +187,14 @@ def cmd_validate(args: argparse.Namespace) -> int:
 
 
 async def cmd_research(args: argparse.Namespace) -> int:
-    return await run_research(Path(args.work_order), out_dir=Path(args.out), run_id=args.run_id, force=args.force, quiet=args.quiet)
+    return await run_research(
+        Path(args.work_order),
+        out_dir=Path(args.out),
+        run_id=args.run_id,
+        force=args.force,
+        quiet=args.quiet,
+        no_triage=args.no_triage,
+    )
 
 
 async def cmd_rerun(args: argparse.Namespace) -> int:
@@ -182,7 +202,14 @@ async def cmd_rerun(args: argparse.Namespace) -> int:
     work_order_path = source_run / "work-order.json"
     if not work_order_path.exists():
         raise ValidationError(f"{source_run} has no work-order.json")
-    return await run_research(work_order_path, out_dir=Path(args.out), run_id=args.new_run_id, force=False, quiet=args.quiet)
+    return await run_research(
+        work_order_path,
+        out_dir=Path(args.out),
+        run_id=args.new_run_id,
+        force=False,
+        quiet=args.quiet,
+        no_triage=args.no_triage,
+    )
 
 
 def cmd_ls(args: argparse.Namespace) -> int:
@@ -226,9 +253,20 @@ def cmd_show(args: argparse.Namespace) -> int:
         raise ValidationError(f"{run_dir} has no report.md")
     report_text = report.read_text(encoding="utf-8")
     print(report_text, end="")
-    if triage_state(run_dir) == "yes":
+    state = triage_state(run_dir)
+    if state == "yes":
         print(f"\ntriage available: bakeoff show {args.run_id} --triage")
-    elif should_recommend_triage({"type": (read_json(run_dir / "meta.json") or {}).get("type")}, read_json(run_dir / "decision.json") or {}, report_text):
+        return 0
+    if state == "stale":
+        print(f"\ntriage stale: bakeoff triage {args.run_id} --force")
+        return 0
+    try:
+        work_order_like = load_work_order(run_dir / "work-order.json")
+    except ValidationError:
+        meta = read_json(run_dir / "meta.json") or {}
+        work_order_like = {"type": meta.get("type"), "facet": meta.get("facet")}
+    recommendation = should_recommend_triage(work_order_like, read_json(run_dir / "decision.json") or {}, report_text)
+    if recommendation:
         print(f"\ntriage not yet run: bakeoff triage {args.run_id}")
     return 0
 
@@ -333,7 +371,15 @@ async def cmd_doctor(args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
-async def run_research(work_order_path: Path, *, out_dir: Path, run_id: str | None, force: bool, quiet: bool = False) -> int:
+async def run_research(
+    work_order_path: Path,
+    *,
+    out_dir: Path,
+    run_id: str | None,
+    force: bool,
+    quiet: bool = False,
+    no_triage: bool = False,
+) -> int:
     work_order = load_work_order(work_order_path)
     actual_run_id = run_id or make_run_id()
     validate_run_id(actual_run_id)
@@ -387,6 +433,11 @@ async def run_research(work_order_path: Path, *, out_dir: Path, run_id: str | No
     write_meta(run_dir, work_order, actual_run_id, started_at, worker_results=worker_results)
     print(f"report: {run_dir / 'report.md'}")
     print(f"next:   bakeoff show {actual_run_id}")
+    auto_triage_reason = None if no_triage or exit_code != 0 else should_auto_triage(work_order, decision)
+    if auto_triage_reason:
+        print(f"auto-triage: {auto_triage_reason}")
+        triage_exit_code = await run_triage(run_dir, force=False, dry_run=False, quiet=quiet)
+        return triage_exit_code if triage_exit_code != 0 else exit_code
     recommendation = should_recommend_triage(work_order, decision, report)
     if recommendation:
         print(f"recommended: bakeoff triage {actual_run_id}  ({recommendation})")
@@ -415,11 +466,17 @@ async def run_triage(run_dir: Path, *, force: bool, dry_run: bool, quiet: bool =
     triage_dir.mkdir(parents=True)
 
     finding_index, synthesized = build_finding_index(report_text)
-    source_findings, skipped_findings = select_triage_source_findings(finding_index)
-    source_finding_filter = {
-        "included": len(source_findings),
-        "skipped_non_actionable": len(skipped_findings),
-    }
+    source_findings, skipped_findings = select_triage_source_findings(finding_index, facet_id=facet_id(work_order))
+    source_finding_filter = summarize_source_finding_filter(source_findings, skipped_findings)
+    write_json(
+        triage_dir / "source_finding_filter.json",
+        {
+            "schema_version": 1,
+            "summary": source_finding_filter,
+            "selected": source_findings,
+            "skipped": skipped_findings,
+        },
+    )
     if synthesized:
         caveats.append("source finding IDs were synthesized from report display order")
         write_json(triage_dir / "finding_index.json", {"schema_version": 1, "findings": finding_index})
@@ -430,6 +487,7 @@ async def run_triage(run_dir: Path, *, force: bool, dry_run: bool, quiet: bool =
         "schema_version": 1,
         "run_id": run_dir.name,
         "work_order_json": (run_dir / "work-order.json").read_text(encoding="utf-8"),
+        "facet": work_order.get("facet"),
         "meta": meta,
         "decision": decision,
         "report_md": report_text,
@@ -451,7 +509,8 @@ async def run_triage(run_dir: Path, *, force: bool, dry_run: bool, quiet: bool =
     print(
         "source findings: "
         f"selected {source_finding_filter['included']}; "
-        f"skipped {source_finding_filter['skipped_non_actionable']} non-actionable"
+        f"skipped {source_finding_filter['skipped_non_actionable']} non-actionable; "
+        f"skipped {source_finding_filter['skipped_out_of_facet']} out-of-facet"
     )
     if dry_run:
         write_json(
@@ -822,6 +881,8 @@ def print_validation_summary(work_order: dict[str, Any]) -> None:
     print("valid work order")
     print(f"  id:      {work_order['id']}")
     print(f"  mode:    {work_order['type']}")
+    if work_order.get("facet"):
+        print(f"  facet:   {work_order['facet']['id']}")
     print(f"  budgets: {format_budget_summary(budgets)}")
     print(f"  scope:   {work_order['scope_policy']['enforcement']}")
     print("  providers:")
@@ -839,6 +900,8 @@ def print_run_header(work_order: dict[str, Any], run_dir: Path, run_id: str) -> 
     judge = work_order["judge"]
     print(f"bakeoff research  run-id: {run_id}")
     print(f"  mode:           {work_order['type']}")
+    if work_order.get("facet"):
+        print(f"  facet:          {work_order['facet']['id']}")
     print(f"  run dir:        {run_dir}/")
     print(f"  providers:      {providers}")
     print(f"  budgets:        {format_budget_summary(budgets)}")
@@ -1037,6 +1100,7 @@ def write_meta(
     meta = {
         "run_id": run_id,
         "type": work_order["type"],
+        "facet": work_order.get("facet"),
         "started_at": started_at,
         "finished_at": utc_now(),
         "cwd": str(Path.cwd()),

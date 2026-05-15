@@ -1,0 +1,58 @@
+{
+  // bakeoff review recipe - edit id, goal, and background, then run:
+  //   bakeoff validate examples/review.work-order.json
+  //   bakeoff research examples/review.work-order.json
+  //
+  // Bakeoff does not compute branch diffs in v1. Paste the branch/diff context,
+  // changed files, acceptance criteria, and known risks into background.
+  "schema_version": 1,
+  "id": "review-example",
+  "type": "gather",
+  "goal": "Review the branch diff for actionable defects.",
+  "background": "Base branch: TODO. Review branch: TODO. Diff command/output: TODO. Changed files: TODO. Acceptance criteria: TODO. Known risk areas: TODO.",
+  "facet": {
+    "id": "code-review",
+    "kind": "generic",
+    "focus": "Find actionable defects introduced or exposed by the change.",
+    "include": [
+      "correctness bugs and edge cases",
+      "security issues with concrete data-flow or control-flow evidence",
+      "user-visible regressions",
+      "missing or misleading tests for changed behavior",
+      "maintainability risks likely to cause future defects"
+    ],
+    "exclude": [
+      "style-only preferences without project convention evidence",
+      "large rewrites unrelated to the changed behavior",
+      "speculation without file:line evidence"
+    ]
+  },
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "claude-sonnet-4-6",
+      "scope": "codebase",
+      "effort": "high"
+    },
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "scope": "codebase",
+      "effort": "high"
+    }
+  ],
+  "judge": {
+    "backend": "claude",
+    "model": "claude-opus-4-7",
+    "effort": "xhigh"
+  },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  }
+}

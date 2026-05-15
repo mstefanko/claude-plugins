@@ -13,20 +13,20 @@
       "backend": "claude",
       "model": "claude-sonnet-4-6",
       "scope": "codebase",
-      "effort": "low"
+      "effort": "high"
     },
     {
       "id": "codex",
       "backend": "codex",
       "model": "gpt-5.5",
       "scope": "web",
-      "effort": "low"
+      "effort": "high"
     }
   ],
   "judge": {
     "backend": "claude",
     "model": "claude-opus-4-7",
-    "effort": "low"
+    "effort": "xhigh"
   },
   "budgets": {
     "wall_clock_seconds": 900,

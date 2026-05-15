@@ -26,7 +26,7 @@
   "judge": {
     "backend": "claude",
     "model": "claude-opus-4-7",
-    "effort": "medium"
+    "effort": "xhigh"
   },
   "budgets": {
     "wall_clock_seconds": 900,

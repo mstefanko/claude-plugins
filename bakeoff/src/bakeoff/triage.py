@@ -9,9 +9,12 @@ from typing import Any
 from bakeoff.report_index import ACTIONABLE_REPORT_SECTIONS, SKIP_REPORT_BULLETS
 from bakeoff.work_order import ValidationError
 
+CODE_REVIEW_FACET_ID = "code-review"
 FINDING_ID_RE = re.compile(r"^\s*-\s+\*\*(F-\d{3})\*\*\s+(.*)$")
 TRIAGE_ACTION_RE = re.compile(
-    r"\b(?:bug|bugs|fix|fixes|fixed|gap|gaps|missing|invalid|schema_error|drift)\b",
+    r"\b(?:bug|bugs|fix|fixes|fixed|gap|gaps|missing|invalid|schema_error|drift|"
+    r"incorrect|mismatch|misleading|ambiguous|unclear|incomplete|omits?|lacks?|"
+    r"stale|contradicts?|contradiction|confusing|unrecoverable)\b",
     re.IGNORECASE,
 )
 PRIMARY_EXPLANATION_ACTION_RE = re.compile(
@@ -24,6 +27,7 @@ PRIMARY_EXPLANATION_DOC_DRIFT_RE = re.compile(
     re.IGNORECASE,
 )
 TRIAGE_SOURCE_SECTIONS = {"Actionable Follow-ups", "Conflicts", "Unknowns"}
+NON_TRIAGE_SECTIONS = {"Out-of-Facet Claims"}
 PATH_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-/")
 
 
@@ -60,25 +64,42 @@ def build_finding_index(report_text: str) -> tuple[list[dict[str, str]], bool]:
     return entries, bool(entries)
 
 
-def select_triage_source_findings(findings: list[dict[str, str]]) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+def select_triage_source_findings(
+    findings: list[dict[str, str]], *, facet_id: str | None = None
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     """Return findings worth sending to triage, skipping ordinary factual report entries."""
     selected = []
     skipped = []
     for finding in findings:
         section = finding.get("section")
         text = finding.get("text", "")
-        if section in TRIAGE_SOURCE_SECTIONS:
+        if section in NON_TRIAGE_SECTIONS:
+            skipped.append({**finding, "skip_reason": "out_of_facet"})
+        elif facet_id and section == "Findings":
+            selected.append(finding)
+        elif section in TRIAGE_SOURCE_SECTIONS:
             selected.append(finding)
         elif section == "Primary Explanation":
             if PRIMARY_EXPLANATION_ACTION_RE.search(text) or PRIMARY_EXPLANATION_DOC_DRIFT_RE.search(text):
                 selected.append(finding)
             else:
-                skipped.append(finding)
+                skipped.append({**finding, "skip_reason": "non_actionable"})
         elif TRIAGE_ACTION_RE.search(text):
             selected.append(finding)
         else:
-            skipped.append(finding)
+            skipped.append({**finding, "skip_reason": "non_actionable"})
     return selected, skipped
+
+
+def summarize_source_finding_filter(
+    source_findings: list[dict[str, str]], skipped_findings: list[dict[str, str]]
+) -> dict[str, int]:
+    out_of_facet = sum(1 for finding in skipped_findings if finding.get("skip_reason") == "out_of_facet")
+    return {
+        "included": len(source_findings),
+        "skipped_non_actionable": len(skipped_findings) - out_of_facet,
+        "skipped_out_of_facet": out_of_facet,
+    }
 
 
 def compute_input_hashes(run_dir: Path) -> dict[str, str]:
@@ -96,6 +117,13 @@ def sha256_file(path: Path) -> str:
         raise ValidationError(f"{path} is required for triage") from exc
 
 
+def facet_id(work_order: dict[str, Any]) -> str | None:
+    facet = work_order.get("facet")
+    if isinstance(facet, dict) and isinstance(facet.get("id"), str):
+        return facet["id"]
+    return None
+
+
 def triage_state(run_dir: Path) -> str:
     final = read_json(run_dir / "triage" / "final.json")
     if not isinstance(final, dict) or not (run_dir / "triage" / "triage.md").exists():
@@ -107,17 +135,32 @@ def triage_state(run_dir: Path) -> str:
         current = compute_input_hashes(run_dir)
     except ValidationError:
         return "stale"
-    if hashes.get("decision_sha256") != current["decision_sha256"] or hashes.get("report_sha256") != current["report_sha256"]:
+    if (
+        hashes.get("decision_sha256") != current["decision_sha256"]
+        or hashes.get("report_sha256") != current["report_sha256"]
+    ):
+        return "stale"
+    if "work_order_sha256" in hashes and hashes.get("work_order_sha256") != current["work_order_sha256"]:
         return "stale"
     return "yes"
 
 
+def should_auto_triage(work_order: dict[str, Any], decision: dict[str, Any]) -> str | None:
+    if work_order.get("type") != "gather" or facet_id(work_order) != CODE_REVIEW_FACET_ID:
+        return None
+    if decision.get("decision_kind") in {"both_failed", "single_provider_only", "tie"}:
+        return None
+    return "code-review facet - verify actionable findings before fixing"
+
+
 def should_recommend_triage(work_order: dict[str, Any], decision: dict[str, Any], report_text: str) -> str | None:
     findings, _ = build_finding_index(report_text)
-    if work_order.get("type") == "gather" and len(findings) >= 5:
-        return f"gather report with {len(findings)} findings - verify before fixing"
     if decision.get("decision_kind") in {"single_provider_only", "both_failed", "tie"}:
         return f"{decision.get('decision_kind')} decision - verify before fixing"
+    if work_order.get("type") == "gather" and facet_id(work_order) == CODE_REVIEW_FACET_ID:
+        return "code-review facet - verify actionable findings before fixing"
+    if work_order.get("type") == "gather" and len(findings) >= 5:
+        return f"gather report with {len(findings)} findings - verify before fixing"
     source_findings, _ = select_triage_source_findings(findings)
     finding_text = "\n".join(finding.get("text", "") for finding in source_findings)
     match = TRIAGE_ACTION_RE.search(finding_text)
@@ -274,14 +317,16 @@ def render_triage_markdown(final: dict[str, Any], caveats: list[str]) -> str:
     source_filter = final.get("source_finding_filter")
     if isinstance(source_filter, dict):
         included = source_filter.get("included", 0)
-        skipped = source_filter.get("skipped_non_actionable", 0)
+        skipped_non_actionable = source_filter.get("skipped_non_actionable", 0)
+        skipped_out_of_facet = source_filter.get("skipped_out_of_facet", 0)
         lines.extend(
             [
                 "",
                 "## Source Findings",
                 "",
                 f"- Selected: `{included}`",
-                f"- Skipped non-actionable: `{skipped}`",
+                f"- Skipped non-actionable: `{skipped_non_actionable}`",
+                f"- Skipped out-of-facet: `{skipped_out_of_facet}`",
             ]
         )
     if caveats:

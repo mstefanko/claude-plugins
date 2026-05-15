@@ -18,11 +18,16 @@ def render_report(
         "",
         f"Mode: `{mode}`",
         f"Decision: `{decision['decision_kind']}`",
-        "",
     ]
+    facet = work_order.get("facet")
+    if isinstance(facet, dict) and isinstance(facet.get("id"), str) and facet["id"].strip():
+        lines.append(f"Facet: `{facet['id']}`")
+        if facet.get("focus"):
+            lines.append(f"Facet Focus: {facet['focus']}")
+    lines.append("")
     lines.extend(_decision_audit(decision))
     if mode == "gather":
-        lines.extend(_render_gather(decision, worker_results, judge_results or {}))
+        lines.extend(_render_gather(work_order, decision, worker_results, judge_results or {}))
     elif mode == "compare":
         lines.extend(_render_compare(decision, worker_results))
     elif mode == "analyze":
@@ -87,6 +92,7 @@ def _decision_audit(decision: dict[str, Any]) -> list[str]:
 
 
 def _render_gather(
+    work_order: dict[str, Any],
     decision: dict[str, Any],
     worker_results: dict[str, dict[str, Any]],
     judge_results: dict[str, dict[str, Any]],
@@ -108,6 +114,13 @@ def _render_gather(
         grouped.setdefault(key, []).append({**claim, "_source_providers": sources})
 
     lines = ["## Findings", ""]
+    if work_order.get("facet"):
+        lines.extend(
+            [
+                f"Corroboration describes worker overlap within the shared `{work_order['facet']['id']}` facet; it is not proof of correctness.",
+                "",
+            ]
+        )
     for key in sorted(grouped):
         lines.append(f"### {key}")
         lines.extend(_claim_lines(grouped[key], show_corroboration=True))
@@ -120,6 +133,10 @@ def _render_gather(
     if not judge.get("unknowns_union"):
         lines.append("- None reported.")
     lines.append("")
+    if judge.get("out_of_facet_claims"):
+        lines.extend(["## Out-of-Facet Claims", ""])
+        lines.extend(_out_of_facet_lines(judge.get("out_of_facet_claims", [])))
+        lines.append("")
     return lines
 
 
@@ -254,6 +271,28 @@ def _generic_item_lines(items: list[Any]) -> list[str]:
                 lines.append(f"  Source: `{item['source_provider']}`")
         else:
             lines.append(f"- {item}")
+    return lines
+
+
+def _out_of_facet_lines(items: list[Any]) -> list[str]:
+    if not items:
+        return ["- None reported."]
+    lines: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            lines.append(f"- {item}")
+            continue
+        claim = item.get("claim") or item.get("description") or str(item)
+        details = []
+        sources = item.get("sources") or item.get("source_labels")
+        if isinstance(sources, list) and sources:
+            details.append(f"sources `{'+'.join(str(source) for source in sources)}`")
+        if item.get("reason"):
+            details.append(f"reason `{item['reason']}`")
+        suffix = f" ({', '.join(details)})" if details else ""
+        lines.append(f"- {claim}{suffix}")
+        if item.get("evidence"):
+            lines.append(f"  Evidence: {', '.join(str(piece) for piece in item['evidence'])}")
     return lines
 
 

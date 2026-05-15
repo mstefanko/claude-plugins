@@ -6,7 +6,9 @@ from bakeoff.triage import (
     render_triage_markdown,
     resolve_citation_cwd,
     select_triage_source_findings,
+    should_auto_triage,
     should_recommend_triage,
+    summarize_source_finding_filter,
     triage_state,
 )
 
@@ -73,6 +75,31 @@ def test_triage_state_marks_changed_inputs_stale(tmp_path):
 
     assert triage_state(run_dir) == "stale"
 
+    write_json(
+        triage_dir / "final.json",
+        {
+            "input_hashes": compute_input_hashes(run_dir),
+        },
+    )
+    (run_dir / "work-order.json").write_text('{"facet":{"id":"security"}}\n', encoding="utf-8")
+
+    assert triage_state(run_dir) == "stale"
+
+
+def test_triage_state_accepts_legacy_hashes_without_work_order_sha(tmp_path):
+    run_dir = tmp_path / "run"
+    triage_dir = run_dir / "triage"
+    triage_dir.mkdir(parents=True)
+    (run_dir / "work-order.json").write_text("{}\n", encoding="utf-8")
+    (run_dir / "decision.json").write_text("{}\n", encoding="utf-8")
+    (run_dir / "report.md").write_text("old\n", encoding="utf-8")
+    hashes = compute_input_hashes(run_dir)
+    hashes.pop("work_order_sha256")
+    write_json(triage_dir / "final.json", {"input_hashes": hashes})
+    (triage_dir / "triage.md").write_text("# ok\n", encoding="utf-8")
+
+    assert triage_state(run_dir) == "yes"
+
 
 def test_recommendation_uses_word_boundaries():
     assert should_recommend_triage({"type": "gather"}, {"decision_kind": "structured_union"}, "vintage report") is None
@@ -88,6 +115,19 @@ def test_recommendation_uses_word_boundaries():
     )
 
 
+def test_code_review_facet_recommends_and_auto_triages():
+    work_order = {"type": "gather", "facet": {"id": "code-review"}}
+    decision = {"decision_kind": "structured_union"}
+
+    assert should_auto_triage(work_order, decision) == "code-review facet - verify actionable findings before fixing"
+    assert should_recommend_triage(work_order, decision, "") == "code-review facet - verify actionable findings before fixing"
+    assert should_auto_triage({"type": "gather"}, decision) is None
+    assert should_auto_triage({"type": "analyze", "facet": {"id": "code-review"}}, decision) is None
+    assert should_auto_triage(work_order, {"decision_kind": "both_failed"}) is None
+    assert should_auto_triage(work_order, {"decision_kind": "single_provider_only"}) is None
+    assert should_auto_triage(work_order, {"decision_kind": "tie"}) is None
+
+
 def test_select_triage_source_findings_skips_plain_findings():
     findings = [
         {"id": "F-001", "section": "Findings", "text": "Provider status is stored in status.json."},
@@ -100,6 +140,37 @@ def test_select_triage_source_findings_skips_plain_findings():
 
     assert [finding["id"] for finding in selected] == ["F-002", "F-003", "F-004"]
     assert [finding["id"] for finding in skipped] == ["F-001"]
+
+
+def test_code_review_facet_selects_all_findings_for_triage():
+    findings = [
+        {"id": "F-001", "section": "Findings", "text": "Provider status is stored in status.json."},
+        {"id": "F-002", "section": "Findings", "text": "Report mentions a missing citation."},
+        {"id": "F-003", "section": "Out-of-Facet Claims", "text": "Out of facet bug."},
+    ]
+
+    selected, skipped = select_triage_source_findings(findings, facet_id="code-review")
+
+    assert [finding["id"] for finding in selected] == ["F-001", "F-002"]
+    assert [finding["id"] for finding in skipped] == ["F-003"]
+
+
+def test_any_facet_selects_findings_for_triage():
+    findings = [
+        {"id": "F-001", "section": "Findings", "text": "The stale-state copy lacks recovery context."},
+        {"id": "F-002", "section": "Findings", "text": "The ls output omits the facet column."},
+        {"id": "F-003", "section": "Out-of-Facet Claims", "text": "Unrelated bug."},
+    ]
+
+    selected, skipped = select_triage_source_findings(findings, facet_id="operator-ux")
+
+    assert [finding["id"] for finding in selected] == ["F-001", "F-002"]
+    assert [finding["id"] for finding in skipped] == ["F-003"]
+    assert summarize_source_finding_filter(selected, skipped) == {
+        "included": 2,
+        "skipped_non_actionable": 0,
+        "skipped_out_of_facet": 1,
+    }
 
 
 def test_select_triage_source_findings_filters_analyze_inventory():
@@ -130,6 +201,32 @@ def test_select_triage_source_findings_filters_analyze_inventory():
 
     assert [finding["id"] for finding in selected] == ["F-002", "F-003", "F-004"]
     assert [finding["id"] for finding in skipped] == ["F-001"]
+
+
+def test_select_triage_source_findings_skips_out_of_facet_claims():
+    findings = [
+        {"id": "F-001", "section": "Out-of-Facet Claims", "text": "Out of facet bug."},
+        {"id": "F-002", "section": "Conflicts", "text": "Workers disagree."},
+    ]
+
+    selected, skipped = select_triage_source_findings(findings)
+
+    assert [finding["id"] for finding in selected] == ["F-002"]
+    assert [finding["id"] for finding in skipped] == ["F-001"]
+    assert skipped[0]["skip_reason"] == "out_of_facet"
+
+
+def test_select_triage_source_findings_catches_operator_ux_language():
+    findings = [
+        {"id": "F-001", "section": "Findings", "text": "The recovery command is misleading."},
+        {"id": "F-002", "section": "Findings", "text": "The triage state label is ambiguous."},
+        {"id": "F-003", "section": "Findings", "text": "Provider status is stored in status.json."},
+    ]
+
+    selected, skipped = select_triage_source_findings(findings)
+
+    assert [finding["id"] for finding in selected] == ["F-001", "F-002"]
+    assert [finding["id"] for finding in skipped] == ["F-003"]
 
 
 def test_should_recommend_triage_ignores_descriptive_analyze_inventory():

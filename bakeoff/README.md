@@ -41,10 +41,10 @@ For plugin dogfood, use the wrapper directly:
 
 ```text
 bakeoff
-bakeoff init {gather|compare|analyze} [--force]
+bakeoff init {gather|compare|analyze|review} [--force]
 bakeoff validate <work-order>
-bakeoff research <work-order> [--out runs] [--run-id ID] [--force] [--quiet]
-bakeoff rerun <run-id> [--out runs] [--run-id ID] [--quiet]
+bakeoff research <work-order> [--out runs] [--run-id ID] [--force] [--quiet] [--no-triage]
+bakeoff rerun <run-id> [--out runs] [--run-id ID] [--quiet] [--no-triage]
 bakeoff triage <run-id> [--out runs] [--force] [--dry-run] [--quiet]
 bakeoff ls [--out runs]
 bakeoff show <run-id> [--judge | --judge-prompt | --triage]
@@ -63,6 +63,7 @@ bakeoff doctor [--skip-auth-probe] [--quiet] [--json]
 - `decision.json`
 - `report.md`
 - optional `triage/{prompt,stdout,stderr,status,final,citation_checks,triage}.json/txt/md`
+- optional `triage/source_finding_filter.json` with selected/skipped finding ids
 - optional `triage/finding_index.json` when legacy report bullets need synthesized finding ids
 - optional `triage/repair-{prompt,stdout,stderr,status}.json/txt` after a triage format retry
 
@@ -94,6 +95,19 @@ array. `model confidence` reflects the worker/judge assessment of evidence
 strength; `corroboration` reflects whether one or both providers surfaced the
 claim.
 
+Work orders may include an optional top-level `facet` object. A facet is a
+shared task filter applied to both workers and the judge; it is not a persona,
+provider-specific lens, new mode, or replacement for `scope`. Facets preserve
+the existing citation and schema rules while narrowing what should count as
+in-scope evidence.
+
+`bakeoff init review` writes `review.work-order.json`, a normal `type:
+"gather"` work order with a `code-review` facet and `codebase` scope for both
+providers. Bakeoff does not compute branch diffs in v1; paste branch, diff,
+changed-file, acceptance-criteria, and known-risk context into `background`.
+`code-review` runs auto-triage after successful research unless
+`bakeoff research --no-triage` or `bakeoff rerun --no-triage` is used.
+
 Provider runs emit compact heartbeat lines to stderr by default. Pass `--quiet`
 on `research`, `rerun`, `triage`, or `doctor` to suppress them. Set
 `budgets.heartbeat_seconds` in a work order to tune heartbeat frequency, or `0`
@@ -103,6 +117,10 @@ Analyze reports keep descriptive reasoning under `Primary Explanation` and
 reserve finding IDs for actionable follow-ups, conflicts, unknowns, and other
 sections that should be eligible for triage. This keeps post-judge triage from
 spending provider calls on ordinary explanation inventory.
+
+Facet gather runs send all `Findings` entries into triage source selection,
+except `Out-of-Facet Claims`, so focused lenses such as `code-review` and
+operator UX get verified before humans act on them.
 
 ## Scope Policy
 
@@ -135,14 +153,16 @@ citation checks against the original run directory, a triage prompt, structured
 
 ## Effort Defaults
 
-`bakeoff init` writes conservative per-mode effort defaults. Existing work
-orders that omit `effort` still validate to `high`.
+`bakeoff init` writes quality-first per-mode effort defaults for dogfooding.
+Workers default to `high`; judges default to `xhigh` for the generated
+Claude Opus 4.7 judge. Existing work orders that omit `effort` still validate
+to `high`.
 
 | Mode | Workers | Judge | Why |
 | --- | --- | --- | --- |
-| `gather` | `low` | `low` | Enumeration and dedupe are extraction-shaped tasks. |
-| `compare` | `high` | `medium` | Workers defend positions; judge applies a fixed rubric. |
-| `analyze` | `high` | `medium` | Workers build a reasoning spine; judge scores and annotates. |
+| `gather` | `high` | `xhigh` | Facets and triage dogfood need stronger enumeration before cost tuning. |
+| `compare` | `high` | `xhigh` | Workers defend positions; judge quality is the primary control point. |
+| `analyze` | `high` | `xhigh` | Workers build a reasoning spine; judge needs deeper synthesis and audit. |
 
 ## Notes
 

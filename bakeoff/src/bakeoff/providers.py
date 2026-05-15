@@ -262,6 +262,8 @@ def build_worker_prompt(work_order: dict[str, Any], provider: dict[str, Any]) ->
         template.replace("{GOAL}", work_order["goal"])
         .replace("{BACKGROUND}", work_order["background"])
         .replace("{SCOPE_INSTRUCTIONS}", SCOPE_INSTRUCTIONS[provider["scope"]])
+        .replace("{FACET_INSTRUCTIONS}", render_facet_block(work_order.get("facet")))
+        .replace("{FACET_WORKER_RULES}", render_worker_facet_rules(work_order.get("facet")))
         .replace("{WORKER_RESULT_SCHEMA}", WORKER_RESULT_SCHEMA)
     )
 
@@ -276,18 +278,75 @@ def build_judge_prompt(
     actual_mode = mode or work_order["type"]
     payload_a = json.dumps(worker_a, indent=2, sort_keys=True)
     payload_b = json.dumps(worker_b, indent=2, sort_keys=True)
+    facet = work_order.get("facet")
     if actual_mode == "gather":
-        return GATHER_JUDGE_PROMPT.replace("{FINAL_JSON_A}", payload_a).replace("{FINAL_JSON_B}", payload_b)
-    if actual_mode == "compare":
-        return COMPARE_JUDGE_PROMPT.replace("{FINAL_JSON_A}", payload_a).replace("{FINAL_JSON_B}", payload_b)
-    if actual_mode == "analyze":
-        return ANALYZE_JUDGE_PROMPT.replace("{FINAL_JSON_A}", payload_a).replace("{FINAL_JSON_B}", payload_b)
-    raise ValueError(f"unsupported mode: {actual_mode}")
+        template = GATHER_JUDGE_PROMPT
+    elif actual_mode == "compare":
+        template = COMPARE_JUDGE_PROMPT
+    elif actual_mode == "analyze":
+        template = ANALYZE_JUDGE_PROMPT
+    else:
+        raise ValueError(f"unsupported mode: {actual_mode}")
+    return (
+        template.replace("{FINAL_JSON_A}", payload_a)
+        .replace("{FINAL_JSON_B}", payload_b)
+        .replace("{FACET_INSTRUCTIONS}", render_facet_block(facet))
+        .replace("{FACET_JUDGE_RULES}", render_judge_facet_rules(facet, actual_mode))
+    )
 
 
 def build_triage_prompt(triage_payload: dict[str, Any]) -> str:
     payload = json.dumps(triage_payload, indent=2, sort_keys=True)
     return TRIAGE_PROMPT.replace("{TRIAGE_PAYLOAD}", payload).replace("{TRIAGE_RESULT_SCHEMA}", TRIAGE_RESULT_SCHEMA)
+
+
+def render_facet_block(facet: dict[str, Any] | None) -> str:
+    if not facet:
+        return ""
+    lines = [
+        "<facet>",
+        f"Facet id: {facet['id']}",
+        f"Focus: {facet['focus']}",
+        "",
+        "This is a task focus, not a persona. Do not role-play. Apply the facet only after the work-order goal, scope, citation rules, and output schema.",
+        "",
+        "Include:",
+    ]
+    lines.extend(f"- {item}" for item in facet.get("include", []))
+    exclude = facet.get("exclude", [])
+    if exclude:
+        lines.extend(["", "Exclude:"])
+        lines.extend(f"- {item}" for item in exclude)
+    notes = facet.get("notes")
+    if notes:
+        lines.extend(["", f"Notes: {notes}"])
+    lines.append("</facet>")
+    return "\n".join(lines)
+
+
+def render_worker_facet_rules(facet: dict[str, Any] | None) -> str:
+    if not facet:
+        return ""
+    return """- Prefer findings inside the facet.
+- Do not invent domain facts to satisfy the facet.
+- If you notice a severe issue outside the facet, place it in `recommended_next_checks` with a citation instead of expanding the main `claims` set.
+- The facet never overrides output schema, citation requirements, or scope enforcement."""
+
+
+def render_judge_facet_rules(facet: dict[str, Any] | None, mode: str) -> str:
+    if not facet:
+        return ""
+    lines = [
+        "- Preserve only claims that satisfy the facet or are clearly severe out-of-facet next checks.",
+        "- Do not reward a worker for broadening beyond the facet.",
+        "- Do not penalize a worker for omitting material that the facet excluded.",
+        "- The facet never overrides output schema, citation requirements, or scope enforcement.",
+    ]
+    if mode == "gather":
+        lines.append(
+            "- When a claim is dropped solely because it is out of facet, include it in optional `out_of_facet_claims[]` with source labels, evidence, and a short reason. This is observability only; do not put these claims in `merged_claims`."
+        )
+    return "\n".join(lines)
 
 
 def anonymized_worker_output(result: dict[str, Any]) -> dict[str, Any]:
@@ -367,6 +426,7 @@ Your job is to classify only the provided actionable-looking source_findings.
 - Check supporting citations when possible using the provided citation_checks data.
 - Look for counterevidence in the provided artifacts and codebase.
 - Verify that each source finding faithfully describes its supporting citations; citation_checks prove location existence, not semantic accuracy.
+- If triage_payload.facet is present, use it only as context for actionability and expected scope; do not invent new triage schema fields from it.
 - Decide whether it should be fixed now, deferred, documented, ignored, or reproduced.
 - Do not mark a finding real just because the report said it confidently.
 - Do not mark a finding false just because it is inconvenient.
@@ -403,7 +463,10 @@ GATHER_WORKER_PROMPT = """You are a research worker. Your job is to enumerate fa
 {SCOPE_INSTRUCTIONS}
 </scope>
 
+{FACET_INSTRUCTIONS}
+
 <rules>
+{FACET_WORKER_RULES}
 - Enumerate findings. Do NOT synthesize, rank, or recommend.
 - Every claim MUST carry a citation: file:line, URL, or doc heading. If you cannot cite it, omit it from `claims` and add it to `unknowns`.
 - Do not invent citations. If a source is not in <context> and not retrievable, do not claim it.
@@ -444,7 +507,10 @@ COMPARE_WORKER_PROMPT = """You are answering a comparison question. Your job:
 {SCOPE_INSTRUCTIONS}
 </scope>
 
+{FACET_INSTRUCTIONS}
+
 <rules>
+{FACET_WORKER_RULES}
 - First decide your position; then defend it. Do not hedge after you've decided.
 - State your `position` as a single declarative sentence ("X is the right choice because...", "Neither X nor Y because...", "X and Y are equivalent for this use case").
 - Honesty constraint: if a fact undercuts your position, acknowledge it in tradeoffs rather than hiding it. Hidden weaknesses cost you credibility with the judge.
@@ -488,7 +554,10 @@ ANALYZE_WORKER_PROMPT = """You are producing an analysis/explanation of the subj
 {SCOPE_INSTRUCTIONS}
 </scope>
 
+{FACET_INSTRUCTIONS}
+
 <rules>
+{FACET_WORKER_RULES}
 - Produce a linear chain of reasoning steps. Each step is a discrete, atomic claim that a peer could independently mark "agrees", "disagrees", or "adds nuance".
 - Number your steps. Avoid forward references ("as discussed below"); a later merger may overlay annotations on each step independently.
 - Cite evidence per step (file:line, URL, or doc heading). Do not invent citations.
@@ -518,6 +587,8 @@ GATHER_JUDGE_PROMPT = """You are a deduplication and conflict-flagging judge. Yo
 
 You do not know which model produced A or B. Use the positional labels "A" and "B" only.
 
+{FACET_INSTRUCTIONS}
+
 <worker_a_output>
 {FINAL_JSON_A}
 </worker_a_output>
@@ -527,6 +598,7 @@ You do not know which model produced A or B. Use the positional labels "A" and "
 </worker_b_output>
 
 <rules>
+{FACET_JUDGE_RULES}
 - Merge claims that make the SAME assertion about the SAME entity, regardless of wording. Preserve all citations from both sources on the merged claim, and tag `sources` using the positional labels: ["A"], ["B"], or ["A","B"].
 - If two claims make CONFLICTING assertions, do NOT pick a side. Emit a conflict entry listing both claims (`claim_a`, `claim_b`), both citations, and a one-line description of the disagreement.
 - Preserve confidence. If two merged claims have different confidences, take the lower.
@@ -542,7 +614,7 @@ You do not know which model produced A or B. Use the positional labels "A" and "
 </process>
 
 <output_format>
-Reason in <scratchpad>...</scratchpad>, then emit one JSON object wrapped in <final_json>...</final_json>: merged_claims[] (with claim, evidence[], sources[] in {"A","B"}, confidence), conflicts[] (with claim_a, claim_b, evidence), unknowns_union[]. No content after </final_json>.
+Reason in <scratchpad>...</scratchpad>, then emit one JSON object wrapped in <final_json>...</final_json>: merged_claims[] (with claim, evidence[], sources[] in {"A","B"}, confidence), conflicts[] (with claim_a, claim_b, evidence), unknowns_union[], and optional out_of_facet_claims[] when a facet caused claims to be dropped. No content after </final_json>.
 </output_format>
 """
 
@@ -553,6 +625,8 @@ If A and B defend the SAME position (semantically - same answer to the underlyin
 If A and B defend DIFFERENT positions, emit `relation: "compare"` and pick a winner OR declare a tie. Be strict: prefer well-evidenced reasoning over verbose advocacy.
 
 You do not know which model produced A or B. Use positional labels only.
+
+{FACET_INSTRUCTIONS}
 
 <position_a>
 {FINAL_JSON_A}
@@ -573,6 +647,7 @@ Length is NOT a virtue. A concise, well-evidenced position beats a verbose, weak
 </rubric>
 
 <rules>
+{FACET_JUDGE_RULES}
 - Determine `relation` first ("consensus" or "compare") based on the `position` fields.
 - Explain reasoning BEFORE the verdict. Score each position on each rubric dimension before naming a winner.
 - The harness will call you TWICE with positions swapped. Your verdict must be driven by the rubric, not by which position appears first. If the two positions are within rubric-noise of each other, declare TIE.
@@ -599,6 +674,8 @@ ANALYZE_JUDGE_PROMPT = """You are a synthesis judge. You receive two analyses (A
 3. Append loser steps that do not map to any spine step as `additions_from_loser[]`.
 4. Separately list only concrete issues or follow-ups that a human should consider acting on as `actionable_followups[]`. Do not put ordinary descriptive explanation steps in this array.
 
+{FACET_INSTRUCTIONS}
+
 <analysis_a>
 {FINAL_JSON_A}
 </analysis_a>
@@ -618,6 +695,7 @@ Length and verbosity do NOT favor a spine.
 </rubric>
 
 <rules>
+{FACET_JUDGE_RULES}
 - Explain reasoning BEFORE the verdict. Score both analyses on the rubric before picking the spine.
 - The harness calls you twice with positions swapped. Your spine choice must be rubric-driven, not position-driven.
 - For each spine step, the annotation must reflect the LOSER's actual content. If the loser does not address a step, use `not_covered`.

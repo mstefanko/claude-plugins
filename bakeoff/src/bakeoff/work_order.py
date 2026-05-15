@@ -6,15 +6,16 @@ from pathlib import Path
 from typing import Any
 
 MODES = ("gather", "compare", "analyze")
+INIT_KINDS = (*MODES, "review")
 SCOPE_ENFORCEMENTS = ("advisory", "best_effort", "required")
 MODE_EFFORT_DEFAULTS = {
-    "gather": {"worker": "low", "judge": "low"},
-    "compare": {"worker": "high", "judge": "medium"},
-    "analyze": {"worker": "high", "judge": "medium"},
+    "gather": {"worker": "high", "judge": "xhigh"},
+    "compare": {"worker": "high", "judge": "xhigh"},
+    "analyze": {"worker": "high", "judge": "xhigh"},
 }
 BACKENDS = ("claude", "codex")
 SCOPES = ("codebase", "web", "mixed")
-EFFORTS = ("low", "medium", "high")
+EFFORTS = ("low", "medium", "high", "xhigh")
 WORKER_STATUSES = ("complete", "complete_with_concerns", "needs_context", "blocked")
 CONFIDENCES = ("high", "medium", "low")
 COMPARE_SCORE_FIELDS = ("evidence", "coherence", "tradeoff_honesty", "rebuttals")
@@ -25,6 +26,11 @@ TRIAGE_CLASSIFICATIONS = ("real_issue", "false_positive", "plan_doc_drift", "pro
 TRIAGE_ACTIONS = ("fix_now", "document", "defer", "ignore", "reproduce")
 TRIAGE_SEVERITIES = ("high", "medium", "low", "none")
 SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+FACET_KEYS = ("id", "kind", "focus", "include", "exclude", "notes")
+FACET_RESERVED_IDS = {"judge", "provider", "providers", "worker", "workers"}
+FACET_STRING_MAX_CHARS = 500
+FACET_TOTAL_TEXT_MAX_CHARS = 4096
+FACET_CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
 
 
 class ValidationError(ValueError):
@@ -129,12 +135,17 @@ def validate_work_order(data: dict[str, Any]) -> dict[str, Any]:
         raise ValidationError("background must be a string")
 
     providers = _validate_providers(data["providers"])
+    facet = _validate_facet(data.get("facet"), {provider["id"] for provider in providers})
     judge = _validate_judge(data["judge"], providers)
     budgets = _validate_budgets(data["budgets"])
     scope_policy = _validate_scope_policy(data.get("scope_policy"))
 
     normalized = dict(data)
     normalized["providers"] = providers
+    if facet is None:
+        normalized.pop("facet", None)
+    else:
+        normalized["facet"] = facet
     normalized["judge"] = judge
     normalized["budgets"] = budgets
     normalized["scope_policy"] = scope_policy
@@ -151,6 +162,8 @@ def _validate_providers(value: Any) -> list[dict[str, Any]]:
     for index, provider in enumerate(value):
         if not isinstance(provider, dict):
             raise ValidationError(f"providers[{index}] must be an object")
+        if "facet" in provider:
+            raise ValidationError(f"providers[{index}].facet is not supported in v1; use top-level facet")
         normalized = _validate_participant(provider, f"providers[{index}]", require_scope=True)
         provider_id = normalized["id"]
         if provider_id in ids:
@@ -162,6 +175,103 @@ def _validate_providers(value: Any) -> list[dict[str, Any]]:
     if len(triples) == 1:
         raise ValidationError("providers must differ on at least one of backend, model, or scope")
     return providers
+
+
+def _validate_facet(value: Any, provider_ids: set[str]) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValidationError("facet must be an object")
+
+    unknown = sorted(set(value) - set(FACET_KEYS))
+    if unknown:
+        raise ValidationError(f"facet has unsupported keys: {', '.join(unknown)}")
+
+    for field in ("id", "focus", "include"):
+        if field not in value:
+            raise ValidationError(f"facet.{field} is required")
+
+    facet_id = value["id"]
+    if not isinstance(facet_id, str) or not facet_id.strip():
+        raise ValidationError("facet.id must be a non-empty slug")
+    if not SLUG_RE.match(facet_id):
+        raise ValidationError("facet.id must be a slug matching ^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    if facet_id in provider_ids:
+        raise ValidationError("facet.id must not duplicate a provider id")
+    if facet_id.lower() in FACET_RESERVED_IDS:
+        raise ValidationError("facet.id is reserved")
+
+    kind = value.get("kind", "generic")
+    if kind != "generic":
+        raise ValidationError('facet.kind must be "generic" when present')
+
+    focus = _normalize_facet_text(value["focus"], "facet.focus")
+
+    include = _validate_facet_string_list(value["include"], "facet.include", min_items=1, max_items=8)
+    exclude = _validate_facet_string_list(value.get("exclude", []), "facet.exclude", min_items=0, max_items=8)
+    notes = _normalize_facet_text(value["notes"], "facet.notes") if "notes" in value else None
+    _validate_facet_total_text(facet_id, kind, focus, include, exclude, notes)
+
+    normalized: dict[str, Any] = {
+        "id": facet_id,
+        "kind": kind,
+        "focus": focus,
+        "include": include,
+    }
+    if "exclude" in value:
+        normalized["exclude"] = exclude
+    if notes is not None:
+        normalized["notes"] = notes
+    return normalized
+
+
+def _validate_facet_string_list(value: Any, label: str, *, min_items: int, max_items: int) -> list[str]:
+    if not isinstance(value, list):
+        raise ValidationError(f"{label} must be an array of strings")
+    if not min_items <= len(value) <= max_items:
+        raise ValidationError(f"{label} must contain {min_items}-{max_items} items")
+    normalized: list[str] = []
+    for index, item in enumerate(value):
+        normalized.append(_normalize_facet_text(item, f"{label}[{index}]"))
+    return normalized
+
+
+def _normalize_facet_text(value: Any, label: str) -> str:
+    if not isinstance(value, str):
+        raise ValidationError(f"{label} must be a string")
+    normalized = FACET_CONTROL_CHAR_RE.sub(" ", value).strip()
+    if not normalized:
+        raise ValidationError(f"{label} must be a non-empty string")
+    if "</facet>" in normalized.lower():
+        raise ValidationError(f"{label} must not contain </facet>")
+    if "<" in normalized or ">" in normalized:
+        raise ValidationError(f"{label} must not contain angle brackets")
+    if "`" in normalized:
+        raise ValidationError(f"{label} must not contain backticks")
+    if len(normalized) > FACET_STRING_MAX_CHARS:
+        raise ValidationError(f"{label} must be at most {FACET_STRING_MAX_CHARS} characters")
+    return normalized
+
+
+def _validate_facet_total_text(
+    facet_id: str,
+    kind: str,
+    focus: str,
+    include: list[str],
+    exclude: list[str],
+    notes: str | None,
+) -> None:
+    total = (
+        len(facet_id)
+        + len(kind)
+        + len(focus)
+        + sum(len(item) for item in include)
+        + sum(len(item) for item in exclude)
+    )
+    if notes is not None:
+        total += len(notes)
+    if total > FACET_TOTAL_TEXT_MAX_CHARS:
+        raise ValidationError(f"facet text must be at most {FACET_TOTAL_TEXT_MAX_CHARS} characters total")
 
 
 def _validate_judge(value: Any, providers: list[dict[str, Any]]) -> dict[str, Any]:
@@ -292,6 +402,11 @@ def validate_gather_judge_result(data: Any) -> dict[str, Any]:
     if not isinstance(data["conflicts"], list):
         raise ValidationError("gather judge final_json.conflicts must be an array")
     _validate_string_list(data["unknowns_union"], "gather judge final_json.unknowns_union")
+    if "out_of_facet_claims" in data:
+        if not isinstance(data["out_of_facet_claims"], list):
+            raise ValidationError("gather judge final_json.out_of_facet_claims must be an array")
+        for index, claim in enumerate(data["out_of_facet_claims"]):
+            _validate_out_of_facet_claim(claim, f"gather judge final_json.out_of_facet_claims[{index}]")
     return data
 
 
@@ -405,11 +520,34 @@ def _validate_mapping_claim(value: Any, label: str, *, require_sources: bool) ->
     if require_sources:
         if "sources" not in value:
             raise ValidationError(f"{label}.sources is required")
-        if not isinstance(value["sources"], list) or any(source not in ("A", "B") for source in value["sources"]):
+        if (
+            not isinstance(value["sources"], list)
+            or not value["sources"]
+            or any(source not in ("A", "B") for source in value["sources"])
+        ):
             raise ValidationError(f'{label}.sources must contain only "A" and "B"')
     else:
         if "id" not in value or not isinstance(value["id"], str):
             raise ValidationError(f"{label}.id must be a string")
+
+
+def _validate_out_of_facet_claim(value: Any, label: str) -> None:
+    if not isinstance(value, dict):
+        raise ValidationError(f"{label} must be an object")
+    for field in ("claim", "evidence", "sources", "reason"):
+        if field not in value:
+            raise ValidationError(f"{label}.{field} is required")
+    if not isinstance(value["claim"], str):
+        raise ValidationError(f"{label}.claim must be a string")
+    if not isinstance(value["reason"], str):
+        raise ValidationError(f"{label}.reason must be a string")
+    _validate_string_list(value["evidence"], f"{label}.evidence")
+    if (
+        not isinstance(value["sources"], list)
+        or not value["sources"]
+        or any(source not in ("A", "B") for source in value["sources"])
+    ):
+        raise ValidationError(f'{label}.sources must contain only "A" and "B"')
 
 
 def _validate_score_map(value: Any, label: str, fields: tuple[str, ...]) -> None:
@@ -500,6 +638,55 @@ def init_template(mode: str) -> str:
   "providers": [
     {{ "id": "claude", "backend": "claude", "model": "claude-sonnet-4-6", "effort": "{effort["worker"]}", "scope": "{scopes[0]}" }},
     {{ "id": "codex",  "backend": "codex",  "model": "gpt-5.5",           "effort": "{effort["worker"]}", "scope": "{scopes[1]}" }}
+  ],
+  "scope_policy": {{ "enforcement": "best_effort" }},
+  "judge":   {{ "backend": "claude", "model": "claude-opus-4-7", "effort": "{effort["judge"]}" }},
+  "budgets": {{
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  }}
+}}
+"""
+
+
+def review_template() -> str:
+    effort = MODE_EFFORT_DEFAULTS["gather"]
+    return f"""// bakeoff review recipe - edit `id`, `goal`, `background`, then run:
+//   bakeoff validate <this-file>
+//   bakeoff research <this-file>
+//
+// This recipe creates a normal gather work order with a shared code-review
+// facet. Bakeoff does not compute branch diffs in v1; paste the branch/diff
+// context, changed files, acceptance criteria, and known risks into background.
+{{
+  "schema_version": 1,
+  "id": "TODO-rename-this",
+  "type": "gather",
+  "goal": "Review the branch diff for actionable defects.",
+  "background": "Base branch: TODO. Review branch: TODO. Diff command/output: TODO. Changed files: TODO. Acceptance criteria: TODO. Known risk areas: TODO.",
+  "facet": {{
+    "id": "code-review",
+    "kind": "generic",
+    "focus": "Find actionable defects introduced or exposed by the change.",
+    "include": [
+      "correctness bugs and edge cases",
+      "security issues with concrete data-flow or control-flow evidence",
+      "user-visible regressions",
+      "missing or misleading tests for changed behavior",
+      "maintainability risks likely to cause future defects"
+    ],
+    "exclude": [
+      "style-only preferences without project convention evidence",
+      "large rewrites unrelated to the changed behavior",
+      "speculation without file:line evidence"
+    ]
+  }},
+  "providers": [
+    {{ "id": "claude", "backend": "claude", "model": "claude-sonnet-4-6", "effort": "{effort["worker"]}", "scope": "codebase" }},
+    {{ "id": "codex",  "backend": "codex",  "model": "gpt-5.5",           "effort": "{effort["worker"]}", "scope": "codebase" }}
   ],
   "scope_policy": {{ "enforcement": "best_effort" }},
   "judge":   {{ "backend": "claude", "model": "claude-opus-4-7", "effort": "{effort["judge"]}" }},
