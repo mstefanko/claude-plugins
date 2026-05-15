@@ -22,6 +22,7 @@ ANALYZE_LOSER_POSITIONS = ("agrees", "disagrees", "not_covered", "adds")
 TRIAGE_CLASSIFICATIONS = ("real_issue", "false_positive", "plan_doc_drift", "product_decision", "needs_repro", "already_fixed", "evidence_gap")
 TRIAGE_ACTIONS = ("fix_now", "document", "defer", "ignore", "reproduce")
 TRIAGE_SEVERITIES = ("high", "medium", "low", "none")
+SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 class ValidationError(ValueError):
@@ -114,7 +115,7 @@ def validate_work_order(data: dict[str, Any]) -> dict[str, Any]:
         raise ValidationError("id must be a non-empty slug")
     if re.match(r"^TODO[-_]", work_id, re.IGNORECASE):
         raise ValidationError("id must not match the init placeholder rule '^TODO[-_]'")
-    if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]*$", work_id):
+    if not SLUG_RE.match(work_id):
         raise ValidationError("id must be a slug matching ^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
     if data["type"] not in MODES:
@@ -187,6 +188,8 @@ def _validate_participant(value: dict[str, Any], label: str, *, require_scope: b
         participant_id = value["id"]
         if not isinstance(participant_id, str) or not participant_id.strip():
             raise ValidationError(f"{label}.id must be a non-empty string")
+        if participant_id in (".", "..") or not SLUG_RE.match(participant_id):
+            raise ValidationError(f"{label}.id must be a slug matching ^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
     backend = value["backend"]
     if backend not in BACKENDS:
@@ -316,7 +319,7 @@ def validate_analyze_judge_result(data: Any) -> dict[str, Any]:
 def validate_triage_result(data: Any) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ValidationError("triage final_json must be an object")
-    for field in ("schema_version", "run_id", "status", "summary", "items", "fix_now", "defer", "unknowns", "input_hashes"):
+    for field in ("schema_version", "status", "summary", "items", "unknowns"):
         if field not in data:
             raise ValidationError(f"triage final_json.{field} is required")
     if data["schema_version"] != 1 or data["status"] != "complete":
@@ -325,11 +328,7 @@ def validate_triage_result(data: Any) -> dict[str, Any]:
         raise ValidationError("triage final_json.items must be an array")
     for index, item in enumerate(data["items"]):
         _validate_triage_item(item, f"triage final_json.items[{index}]")
-    _validate_string_list(data["fix_now"], "triage final_json.fix_now")
-    _validate_string_list(data["defer"], "triage final_json.defer")
     _validate_string_list(data["unknowns"], "triage final_json.unknowns")
-    if not isinstance(data["input_hashes"], dict):
-        raise ValidationError("triage final_json.input_hashes must be an object")
     return data
 
 

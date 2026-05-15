@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from bakeoff.triage import ACTIONABLE_REPORT_SECTIONS, SKIP_REPORT_BULLETS
+from bakeoff.report_index import ACTIONABLE_REPORT_SECTIONS, SKIP_REPORT_BULLETS
 
 
 def render_report(

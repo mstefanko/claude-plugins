@@ -19,15 +19,23 @@ def test_citation_extraction_skips_urls_and_handles_ranges(tmp_path):
 def test_citation_checks_record_ok_missing_range_and_escape(tmp_path):
     repo = tmp_path / "repo"
     source = repo / "src" / "app.py"
+    absolute_outside = tmp_path / "outside.py"
     source.parent.mkdir(parents=True)
     source.write_text("one\ntwo\nthree\n", encoding="utf-8")
+    absolute_outside.write_text("secret\n", encoding="utf-8")
 
     checks = check_citations(
-        ["src/app.py:2", "src/missing.py:1", "src/app.py:99", "../outside.py:1"],
+        ["src/app.py:2", "src/missing.py:1", "src/app.py:99", "../outside.py:1", f"{absolute_outside}:1"],
         repo.resolve(),
     )["checks"]
 
-    assert [check["status"] for check in checks] == ["ok", "missing_file", "line_out_of_range", "path_escape"]
+    assert [check["status"] for check in checks] == [
+        "ok",
+        "missing_file",
+        "line_out_of_range",
+        "path_escape",
+        "path_escape",
+    ]
     assert "two" in checks[0]["excerpt"]
 
 
@@ -67,3 +75,12 @@ def test_triage_state_marks_changed_inputs_stale(tmp_path):
 def test_recommendation_uses_word_boundaries():
     assert should_recommend_triage({"type": "gather"}, {"decision_kind": "structured_union"}, "vintage report") is None
     assert should_recommend_triage({"type": "gather"}, {"decision_kind": "structured_union"}, "- **F-001** missing docs")
+    assert should_recommend_triage({"type": "compare"}, {"decision_kind": "pick_winner"}, "- **F-001** should consider docs") is None
+    assert (
+        should_recommend_triage(
+            {"type": "compare"},
+            {"decision_kind": "pick_winner"},
+            "## Decision Audit\n\n- Judge rationale: should fix maybe\n\n## Comparison\n\n- **F-001** stable choice",
+        )
+        is None
+    )

@@ -122,7 +122,6 @@ Put unverified material in unknowns[] as strings instead of adding uncited claim
 TRIAGE_RESULT_SCHEMA = """\
 {
   "schema_version": 1,
-  "run_id": "feature-gap-map",
   "status": "complete",
   "summary": "Short assessment of report quality and actionability.",
   "items": [
@@ -140,14 +139,7 @@ TRIAGE_RESULT_SCHEMA = """\
       "rationale": "Why this is or is not actionable."
     }
   ],
-  "fix_now": ["T-001"],
-  "defer": ["T-004"],
-  "unknowns": ["Any checks triage could not perform."],
-  "input_hashes": {
-    "decision_sha256": "...",
-    "report_sha256": "...",
-    "work_order_sha256": "..."
-  }
+  "unknowns": ["Any checks triage could not perform."]
 }
 
 Allowed classification values: real_issue, false_positive, plan_doc_drift, product_decision, needs_repro, already_fixed, evidence_gap.

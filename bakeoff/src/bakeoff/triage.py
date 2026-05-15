@@ -6,27 +6,12 @@ import re
 from pathlib import Path
 from typing import Any
 
+from bakeoff.report_index import ACTIONABLE_REPORT_SECTIONS, SKIP_REPORT_BULLETS
 from bakeoff.work_order import ValidationError
 
-ACTIONABLE_REPORT_SECTIONS = {
-    "Findings",
-    "Comparison",
-    "Primary Explanation",
-    "Strongest Material",
-    "Consensus Disagreements",
-    "Kept From Nonwinner",
-    "Additions From Loser",
-    "Conflicts",
-    "Unknowns",
-}
-SKIP_REPORT_BULLETS = {
-    "None reported.",
-    "No conflicts found.",
-    "No provider completed successfully.",
-}
 FINDING_ID_RE = re.compile(r"^\s*-\s+\*\*(F-\d{3})\*\*\s+(.*)$")
 TRIAGE_ACTION_RE = re.compile(
-    r"\b(?:bug|bugs|fix|fixes|fixed|gap|gaps|missing|invalid|schema_error|drift|should)\b",
+    r"\b(?:bug|bugs|fix|fixes|fixed|gap|gaps|missing|invalid|schema_error|drift)\b",
     re.IGNORECASE,
 )
 PATH_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-/")
@@ -34,14 +19,23 @@ PATH_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789
 
 def build_finding_index(report_text: str) -> tuple[list[dict[str, str]], bool]:
     entries = []
+    section: str | None = None
     for line in report_text.splitlines():
+        if line.startswith("## "):
+            section = line.removeprefix("## ").strip()
+            continue
+        if line.startswith("### "):
+            continue
         match = FINDING_ID_RE.match(line)
         if match:
-            entries.append({"id": match.group(1), "text": match.group(2).strip()})
+            entry = {"id": match.group(1), "text": match.group(2).strip()}
+            if section:
+                entry["section"] = section
+            entries.append(entry)
     if entries:
         return entries, False
 
-    section: str | None = None
+    section = None
     for line in report_text.splitlines():
         if line.startswith("## "):
             section = line.removeprefix("## ").strip()
@@ -52,7 +46,7 @@ def build_finding_index(report_text: str) -> tuple[list[dict[str, str]], bool]:
             continue
         text = line[2:].strip()
         if text not in SKIP_REPORT_BULLETS:
-            entries.append({"id": f"LEGACY-F-{len(entries) + 1:03d}", "text": text})
+            entries.append({"id": f"LEGACY-F-{len(entries) + 1:03d}", "text": text, "section": section})
     return entries, bool(entries)
 
 
@@ -93,10 +87,11 @@ def should_recommend_triage(work_order: dict[str, Any], decision: dict[str, Any]
         return f"gather report with {len(findings)} findings - verify before fixing"
     if decision.get("decision_kind") in {"single_provider_only", "both_failed", "tie"}:
         return f"{decision.get('decision_kind')} decision - verify before fixing"
-    match = TRIAGE_ACTION_RE.search(report_text)
+    finding_text = "\n".join(finding.get("text", "") for finding in findings)
+    match = TRIAGE_ACTION_RE.search(finding_text)
     if match:
         return f"report mentions {match.group(0).lower()} - verify before fixing"
-    if "## Conflicts" in report_text and "No conflicts found." not in report_text:
+    if any(finding.get("section") == "Conflicts" for finding in findings):
         return "report contains conflicts - verify before fixing"
     return None
 
@@ -193,14 +188,14 @@ def check_citation(citation: str, cwd: Path) -> dict[str, Any]:
     if parsed is None:
         return {"citation": citation, "status": "unsupported"}
     raw_path, line_start, line_end = parsed
-    resolved = raw_path if raw_path.is_absolute() else (cwd / raw_path).resolve()
+    resolved = raw_path.resolve() if raw_path.is_absolute() else (cwd / raw_path).resolve()
     base = {
         "citation": citation,
         "resolved_path": str(resolved),
         "line_start": line_start,
         "line_end": line_end,
     }
-    if not raw_path.is_absolute() and not is_relative_to(resolved, cwd):
+    if not is_relative_to(resolved, cwd):
         return {**base, "status": "path_escape"}
     if not resolved.exists():
         return {**base, "status": "missing_file"}

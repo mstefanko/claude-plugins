@@ -69,7 +69,8 @@ to disable heartbeat ticks.
 
 `bakeoff triage` is an explicit post-judge verification pass. It writes
 advisory artifacts under `runs/<run-id>/triage/`, including harness-side
-citation checks, a triage prompt, structured `final.json`, and `triage.md`.
+citation checks against the original run directory, a triage prompt, structured
+`final.json`, and `triage.md`.
 
 ## Effort Defaults
 

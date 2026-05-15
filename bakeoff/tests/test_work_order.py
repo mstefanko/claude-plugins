@@ -108,6 +108,15 @@ def test_budget_heartbeat_seconds_must_not_be_negative(tmp_path):
             },
             "providers must have exactly 2 entries",
         ),
+        (
+            {
+                "providers": [
+                    {"id": "../claude", "backend": "claude", "model": "same", "scope": "codebase"},
+                    {"id": "codex", "backend": "codex", "model": "other", "scope": "web"},
+                ]
+            },
+            "providers\\[0\\].id must be a slug",
+        ),
     ],
 )
 def test_validation_errors_name_field(tmp_path, patch, message):
@@ -171,7 +180,6 @@ def test_analyze_judge_verdicts_must_match_overlay_shape():
 def test_triage_result_must_match_schema_shape():
     result = {
         "schema_version": 1,
-        "run_id": "run-1",
         "status": "complete",
         "summary": "checked",
         "items": [
@@ -189,14 +197,7 @@ def test_triage_result_must_match_schema_shape():
                 "rationale": "actionable",
             }
         ],
-        "fix_now": ["T-001"],
-        "defer": [],
         "unknowns": [],
-        "input_hashes": {
-            "decision_sha256": "x",
-            "report_sha256": "y",
-            "work_order_sha256": "z",
-        },
     }
 
     assert validate_triage_result(result) == result

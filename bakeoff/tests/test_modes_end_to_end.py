@@ -135,7 +135,7 @@ def install_fake_providers(tmp_path, *, judge_mode, fail_providers=frozenset()):
                 print("provider failed before final json", file=sys.stderr)
                 sys.exit(9)
             elif "evidence-grounded triage of a Bakeoff report" in prompt:
-                emit({{"schema_version":1,"run_id":"fake","status":"complete","summary":"checked","items":[{{"id":"T-001","source_finding_id":"F-001","source_finding":"Fake merged claim","classification":"real_issue","severity":"medium","confidence":"high","supporting_evidence":["src/fake.py:1"],"counterevidence":[],"citation_check_ids":[],"recommended_action":"fix_now","rationale":"actionable"}}],"fix_now":["T-001"],"defer":[],"unknowns":[],"input_hashes":{{"decision_sha256":"x","report_sha256":"y","work_order_sha256":"z"}}}})
+                emit({{"schema_version":1,"status":"complete","summary":"checked","items":[{{"id":"T-001","source_finding_id":"F-001","source_finding":"Fake merged claim","classification":"real_issue","severity":"medium","confidence":"high","supporting_evidence":["src/fake.py:1"],"counterevidence":[],"citation_check_ids":[],"recommended_action":"fix_now","rationale":"actionable"}}],"unknowns":[]}})
             elif "deduplication and conflict-flagging judge" in prompt:
                 emit({{"merged_claims":[{{"claim":"Fake merged claim","evidence":["fake:1"],"sources":["A","B"],"confidence":"high"}}],"conflicts":[],"unknowns_union":[]}})
             elif "pairwise judge" in prompt:
