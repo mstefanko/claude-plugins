@@ -3,6 +3,7 @@ import signal
 import sys
 
 import bakeoff.runner as runner
+from bakeoff.cli import status_without_payload
 from bakeoff.runner import extract_final_json, run_provider, run_provider_with_format_retry
 from bakeoff.work_order import ValidationError
 
@@ -26,6 +27,15 @@ def test_extract_final_json_allows_tag_text_inside_json_strings():
     }
 
 
+def test_extract_final_json_uses_source_label_in_extraction_errors():
+    try:
+        extract_final_json("plain prose", source_label="last-message artifact")
+    except ValidationError as exc:
+        assert str(exc) == "last-message artifact is missing a <final_json>...</final_json> block"
+    else:
+        raise AssertionError("expected ValidationError")
+
+
 def test_run_provider_reports_schema_error_for_missing_final_json():
     result = asyncio.run(
         run_provider(
@@ -36,6 +46,104 @@ def test_run_provider_reports_schema_error_for_missing_final_json():
     )
 
     assert result["status"] == "schema_error"
+
+
+def test_run_provider_prefers_nonempty_last_message_for_final_json(tmp_path):
+    last_message = tmp_path / "last-message.txt"
+    script = tmp_path / "provider.py"
+    script.write_text(
+        """
+import pathlib
+import sys
+
+pathlib.Path(sys.argv[1]).write_text('<final_json>{"ok": true}</final_json>', encoding='utf-8')
+print('plain prose without final json')
+""",
+        encoding="utf-8",
+    )
+
+    result = asyncio.run(
+        run_provider(
+            [sys.executable, str(script), str(last_message)],
+            "",
+            {"wall_clock_seconds": 3, "max_output_bytes": 2000},
+            final_message_path=last_message,
+        )
+    )
+
+    assert result["status"] == "ok"
+    assert result["final_json"] == {"ok": True}
+    assert result["final_json_source"] == "last_message"
+    assert status_without_payload(result)["final_json_source"] == "last_message"
+
+
+def test_run_provider_falls_back_to_stdout_when_last_message_absent_or_empty(tmp_path):
+    absent_path = tmp_path / "absent-last-message.txt"
+    absent_result = asyncio.run(
+        run_provider(
+            [sys.executable, "-c", "print('<final_json>{\"ok\": true}</final_json>')"],
+            "",
+            {"wall_clock_seconds": 3, "max_output_bytes": 2000},
+            final_message_path=absent_path,
+        )
+    )
+
+    empty_path = tmp_path / "empty-last-message.txt"
+    empty_result = asyncio.run(
+        run_provider(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import pathlib, sys; "
+                    "pathlib.Path(sys.argv[1]).write_text('', encoding='utf-8'); "
+                    "print('<final_json>{\"ok\": true}</final_json>')"
+                ),
+                str(empty_path),
+            ],
+            "",
+            {"wall_clock_seconds": 3, "max_output_bytes": 2000},
+            final_message_path=empty_path,
+        )
+    )
+
+    assert absent_result["status"] == "ok"
+    assert absent_result["final_json_source"] == "stdout"
+    assert empty_result["status"] == "ok"
+    assert empty_result["final_json_source"] == "stdout"
+
+
+def test_run_provider_does_not_rewrite_validator_stdout_words_for_last_message(tmp_path):
+    last_message = tmp_path / "last-message.txt"
+    script = tmp_path / "provider.py"
+    script.write_text(
+        """
+import pathlib
+import sys
+
+pathlib.Path(sys.argv[1]).write_text('<final_json>{"ok": false}</final_json>', encoding='utf-8')
+print('stdout fallback has ok true nowhere')
+""",
+        encoding="utf-8",
+    )
+
+    def validator(data):
+        raise ValidationError("stdout field must remain named stdout")
+
+    result = asyncio.run(
+        run_provider(
+            [sys.executable, str(script), str(last_message)],
+            "",
+            {"wall_clock_seconds": 3, "max_output_bytes": 2000},
+            validator=validator,
+            final_message_path=last_message,
+        )
+    )
+
+    assert result["status"] == "schema_error"
+    assert result["final_json_source"] == "last_message"
+    assert "stdout field must remain named stdout" in result["stderr"]
+    assert "last-message artifact field" not in result["stderr"]
 
 
 def test_run_provider_format_retry_recovers_zero_exit_schema_error(tmp_path):

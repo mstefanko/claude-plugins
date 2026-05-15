@@ -209,6 +209,12 @@ def out_dir_suffix(out_dir: Path) -> str:
     return f" --out {shlex.quote(str(out_dir))}"
 
 
+def codex_final_message_path(participant: dict[str, Any], path: Path) -> Path | None:
+    if participant.get("backend") != "codex":
+        return None
+    return path
+
+
 def format_stale_inputs(stale_inputs: list[str]) -> str:
     if not stale_inputs:
         return ""
@@ -591,7 +597,7 @@ async def run_triage(
         "caveats": caveats,
         "input_hashes": input_hashes,
     }
-    prompt = build_triage_prompt(payload)
+    prompt = build_triage_prompt(payload, work_order["budgets"])
     (triage_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
     participant = {
         "backend": work_order["judge"]["backend"],
@@ -642,13 +648,15 @@ async def run_triage(
         final["source_finding_filter"] = source_finding_filter
         return final
 
+    final_message_path = codex_final_message_path(work_order["judge"], triage_dir / "last-message.txt")
     result = await run_provider_with_format_retry(
-        build_participant_argv(work_order["judge"], cwd=citation_cwd),
+        build_participant_argv(work_order["judge"], cwd=citation_cwd, final_message_path=final_message_path),
         prompt,
         work_order["budgets"],
         cwd=citation_cwd,
         validator=validator,
         on_tick=make_tick_printer("triage", quiet=quiet),
+        final_message_path=final_message_path,
     )
     (triage_dir / "stdout.txt").write_text(result["stdout"], encoding="utf-8")
     (triage_dir / "stderr.txt").write_text(result["stderr"], encoding="utf-8")
@@ -681,6 +689,8 @@ async def run_workers(work_order: dict[str, Any], run_dir: Path, *, quiet: bool 
         provider_id = provider["id"]
         prompt = build_worker_prompt(work_order, provider)
         cleanup_paths: list[Path] = []
+        provider_dir = run_dir / "providers" / provider_id
+        final_message_path = codex_final_message_path(provider, provider_dir / "last-message.txt")
         try:
             scope_execution = build_scope_execution(
                 provider,
@@ -688,9 +698,9 @@ async def run_workers(work_order: dict[str, Any], run_dir: Path, *, quiet: bool 
                 workspace_cwd=Path.cwd(),
                 run_dir=run_dir,
                 capabilities=capabilities.get(provider["backend"]),
+                final_message_path=final_message_path,
             )
         except ScopeEnforcementError as exc:
-            provider_dir = run_dir / "providers" / provider_id
             provider_dir.mkdir(parents=True, exist_ok=True)
             (provider_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
             result = scope_error_result(exc, provider, work_order["scope_policy"])
@@ -700,7 +710,6 @@ async def run_workers(work_order: dict[str, Any], run_dir: Path, *, quiet: bool 
         argv = scope_execution["argv"]
         execution_cwd = Path(scope_execution["cwd"])
         cleanup_paths = [Path(path) for path in scope_execution.get("cleanup_paths", [])]
-        provider_dir = run_dir / "providers" / provider_id
         try:
             provider_dir.mkdir(parents=True, exist_ok=True)
             (provider_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
@@ -713,6 +722,7 @@ async def run_workers(work_order: dict[str, Any], run_dir: Path, *, quiet: bool 
                 cwd=execution_cwd,
                 validator=validator,
                 on_tick=make_tick_printer(provider_id, quiet=quiet),
+                final_message_path=final_message_path,
             )
             result["scope_enforcement"] = scope_execution["metadata"]
             write_provider_artifacts(provider_dir, result)
@@ -818,16 +828,19 @@ async def run_single_judge(
         status_path = judge_dir / f"status-{label}.json"
         stdout_path = judge_dir / f"stdout-{label}.txt"
         stderr_path = judge_dir / f"stderr-{label}.txt"
+    last_message_name = "last-message.txt" if label == "gather" else f"last-message-{label}.txt"
+    final_message_path = codex_final_message_path(work_order["judge"], judge_dir / last_message_name)
     prompt_path.write_text(prompt, encoding="utf-8")
     validator = judge_validator(mode)
     print(f"[judge:{label}] running...")
     result = await run_provider_with_format_retry(
-        build_participant_argv(work_order["judge"], cwd=Path.cwd()),
+        build_participant_argv(work_order["judge"], cwd=Path.cwd(), final_message_path=final_message_path),
         prompt,
         work_order["budgets"],
         cwd=Path.cwd(),
         validator=validator,
         on_tick=make_tick_printer(f"judge:{label}", quiet=quiet),
+        final_message_path=final_message_path,
     )
     stdout_path.write_text(result["stdout"], encoding="utf-8")
     stderr_path.write_text(result["stderr"], encoding="utf-8")
@@ -1243,6 +1256,7 @@ def status_without_payload(result: dict[str, Any]) -> dict[str, Any]:
             "stderr_observed_bytes",
             "stdout_truncated",
             "stderr_truncated",
+            "final_json_source",
         )
         if key in result
     }
@@ -1304,12 +1318,22 @@ def make_tick_printer(label: str, *, quiet: bool) -> Callable[[dict[str, Any]], 
         return None
 
     def on_tick(tick: dict[str, Any]) -> None:
-        elapsed = int(float(tick.get("elapsed", 0)))
-        quiet_for = int(float(tick.get("last_output_age", 0)))
-        total = int(tick.get("total_bytes", 0))
-        print(f"[provider={label} t={elapsed}s out={format_kb(total)} quiet={quiet_for}s]", file=sys.stderr)
+        print(format_heartbeat_line(label, tick), file=sys.stderr)
 
     return on_tick
+
+
+def format_heartbeat_line(label: str, tick: dict[str, Any]) -> str:
+    elapsed = int(float(tick.get("elapsed", 0)))
+    wall_seconds = int(float(tick.get("wall_seconds", 0)))
+    last_output_age = int(float(tick.get("last_output_age", 0)))
+    stdout_bytes = int(tick.get("stdout_bytes", 0))
+    stderr_bytes = int(tick.get("stderr_bytes", 0))
+    phase = str(tick.get("phase", "running"))
+    return (
+        f"[{label}] {phase} t={elapsed}s/{wall_seconds}s "
+        f"out={format_kb(stdout_bytes)} err={format_kb(stderr_bytes)} last={last_output_age}s"
+    )
 
 
 def format_kb(byte_count: int) -> str:

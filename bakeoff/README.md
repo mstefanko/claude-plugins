@@ -56,13 +56,16 @@ bakeoff doctor [--skip-auth-probe] [--quiet] [--json]
 - `work-order.json`
 - `providers/<id>/{prompt,stdout,stderr,status}.json/txt`
 - optional `providers/<id>/final.json` when the provider returned a schema-valid result
+- optional `providers/<id>/last-message.txt` for Codex final-message capture when the installed CLI supports it
 - optional `providers/<id>/repair-{prompt,stdout,stderr,status}.json/txt` after a one-shot format retry
 - `judge/` prompts and results
+- optional `judge/last-message.txt` or `judge/last-message-{pass1,pass2}.txt` for Codex judges
 - optional `judge/repair-{prompt,stdout,stderr,status}.json/txt` after a gather judge format retry
 - optional `judge/repair-{prompt,stdout,stderr,status}-{pass1,pass2}.json/txt` after compare/analyze judge format retries
 - `decision.json`
 - `report.md`
 - optional `triage/{prompt,stdout,stderr,status,final,citation_checks,triage}.json/txt/md`
+- optional `triage/last-message.txt` for Codex triage capture
 - optional `triage/source_finding_filter.json` with selected/skipped finding ids
 - optional `triage/finding_index.json` when legacy report bullets need synthesized finding ids
 - optional `triage/repair-{prompt,stdout,stderr,status}.json/txt` after a triage format retry
@@ -78,6 +81,12 @@ terminal. Top-level `wall_seconds`/`output_bytes` include both attempts after a
 successful retry, while per-attempt costs live under `format_retry`. Provider
 status also records `stdout_bytes`, `stderr_bytes`, observed byte counts, and
 explicit truncation flags; stderr truncation does not fail a run by itself.
+When Codex advertises `--output-last-message`, Bakeoff asks it to write the
+final assistant message to `last-message.txt` beside the normal artifacts and
+prefers that file for `<final_json>` extraction when it is non-empty. If the
+file is unsupported, absent, or empty, Bakeoff falls back to captured stdout.
+Provider and judge status metadata may include `final_json_source` with
+`stdout` or `last_message`.
 
 `budgets.max_output_bytes` caps retained stdout and stderr payload bytes. Stdout
 overflow starts a bounded salvage window controlled by
@@ -111,7 +120,17 @@ changed-file, acceptance-criteria, and known-risk context into `background`.
 Provider runs emit compact heartbeat lines to stderr by default. Pass `--quiet`
 on `research`, `rerun`, `triage`, or `doctor` to suppress them. Set
 `budgets.heartbeat_seconds` in a work order to tune heartbeat frequency, or `0`
-to disable heartbeat ticks.
+to disable heartbeat ticks. A heartbeat line looks like:
+
+```text
+[codex] running t=60s/900s out=13.5KB err=58.6KB last=14s
+```
+
+`running` or `quiet` is subprocess output phase, `t` is elapsed time over the
+wall-clock budget, `out` and `err` are retained stdout and stderr bytes, and
+`last` is seconds since the last stdout or stderr. This is process telemetry,
+not semantic model progress; some provider CLIs buffer useful work until their
+final output.
 
 Analyze reports keep descriptive reasoning under `Primary Explanation` and
 reserve finding IDs for actionable follow-ups, conflicts, unknowns, and other
@@ -150,11 +169,17 @@ web-tool allowlisting where available. `mixed` scope is recorded but not
 narrowed. `bakeoff doctor` prints the installed CLI controls that Bakeoff can
 detect; pass `--json` for a parseable readiness report.
 
+`bakeoff show <run-id> --out runs` prints the report from the default ledger;
+`--judge`, `--judge-prompt`, and `--triage` select individual artifacts.
+
 `bakeoff triage` is an explicit post-judge verification pass. It writes
 advisory artifacts under `runs/<run-id>/triage/`, including harness-side
 citation checks against the original working directory recorded in `meta.json`
-(falling back to the current working directory with a caveat), a source finding
-filter artifact, a triage prompt, structured `final.json`, and `triage.md`.
+(falling back to the current working directory with a caveat), a
+`source_finding_filter.json` artifact, a triage prompt, structured `final.json`,
+and `triage.md`. `bakeoff triage --dry-run` writes the prompt, status, citation
+checks, and source filter without invoking a provider; `bakeoff ls` reports that
+state as `triage:dry_run`.
 
 ## Effort Defaults
 

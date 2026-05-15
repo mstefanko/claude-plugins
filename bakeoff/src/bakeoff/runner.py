@@ -22,12 +22,14 @@ MAX_REPAIR_STDERR_CHARS = 12000
 DEFAULT_OUTPUT_CAP_GRACE_SECONDS = 10
 
 
-def extract_final_json(text: str) -> dict[str, Any]:
+def extract_final_json(text: str, *, source_label: str = "stdout") -> dict[str, Any]:
     blocks = _extract_tagged_json_values(text)
     if not blocks:
         if FINAL_JSON_OPEN not in text:
-            raise ValidationError("stdout is missing a <final_json>...</final_json> block")
-        raise ValidationError("stdout does not contain a valid <final_json> JSON value followed by </final_json>")
+            raise ValidationError(f"{source_label} is missing a <final_json>...</final_json> block")
+        raise ValidationError(
+            f"{source_label} does not contain a valid <final_json> JSON value followed by </final_json>"
+        )
     payload = blocks[-1]
     if not isinstance(payload, dict):
         raise ValidationError("last <final_json> block must decode to a JSON object")
@@ -72,6 +74,7 @@ async def run_provider(
     cwd: str | Path | None = None,
     validator: Callable[[Any], dict[str, Any]] | None = None,
     on_tick: Callable[[dict[str, Any]], None] | None = None,
+    final_message_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Run one provider subprocess under wall-clock and stdout caps."""
     started = time.monotonic()
@@ -93,6 +96,13 @@ async def run_provider(
     heartbeat_count = 0
     quiet_tick_count = 0
     output_cap_reason: str | None = None
+    final_message_file = Path(final_message_path) if final_message_path is not None else None
+    if final_message_file is not None:
+        try:
+            final_message_file.parent.mkdir(parents=True, exist_ok=True)
+            final_message_file.unlink(missing_ok=True)
+        except OSError:
+            pass
 
     def current_io(now: float | None = None) -> dict[str, Any]:
         actual_now = time.monotonic() if now is None else now
@@ -422,8 +432,9 @@ async def run_provider(
             stderr_truncated=stderr_cap_hit,
         )
 
+    final_json_text, final_json_source = _final_json_text(stdout, final_message_file)
     try:
-        final_json = extract_final_json(stdout)
+        final_json = extract_final_json(final_json_text, source_label=final_json_source_label(final_json_source))
         if validator is not None:
             final_json = validator(final_json)
     except ValidationError as exc:
@@ -440,6 +451,7 @@ async def run_provider(
                 stdout_truncated=True,
                 stderr_truncated=stderr_cap_hit,
                 output_cap=output_cap_metadata(),
+                final_json_source=final_json_source,
             )
         stderr = f"{stderr}\n{exc}".strip()
         return _status(
@@ -451,6 +463,7 @@ async def run_provider(
             final_json=None,
             io=current_io(),
             stderr_truncated=stderr_cap_hit,
+            final_json_source=final_json_source,
         )
 
     return _status(
@@ -464,6 +477,7 @@ async def run_provider(
         stdout_truncated=output_cap_hit,
         stderr_truncated=stderr_cap_hit,
         output_cap=output_cap_metadata() if output_cap_hit else None,
+        final_json_source=final_json_source,
     )
 
 
@@ -475,18 +489,35 @@ async def run_provider_with_format_retry(
     cwd: str | Path | None = None,
     validator: Callable[[Any], dict[str, Any]] | None = None,
     on_tick: Callable[[dict[str, Any]], None] | None = None,
+    final_message_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Run a provider once, then retry one zero-exit schema error as a format-only repair.
 
     Top-level wall_seconds/output_bytes are aggregate attempt costs when the retry succeeds;
     per-attempt status remains available under format_retry.
     """
-    first = await run_provider(argv, prompt, budgets, cwd=cwd, validator=validator, on_tick=on_tick)
+    first = await run_provider(
+        argv,
+        prompt,
+        budgets,
+        cwd=cwd,
+        validator=validator,
+        on_tick=on_tick,
+        final_message_path=final_message_path,
+    )
     if first["status"] != "schema_error" or first.get("exit_code") != 0:
         return first
 
     retry_prompt = build_format_retry_prompt(prompt, first)
-    retry = await run_provider(argv, retry_prompt, budgets, cwd=cwd, validator=validator, on_tick=on_tick)
+    retry = await run_provider(
+        argv,
+        retry_prompt,
+        budgets,
+        cwd=cwd,
+        validator=validator,
+        on_tick=on_tick,
+        final_message_path=final_message_path,
+    )
     retry_summary = {
         "attempted": True,
         "reason": _last_nonempty_line(first.get("stderr", "")) or first["status"],
@@ -529,6 +560,8 @@ async def run_provider_with_format_retry(
         "stderr_truncated": bool(first.get("stderr_truncated")) or bool(retry.get("stderr_truncated")),
         "final_json": retry["final_json"],
     }
+    if retry.get("final_json_source"):
+        combined["final_json_source"] = retry["final_json_source"]
     if retry.get("output_cap"):
         combined["output_cap"] = retry["output_cap"]
     return combined
@@ -616,6 +649,31 @@ def _append_diagnostic(stderr: str, diagnostic: str | None) -> str:
     return f"{stderr}\n{diagnostic}".strip()
 
 
+def _final_json_text(stdout: str, final_message_path: Path | None) -> tuple[str, str]:
+    final_message = _read_nonempty_text(final_message_path)
+    if final_message is not None:
+        return final_message, "last_message"
+    return stdout, "stdout"
+
+
+def final_json_source_label(final_json_source: str) -> str:
+    if final_json_source == "last_message":
+        return "last-message artifact"
+    return "stdout"
+
+
+def _read_nonempty_text(path: Path | None) -> str | None:
+    if path is None:
+        return None
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    if not text.strip():
+        return None
+    return text
+
+
 def _safe_on_tick(on_tick: Callable[[dict[str, Any]], None] | None, payload: dict[str, Any]) -> None:
     if on_tick is None:
         return
@@ -637,6 +695,7 @@ def _status(
     stdout_truncated: bool = False,
     stderr_truncated: bool = False,
     output_cap: dict[str, Any] | None = None,
+    final_json_source: str | None = None,
 ) -> dict[str, Any]:
     stdout_bytes = int(io.get("stdout_bytes", len(stdout.encode("utf-8"))))
     stderr_bytes = int(io.get("stderr_bytes", len(stderr.encode("utf-8"))))
@@ -656,6 +715,8 @@ def _status(
         "stderr": stderr,
         "final_json": final_json,
     }
+    if final_json_source is not None:
+        result["final_json_source"] = final_json_source
     if output_cap is not None:
         result["output_cap"] = output_cap
     return result
@@ -675,6 +736,7 @@ def _attempt_status(result: dict[str, Any]) -> dict[str, Any]:
             "stderr_observed_bytes",
             "stdout_truncated",
             "stderr_truncated",
+            "final_json_source",
         )
         if key in result
     }

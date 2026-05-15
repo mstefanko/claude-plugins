@@ -1,7 +1,7 @@
 import json
 
 from bakeoff import cli as cli_module
-from bakeoff.cli import main, merge_items
+from bakeoff.cli import format_heartbeat_line, main, make_tick_printer, merge_items
 
 
 def test_orientation_lists_review_mode(capsys):
@@ -46,6 +46,61 @@ def test_merge_items_keeps_similar_claims_from_different_sources():
     )
 
     assert len(items) == 2
+
+
+def test_format_heartbeat_line_splits_stdout_and_stderr_bytes():
+    line = format_heartbeat_line(
+        "codex",
+        {
+            "phase": "running",
+            "elapsed": 60.9,
+            "wall_seconds": 900,
+            "stdout_bytes": 1024,
+            "stderr_bytes": 2048,
+            "total_bytes": 999999,
+            "last_output_age": 14.2,
+        },
+    )
+
+    assert line == "[codex] running t=60s/900s out=1.0KB err=2.0KB last=14s"
+    assert "976.6KB" not in line
+
+
+def test_format_heartbeat_line_shows_quiet_phase():
+    line = format_heartbeat_line(
+        "claude",
+        {
+            "phase": "quiet",
+            "elapsed": 600,
+            "wall_seconds": 900,
+            "stdout_bytes": 0,
+            "stderr_bytes": 0,
+            "last_output_age": 600,
+        },
+    )
+
+    assert line == "[claude] quiet t=600s/900s out=0.0KB err=0.0KB last=600s"
+
+
+def test_make_tick_printer_honors_quiet_and_writes_to_stderr(capsys):
+    assert make_tick_printer("codex", quiet=True) is None
+
+    printer = make_tick_printer("codex", quiet=False)
+    assert printer is not None
+    printer(
+        {
+            "phase": "running",
+            "elapsed": 1,
+            "wall_seconds": 3,
+            "stdout_bytes": 1024,
+            "stderr_bytes": 0,
+            "last_output_age": 0,
+        }
+    )
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "[codex] running t=1s/3s out=1.0KB err=0.0KB last=0s\n"
 
 
 def test_doctor_auth_probe_failure_is_warning_with_reason(tmp_path, monkeypatch, capsys):

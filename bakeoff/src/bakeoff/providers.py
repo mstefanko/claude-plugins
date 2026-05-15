@@ -25,6 +25,7 @@ SCOPE_INSTRUCTIONS = {
 
 SCOPE_POLICY_DEFAULT = "best_effort"
 SCOPE_POLICY_VALUES = ("advisory", "best_effort", "required")
+RUNTIME_BUDGET_ROLES = ("worker", "judge", "triage")
 
 
 class ScopeEnforcementError(ValueError):
@@ -36,6 +37,7 @@ def build_participant_argv(
     *,
     cwd: str | Path | None = None,
     extra_args: list[str] | None = None,
+    final_message_path: str | Path | None = None,
 ) -> list[str]:
     backend = participant["backend"]
     model = participant["model"]
@@ -46,6 +48,8 @@ def build_participant_argv(
     if backend == "codex":
         argv = ["codex", "exec", "-m", model, "-c", f'model_reasoning_effort="{effort}"', "--skip-git-repo-check"]
         argv.extend(extras)
+        if final_message_path is not None and codex_exec_supports_output_last_message():
+            argv.extend(["--output-last-message", str(final_message_path)])
         if cwd is not None:
             argv.extend(["-C", str(cwd)])
         return argv
@@ -102,6 +106,7 @@ def scope_capabilities_from_help(backend: str, help_text: str) -> dict[str, Any]
             "disable_feature": has_help_option(options, "--disable"),
             "profile": has_help_option(options, "--profile"),
             "config": has_help_option(options, "--config"),
+            "output_last_message": has_help_option(options, "--output-last-message"),
         }
     else:
         raise ValueError(f"unsupported backend: {backend}")
@@ -116,6 +121,19 @@ def has_help_option(options: set[str], *names: str) -> bool:
     return any(name in options for name in names)
 
 
+@lru_cache(maxsize=None)
+def codex_exec_supports_output_last_message() -> bool:
+    try:
+        result = subprocess.run(["codex", "exec", "--help"], capture_output=True, text=True, timeout=10, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return codex_exec_supports_output_last_message_from_help(f"{result.stdout}\n{result.stderr}")
+
+
+def codex_exec_supports_output_last_message_from_help(help_text: str) -> bool:
+    return has_help_option(help_option_tokens(help_text), "--output-last-message")
+
+
 def build_scope_execution(
     participant: dict[str, Any],
     scope_policy: dict[str, Any],
@@ -123,6 +141,7 @@ def build_scope_execution(
     workspace_cwd: Path,
     run_dir: Path,
     capabilities: dict[str, Any] | None = None,
+    final_message_path: str | Path | None = None,
 ) -> dict[str, Any]:
     requested_scope = participant.get("scope", "mixed")
     policy = scope_policy.get("enforcement", SCOPE_POLICY_DEFAULT)
@@ -139,6 +158,7 @@ def build_scope_execution(
             execution_cwd=execution_cwd,
             extra_args=extra_args,
             cleanup_paths=cleanup_paths,
+            final_message_path=final_message_path,
             policy=policy,
             requested_scope=requested_scope,
             effective_scope="advisory",
@@ -197,6 +217,7 @@ def build_scope_execution(
         execution_cwd=execution_cwd,
         extra_args=extra_args,
         cleanup_paths=cleanup_paths,
+        final_message_path=final_message_path,
         policy=policy,
         requested_scope=requested_scope,
         effective_scope=requested_scope if enforcement_level != "advisory" else "advisory",
@@ -212,6 +233,7 @@ def _scope_execution_result(
     execution_cwd: Path,
     extra_args: list[str],
     cleanup_paths: list[Path],
+    final_message_path: str | Path | None,
     policy: str,
     requested_scope: str,
     effective_scope: str,
@@ -230,7 +252,12 @@ def _scope_execution_result(
         "temporary_cwd": bool(cleanup_paths),
     }
     return {
-        "argv": build_participant_argv(participant, cwd=execution_cwd, extra_args=extra_args),
+        "argv": build_participant_argv(
+            participant,
+            cwd=execution_cwd,
+            extra_args=extra_args,
+            final_message_path=final_message_path,
+        ),
         "cwd": execution_cwd,
         "cleanup_paths": cleanup_paths,
         "metadata": metadata,
@@ -246,6 +273,35 @@ def make_scope_workspace(run_id: str, provider_id: str) -> Path:
 
 def safe_temp_prefix(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "-", value)[:80] or "scope"
+
+
+def render_runtime_budget_block(budgets: dict[str, Any], *, role: str) -> str:
+    if role not in RUNTIME_BUDGET_ROLES:
+        raise ValueError(f"unsupported runtime budget role: {role}")
+    if not isinstance(budgets, dict):
+        raise ValueError("budgets.wall_clock_seconds must be a positive integer")
+    wall_clock_seconds = budgets.get("wall_clock_seconds")
+    if not isinstance(wall_clock_seconds, int) or isinstance(wall_clock_seconds, bool) or wall_clock_seconds <= 0:
+        raise ValueError("budgets.wall_clock_seconds must be a positive integer")
+    reserve_seconds = min(max(30, wall_clock_seconds // 5), max(1, wall_clock_seconds - 1))
+    work_seconds = max(1, wall_clock_seconds - reserve_seconds)
+    return f"""<runtime_budget>
+The harness will stop this provider after {wall_clock_seconds} seconds.
+Plan to stop investigation by about {work_seconds} seconds and reserve the
+remaining time to emit a schema-valid <final_json>.
+
+If full coverage is not possible before the cutoff:
+- Prefer fewer well-cited findings over broad uncited coverage.
+- Emit a partial but schema-valid result before the cutoff.
+- Use existing uncertainty or rationale fields in the requested schema to record
+  unfinished areas.
+- Do not add fields outside the requested schema.
+- Do not wait for perfect coverage if that risks missing the final_json cutoff.
+
+Do not emit progress updates or partial JSON outside the final <final_json>
+block. stdout is the structured answer channel.
+</runtime_budget>
+"""
 
 
 def build_worker_prompt(work_order: dict[str, Any], provider: dict[str, Any]) -> str:
@@ -264,6 +320,7 @@ def build_worker_prompt(work_order: dict[str, Any], provider: dict[str, Any]) ->
         .replace("{SCOPE_INSTRUCTIONS}", SCOPE_INSTRUCTIONS[provider["scope"]])
         .replace("{FACET_INSTRUCTIONS}", render_facet_block(work_order.get("facet")))
         .replace("{FACET_WORKER_RULES}", render_worker_facet_rules(work_order.get("facet")))
+        .replace("{RUNTIME_BUDGET}", render_runtime_budget_block(work_order["budgets"], role="worker"))
         .replace("{WORKER_RESULT_SCHEMA}", WORKER_RESULT_SCHEMA)
     )
 
@@ -292,12 +349,18 @@ def build_judge_prompt(
         .replace("{FINAL_JSON_B}", payload_b)
         .replace("{FACET_INSTRUCTIONS}", render_facet_block(facet))
         .replace("{FACET_JUDGE_RULES}", render_judge_facet_rules(facet, actual_mode))
+        .replace("{RUNTIME_BUDGET}", render_runtime_budget_block(work_order["budgets"], role="judge"))
     )
 
 
-def build_triage_prompt(triage_payload: dict[str, Any]) -> str:
+def build_triage_prompt(triage_payload: dict[str, Any], budgets: dict[str, Any] | None = None) -> str:
     payload = json.dumps(triage_payload, indent=2, sort_keys=True)
-    return TRIAGE_PROMPT.replace("{TRIAGE_PAYLOAD}", payload).replace("{TRIAGE_RESULT_SCHEMA}", TRIAGE_RESULT_SCHEMA)
+    runtime_budgets = budgets if budgets is not None else triage_payload.get("budgets")
+    return (
+        TRIAGE_PROMPT.replace("{RUNTIME_BUDGET}", render_runtime_budget_block(runtime_budgets, role="triage"))
+        .replace("{TRIAGE_PAYLOAD}", payload)
+        .replace("{TRIAGE_RESULT_SCHEMA}", TRIAGE_RESULT_SCHEMA)
+    )
 
 
 def render_facet_block(facet: dict[str, Any] | None) -> str:
@@ -435,6 +498,7 @@ Your job is to classify only the provided actionable-looking source_findings.
 - Do not mutate the original decision or report.
 </rules>
 
+{RUNTIME_BUDGET}
 <triage_payload>
 {TRIAGE_PAYLOAD}
 </triage_payload>
@@ -476,6 +540,7 @@ GATHER_WORKER_PROMPT = """You are a research worker. Your job is to enumerate fa
 - Confidence is one of: high, medium, low. Default to medium when uncertain.
 </rules>
 
+{RUNTIME_BUDGET}
 <worker_result_schema>
 {WORKER_RESULT_SCHEMA}
 </worker_result_schema>
@@ -520,6 +585,7 @@ COMPARE_WORKER_PROMPT = """You are answering a comparison question. Your job:
 - Confidence is one of: high, medium, low.
 </rules>
 
+{RUNTIME_BUDGET}
 <worker_result_schema>
 {WORKER_RESULT_SCHEMA}
 Compare mode MUST also include this top-level field:
@@ -566,6 +632,7 @@ ANALYZE_WORKER_PROMPT = """You are producing an analysis/explanation of the subj
 - Do not summarize at the end. The judge handles synthesis.
 </rules>
 
+{RUNTIME_BUDGET}
 <worker_result_schema>
 {WORKER_RESULT_SCHEMA}
 For analyze mode, the claims[] array IS your spine. Each claim object is one numbered, atomic analysis step.
@@ -607,6 +674,7 @@ You do not know which model produced A or B. Use the positional labels "A" and "
 - Leave near-duplicates separate when in doubt. Over-merging is the dominant failure mode of dedupe judges.
 </rules>
 
+{RUNTIME_BUDGET}
 <process>
 1. In <scratchpad>, pair up claims that appear to be the same assertion. Note any near-duplicates you are unsure about - leave them separate if in doubt.
 2. Identify direct conflicts.
@@ -657,6 +725,7 @@ Length is NOT a virtue. A concise, well-evidenced position beats a verbose, weak
 - Do not invent evidence that neither position cited.
 </rules>
 
+{RUNTIME_BUDGET}
 <process>
 1. In <scratchpad>, compare the `position` fields to decide `relation`.
 2. Score A on each rubric dimension (1-5). Then score B. Then compare margins.
@@ -704,6 +773,7 @@ Length and verbosity do NOT favor a spine.
 - `actionable_followups[]` is only for bugs, correctness risks, documentation drift, test gaps, or explicit follow-up work. If there are none, emit an empty array.
 </rules>
 
+{RUNTIME_BUDGET}
 <process>
 1. In <scratchpad>, score both analyses on the rubric. Pick the spine.
 2. For each spine step, scan the loser for the closest semantic match. Decide: agrees, disagrees, adds, or not_covered.
