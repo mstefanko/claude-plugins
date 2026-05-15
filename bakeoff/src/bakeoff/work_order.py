@@ -6,6 +6,11 @@ from pathlib import Path
 from typing import Any
 
 MODES = ("gather", "compare", "analyze")
+MODE_EFFORT_DEFAULTS = {
+    "gather": {"worker": "low", "judge": "low"},
+    "compare": {"worker": "high", "judge": "medium"},
+    "analyze": {"worker": "high", "judge": "medium"},
+}
 BACKENDS = ("claude", "codex")
 SCOPES = ("codebase", "web", "mixed")
 EFFORTS = ("low", "medium", "high")
@@ -14,6 +19,9 @@ CONFIDENCES = ("high", "medium", "low")
 COMPARE_SCORE_FIELDS = ("evidence", "coherence", "tradeoff_honesty", "rebuttals")
 ANALYZE_SCORE_FIELDS = ("step_atomicity", "citation_grounding", "assumption_transparency", "coherence")
 ANALYZE_LOSER_POSITIONS = ("agrees", "disagrees", "not_covered", "adds")
+TRIAGE_CLASSIFICATIONS = ("real_issue", "false_positive", "plan_doc_drift", "product_decision", "needs_repro", "already_fixed", "evidence_gap")
+TRIAGE_ACTIONS = ("fix_now", "document", "defer", "ignore", "reproduce")
+TRIAGE_SEVERITIES = ("high", "medium", "low", "none")
 
 
 class ValidationError(ValueError):
@@ -212,7 +220,14 @@ def _validate_budgets(value: Any) -> dict[str, int]:
             raise ValidationError(f"budgets.{field} is required")
         if not isinstance(value[field], int) or value[field] <= 0:
             raise ValidationError(f"budgets.{field} must be a positive integer")
-    return {"wall_clock_seconds": value["wall_clock_seconds"], "max_output_bytes": value["max_output_bytes"]}
+    heartbeat_seconds = value.get("heartbeat_seconds", 60)
+    if not isinstance(heartbeat_seconds, int) or heartbeat_seconds < 0:
+        raise ValidationError("budgets.heartbeat_seconds must be a non-negative integer")
+    return {
+        "wall_clock_seconds": value["wall_clock_seconds"],
+        "max_output_bytes": value["max_output_bytes"],
+        "heartbeat_seconds": heartbeat_seconds,
+    }
 
 
 def validate_worker_result(data: Any, *, mode: str) -> dict[str, Any]:
@@ -298,11 +313,50 @@ def validate_analyze_judge_result(data: Any) -> dict[str, Any]:
     return data
 
 
+def validate_triage_result(data: Any) -> dict[str, Any]:
+    if not isinstance(data, dict):
+        raise ValidationError("triage final_json must be an object")
+    for field in ("schema_version", "run_id", "status", "summary", "items", "fix_now", "defer", "unknowns", "input_hashes"):
+        if field not in data:
+            raise ValidationError(f"triage final_json.{field} is required")
+    if data["schema_version"] != 1 or data["status"] != "complete":
+        raise ValidationError('triage final_json.status must equal "complete" and schema_version must equal 1')
+    if not isinstance(data["items"], list):
+        raise ValidationError("triage final_json.items must be an array")
+    for index, item in enumerate(data["items"]):
+        _validate_triage_item(item, f"triage final_json.items[{index}]")
+    _validate_string_list(data["fix_now"], "triage final_json.fix_now")
+    _validate_string_list(data["defer"], "triage final_json.defer")
+    _validate_string_list(data["unknowns"], "triage final_json.unknowns")
+    if not isinstance(data["input_hashes"], dict):
+        raise ValidationError("triage final_json.input_hashes must be an object")
+    return data
+
+
 def _validate_claims(value: Any, label: str) -> None:
     if not isinstance(value, list):
         raise ValidationError(f"{label} must be an array")
     for index, claim in enumerate(value):
         _validate_mapping_claim(claim, f"{label}[{index}]", require_sources=False)
+
+
+def _validate_triage_item(value: Any, label: str) -> None:
+    if not isinstance(value, dict):
+        raise ValidationError(f"{label} must be an object")
+    for field in ("id", "source_finding_id", "source_finding", "classification", "severity", "confidence", "supporting_evidence", "counterevidence", "citation_check_ids", "recommended_action", "rationale"):
+        if field not in value:
+            raise ValidationError(f"{label}.{field} is required")
+    if value["classification"] not in TRIAGE_CLASSIFICATIONS:
+        raise ValidationError(f"{label}.classification must be one of: {', '.join(TRIAGE_CLASSIFICATIONS)}")
+    if value["severity"] not in TRIAGE_SEVERITIES:
+        raise ValidationError(f"{label}.severity must be one of: {', '.join(TRIAGE_SEVERITIES)}")
+    if value["confidence"] not in CONFIDENCES:
+        raise ValidationError(f"{label}.confidence must be one of: {', '.join(CONFIDENCES)}")
+    if value["recommended_action"] not in TRIAGE_ACTIONS:
+        raise ValidationError(f"{label}.recommended_action must be one of: {', '.join(TRIAGE_ACTIONS)}")
+    _validate_string_list(value["supporting_evidence"], f"{label}.supporting_evidence")
+    _validate_string_list(value["counterevidence"], f"{label}.counterevidence")
+    _validate_string_list(value["citation_check_ids"], f"{label}.citation_check_ids")
 
 
 def _validate_mapping_claim(value: Any, label: str, *, require_sources: bool) -> None:
@@ -383,6 +437,7 @@ def init_template(mode: str) -> str:
         scopes = ("codebase", "codebase")
         goal = "ONE SENTENCE: what subject should be explained thoroughly?"
         background = "MULTI-LINE: relevant files, design notes, links, and questions."
+    effort = MODE_EFFORT_DEFAULTS[mode]
 
     return f"""// bakeoff {mode} work order - edit `id`, `goal`, `background`, then run:
 //   bakeoff validate <this-file>
@@ -394,10 +449,10 @@ def init_template(mode: str) -> str:
   "goal": "{goal}",
   "background": "{background}",
   "providers": [
-    {{ "id": "claude", "backend": "claude", "model": "claude-sonnet-4-6", "effort": "high", "scope": "{scopes[0]}" }},
-    {{ "id": "codex",  "backend": "codex",  "model": "gpt-5.5",           "effort": "high", "scope": "{scopes[1]}" }}
+    {{ "id": "claude", "backend": "claude", "model": "claude-sonnet-4-6", "effort": "{effort["worker"]}", "scope": "{scopes[0]}" }},
+    {{ "id": "codex",  "backend": "codex",  "model": "gpt-5.5",           "effort": "{effort["worker"]}", "scope": "{scopes[1]}" }}
   ],
-  "judge":   {{ "backend": "claude", "model": "claude-opus-4-7", "effort": "high" }},
-  "budgets": {{ "wall_clock_seconds": 900, "max_output_bytes": 60000 }}
+  "judge":   {{ "backend": "claude", "model": "claude-opus-4-7", "effort": "{effort["judge"]}" }},
+  "budgets": {{ "wall_clock_seconds": 900, "max_output_bytes": 60000, "heartbeat_seconds": 60 }}
 }}
 """

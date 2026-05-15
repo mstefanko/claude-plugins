@@ -25,6 +25,38 @@ def test_gather_research_with_fake_providers(tmp_path, monkeypatch):
     assert "Fake merged claim" in report
 
 
+def test_triage_writes_structured_artifacts(tmp_path, monkeypatch):
+    install_fake_providers(tmp_path, judge_mode="gather")
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    work_order = write_work_order(tmp_path, "gather")
+    out_dir = tmp_path / "runs"
+    assert main(["research", str(work_order), "--out", str(out_dir), "--run-id", "triage-run"]) == 0
+
+    assert main(["triage", "triage-run", "--out", str(out_dir)]) == 0
+
+    triage_dir = out_dir / "triage-run" / "triage"
+    final = json.loads((triage_dir / "final.json").read_text())
+    assert final["triage_participant"]["model"] == "fake-judge"
+    assert final["items"][0]["classification"] == "real_issue"
+    assert (triage_dir / "citation_checks.json").exists()
+
+
+def test_triage_dry_run_and_force(tmp_path, monkeypatch):
+    install_fake_providers(tmp_path, judge_mode="gather")
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    work_order = write_work_order(tmp_path, "gather")
+    out_dir = tmp_path / "runs"
+    assert main(["research", str(work_order), "--out", str(out_dir), "--run-id", "triage-dry"]) == 0
+
+    assert main(["triage", "triage-dry", "--out", str(out_dir), "--dry-run"]) == 0
+
+    triage_dir = out_dir / "triage-dry" / "triage"
+    assert (triage_dir / "prompt.txt").exists()
+    assert not (triage_dir / "final.json").exists()
+    assert main(["triage", "triage-dry", "--out", str(out_dir)]) == 2
+    assert main(["triage", "triage-dry", "--out", str(out_dir), "--force"]) == 0
+
+
 def test_compare_position_swap_catches_position_bias(tmp_path, monkeypatch):
     install_fake_providers(tmp_path, judge_mode="compare_always_a")
     monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
@@ -102,6 +134,8 @@ def install_fake_providers(tmp_path, *, judge_mode, fail_providers=frozenset()):
             elif name in fail_providers:
                 print("provider failed before final json", file=sys.stderr)
                 sys.exit(9)
+            elif "evidence-grounded triage of a Bakeoff report" in prompt:
+                emit({{"schema_version":1,"run_id":"fake","status":"complete","summary":"checked","items":[{{"id":"T-001","source_finding_id":"F-001","source_finding":"Fake merged claim","classification":"real_issue","severity":"medium","confidence":"high","supporting_evidence":["src/fake.py:1"],"counterevidence":[],"citation_check_ids":[],"recommended_action":"fix_now","rationale":"actionable"}}],"fix_now":["T-001"],"defer":[],"unknowns":[],"input_hashes":{{"decision_sha256":"x","report_sha256":"y","work_order_sha256":"z"}}}})
             elif "deduplication and conflict-flagging judge" in prompt:
                 emit({{"merged_claims":[{{"claim":"Fake merged claim","evidence":["fake:1"],"sources":["A","B"],"confidence":"high"}}],"conflicts":[],"unknowns_union":[]}})
             elif "pairwise judge" in prompt:

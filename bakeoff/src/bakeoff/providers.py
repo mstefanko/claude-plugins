@@ -80,6 +80,11 @@ def build_judge_prompt(
     raise ValueError(f"unsupported mode: {actual_mode}")
 
 
+def build_triage_prompt(triage_payload: dict[str, Any]) -> str:
+    payload = json.dumps(triage_payload, indent=2, sort_keys=True)
+    return TRIAGE_PROMPT.replace("{TRIAGE_PAYLOAD}", payload).replace("{TRIAGE_RESULT_SCHEMA}", TRIAGE_RESULT_SCHEMA)
+
+
 def anonymized_worker_output(result: dict[str, Any]) -> dict[str, Any]:
     """Return only the parsed worker artifact; no provider id or transcript data."""
     final_json = result.get("final_json")
@@ -111,6 +116,75 @@ Allowed confidence values: "high", "medium", "low".
 Every claims[] item MUST include these required fields with these exact names: "id", "claim", "evidence", "confidence".
 Do not rename fields. Use "claim", not "finding", "summary", or "description". Use "evidence", not "citation", "citations", "source", or "sources".
 Put unverified material in unknowns[] as strings instead of adding uncited claims.
+"""
+
+
+TRIAGE_RESULT_SCHEMA = """\
+{
+  "schema_version": 1,
+  "run_id": "feature-gap-map",
+  "status": "complete",
+  "summary": "Short assessment of report quality and actionability.",
+  "items": [
+    {
+      "id": "T-001",
+      "source_finding_id": "F-001",
+      "source_finding": "The report finding being triaged.",
+      "classification": "real_issue",
+      "severity": "medium",
+      "confidence": "high",
+      "supporting_evidence": ["src/bakeoff/cli.py:631"],
+      "counterevidence": ["tests/test_modes_end_to_end.py:19"],
+      "citation_check_ids": ["C-001", "C-014"],
+      "recommended_action": "fix_now",
+      "rationale": "Why this is or is not actionable."
+    }
+  ],
+  "fix_now": ["T-001"],
+  "defer": ["T-004"],
+  "unknowns": ["Any checks triage could not perform."],
+  "input_hashes": {
+    "decision_sha256": "...",
+    "report_sha256": "...",
+    "work_order_sha256": "..."
+  }
+}
+
+Allowed classification values: real_issue, false_positive, plan_doc_drift, product_decision, needs_repro, already_fixed, evidence_gap.
+Allowed recommended_action values: fix_now, document, defer, ignore, reproduce.
+Allowed severity values: high, medium, low, none.
+Allowed confidence values: high, medium, low.
+"""
+
+
+TRIAGE_PROMPT = """You are a senior engineer doing evidence-grounded triage of a Bakeoff report.
+You are NOT the original judge.
+Your job is not to improve the report prose.
+Your job is to classify each actionable-looking finding.
+
+<rules>
+- Identify each actionable-looking finding by source_finding_id.
+- Check supporting citations when possible using the provided citation_checks data.
+- Look for counterevidence in the provided artifacts and codebase.
+- Classify each finding.
+- Decide whether it should be fixed now, deferred, documented, ignored, or reproduced.
+- Do not mark a finding real just because the report said it confidently.
+- Do not mark a finding false just because it is inconvenient.
+- If evidence is missing, use needs_repro or evidence_gap.
+- Do not mutate the original decision or report.
+</rules>
+
+<triage_payload>
+{TRIAGE_PAYLOAD}
+</triage_payload>
+
+<triage_result_schema>
+{TRIAGE_RESULT_SCHEMA}
+</triage_result_schema>
+
+<output_format>
+Reason privately if needed, then emit only one JSON object wrapped in <final_json>...</final_json>, matching the triage schema. No prose before or after the final_json block.
+</output_format>
 """
 
 

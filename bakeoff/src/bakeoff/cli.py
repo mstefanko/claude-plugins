@@ -8,7 +8,7 @@ import re
 import shutil
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -20,12 +20,25 @@ from bakeoff.providers import (
     anonymized_worker_output,
     build_judge_prompt,
     build_participant_argv,
+    build_triage_prompt,
     build_worker_prompt,
     version_argv,
 )
 from bakeoff.report import render_report
 from bakeoff.runner import run_provider
+from bakeoff.triage import (
+    build_finding_index,
+    check_citations,
+    collect_citation_text,
+    compute_input_hashes,
+    extract_citations_from_text,
+    render_triage_markdown,
+    resolve_citation_cwd,
+    should_recommend_triage,
+    triage_state,
+)
 from bakeoff.work_order import (
+    MODE_EFFORT_DEFAULTS,
     MODES,
     ValidationError,
     init_template,
@@ -33,6 +46,7 @@ from bakeoff.work_order import (
     validate_analyze_judge_result,
     validate_compare_judge_result,
     validate_gather_judge_result,
+    validate_triage_result,
     validate_worker_result,
 )
 
@@ -74,11 +88,20 @@ def build_parser() -> argparse.ArgumentParser:
     research.add_argument("--out", default="runs", help="run ledger directory (default: runs)")
     research.add_argument("--run-id", help="explicit run id")
     research.add_argument("--force", action="store_true", help="replace an existing run directory")
+    research.add_argument("--quiet", action="store_true", help="suppress provider heartbeat lines")
 
     rerun = subcommands.add_parser("rerun", help="replay a previous work order with a fresh run id")
     rerun.add_argument("source_run_id")
     rerun.add_argument("--out", default="runs", help="run ledger directory (default: runs)")
     rerun.add_argument("--run-id", dest="new_run_id", help="explicit new run id")
+    rerun.add_argument("--quiet", action="store_true", help="suppress provider heartbeat lines")
+
+    triage = subcommands.add_parser("triage", help="triage a completed bakeoff report")
+    triage.add_argument("run_id")
+    triage.add_argument("--out", default="runs", help="run ledger directory (default: runs)")
+    triage.add_argument("--force", action="store_true", help="replace an existing triage directory")
+    triage.add_argument("--dry-run", action="store_true", help="build triage inputs without invoking a provider")
+    triage.add_argument("--quiet", action="store_true", help="suppress provider heartbeat lines")
 
     ls_cmd = subcommands.add_parser("ls", help="list past runs")
     ls_cmd.add_argument("--out", default="runs", help="run ledger directory (default: runs)")
@@ -88,9 +111,11 @@ def build_parser() -> argparse.ArgumentParser:
     show.add_argument("--out", default="runs", help="run ledger directory (default: runs)")
     show.add_argument("--judge", action="store_true", help="show judge output")
     show.add_argument("--judge-prompt", action="store_true", help="show judge prompt")
+    show.add_argument("--triage", action="store_true", help="show triage output")
 
     doctor = subcommands.add_parser("doctor", help="check provider CLIs, auth, and local readiness")
     doctor.add_argument("--skip-auth-probe", action="store_true", help="skip spendful provider auth probes")
+    doctor.add_argument("--quiet", action="store_true", help="suppress provider heartbeat lines")
 
     return parser
 
@@ -112,6 +137,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return asyncio.run(cmd_research(args))
         if args.command == "rerun":
             return asyncio.run(cmd_rerun(args))
+        if args.command == "triage":
+            return asyncio.run(cmd_triage(args))
         if args.command == "ls":
             return cmd_ls(args)
         if args.command == "show":
@@ -130,6 +157,8 @@ def cmd_init(args: argparse.Namespace) -> int:
         raise ValidationError(f"{path} already exists; use --force to overwrite")
     path.write_text(init_template(args.type), encoding="utf-8")
     print(f"wrote {path}")
+    defaults = MODE_EFFORT_DEFAULTS[args.type]
+    print(f"effort defaults: workers={defaults['worker']}, judge={defaults['judge']}")
     return 0
 
 
@@ -140,7 +169,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
 
 
 async def cmd_research(args: argparse.Namespace) -> int:
-    return await run_research(Path(args.work_order), out_dir=Path(args.out), run_id=args.run_id, force=args.force)
+    return await run_research(Path(args.work_order), out_dir=Path(args.out), run_id=args.run_id, force=args.force, quiet=args.quiet)
 
 
 async def cmd_rerun(args: argparse.Namespace) -> int:
@@ -148,7 +177,7 @@ async def cmd_rerun(args: argparse.Namespace) -> int:
     work_order_path = source_run / "work-order.json"
     if not work_order_path.exists():
         raise ValidationError(f"{source_run} has no work-order.json")
-    return await run_research(work_order_path, out_dir=Path(args.out), run_id=args.new_run_id, force=False)
+    return await run_research(work_order_path, out_dir=Path(args.out), run_id=args.new_run_id, force=False, quiet=args.quiet)
 
 
 def cmd_ls(args: argparse.Namespace) -> int:
@@ -161,13 +190,22 @@ def cmd_ls(args: argparse.Namespace) -> int:
         meta = read_json(run_dir / "meta.json") or {}
         decision = read_json(run_dir / "decision.json") or {}
         print(
-            f"{run_dir.name}\t{meta.get('type', '?')}\t{decision.get('decision_kind', '?')}\t{meta.get('finished_at', '-')}"
+            f"{run_dir.name}\t{meta.get('type', '?')}\t{decision.get('decision_kind', '?')}\t"
+            f"triage:{triage_state(run_dir)}\t{meta.get('finished_at', '-')}"
         )
     return 0
 
 
 def cmd_show(args: argparse.Namespace) -> int:
+    if sum(1 for value in (args.judge, args.judge_prompt, args.triage) if value) > 1:
+        raise ValidationError("show artifact flags are mutually exclusive: --judge, --judge-prompt, --triage")
     run_dir = resolve_run_dir(Path(args.out), args.run_id)
+    if args.triage:
+        triage_report = run_dir / "triage" / "triage.md"
+        if not triage_report.exists():
+            raise ValidationError(f"triage has not been run for {run_dir.name}")
+        print(triage_report.read_text(encoding="utf-8"), end="")
+        return 0
     if args.judge_prompt:
         for path in sorted((run_dir / "judge").glob("prompt*.txt")):
             print(f"===== {path.relative_to(run_dir)} =====")
@@ -181,8 +219,17 @@ def cmd_show(args: argparse.Namespace) -> int:
     report = run_dir / "report.md"
     if not report.exists():
         raise ValidationError(f"{run_dir} has no report.md")
-    print(report.read_text(encoding="utf-8"), end="")
+    report_text = report.read_text(encoding="utf-8")
+    print(report_text, end="")
+    if triage_state(run_dir) == "yes":
+        print(f"\ntriage available: bakeoff show {args.run_id} --triage")
+    elif should_recommend_triage({"type": (read_json(run_dir / "meta.json") or {}).get("type")}, read_json(run_dir / "decision.json") or {}, report_text):
+        print(f"\ntriage not yet run: bakeoff triage {args.run_id}")
     return 0
+
+
+async def cmd_triage(args: argparse.Namespace) -> int:
+    return await run_triage(resolve_run_dir(Path(args.out), args.run_id), force=args.force, dry_run=args.dry_run, quiet=args.quiet)
 
 
 async def cmd_doctor(args: argparse.Namespace) -> int:
@@ -221,13 +268,18 @@ async def cmd_doctor(args: argparse.Namespace) -> int:
         ]
         for participant in participants:
             backend = participant["backend"]
-            result = await run_provider(build_participant_argv(participant, cwd=Path.cwd()), prompt, budgets)
+            result = await run_provider(
+                build_participant_argv(participant, cwd=Path.cwd()),
+                prompt,
+                budgets,
+                on_tick=make_tick_printer(f"{backend}:auth", quiet=args.quiet),
+            )
             print(f"- {backend} auth probe: {result['status']}")
             failed = failed or result["status"] != "ok"
     return 1 if failed else 0
 
 
-async def run_research(work_order_path: Path, *, out_dir: Path, run_id: str | None, force: bool) -> int:
+async def run_research(work_order_path: Path, *, out_dir: Path, run_id: str | None, force: bool, quiet: bool = False) -> int:
     work_order = load_work_order(work_order_path)
     actual_run_id = run_id or make_run_id()
     validate_run_id(actual_run_id)
@@ -244,7 +296,7 @@ async def run_research(work_order_path: Path, *, out_dir: Path, run_id: str | No
     (run_dir / "work-order.json").write_text(work_order_path.read_text(encoding="utf-8"), encoding="utf-8")
     print_run_header(work_order, run_dir, actual_run_id)
 
-    worker_results = await run_workers(work_order, run_dir)
+    worker_results = await run_workers(work_order, run_dir, quiet=quiet)
     ok_results = {pid: result for pid, result in worker_results.items() if result["status"] == "ok"}
 
     judge_results: dict[str, dict[str, Any]] = {}
@@ -273,7 +325,7 @@ async def run_research(work_order_path: Path, *, out_dir: Path, run_id: str | No
             }
         )
     else:
-        decision, judge_results, exit_code = await run_judge_phase(work_order, worker_results, run_dir)
+        decision, judge_results, exit_code = await run_judge_phase(work_order, worker_results, run_dir, quiet=quiet)
 
     write_json(run_dir / "decision.json", decision)
     report = render_report(work_order, decision, worker_results, judge_results=judge_results)
@@ -281,10 +333,96 @@ async def run_research(work_order_path: Path, *, out_dir: Path, run_id: str | No
     write_meta(run_dir, work_order, actual_run_id, started_at)
     print(f"report: {run_dir / 'report.md'}")
     print(f"next:   bakeoff show {actual_run_id}")
+    recommendation = should_recommend_triage(work_order, decision, report)
+    if recommendation:
+        print(f"recommended: bakeoff triage {actual_run_id}  ({recommendation})")
     return exit_code
 
 
-async def run_workers(work_order: dict[str, Any], run_dir: Path) -> dict[str, dict[str, Any]]:
+async def run_triage(run_dir: Path, *, force: bool, dry_run: bool, quiet: bool = False) -> int:
+    work_order = load_work_order(run_dir / "work-order.json")
+    decision = read_json(run_dir / "decision.json")
+    if not isinstance(decision, dict):
+        raise ValidationError(f"{run_dir} has no valid decision.json")
+    report_path = run_dir / "report.md"
+    if not report_path.exists():
+        raise ValidationError(f"{run_dir} has no report.md")
+    meta = read_json(run_dir / "meta.json") or {}
+    report_text = report_path.read_text(encoding="utf-8")
+    input_hashes = compute_input_hashes(run_dir)
+    citation_cwd, caveats = resolve_citation_cwd(meta if isinstance(meta, dict) else {})
+
+    triage_dir = run_dir / "triage"
+    if triage_dir.exists():
+        if not force:
+            raise ValidationError(f"{triage_dir} already exists; use --force to replace")
+        ensure_child_path(run_dir, triage_dir)
+        shutil.rmtree(triage_dir)
+    triage_dir.mkdir(parents=True)
+
+    finding_index, synthesized = build_finding_index(report_text)
+    if synthesized:
+        caveats.append("source finding IDs were synthesized from report display order")
+        write_json(triage_dir / "finding_index.json", {"schema_version": 1, "findings": finding_index})
+    citation_text = collect_citation_text(run_dir, report_text, decision)
+    citation_checks = check_citations(extract_citations_from_text(citation_text), citation_cwd)
+    write_json(triage_dir / "citation_checks.json", citation_checks)
+    payload = {
+        "schema_version": 1,
+        "run_id": run_dir.name,
+        "work_order_json": (run_dir / "work-order.json").read_text(encoding="utf-8"),
+        "meta": meta,
+        "decision": decision,
+        "report_md": report_text,
+        "source_findings": finding_index,
+        "citation_checks": citation_checks,
+        "caveats": caveats,
+        "input_hashes": input_hashes,
+    }
+    prompt = build_triage_prompt(payload)
+    (triage_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
+    participant = {
+        "backend": work_order["judge"]["backend"],
+        "model": work_order["judge"]["model"],
+        "effort": work_order["judge"]["effort"],
+    }
+    print(f"triage participant: {participant['backend']} {participant['model']} (effort {participant['effort']})")
+    print("note: triage invokes one provider call; use --dry-run to inspect inputs only")
+    if dry_run:
+        write_json(triage_dir / "status.json", {"status": "dry_run", "triage_participant": participant, "input_hashes": input_hashes})
+        return 0
+
+    def validator(data: Any) -> dict[str, Any]:
+        final = dict(validate_triage_result(data))
+        final["run_id"] = run_dir.name
+        final["input_hashes"] = input_hashes
+        final["triage_participant"] = participant
+        return final
+
+    result = await run_provider(
+        build_participant_argv(work_order["judge"], cwd=citation_cwd),
+        prompt,
+        work_order["budgets"],
+        cwd=citation_cwd,
+        validator=validator,
+        on_tick=make_tick_printer("triage", quiet=quiet),
+    )
+    (triage_dir / "stdout.txt").write_text(result["stdout"], encoding="utf-8")
+    (triage_dir / "stderr.txt").write_text(result["stderr"], encoding="utf-8")
+    status = status_without_payload(result)
+    status["triage_participant"] = participant
+    status["input_hashes"] = input_hashes
+    write_json(triage_dir / "status.json", status)
+    if result["status"] != "ok":
+        return 2
+    write_json(triage_dir / "final.json", result["final_json"])
+    (triage_dir / "triage.md").write_text(render_triage_markdown(result["final_json"], caveats), encoding="utf-8")
+    print(f"triage: {triage_dir / 'triage.md'}")
+    print(f"next:   bakeoff show {run_dir.name} --triage")
+    return 0
+
+
+async def run_workers(work_order: dict[str, Any], run_dir: Path, *, quiet: bool = False) -> dict[str, dict[str, Any]]:
     async def run_one(provider: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         provider_id = provider["id"]
         prompt = build_worker_prompt(work_order, provider)
@@ -294,7 +432,14 @@ async def run_workers(work_order: dict[str, Any], run_dir: Path) -> dict[str, di
         (provider_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
         print(f"[{provider_id}] launching...")
         validator = lambda data: validate_worker_result(data, mode=work_order["type"])
-        result = await run_provider(argv, prompt, work_order["budgets"], cwd=Path.cwd(), validator=validator)
+        result = await run_provider(
+            argv,
+            prompt,
+            work_order["budgets"],
+            cwd=Path.cwd(),
+            validator=validator,
+            on_tick=make_tick_printer(provider_id, quiet=quiet),
+        )
         write_provider_artifacts(provider_dir, result)
         print(f"[{provider_id}] {result['status']} {result['wall_seconds']}s {result['output_bytes']} bytes")
         return provider_id, result
@@ -315,14 +460,14 @@ async def run_workers(work_order: dict[str, Any], run_dir: Path) -> dict[str, di
 
 
 async def run_judge_phase(
-    work_order: dict[str, Any], worker_results: dict[str, dict[str, Any]], run_dir: Path
+    work_order: dict[str, Any], worker_results: dict[str, dict[str, Any]], run_dir: Path, *, quiet: bool = False
 ) -> tuple[dict[str, Any], dict[str, dict[str, Any]], int]:
     mode = work_order["type"]
     provider_ids = [provider["id"] for provider in work_order["providers"]]
     base = decision_base(work_order, worker_results, run_dir)
     if mode == "gather":
         order = {"A": provider_ids[0], "B": provider_ids[1]}
-        judge_result = await run_single_judge(work_order, worker_results, order, run_dir, "gather")
+        judge_result = await run_single_judge(work_order, worker_results, order, run_dir, "gather", quiet=quiet)
         judge_results = {"pass1": judge_result.get("final_json") or {}}
         decision = {
             **base,
@@ -340,8 +485,8 @@ async def run_judge_phase(
 
     pass1_order = {"A": provider_ids[0], "B": provider_ids[1]}
     pass2_order = {"A": provider_ids[1], "B": provider_ids[0]}
-    pass1 = await run_single_judge(work_order, worker_results, pass1_order, run_dir, "pass1")
-    pass2 = await run_single_judge(work_order, worker_results, pass2_order, run_dir, "pass2")
+    pass1 = await run_single_judge(work_order, worker_results, pass1_order, run_dir, "pass1", quiet=quiet)
+    pass2 = await run_single_judge(work_order, worker_results, pass2_order, run_dir, "pass2", quiet=quiet)
     judge_results = {"pass1": pass1.get("final_json") or {}, "pass2": pass2.get("final_json") or {}}
     if pass1["status"] != "ok" or pass2["status"] != "ok":
         decision = {
@@ -365,6 +510,8 @@ async def run_single_judge(
     order_map: dict[str, str],
     run_dir: Path,
     label: str,
+    *,
+    quiet: bool = False,
 ) -> dict[str, Any]:
     mode = work_order["type"]
     worker_a = anonymized_worker_output(worker_results[order_map["A"]])
@@ -393,6 +540,7 @@ async def run_single_judge(
         work_order["budgets"],
         cwd=Path.cwd(),
         validator=validator,
+        on_tick=make_tick_printer(f"judge:{label}", quiet=quiet),
     )
     stdout_path.write_text(result["stdout"], encoding="utf-8")
     stderr_path.write_text(result["stderr"], encoding="utf-8")
@@ -635,8 +783,10 @@ def write_meta(run_dir: Path, work_order: dict[str, Any], run_id: str, started_a
         "type": work_order["type"],
         "started_at": started_at,
         "finished_at": utc_now(),
+        "cwd": str(Path.cwd()),
         "bakeoff_version": __version__,
         "provider_cli_versions": versions,
+        "input_hashes": compute_input_hashes(run_dir),
         "resolved_models": {
             "providers": {
                 provider["id"]: {
@@ -658,7 +808,27 @@ def write_meta(run_dir: Path, work_order: dict[str, Any], run_id: str, started_a
 
 
 def status_without_payload(result: dict[str, Any]) -> dict[str, Any]:
-    return {key: result[key] for key in ("status", "exit_code", "wall_seconds", "output_bytes")}
+    status = {key: result[key] for key in ("status", "exit_code", "wall_seconds", "output_bytes")}
+    if "io" in result:
+        status["io"] = result["io"]
+    return status
+
+
+def make_tick_printer(label: str, *, quiet: bool) -> Callable[[dict[str, Any]], None] | None:
+    if quiet:
+        return None
+
+    def on_tick(tick: dict[str, Any]) -> None:
+        elapsed = int(float(tick.get("elapsed", 0)))
+        quiet_for = int(float(tick.get("last_output_age", 0)))
+        total = int(tick.get("total_bytes", 0))
+        print(f"[provider={label} t={elapsed}s out={format_kb(total)} quiet={quiet_for}s]", file=sys.stderr)
+
+    return on_tick
+
+
+def format_kb(byte_count: int) -> str:
+    return f"{byte_count / 1024:.1f}KB"
 
 
 def write_json(path: Path, data: Any) -> None:

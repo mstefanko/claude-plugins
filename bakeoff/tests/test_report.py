@@ -23,5 +23,7 @@ def test_report_surfaces_compare_nonwinner_material():
     )
 
     assert "## Kept From Nonwinner" in report
+    assert "**F-001** X is better" in report
+    assert "**F-002** keep this" in report
     assert "keep this" in report
     assert "Source: `codex`" in report

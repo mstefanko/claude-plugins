@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from bakeoff.triage import ACTIONABLE_REPORT_SECTIONS, SKIP_REPORT_BULLETS
+
 
 def render_report(
     work_order: dict[str, Any],
@@ -28,7 +30,7 @@ def render_report(
     else:
         lines.append("Unsupported mode.")
     lines.extend(_caveats(decision))
-    return "\n".join(lines).rstrip() + "\n"
+    return _add_finding_ids("\n".join(lines).rstrip()) + "\n"
 
 
 def _decision_audit(decision: dict[str, Any]) -> list[str]:
@@ -223,3 +225,21 @@ def _as_list(value: Any) -> list[str]:
     if value is None:
         return []
     return [str(value)]
+
+
+def _add_finding_ids(report: str) -> str:
+    numbered: list[str] = []
+    section: str | None = None
+    next_id = 1
+    for line in report.splitlines():
+        if line.startswith("## "):
+            section = line.removeprefix("## ").strip()
+            numbered.append(line)
+            continue
+        if section in ACTIONABLE_REPORT_SECTIONS and line.startswith("- ") and not line.startswith("- **F-"):
+            text = line[2:].strip()
+            if text not in SKIP_REPORT_BULLETS:
+                line = f"- **F-{next_id:03d}** {text}"
+                next_id += 1
+        numbered.append(line)
+    return "\n".join(numbered)

@@ -43,11 +43,12 @@ For plugin dogfood, use the wrapper directly:
 bakeoff
 bakeoff init {gather|compare|analyze} [--force]
 bakeoff validate <work-order>
-bakeoff research <work-order> [--out runs] [--run-id ID] [--force]
-bakeoff rerun <run-id>
+bakeoff research <work-order> [--out runs] [--run-id ID] [--force] [--quiet]
+bakeoff rerun <run-id> [--quiet]
+bakeoff triage <run-id> [--out runs] [--force] [--dry-run] [--quiet]
 bakeoff ls [--out runs]
-bakeoff show <run-id> [--judge | --judge-prompt]
-bakeoff doctor [--skip-auth-probe]
+bakeoff show <run-id> [--judge | --judge-prompt | --triage]
+bakeoff doctor [--skip-auth-probe] [--quiet]
 ```
 
 `bakeoff research` writes a replayable ledger under `runs/<run-id>/`:
@@ -57,8 +58,29 @@ bakeoff doctor [--skip-auth-probe]
 - `judge/` prompts and results
 - `decision.json`
 - `report.md`
+- optional `triage/{prompt,stdout,stderr,status,final,citation_checks,triage}.json/txt/md`
 
 `runs/latest` points at the newest run.
+
+Provider runs emit compact heartbeat lines to stderr by default. Pass `--quiet`
+on `research`, `rerun`, `triage`, or `doctor` to suppress them. Set
+`budgets.heartbeat_seconds` in a work order to tune heartbeat frequency, or `0`
+to disable heartbeat ticks.
+
+`bakeoff triage` is an explicit post-judge verification pass. It writes
+advisory artifacts under `runs/<run-id>/triage/`, including harness-side
+citation checks, a triage prompt, structured `final.json`, and `triage.md`.
+
+## Effort Defaults
+
+`bakeoff init` writes conservative per-mode effort defaults. Existing work
+orders that omit `effort` still validate to `high`.
+
+| Mode | Workers | Judge | Why |
+| --- | --- | --- | --- |
+| `gather` | `low` | `low` | Enumeration and dedupe are extraction-shaped tasks. |
+| `compare` | `high` | `medium` | Workers defend positions; judge applies a fixed rubric. |
+| `analyze` | `high` | `medium` | Workers build a reasoning spine; judge scores and annotates. |
 
 ## Notes
 

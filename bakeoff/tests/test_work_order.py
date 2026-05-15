@@ -3,11 +3,14 @@ import json
 import pytest
 
 from bakeoff.work_order import (
+    MODE_EFFORT_DEFAULTS,
     ValidationError,
+    init_template,
     load_work_order,
     strip_jsonc_comments,
     validate_analyze_judge_result,
     validate_compare_judge_result,
+    validate_triage_result,
 )
 
 
@@ -55,6 +58,39 @@ def test_validates_work_order_and_defaults_effort(tmp_path):
 
     assert work_order["providers"][0]["effort"] == "high"
     assert work_order["judge"]["effort"] == "high"
+    assert work_order["budgets"]["heartbeat_seconds"] == 60
+
+
+@pytest.mark.parametrize("mode", sorted(MODE_EFFORT_DEFAULTS))
+def test_init_template_uses_mode_effort_defaults(mode):
+    template = init_template(mode)
+    data = json.loads(strip_jsonc_comments(template))
+    defaults = MODE_EFFORT_DEFAULTS[mode]
+
+    assert data["providers"][0]["effort"] == defaults["worker"]
+    assert data["providers"][1]["effort"] == defaults["worker"]
+    assert data["judge"]["effort"] == defaults["judge"]
+
+
+def test_budget_heartbeat_seconds_must_not_be_negative(tmp_path):
+    data = {
+        "schema_version": 1,
+        "id": "routing",
+        "type": "gather",
+        "goal": "Find routing facts.",
+        "background": "",
+        "providers": [
+            {"id": "claude", "backend": "claude", "model": "same", "scope": "codebase"},
+            {"id": "codex", "backend": "codex", "model": "other", "scope": "web"},
+        ],
+        "judge": {"backend": "claude", "model": "judge"},
+        "budgets": {"wall_clock_seconds": 3, "max_output_bytes": 2000, "heartbeat_seconds": -1},
+    }
+    path = tmp_path / "bad-heartbeat.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(ValidationError, match="budgets.heartbeat_seconds"):
+        load_work_order(path)
 
 
 @pytest.mark.parametrize(
@@ -130,3 +166,41 @@ def test_analyze_judge_verdicts_must_match_overlay_shape():
     result["claim_verdicts"][0]["loser_position"] = "maybe"
     with pytest.raises(ValidationError, match="loser_position"):
         validate_analyze_judge_result(result)
+
+
+def test_triage_result_must_match_schema_shape():
+    result = {
+        "schema_version": 1,
+        "run_id": "run-1",
+        "status": "complete",
+        "summary": "checked",
+        "items": [
+            {
+                "id": "T-001",
+                "source_finding_id": "F-001",
+                "source_finding": "bug",
+                "classification": "real_issue",
+                "severity": "medium",
+                "confidence": "high",
+                "supporting_evidence": ["src/app.py:1"],
+                "counterevidence": [],
+                "citation_check_ids": ["C-001"],
+                "recommended_action": "fix_now",
+                "rationale": "actionable",
+            }
+        ],
+        "fix_now": ["T-001"],
+        "defer": [],
+        "unknowns": [],
+        "input_hashes": {
+            "decision_sha256": "x",
+            "report_sha256": "y",
+            "work_order_sha256": "z",
+        },
+    }
+
+    assert validate_triage_result(result) == result
+
+    result["items"][0]["classification"] = "maybe"
+    with pytest.raises(ValidationError, match="classification"):
+        validate_triage_result(result)
