@@ -43,10 +43,10 @@ For plugin dogfood, use the wrapper directly:
 bakeoff
 bakeoff init {gather|compare|analyze|review} [--force]
 bakeoff validate <work-order>
-bakeoff research <work-order> [--out runs] [--run-id ID] [--force] [--quiet] [--no-triage]
+bakeoff research <work-order> [--out runs] [--run-id ID] [--force] [--quiet] [--no-triage] [--base REF] [--diff] [--changed-files]
 bakeoff rerun <run-id> [--out runs] [--run-id ID] [--quiet] [--no-triage]
 bakeoff triage <run-id> [--out runs] [--force] [--dry-run] [--quiet]
-bakeoff ls [--out runs]
+bakeoff ls [--out runs] [--json] [--facet ID] [--triage-state {no|dry_run|yes|stale}]
 bakeoff show <run-id> [--out runs] [--judge | --judge-prompt | --triage]
 bakeoff doctor [--skip-auth-probe] [--quiet] [--json]
 ```
@@ -54,6 +54,8 @@ bakeoff doctor [--skip-auth-probe] [--quiet] [--json]
 `bakeoff research` writes a replayable ledger under `runs/<run-id>/`:
 
 - `work-order.json`
+- optional `source-work-order.json` when generated review context was captured
+- optional `review-context.md` and `review-context.json` for generated git review context
 - `providers/<id>/{prompt,stdout,stderr,status}.json/txt`
 - optional `providers/<id>/final.json` when the provider returned a schema-valid result
 - optional `providers/<id>/last-message.txt` for Codex final-message capture when the installed CLI supports it
@@ -64,6 +66,8 @@ bakeoff doctor [--skip-auth-probe] [--quiet] [--json]
 - optional `judge/repair-{prompt,stdout,stderr,status}-{pass1,pass2}.json/txt` after compare/analyze judge format retries
 - `decision.json`
 - `report.md`
+- `meta.json`
+- `manifest.json`
 - optional `triage/{prompt,stdout,stderr,status,final,citation_checks,triage}.json/txt/md`
 - optional `triage/last-message.txt` for Codex triage capture
 - optional `triage/source_finding_filter.json` with selected/skipped finding ids
@@ -112,8 +116,21 @@ in-scope evidence.
 
 `bakeoff init review` writes `review.work-order.json`, a normal `type:
 "gather"` work order with a `code-review` facet and `codebase` scope for both
-providers. Bakeoff does not compute branch diffs in v1; paste branch, diff,
-changed-file, acceptance-criteria, and known-risk context into `background`.
+providers. Review runs can capture deterministic local git context before
+providers launch:
+
+```bash
+bakeoff init review
+bakeoff research review.work-order.json --base main --diff
+```
+
+Any of `--base`, `--changed-files`, or `--diff` enables generated review
+context. `--base REF` alone records metadata, diffstat, and changed files
+against `REF`; `--changed-files` and `--diff` use `HEAD` when `--base` is not
+provided. `--diff` also includes a bounded unified patch. Generated context is
+appended to the effective `work-order.json`; the original input is preserved as
+`source-work-order.json`, and the generated inputs are written to
+`review-context.md` and `review-context.json`.
 `code-review` runs auto-triage after successful research unless
 `bakeoff research --no-triage` or `bakeoff rerun --no-triage` is used.
 
@@ -143,7 +160,9 @@ operator UX get verified before humans act on them.
 
 `bakeoff ls` prints a headered table with each run's type, facet, decision, and
 triage state. Triage states are `triage:no`, `triage:dry_run`, `triage:yes`,
-and `triage:stale`.
+and `triage:stale`. `bakeoff ls --json` scans `manifest.json` files and falls
+back to legacy rows for older runs; `--facet` and `--triage-state` filter both
+table and JSON output.
 
 ## Scope Policy
 

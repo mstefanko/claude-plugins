@@ -16,6 +16,7 @@ from typing import Any
 from uuid import uuid4
 
 from bakeoff import __version__
+from bakeoff.manifest import manifest_row_for_ls, write_run_manifest
 from bakeoff.providers import (
     DEFAULT_MODEL_IDS,
     anonymized_worker_output,
@@ -29,6 +30,14 @@ from bakeoff.providers import (
     version_argv,
 )
 from bakeoff.report import render_report
+from bakeoff.review_context import (
+    ReviewContextOptions,
+    apply_review_context,
+    build_review_context,
+    format_review_context_summary,
+    render_review_context_markdown,
+    review_context_metadata,
+)
 from bakeoff.runner import provider_succeeded, run_provider, run_provider_with_format_retry
 from bakeoff.triage import (
     build_finding_index,
@@ -101,6 +110,9 @@ def build_parser() -> argparse.ArgumentParser:
     research.add_argument("--force", action="store_true", help="replace an existing run directory")
     research.add_argument("--quiet", action="store_true", help="suppress provider heartbeat lines")
     research.add_argument("--no-triage", action="store_true", help="skip automatic triage for code-review runs")
+    research.add_argument("--base", help="capture git review context against REF (default for review context: HEAD)")
+    research.add_argument("--diff", action="store_true", help="include a bounded unified patch in generated review context")
+    research.add_argument("--changed-files", action="store_true", help="include changed-file context against the base ref")
 
     rerun = subcommands.add_parser("rerun", help="replay a previous work order with a fresh run id")
     rerun.add_argument("source_run_id")
@@ -118,6 +130,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     ls_cmd = subcommands.add_parser("ls", help="list past runs")
     ls_cmd.add_argument("--out", default="runs", help="run ledger directory (default: runs)")
+    ls_cmd.add_argument("--json", action="store_true", help="emit a manifest-backed JSON listing")
+    ls_cmd.add_argument("--facet", help="filter by facet id")
+    ls_cmd.add_argument("--triage-state", choices=("no", "dry_run", "yes", "stale"), help="filter by triage state")
 
     show = subcommands.add_parser("show", help="print a run report")
     show.add_argument("run_id")
@@ -236,6 +251,11 @@ async def cmd_research(args: argparse.Namespace) -> int:
         force=args.force,
         quiet=args.quiet,
         no_triage=args.no_triage,
+        review_context_options=ReviewContextOptions(
+            base_ref=args.base,
+            include_patch=args.diff,
+            include_changed_files=args.changed_files,
+        ),
     )
 
 
@@ -251,27 +271,79 @@ async def cmd_rerun(args: argparse.Namespace) -> int:
         force=False,
         quiet=args.quiet,
         no_triage=args.no_triage,
+        replay_source_run_dir=source_run,
     )
 
 
 def cmd_ls(args: argparse.Namespace) -> int:
     out_dir = Path(args.out)
     if not out_dir.exists():
+        if args.json:
+            print(json.dumps({"schema_version": 1, "out_dir": str(out_dir), "runs": []}, indent=2, sort_keys=True))
+            return 0
         print(f"no runs found under {out_dir}")
         return 0
+    rows = [
+        manifest_row_for_ls(run_dir)
+        for run_dir in sorted((path for path in out_dir.iterdir() if path.is_dir()), reverse=True)
+        if run_dir.name != "latest"
+    ]
+    rows = filter_ls_rows(rows, facet=args.facet, triage_state=args.triage_state)
+    if args.json:
+        print(json.dumps({"schema_version": 1, "out_dir": str(out_dir), "runs": rows}, indent=2, sort_keys=True))
+        return 0
     print("run_id\ttype\tfacet\tdecision\ttriage\tfinished_at")
-    for run_dir in sorted((path for path in out_dir.iterdir() if path.is_dir()), reverse=True):
-        if run_dir.name == "latest":
-            continue
-        meta = read_json(run_dir / "meta.json") or {}
-        decision = read_json(run_dir / "decision.json") or {}
-        facet = meta.get("facet")
-        facet_label = facet.get("id") if isinstance(facet, dict) and isinstance(facet.get("id"), str) else "-"
+    for row in rows:
+        facet_label = row.get("facet_id") or "-"
         print(
-            f"{run_dir.name}\t{meta.get('type', '?')}\t{facet_label}\t{decision.get('decision_kind', '?')}\t"
-            f"triage:{triage_state(run_dir)}\t{meta.get('finished_at', '-')}"
+            f"{row.get('run_id')}\t{row.get('type') or '?'}\t{facet_label}\t{row.get('decision_kind') or '?'}\t"
+            f"triage:{row.get('triage_state') or 'no'}\t{row.get('finished_at') or '-'}"
         )
     return 0
+
+
+def filter_ls_rows(rows: list[dict[str, Any]], *, facet: str | None, triage_state: str | None) -> list[dict[str, Any]]:
+    filtered = rows
+    if facet is not None:
+        filtered = [row for row in filtered if row.get("facet_id") == facet]
+    if triage_state is not None:
+        filtered = [row for row in filtered if row.get("triage_state") == triage_state]
+    return filtered
+
+
+def copy_replay_context_artifacts(source_run_dir: Path, run_dir: Path) -> None:
+    for name in ("source-work-order.json", "review-context.md", "review-context.json"):
+        source = source_run_dir / name
+        if source.exists():
+            copy_file_atomic(source, run_dir / name)
+
+
+def write_json_atomic(path: Path, data: Any) -> None:
+    write_text_atomic(path, json.dumps(data, indent=2, sort_keys=True) + "\n")
+
+
+def write_text_atomic(path: Path, text: str) -> None:
+    tmp = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, path)
+    finally:
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def copy_file_atomic(source: Path, destination: Path) -> None:
+    tmp = destination.with_name(f".{destination.name}.{uuid4().hex}.tmp")
+    try:
+        tmp.write_bytes(source.read_bytes())
+        os.replace(tmp, destination)
+    finally:
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def cmd_show(args: argparse.Namespace) -> int:
@@ -458,8 +530,11 @@ async def run_research(
     force: bool,
     quiet: bool = False,
     no_triage: bool = False,
+    review_context_options: ReviewContextOptions | None = None,
+    replay_source_run_dir: Path | None = None,
 ) -> int:
     work_order = load_work_order(work_order_path)
+    source_work_order_text = work_order_path.read_text(encoding="utf-8")
     actual_run_id = run_id or make_run_id()
     validate_run_id(actual_run_id)
     run_dir = out_dir / actual_run_id
@@ -467,13 +542,34 @@ async def run_research(
         if not force:
             raise ValidationError(f"{run_dir} already exists; use --force to replace")
         ensure_child_path(out_dir, run_dir)
+
+    started_at = utc_now()
+    review_context = None
+    if review_context_options is not None and review_context_options.enabled:
+        review_context = build_review_context(review_context_options, Path.cwd(), started_at)
+        if facet_id(work_order) != "code-review":
+            print("note: generated review context was requested for a non-code-review facet")
+        work_order = apply_review_context(work_order, review_context)
+
+    if run_dir.exists():
         shutil.rmtree(run_dir)
     run_dir.mkdir(parents=True)
     update_latest_symlink(out_dir, actual_run_id)
 
-    started_at = utc_now()
-    (run_dir / "work-order.json").write_text(work_order_path.read_text(encoding="utf-8"), encoding="utf-8")
+    if review_context is not None:
+        write_text_atomic(run_dir / "source-work-order.json", source_work_order_text)
+        write_json_atomic(run_dir / "work-order.json", work_order)
+        write_text_atomic(run_dir / "review-context.md", render_review_context_markdown(review_context))
+        write_json_atomic(run_dir / "review-context.json", review_context_metadata(review_context))
+    else:
+        write_text_atomic(run_dir / "work-order.json", source_work_order_text)
+        if replay_source_run_dir is not None:
+            copy_replay_context_artifacts(replay_source_run_dir, run_dir)
     print_run_header(work_order, run_dir, actual_run_id)
+    if review_context is not None:
+        print(format_review_context_summary(review_context))
+    elif (run_dir / "review-context.md").exists():
+        print(f"review context: replayed from {replay_source_run_dir}")
 
     worker_results = await run_workers(work_order, run_dir, quiet=quiet)
     ok_results = {pid: result for pid, result in worker_results.items() if provider_succeeded(result)}
@@ -510,6 +606,10 @@ async def run_research(
     report = render_report(work_order, decision, worker_results, judge_results=judge_results)
     (run_dir / "report.md").write_text(report, encoding="utf-8")
     write_meta(run_dir, work_order, actual_run_id, started_at, worker_results=worker_results)
+    write_run_manifest(run_dir)
+    if (run_dir / "review-context.md").exists():
+        print(f"context-md: {run_dir / 'review-context.md'}")
+    print(f"manifest: {run_dir / 'manifest.json'}")
     print(f"report: {run_dir / 'report.md'}")
     print(f"next:   {bakeoff_show_command(actual_run_id, out_dir)}")
     auto_triage_reason = None if no_triage or exit_code != 0 else should_auto_triage(work_order, decision)
@@ -626,6 +726,7 @@ async def run_triage(
         print(f"triage dry run: {triage_dir / 'prompt.txt'}")
         print(f"triage status:  {triage_dir / 'status.json'}")
         print(f"next:           {bakeoff_triage_command(command_run_id, display_out_dir, force=True)}")
+        write_run_manifest(run_dir)
         return 0
 
     selected_source_ids = {finding["id"] for finding in source_findings}
@@ -667,11 +768,13 @@ async def run_triage(
     status["source_finding_filter"] = source_finding_filter
     write_json(triage_dir / "status.json", status)
     if not provider_succeeded(result):
+        write_run_manifest(run_dir)
         print(f"triage failed: {status.get('status')}")
         print(f"retry:  {bakeoff_triage_command(command_run_id, display_out_dir, force=True)}")
         return 2
     write_json(triage_dir / "final.json", result["final_json"])
     (triage_dir / "triage.md").write_text(render_triage_markdown(result["final_json"], caveats), encoding="utf-8")
+    write_run_manifest(run_dir)
     print(f"triage: {triage_dir / 'triage.md'}")
     print(f"next:   {bakeoff_show_command(command_run_id, display_out_dir, '--triage')}")
     return 0

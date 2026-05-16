@@ -2,11 +2,14 @@ import json
 import os
 from pathlib import Path
 import stat
+import subprocess
 import sys
 import textwrap
 
+from bakeoff import cli as cli_module
 from bakeoff.cli import main
-from bakeoff.work_order import strip_jsonc_comments
+from bakeoff.review_context import ReviewContext
+from bakeoff.work_order import ValidationError, strip_jsonc_comments
 
 
 def test_init_review_writes_gather_recipe(tmp_path, monkeypatch, capsys):
@@ -57,9 +60,12 @@ def test_code_review_facet_auto_triages_successful_research(tmp_path, monkeypatc
     report = (run_dir / "report.md").read_text()
     triage_dir = run_dir / "triage"
     triage_prompt = (triage_dir / "prompt.txt").read_text()
+    manifest = json.loads((run_dir / "manifest.json").read_text())
     assert meta["facet"]["id"] == "code-review"
     assert "Facet: `code-review`" in report
     assert (triage_dir / "final.json").exists()
+    assert manifest["triage"]["state"] == "yes"
+    assert manifest["triage"]["attempt_status"] in {"ok", "ok_after_format_retry"}
     assert '"facet": {' in triage_prompt
     assert '"id": "code-review"' in triage_prompt
 
@@ -87,6 +93,155 @@ def test_code_review_facet_can_skip_auto_triage(tmp_path, monkeypatch, capsys):
     assert "recommended: bakeoff triage review-skip" not in output
     assert "auto-triage" not in output
     assert not (out_dir / "review-skip" / "triage").exists()
+
+
+def test_research_base_diff_writes_review_context_and_manifest(tmp_path, monkeypatch, capsys):
+    init_git_repo(tmp_path)
+    install_fake_providers(tmp_path, judge_mode="gather")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    work_order = write_work_order(tmp_path, "gather", facet={"id": "code-review"})
+    out_dir = tmp_path / "runs"
+
+    assert (
+        main(
+            [
+                "research",
+                str(work_order),
+                "--out",
+                str(out_dir),
+                "--run-id",
+                "review-context-run",
+                "--base",
+                "main",
+                "--diff",
+                "--no-triage",
+            ]
+        )
+        == 0
+    )
+
+    output = capsys.readouterr().out
+    run_dir = out_dir / "review-context-run"
+    effective = json.loads((run_dir / "work-order.json").read_text())
+    source = json.loads((run_dir / "source-work-order.json").read_text())
+    context_json = json.loads((run_dir / "review-context.json").read_text())
+    manifest = json.loads((run_dir / "manifest.json").read_text())
+
+    assert "review context: base main" in output
+    assert f"context-md: {run_dir / 'review-context.md'}" in output
+    assert f"manifest: {run_dir / 'manifest.json'}" in output
+    assert "<generated_review_context>" in effective["background"]
+    assert "diff --git" in effective["background"]
+    assert "<generated_review_context>" not in source["background"]
+    assert context_json["base_ref"] == "main"
+    assert context_json["included_sections"] == ["metadata", "diffstat", "changed_files", "patch"]
+    assert context_json["sections"]["patch"]["text"].startswith("diff --git")
+    assert manifest["review_context"]["present"] is True
+    assert manifest["review_context"]["base_ref"] == "main"
+    assert manifest["artifacts"]["source_work_order"] == "source-work-order.json"
+    assert manifest["artifacts"]["review_context_md"] == "review-context.md"
+    assert manifest["artifact_fingerprints"]["review-context.json"]["size_bytes"] > 0
+    assert "providers/claude/stdout.txt" not in manifest["artifact_fingerprints"]
+    assert manifest["providers"]["claude"]["status"] == "ok"
+    assert manifest["triage"]["state"] == "no"
+
+
+def test_rerun_copies_review_context_without_recapturing_git(tmp_path, monkeypatch):
+    init_git_repo(tmp_path)
+    install_fake_providers(tmp_path, judge_mode="gather")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    work_order = write_work_order(tmp_path, "gather", facet={"id": "code-review"})
+    out_dir = tmp_path / "runs"
+    assert (
+        main(
+            [
+                "research",
+                str(work_order),
+                "--out",
+                str(out_dir),
+                "--run-id",
+                "source-review",
+                "--base",
+                "main",
+                "--diff",
+                "--no-triage",
+            ]
+        )
+        == 0
+    )
+    source_context = (out_dir / "source-review" / "review-context.md").read_text()
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("rerun should not regenerate review context")
+
+    monkeypatch.setattr(cli_module, "build_review_context", fail_if_called)
+
+    assert main(["rerun", "source-review", "--out", str(out_dir), "--run-id", "replayed-review", "--no-triage"]) == 0
+
+    replay_dir = out_dir / "replayed-review"
+    assert (replay_dir / "source-work-order.json").exists()
+    assert (replay_dir / "review-context.json").exists()
+    assert (replay_dir / "review-context.md").read_text() == source_context
+    manifest = json.loads((replay_dir / "manifest.json").read_text())
+    assert manifest["review_context"]["present"] is True
+    assert manifest["artifacts"]["review_context_json"] == "review-context.json"
+
+
+def test_review_context_failure_preserves_existing_run_dir(tmp_path, monkeypatch):
+    install_fake_providers(tmp_path, judge_mode="gather")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    work_order = write_work_order(tmp_path, "gather")
+    out_dir = tmp_path / "runs"
+    existing = out_dir / "blocked"
+    existing.mkdir(parents=True)
+    (existing / "keep.txt").write_text("old run\n", encoding="utf-8")
+
+    def fail_context(*args, **kwargs):
+        raise ValidationError("review context patch is 120001 bytes, exceeding 120000 bytes")
+
+    monkeypatch.setattr(cli_module, "build_review_context", fail_context)
+
+    assert main(["research", str(work_order), "--out", str(out_dir), "--run-id", "blocked", "--force", "--diff"]) == 2
+
+    assert (existing / "keep.txt").read_text(encoding="utf-8") == "old run\n"
+    assert not (existing / "work-order.json").exists()
+
+
+def test_review_context_for_non_code_review_facet_prints_note(tmp_path, monkeypatch, capsys):
+    install_fake_providers(tmp_path, judge_mode="gather")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    work_order = write_work_order(tmp_path, "gather")
+    out_dir = tmp_path / "runs"
+
+    def fake_context(options, cwd, started_at):
+        return ReviewContext(
+            generated_at=started_at,
+            base_ref="HEAD",
+            base_commit="abc123",
+            head_ref="main",
+            head_commit="abc123",
+            worktree_dirty=False,
+            git_root=str(tmp_path),
+            capture_cwd=str(tmp_path),
+            pathspec=".",
+            included_sections=["metadata", "diffstat", "changed_files"],
+            diffstat="",
+            changed_files="",
+            patch=None,
+        )
+
+    monkeypatch.setattr(cli_module, "build_review_context", fake_context)
+
+    assert main(["research", str(work_order), "--out", str(out_dir), "--run-id", "plain-context", "--changed-files"]) == 0
+
+    output = capsys.readouterr().out
+    assert "note: generated review context was requested for a non-code-review facet" in output
+    assert "review context: base HEAD abc123" in output
+    assert f"context-md: {out_dir / 'plain-context' / 'review-context.md'}" in output
 
 
 def test_rerun_can_skip_code_review_auto_triage(tmp_path, monkeypatch, capsys):
@@ -142,6 +297,10 @@ def test_show_labels_stale_triage(tmp_path, monkeypatch, capsys):
     assert "triage is stale for review-stale (report.md changed)" in error
     assert "bakeoff triage review-stale --force" in error
     assert f"--out {out_dir}" in error
+
+    assert main(["ls", "--out", str(out_dir)]) == 0
+    ls_output = capsys.readouterr().out
+    assert "review-stale\tgather\tcode-review\tstructured_union\ttriage:stale\t" in ls_output
 
 
 def test_show_recommendation_uses_current_work_order_facet(tmp_path, monkeypatch, capsys):
@@ -272,6 +431,44 @@ def test_ls_reports_empty_out_dir(tmp_path, capsys):
     assert f"no runs found under {out_dir}" in capsys.readouterr().out
 
 
+def test_ls_json_scans_manifests_and_legacy_runs_with_filters(tmp_path, monkeypatch, capsys):
+    install_fake_providers(tmp_path, judge_mode="gather")
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    work_order = write_work_order(tmp_path, "gather", facet={"id": "code-review"})
+    out_dir = tmp_path / "runs"
+    assert main(["research", str(work_order), "--out", str(out_dir), "--run-id", "manifest-run", "--no-triage"]) == 0
+    capsys.readouterr()
+
+    legacy_dir = out_dir / "legacy-run"
+    legacy_dir.mkdir()
+    (legacy_dir / "work-order.json").write_text("{}\n", encoding="utf-8")
+    (legacy_dir / "report.md").write_text("# legacy\n", encoding="utf-8")
+    (legacy_dir / "decision.json").write_text(
+        json.dumps({"decision_kind": "structured_union", "judge_ran": True}) + "\n",
+        encoding="utf-8",
+    )
+    (legacy_dir / "meta.json").write_text(
+        json.dumps(
+            {
+                "type": "gather",
+                "facet": {"id": "code-review"},
+                "finished_at": "2026-05-16T12:00:00+00:00",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert main(["ls", "--out", str(out_dir), "--json", "--facet", "code-review", "--triage-state", "no"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    rows_by_id = {row["run_id"]: row for row in payload["runs"]}
+    assert rows_by_id["manifest-run"]["manifest_state"] == "present"
+    assert rows_by_id["manifest-run"]["manifest_path"] == str(out_dir / "manifest-run" / "manifest.json")
+    assert rows_by_id["legacy-run"]["manifest_state"] == "missing"
+    assert "manifest_path" not in rows_by_id["legacy-run"]
+
+
 def test_show_judge_artifacts_empty_state_names_decision(tmp_path, monkeypatch, capsys):
     install_fake_providers(tmp_path, judge_mode="gather", fail_providers={"codex"})
     monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
@@ -367,6 +564,19 @@ def test_both_failed_exits_two(tmp_path, monkeypatch):
     decision = json.loads((run_dir / "decision.json").read_text())
     assert decision["decision_kind"] == "both_failed"
     assert decision["judge_rationale"] == []
+
+
+def init_git_repo(tmp_path):
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.email", "bakeoff@example.test"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Bakeoff Test"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "core.hooksPath", "/dev/null"], cwd=tmp_path, check=True)
+    tracked = tmp_path / "tracked.txt"
+    tracked.write_text("old\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-m", "initial"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "branch", "-M", "main"], cwd=tmp_path, check=True)
+    tracked.write_text("old\nnew\n", encoding="utf-8")
 
 
 def install_fake_providers(
