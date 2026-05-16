@@ -132,13 +132,31 @@ Go module rules:
 - Put `go.mod` in this `bakeoff/` directory, not at the plugin marketplace
   repository root.
 - Do not create a separate `bakeoff-go` repository, git submodule, nested Go
-  workspace, or sibling checkout. The Go CLI lives beside the Python CLI in this
-  repo.
+  workspace, sibling checkout, sibling marketplace plugin, or all-in
+  `bakeoff-go/` implementation directory. The Go CLI lives at the current
+  Bakeoff plugin root beside the Python CLI surfaces.
 - Start with module path `github.com/mstefanko/claude-plugins/bakeoff`, matching
   the current `origin` repository plus this subdirectory.
 - Declare `go 1.22` or newer. The local development toolchain is currently
   Go 1.24.4; do not rely on 1.24-only APIs unless the module version is bumped
   deliberately.
+
+Layout rationale:
+
+- The Go implementation is intended to become the Bakeoff implementation if the
+  parity trial succeeds. Keeping the Go module at the Bakeoff plugin root makes
+  the success path cheap: remove the frozen Python implementation, switch
+  `bin/bakeoff`, and keep Go package paths, parity fixtures, docs, and local CI
+  in place.
+- A separate `bakeoff-go/` folder would make the experiment feel more
+  quarantined and easier to abandon, but it would also create a second migration
+  at the moment of success: move the Go project, rewrite package paths/scripts,
+  and revalidate fixtures after the move.
+- The isolation boundary during the trial is therefore the Python freeze rule
+  and the `bakeoff-go` binary name, not a separate project root. If the Phase 3
+  runner stop gate fails, abandon Go by deleting the root-level Go trial files
+  (`go.mod`, `go.sum`, `cmd/`, and `internal/`) rather than carrying a parallel
+  implementation indefinitely.
 
 ## Project Setup Rules
 
@@ -460,12 +478,24 @@ tests/parity/fixtures/<workflow>/
 ```
 
 The harness may be Python, but it must not import or modify `bakeoff` internals.
-It should invoke both CLIs as black boxes:
+It should invoke both CLIs as black boxes. Python can be invoked directly:
 
 ```text
 bin/bakeoff ...
-go run ./cmd/bakeoff-go ...
 ```
+
+For Go, the harness must first build a temporary binary from the Bakeoff plugin
+root, then invoke that binary with the fixture workspace as the process working
+directory:
+
+```text
+go build -o <tmp>/bakeoff-go ./cmd/bakeoff-go
+cd <fixture-workspace> && <tmp>/bakeoff-go ...
+```
+
+Do not use `go run ./cmd/bakeoff-go` from inside fixture temp directories: the
+relative package path only exists at the repo root, while runtime behavior must
+observe the fixture workspace as `cwd`.
 
 Use deterministic fake providers, not real Claude or Codex calls.
 

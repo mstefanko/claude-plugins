@@ -342,10 +342,33 @@ def cases() -> list[Case]:
     ]
 
 
-def cli_argv(target: str) -> list[str]:
+def build_go_binary(out_dir: Path) -> Path:
+    binary = out_dir / ("bakeoff-go.exe" if os.name == "nt" else "bakeoff-go")
+    env = os.environ.copy()
+    env.setdefault("GOCACHE", "/tmp/bakeoff-go-cache")
+    Path(env["GOCACHE"]).mkdir(parents=True, exist_ok=True)
+    completed = subprocess.run(
+        ["go", "build", "-o", str(binary), "./cmd/bakeoff-go"],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"go build failed with exit code {completed.returncode}\n"
+            f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+        )
+    return binary
+
+
+def cli_argv(target: str, *, go_binary: Path | None = None) -> list[str]:
     if target == "python":
         return [str(ROOT / "bin" / "bakeoff")]
-    return ["go", "run", "./cmd/bakeoff-go"]
+    if go_binary is None:
+        raise RuntimeError("go target requires a built bakeoff-go binary")
+    return [str(go_binary)]
 
 
 def install_fakes(workdir: Path, omit: set[str]) -> Path:
@@ -385,9 +408,10 @@ def run_cli(
     *,
     workdir: Path,
     env: dict[str, str],
+    go_binary: Path | None = None,
     interrupt_after: float | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    command = [*cli_argv(target), *argv]
+    command = [*cli_argv(target, go_binary=go_binary), *argv]
     if interrupt_after is None:
         return subprocess.run(
             command,
@@ -412,18 +436,25 @@ def run_cli(
     return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
 
 
-def run_case(target: str, case: Case) -> dict[str, Any]:
+def run_case(target: str, case: Case, *, go_binary: Path | None = None) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix=f"bakeoff-parity-{case.name}-") as tmp:
         workdir = Path(tmp)
         env = prepare_case(workdir, case)
         for action in case.setup:
-            completed = run_cli(target, action.argv, workdir=workdir, env=env)
+            completed = run_cli(target, action.argv, workdir=workdir, env=env, go_binary=go_binary)
             if completed.returncode not in action.expect:
                 raise RuntimeError(
                     f"{case.name} setup failed: {' '.join(action.argv)} exited {completed.returncode}\n"
                     f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
                 )
-        completed = run_cli(target, case.argv, workdir=workdir, env=env, interrupt_after=case.interrupt_after)
+        completed = run_cli(
+            target,
+            case.argv,
+            workdir=workdir,
+            env=env,
+            go_binary=go_binary,
+            interrupt_after=case.interrupt_after,
+        )
         if completed.returncode not in case.expect:
             raise RuntimeError(
                 f"{case.name} failed: {' '.join(case.argv)} exited {completed.returncode}, expected {sorted(case.expect)}\n"
@@ -570,19 +601,29 @@ def main() -> int:
 
     target = "go" if args.go_only else "python"
     failures: list[str] = []
-    for case in selected_cases(args.cases):
-        result = run_case(target, case)
-        if args.update:
-            if target != "python":
-                raise SystemExit("--update is only supported for the Python oracle")
-            write_snapshot(case, result)
-            print(f"updated {case.name}")
-            continue
-        failure = compare_snapshot(case, result)
-        if failure:
-            failures.append(f"== {case.name} ==\n{failure}")
-        else:
-            print(f"ok {case.name}")
+    go_temp: tempfile.TemporaryDirectory[str] | None = None
+    go_binary: Path | None = None
+    if target == "go":
+        go_temp = tempfile.TemporaryDirectory(prefix="bakeoff-go-bin-")
+        go_binary = build_go_binary(Path(go_temp.name))
+
+    try:
+        for case in selected_cases(args.cases):
+            result = run_case(target, case, go_binary=go_binary)
+            if args.update:
+                if target != "python":
+                    raise SystemExit("--update is only supported for the Python oracle")
+                write_snapshot(case, result)
+                print(f"updated {case.name}")
+                continue
+            failure = compare_snapshot(case, result)
+            if failure:
+                failures.append(f"== {case.name} ==\n{failure}")
+            else:
+                print(f"ok {case.name}")
+    finally:
+        if go_temp is not None:
+            go_temp.cleanup()
 
     if failures:
         print("\n\n".join(failures), file=sys.stderr)
