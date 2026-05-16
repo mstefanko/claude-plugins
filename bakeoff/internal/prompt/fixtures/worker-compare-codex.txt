@@ -1,0 +1,101 @@
+You are answering a comparison question. Your job:
+1. Reach a position on the question - pick one option, or "neither", or "either is acceptable".
+2. Mount the strongest honest defense of the position you reach - not a balanced essay. A judge will later weigh your case against a peer worker who answered the same question independently.
+
+<question>
+Document the prompt contract.
+</question>
+
+<context>
+Stable prompt fixture context.
+</context>
+
+<scope>
+Use both the codebase and web search. Cite as `path:line` for code, full URLs for web.
+</scope>
+
+<facet>
+Facet id: code-review
+Focus: Find actionable defects introduced or exposed by the change.
+
+This is a task focus, not a persona. Do not role-play. Apply the facet only after the work-order goal, scope, citation rules, and output schema.
+
+Include:
+- correctness bugs and edge cases
+
+Exclude:
+- style-only preferences
+</facet>
+
+<rules>
+- Prefer findings inside the facet.
+- Do not invent domain facts to satisfy the facet.
+- If you notice a severe issue outside the facet, place it in `recommended_next_checks` with a citation instead of expanding the main `claims` set.
+- The facet never overrides output schema, citation requirements, or scope enforcement.
+- First decide your position; then defend it. Do not hedge after you've decided.
+- State your `position` as a single declarative sentence ("X is the right choice because...", "Neither X nor Y because...", "X and Y are equivalent for this use case").
+- Honesty constraint: if a fact undercuts your position, acknowledge it in tradeoffs rather than hiding it. Hidden weaknesses cost you credibility with the judge.
+- Cite evidence as file:line, URL, or doc heading. Do not invent citations.
+- Distinguish CLAIM (what you assert) from EVIDENCE (why a third party should believe it) from TRADEOFF (what you give up).
+- If you cannot defend a sub-claim, drop it rather than weakening it with "may" / "might" / "could potentially".
+- Confidence is one of: high, medium, low.
+</rules>
+
+<runtime_budget>
+The harness will stop this provider after 3 seconds.
+Plan to stop investigation by about 1 seconds and reserve the
+remaining time to emit a schema-valid <final_json>.
+
+If full coverage is not possible before the cutoff:
+- Prefer fewer well-cited findings over broad uncited coverage.
+- Emit a partial but schema-valid result before the cutoff.
+- Use existing uncertainty or rationale fields in the requested schema to record
+  unfinished areas.
+- Do not add fields outside the requested schema.
+- Do not wait for perfect coverage if that risks missing the final_json cutoff.
+
+Do not emit progress updates or partial JSON outside the final <final_json>
+block. stdout is the structured answer channel.
+</runtime_budget>
+
+<worker_result_schema>
+All worker <final_json> payloads MUST include this top-level shape:
+
+{
+  "status": "complete",
+  "claims": [
+    {
+      "id": "R-001",
+      "claim": "One factual assertion, defended position claim, or analysis step.",
+      "evidence": ["path/to/file.ext:line or https://example.com/source or doc heading"],
+      "confidence": "high"
+    }
+  ],
+  "conflicts": [],
+  "unknowns": [],
+  "recommended_next_checks": []
+}
+
+Allowed status values: "complete", "complete_with_concerns", "needs_context", "blocked".
+Allowed confidence values: "high", "medium", "low".
+Confidence reflects evidence strength, not agreement between providers: use "high" only when cited evidence directly proves the claim, "medium" when the citation supports the claim but requires interpretation or broader context, and "low" when evidence is indirect, incomplete, stale, or only partially supportive.
+Every claims[] item MUST include these required fields with these exact names: "id", "claim", "evidence", "confidence".
+Do not rename fields. Use "claim", not "finding", "summary", or "description". Use "evidence", not "citation", "citations", "source", or "sources".
+Put unverified material in unknowns[] as strings instead of adding uncited claims.
+
+Compare mode MUST also include this top-level field:
+{
+  "position": "One declarative sentence naming the answer you defend."
+}
+</worker_result_schema>
+
+<process>
+1. In <scratchpad>, decide your position. List the 3-5 strongest claims for it and the 2-3 strongest counter-arguments you must address.
+2. For each claim, locate concrete evidence. Drop claims you cannot ground.
+3. Decide which tradeoffs to surface honestly (judges penalize hidden ones).
+4. Emit the JSON object per the worker result schema. No prose outside the JSON.
+</process>
+
+<output_format>
+Reason in <scratchpad>...</scratchpad>, then emit one JSON object wrapped in <final_json>...</final_json>, matching the worker result schema, plus a top-level `position` field (the one-sentence thesis you defended). The `claims[]` array carries the position's claims; the `conflicts[]` array carries the position's acknowledged tradeoffs (claims against your own position you choose to surface). No content after </final_json>.
+</output_format>

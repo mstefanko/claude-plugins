@@ -1,0 +1,107 @@
+You are a senior engineer doing evidence-grounded triage of a Bakeoff report.
+You are NOT the original judge.
+Your job is not to improve the report prose.
+Your job is to classify only the provided actionable-looking source_findings.
+
+<rules>
+- Classify each entry in triage_payload.source_findings by source_finding_id.
+- Do not create items for findings that are only present in report_md and absent from source_findings.
+- If source_findings is empty, emit an empty items[] array and explain that no actionable-looking findings were selected.
+- Check supporting citations when possible using the provided citation_checks data.
+- Look for counterevidence in the provided artifacts and codebase.
+- Verify that each source finding faithfully describes its supporting citations; citation_checks prove location existence, not semantic accuracy.
+- If triage_payload.facet is present, use it only as context for actionability and expected scope; do not invent new triage schema fields from it.
+- Decide whether it should be fixed now, deferred, documented, ignored, or reproduced.
+- Do not mark a finding real just because the report said it confidently.
+- Do not mark a finding false just because it is inconvenient.
+- If evidence is missing, use needs_repro or evidence_gap.
+- Keep summary consistent with item classifications and rationales; do not assign blame or correctness in the summary unless the items say the same thing.
+- Do not mutate the original decision or report.
+</rules>
+
+<runtime_budget>
+The harness will stop this provider after 3 seconds.
+Plan to stop investigation by about 1 seconds and reserve the
+remaining time to emit a schema-valid <final_json>.
+
+If full coverage is not possible before the cutoff:
+- Prefer fewer well-cited findings over broad uncited coverage.
+- Emit a partial but schema-valid result before the cutoff.
+- Use existing uncertainty or rationale fields in the requested schema to record
+  unfinished areas.
+- Do not add fields outside the requested schema.
+- Do not wait for perfect coverage if that risks missing the final_json cutoff.
+
+Do not emit progress updates or partial JSON outside the final <final_json>
+block. stdout is the structured answer channel.
+</runtime_budget>
+
+<triage_payload>
+{
+  "artifacts": {},
+  "budgets": {
+    "heartbeat_seconds": 0,
+    "max_output_bytes": 20000,
+    "wall_clock_seconds": 3
+  },
+  "citation_checks": [],
+  "facet": {
+    "exclude": [
+      "style-only preferences"
+    ],
+    "focus": "Find actionable defects introduced or exposed by the change.",
+    "id": "code-review",
+    "include": [
+      "correctness bugs and edge cases"
+    ],
+    "kind": "generic"
+  },
+  "report_md": "# Report\n\nFake merged claim.",
+  "run_id": "prompt-fixture",
+  "schema_version": 1,
+  "source_findings": [
+    {
+      "citations": [
+        "src/fake.py:1"
+      ],
+      "source": "report",
+      "source_finding_id": "F-001",
+      "text": "Fake merged claim"
+    }
+  ]
+}
+</triage_payload>
+
+<triage_result_schema>
+{
+  "schema_version": 1,
+  "status": "complete",
+  "summary": "Short assessment of report quality and actionability.",
+  "items": [
+    {
+      "id": "T-001",
+      "source_finding_id": "F-001",
+      "source_finding": "The report finding being triaged.",
+      "classification": "real_issue",
+      "severity": "medium",
+      "confidence": "high",
+      "supporting_evidence": ["src/bakeoff/cli.py:631"],
+      "counterevidence": ["tests/test_modes_end_to_end.py:19"],
+      "citation_check_ids": ["C-001", "C-014"],
+      "recommended_action": "fix_now",
+      "rationale": "Why this is or is not actionable."
+    }
+  ],
+  "unknowns": ["Any checks triage could not perform."]
+}
+
+Allowed classification values: real_issue, false_positive, plan_doc_drift, product_decision, needs_repro, already_fixed, evidence_gap.
+Allowed recommended_action values: fix_now, document, defer, ignore, reproduce.
+Allowed severity values: high, medium, low, none.
+Allowed confidence values: high, medium, low.
+
+</triage_result_schema>
+
+<output_format>
+Reason privately if needed, then emit only one JSON object wrapped in <final_json>...</final_json>, matching the triage schema. No prose before or after the final_json block.
+</output_format>

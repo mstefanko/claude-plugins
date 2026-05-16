@@ -1,0 +1,23 @@
+// bakeoff compare work order - edit `id`, `goal`, `background`, then run:
+//   bakeoff validate <this-file>
+//   bakeoff research <this-file>
+{
+  "schema_version": 1,
+  "id": "TODO-rename-this",
+  "type": "compare",
+  "goal": "ONE SENTENCE: what decision or comparison should be judged?",
+  "background": "MULTI-LINE: relevant evidence, constraints, and options.",
+  "providers": [
+    { "id": "claude", "backend": "claude", "model": "claude-sonnet-4-6", "effort": "high", "scope": "mixed" },
+    { "id": "codex",  "backend": "codex",  "model": "gpt-5.5",           "effort": "high", "scope": "mixed" }
+  ],
+  "scope_policy": { "enforcement": "best_effort" },
+  "judge":   { "backend": "claude", "model": "claude-opus-4-7", "effort": "xhigh" },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  }
+}

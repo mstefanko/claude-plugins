@@ -1,0 +1,45 @@
+// bakeoff review recipe - edit `id`, `goal`, `background`, then run:
+//   bakeoff validate <this-file>
+//   bakeoff research <this-file>
+//
+// This recipe creates a normal gather work order with a shared code-review
+// facet. For generated review context, run research with --base main --diff.
+// You can still paste branch context, acceptance criteria, and known risks
+// into background when they are not present in git.
+{
+  "schema_version": 1,
+  "id": "TODO-rename-this",
+  "type": "gather",
+  "goal": "Review the branch diff for actionable defects.",
+  "background": "Base branch: TODO. Review branch: TODO. Diff command/output: TODO. Changed files: TODO. Acceptance criteria: TODO. Known risk areas: TODO.",
+  "facet": {
+    "id": "code-review",
+    "kind": "generic",
+    "focus": "Find actionable defects introduced or exposed by the change.",
+    "include": [
+      "correctness bugs and edge cases",
+      "security issues with concrete data-flow or control-flow evidence",
+      "user-visible regressions",
+      "missing or misleading tests for changed behavior",
+      "maintainability risks likely to cause future defects"
+    ],
+    "exclude": [
+      "style-only preferences without project convention evidence",
+      "large rewrites unrelated to the changed behavior",
+      "speculation without file:line evidence"
+    ]
+  },
+  "providers": [
+    { "id": "claude", "backend": "claude", "model": "claude-sonnet-4-6", "effort": "high", "scope": "codebase" },
+    { "id": "codex",  "backend": "codex",  "model": "gpt-5.5",           "effort": "high", "scope": "codebase" }
+  ],
+  "scope_policy": { "enforcement": "best_effort" },
+  "judge":   { "backend": "claude", "model": "claude-opus-4-7", "effort": "xhigh" },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  }
+}

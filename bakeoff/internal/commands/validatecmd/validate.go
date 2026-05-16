@@ -2,8 +2,11 @@ package validatecmd
 
 import (
 	"context"
+	"errors"
 
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/apperror"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
 	"github.com/spf13/cobra"
 )
 
@@ -12,7 +15,6 @@ type ValidateOptions struct {
 }
 
 func NewCmdValidate(f commands.Factory, runF func(context.Context, *ValidateOptions) error) *cobra.Command {
-	_ = f
 	opts := &ValidateOptions{}
 	cmd := &cobra.Command{
 		Use:           "validate WORK_ORDER",
@@ -23,10 +25,40 @@ func NewCmdValidate(f commands.Factory, runF func(context.Context, *ValidateOpti
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.WorkOrder = args[0]
 			if runF == nil {
-				return commands.PlaceholderError("validate")
+				return runValidate(cmd.Context(), f, opts)
 			}
 			return runF(cmd.Context(), opts)
 		},
 	}
 	return cmd
+}
+
+func runValidate(_ context.Context, f commands.Factory, opts *ValidateOptions) error {
+	wo, err := workorder.Load(opts.WorkOrder)
+	if err != nil {
+		return wrapValidation(err)
+	}
+	streams := f.Streams()
+	streams.Printf("valid work order\n")
+	streams.Printf("  id:      %s\n", wo.ID)
+	streams.Printf("  mode:    %s\n", wo.Type)
+	if wo.Facet != nil {
+		streams.Printf("  facet:   %s\n", wo.Facet.ID)
+	}
+	streams.Printf("  budgets: %s\n", workorder.FormatBudgetSummary(wo.Budgets))
+	streams.Printf("  scope:   %s\n", wo.ScopePolicy.Enforcement)
+	streams.Printf("  providers:\n")
+	for _, provider := range wo.Providers {
+		streams.Printf("    - %s: %s %s (%s, %s)\n", provider.ID, provider.Backend, provider.Model, provider.Scope, provider.Effort)
+	}
+	streams.Printf("  judge:   %s %s (%s)\n", wo.Judge.Backend, wo.Judge.Model, wo.Judge.Effort)
+	return nil
+}
+
+func wrapValidation(err error) error {
+	var validation *workorder.ValidationError
+	if errors.As(err, &validation) {
+		return &apperror.ValidationError{Message: validation.Error(), Err: err}
+	}
+	return err
 }

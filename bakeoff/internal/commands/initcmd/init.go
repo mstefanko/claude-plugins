@@ -2,8 +2,13 @@ package initcmd
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"os"
 
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/apperror"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
 	"github.com/spf13/cobra"
 )
 
@@ -13,7 +18,6 @@ type InitOptions struct {
 }
 
 func NewCmdInit(f commands.Factory, runF func(context.Context, *InitOptions) error) *cobra.Command {
-	_ = f
 	opts := &InitOptions{}
 	cmd := &cobra.Command{
 		Use:           "init {gather|compare|analyze|review}",
@@ -27,11 +31,55 @@ func NewCmdInit(f commands.Factory, runF func(context.Context, *InitOptions) err
 				return err
 			}
 			if runF == nil {
-				return commands.PlaceholderError("init")
+				return runInit(cmd.Context(), f, opts)
 			}
 			return runF(cmd.Context(), opts)
 		},
 	}
 	cmd.Flags().BoolVar(&opts.Force, "force", false, "overwrite an existing template")
 	return cmd
+}
+
+func runInit(_ context.Context, f commands.Factory, opts *InitOptions) error {
+	path := fmt.Sprintf("%s.work-order.json", opts.Type)
+	if !opts.Force {
+		if exists(path) {
+			return &apperror.ValidationError{Message: fmt.Sprintf("%s already exists; use --force to overwrite", path)}
+		}
+	}
+	template, err := workorder.InitTemplate(opts.Type)
+	if err != nil {
+		return wrapValidation(err)
+	}
+	if err := workorder.WriteTextAtomic(path, template); err != nil {
+		return &apperror.RuntimeError{Err: err}
+	}
+	streams := f.Streams()
+	streams.Printf("wrote %s\n", path)
+	if opts.Type == "review" {
+		streams.Printf("recipe: review (mode gather)\n")
+	}
+	worker, judge := workorder.ModeEffortDefaults(effectiveMode(opts.Type))
+	streams.Printf("effort defaults: workers=%s, judge=%s\n", worker, judge)
+	return nil
+}
+
+func effectiveMode(kind string) string {
+	if kind == "review" {
+		return "gather"
+	}
+	return kind
+}
+
+func exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func wrapValidation(err error) error {
+	var validation *workorder.ValidationError
+	if errors.As(err, &validation) {
+		return &apperror.ValidationError{Message: validation.Error(), Err: err}
+	}
+	return err
 }
