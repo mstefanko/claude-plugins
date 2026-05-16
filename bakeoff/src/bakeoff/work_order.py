@@ -659,8 +659,9 @@ def review_template() -> str:
 //   bakeoff research <this-file>
 //
 // This recipe creates a normal gather work order with a shared code-review
-// facet. Bakeoff does not compute branch diffs in v1; paste the branch/diff
-// context, changed files, acceptance criteria, and known risks into background.
+// facet. For generated review context, run research with --base main --diff.
+// You can still paste branch context, acceptance criteria, and known risks
+// into background when they are not present in git.
 {{
   "schema_version": 1,
   "id": "TODO-rename-this",

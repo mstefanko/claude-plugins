@@ -1,7 +1,10 @@
 import json
+import re
+
+import pytest
 
 from bakeoff import cli as cli_module
-from bakeoff.cli import format_heartbeat_line, main, make_tick_printer, merge_items
+from bakeoff.cli import build_parser, format_heartbeat_line, main, make_tick_printer, merge_items
 
 
 def test_orientation_lists_review_mode(capsys):
@@ -9,6 +12,46 @@ def test_orientation_lists_review_mode(capsys):
 
     output = capsys.readouterr().out
     assert "review   code-review recipe" in output
+
+
+def test_root_help_documents_exit_codes_and_no_color(monkeypatch):
+    monkeypatch.setenv("NO_COLOR", "1")
+
+    help_text = build_parser().format_help()
+
+    assert "Exit codes:" in help_text
+    assert "3  completed run with unresolved judge disagreement" in help_text
+    assert re.search(r"\x1b\[[0-?]*[ -/]*[@-~]", help_text) is None
+
+
+def test_runs_help_lists_verify(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        main(["runs", "--help"])
+
+    assert excinfo.value.code == 0
+    assert "verify" in capsys.readouterr().out
+
+
+def test_note_and_warn_write_to_stderr(capsys):
+    cli_module._note("hello")
+    cli_module._warn("careful")
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "note: hello\nwarning: careful\n"
+
+
+def test_json_research_interrupt_emits_no_summary(monkeypatch, capsys):
+    async def interrupt(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli_module, "run_research", interrupt)
+
+    assert main(["research", "work-order.json", "--json"]) == 130
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "error: interrupted\n"
 
 
 def test_merge_items_dedupes_normalized_duplicate_preserved_claims_from_same_source():
@@ -142,9 +185,17 @@ def test_doctor_auth_probe_failure_is_warning_with_reason(tmp_path, monkeypatch,
 
     monkeypatch.setattr(cli_module, "run_provider", fake_run_provider)
 
+    assert main(["doctor", "--quiet"]) == 0
+    captured = capsys.readouterr()
+    assert "- claude auth probe: exit_error" in captured.out
+    assert "(warning:" not in captured.out
+    assert "warning: claude auth probe failed with exit_error: Not logged in - Please run /login" in captured.err
+    assert "warning: codex auth probe failed with exit_error: final codex reason" in captured.err
+
     assert main(["doctor", "--json", "--quiet"]) == 0
 
     report = json.loads(capsys.readouterr().out)
+    assert report["command"] == "doctor"
     assert report["status"] == "ok"
     assert report["warnings"] == [
         "claude auth probe failed with exit_error: Not logged in - Please run /login",

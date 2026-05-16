@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import tempfile
 from pathlib import Path
 from typing import Any
 
 from bakeoff import __version__
+from bakeoff.io import write_json_atomic
 from bakeoff.triage import triage_state_detail
 from bakeoff.work_order import TRIAGE_CLASSIFICATIONS, ValidationError
 
@@ -61,28 +60,7 @@ def build_run_manifest(run_dir: Path) -> dict[str, Any]:
 
 def write_run_manifest(run_dir: Path) -> dict[str, Any]:
     manifest = build_run_manifest(run_dir)
-    text = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
-    tmp_name = ""
-    try:
-        with tempfile.NamedTemporaryFile(
-            "w",
-            encoding="utf-8",
-            dir=run_dir,
-            prefix=".manifest.",
-            suffix=".tmp",
-            delete=False,
-        ) as handle:
-            tmp_name = handle.name
-            handle.write(text)
-        os.replace(tmp_name, run_dir / "manifest.json")
-        tmp_name = ""
-    finally:
-        if tmp_name:
-            try:
-                Path(tmp_name).unlink()
-            except FileNotFoundError:
-                pass
-
+    write_json_atomic(run_dir / "manifest.json", manifest)
     return manifest
 
 

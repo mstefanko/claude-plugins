@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import subprocess
 import sys
@@ -8,6 +9,7 @@ import textwrap
 
 from bakeoff import cli as cli_module
 from bakeoff.cli import main
+from bakeoff.manifest import write_run_manifest
 from bakeoff.review_context import ReviewContext
 from bakeoff.work_order import ValidationError, strip_jsonc_comments
 
@@ -238,8 +240,9 @@ def test_review_context_for_non_code_review_facet_prints_note(tmp_path, monkeypa
 
     assert main(["research", str(work_order), "--out", str(out_dir), "--run-id", "plain-context", "--changed-files"]) == 0
 
-    output = capsys.readouterr().out
-    assert "note: generated review context was requested for a non-code-review facet" in output
+    captured = capsys.readouterr()
+    output = captured.out
+    assert "note: generated review context was requested for a non-code-review facet" in captured.err
     assert "review context: base HEAD abc123" in output
     assert f"context-md: {out_dir / 'plain-context' / 'review-context.md'}" in output
 
@@ -375,7 +378,7 @@ def test_triage_rejects_items_for_unselected_findings(tmp_path, monkeypatch):
     out_dir = tmp_path / "runs"
     assert main(["research", str(work_order), "--out", str(out_dir), "--run-id", "triage-unselected"]) == 0
 
-    assert main(["triage", "triage-unselected", "--out", str(out_dir)]) == 2
+    assert main(["triage", "triage-unselected", "--out", str(out_dir)]) == 1
 
     triage_dir = out_dir / "triage-unselected" / "triage"
     status = json.loads((triage_dir / "status.json").read_text())
@@ -490,7 +493,7 @@ def test_compare_position_swap_catches_position_bias(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
     work_order = write_work_order(tmp_path, "compare")
 
-    assert main(["research", str(work_order), "--out", str(tmp_path / "runs")]) == 0
+    assert main(["research", str(work_order), "--out", str(tmp_path / "runs")]) == 3
 
     run_dir = next(path for path in (tmp_path / "runs").iterdir() if path.is_dir())
     decision = json.loads((run_dir / "decision.json").read_text())
@@ -553,17 +556,209 @@ def test_format_retry_writes_provider_audit_artifacts(tmp_path, monkeypatch):
     assert (codex_dir / "final.json").exists()
 
 
-def test_both_failed_exits_two(tmp_path, monkeypatch):
+def test_both_failed_exits_one(tmp_path, monkeypatch):
     install_fake_providers(tmp_path, judge_mode="gather", fail_providers={"claude", "codex"})
     monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
     work_order = write_work_order(tmp_path, "gather")
 
-    assert main(["research", str(work_order), "--out", str(tmp_path / "runs")]) == 2
+    assert main(["research", str(work_order), "--out", str(tmp_path / "runs")]) == 1
 
     run_dir = next(path for path in (tmp_path / "runs").iterdir() if path.is_dir())
     decision = json.loads((run_dir / "decision.json").read_text())
     assert decision["decision_kind"] == "both_failed"
     assert decision["judge_rationale"] == []
+
+
+def test_judge_runtime_failure_exits_one(tmp_path, monkeypatch):
+    install_fake_providers(tmp_path, judge_mode="gather", fail_judge=True)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    work_order = write_work_order(tmp_path, "gather")
+    out_dir = tmp_path / "runs"
+
+    assert main(["research", str(work_order), "--out", str(out_dir), "--run-id", "judge-failed"]) == 1
+
+    run_dir = out_dir / "judge-failed"
+    decision = json.loads((run_dir / "decision.json").read_text())
+    assert decision["decision_kind"] == "structured_union"
+    assert decision["caveats"] == ["gather judge failed with exit_error"]
+
+
+def test_research_json_success_emits_single_summary(tmp_path, monkeypatch, capsys):
+    install_fake_providers(tmp_path, judge_mode="gather")
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    work_order = write_work_order(tmp_path, "gather")
+    out_dir = tmp_path / "runs"
+
+    assert main(["research", str(work_order), "--out", str(out_dir), "--run-id", "json-run", "--json"]) == 0
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["command"] == "research"
+    assert payload["status"] == "ok"
+    assert payload["exit_code"] == 0
+    assert payload["run_id"] == "json-run"
+    assert payload["decision_kind"] == "structured_union"
+    assert payload["providers"]["claude"]["status"] == "ok"
+    assert payload["triage"]["auto_started"] is False
+    assert "bakeoff research" not in captured.out
+    assert "[claude]" not in captured.err
+
+
+def test_research_json_both_failed_and_compare_tie_exit_codes(tmp_path, monkeypatch, capsys):
+    install_fake_providers(tmp_path, judge_mode="gather", fail_providers={"claude", "codex"})
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    failed_work_order = write_work_order(tmp_path, "gather")
+    out_dir = tmp_path / "runs"
+
+    assert main(["research", str(failed_work_order), "--out", str(out_dir), "--run-id", "failed-json", "--json"]) == 1
+    failed_payload = json.loads(capsys.readouterr().out)
+    assert failed_payload["status"] == "failed"
+    assert failed_payload["decision_kind"] == "both_failed"
+    assert failed_payload["providers"]["claude"]["status"] == "failed"
+
+    install_fake_providers(tmp_path, judge_mode="compare_always_a")
+    compare_work_order = write_work_order(tmp_path, "compare")
+
+    assert main(["research", str(compare_work_order), "--out", str(out_dir), "--run-id", "tie-json", "--json"]) == 3
+    tie_payload = json.loads(capsys.readouterr().out)
+    assert tie_payload["status"] == "judge_disagreement"
+    assert tie_payload["decision_kind"] == "tie"
+    assert tie_payload["exit_code"] == 3
+
+
+def test_research_json_auto_triage_summary(tmp_path, monkeypatch, capsys):
+    install_fake_providers(tmp_path, judge_mode="gather")
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    work_order = write_work_order(tmp_path, "gather", facet={"id": "code-review"})
+    out_dir = tmp_path / "runs"
+
+    assert main(["research", str(work_order), "--out", str(out_dir), "--run-id", "auto-json", "--json"]) == 0
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["triage"]["auto_started"] is True
+    assert payload["triage"]["state"] == "yes"
+    assert payload["triage"]["exit_code"] == 0
+    assert "final" in payload["triage"]["artifacts"]
+    assert "auto-triage" not in captured.out
+    assert "[triage]" not in captured.err
+
+
+def test_triage_json_dry_run_and_schema_failure(tmp_path, monkeypatch, capsys):
+    install_fake_providers(tmp_path, judge_mode="gather")
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    work_order = write_work_order(tmp_path, "gather")
+    out_dir = tmp_path / "runs"
+    assert main(["research", str(work_order), "--out", str(out_dir), "--run-id", "triage-json"]) == 0
+    capsys.readouterr()
+
+    assert main(["triage", "triage-json", "--out", str(out_dir), "--dry-run", "--json"]) == 0
+    dry_payload = json.loads(capsys.readouterr().out)
+    assert dry_payload["command"] == "triage"
+    assert dry_payload["dry_run"] is True
+    assert dry_payload["triage"]["status"] == "dry_run"
+    assert dry_payload["triage"]["selected_findings"] == 0
+
+    install_fake_providers(tmp_path, judge_mode="gather", triage_source_id="F-001")
+    failure_work_order = write_work_order(tmp_path, "gather")
+    assert main(["research", str(failure_work_order), "--out", str(out_dir), "--run-id", "triage-json-fail"]) == 0
+    capsys.readouterr()
+
+    assert main(["triage", "triage-json-fail", "--out", str(out_dir), "--json"]) == 1
+    captured = capsys.readouterr()
+    failure_payload = json.loads(captured.out)
+    assert failure_payload["status"] == "failed"
+    assert failure_payload["triage"]["raw_status"] == "schema_error"
+    assert "triage participant" not in captured.out
+
+
+def test_runs_verify_success_latest_and_json(tmp_path, monkeypatch, capsys):
+    install_fake_providers(tmp_path, judge_mode="gather")
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    work_order = write_work_order(tmp_path, "gather")
+    out_dir = tmp_path / "runs"
+    assert main(["research", str(work_order), "--out", str(out_dir), "--run-id", "verify-run"]) == 0
+    capsys.readouterr()
+
+    assert main(["runs", "verify", "verify-run", "--out", str(out_dir)]) == 0
+    human = capsys.readouterr().out
+    assert "run verify: verify-run" in human
+    assert "manifest: ok" in human
+    assert "fingerprints: ok" in human
+
+    assert main(["runs", "verify", "latest", "--out", str(out_dir), "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["command"] == "runs verify"
+    assert payload["run_id"] == "verify-run"
+    assert payload["required_artifacts"]["status"] == "ok"
+    assert payload["fingerprints"]["checked_count"] > 0
+
+    assert main(["runs", "verify", str(out_dir / "verify-run"), "--out", str(out_dir), "--json"]) == 0
+    path_payload = json.loads(capsys.readouterr().out)
+    assert path_payload["run_id"] == "verify-run"
+
+    assert main(["runs", "verify", "../../etc", "--out", str(out_dir), "--json"]) == 2
+    assert "run-id path must not contain . or .. segments" in capsys.readouterr().err
+
+
+def test_runs_verify_failures_and_stale_triage(tmp_path, monkeypatch, capsys):
+    install_fake_providers(tmp_path, judge_mode="gather")
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    work_order = write_work_order(tmp_path, "gather", facet={"id": "code-review"})
+    out_dir = tmp_path / "runs"
+
+    assert main(["research", str(work_order), "--out", str(out_dir), "--run-id", "missing-manifest"]) == 0
+    run_dir = out_dir / "missing-manifest"
+    capsys.readouterr()
+    (run_dir / "manifest.json").unlink()
+    assert main(["runs", "verify", "missing-manifest", "--out", str(out_dir)]) == 1
+    assert "missing manifest" in capsys.readouterr().out
+
+    assert main(["research", str(work_order), "--out", str(out_dir), "--run-id", "missing-required"]) == 0
+    run_dir = out_dir / "missing-required"
+    capsys.readouterr()
+    (run_dir / "report.md").unlink()
+    assert main(["runs", "verify", "missing-required", "--out", str(out_dir)]) == 1
+    assert "missing artifact" in capsys.readouterr().out
+
+    assert main(["research", str(work_order), "--out", str(out_dir), "--run-id", "fingerprint-mismatch"]) == 0
+    run_dir = out_dir / "fingerprint-mismatch"
+    capsys.readouterr()
+    (run_dir / "decision.json").write_text((run_dir / "decision.json").read_text() + "\n", encoding="utf-8")
+    assert main(["runs", "verify", "fingerprint-mismatch", "--out", str(out_dir)]) == 1
+    assert "fingerprint mismatch" in capsys.readouterr().out
+
+    assert main(["research", str(work_order), "--out", str(out_dir), "--run-id", "stale-verify"]) == 0
+    run_dir = out_dir / "stale-verify"
+    capsys.readouterr()
+    (run_dir / "decision.json").write_text((run_dir / "decision.json").read_text() + "\n", encoding="utf-8")
+    write_run_manifest(run_dir)
+    assert main(["runs", "verify", "stale-verify", "--out", str(out_dir), "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["triage"]["state"] == "stale"
+    assert payload["triage"]["stale_inputs"] == ["decision.json"]
+    assert payload["next"].startswith("bakeoff triage stale-verify --force")
+
+
+def test_no_color_for_json_surfaces(tmp_path, monkeypatch, capsys):
+    ansi = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+    monkeypatch.setenv("NO_COLOR", "1")
+    install_fake_providers(tmp_path, judge_mode="gather")
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    work_order = write_work_order(tmp_path, "gather")
+    out_dir = tmp_path / "runs"
+
+    assert main(["research", str(work_order), "--out", str(out_dir), "--run-id", "plain-json", "--json"]) == 0
+    research_output = "".join(capsys.readouterr())
+    assert ansi.search(research_output) is None
+
+    assert main(["triage", "plain-json", "--out", str(out_dir), "--dry-run", "--json"]) == 0
+    triage_output = "".join(capsys.readouterr())
+    assert ansi.search(triage_output) is None
+
+    assert main(["runs", "verify", "plain-json", "--out", str(out_dir), "--json"]) == 0
+    verify_output = "".join(capsys.readouterr())
+    assert ansi.search(verify_output) is None
 
 
 def init_git_repo(tmp_path):
@@ -584,6 +779,7 @@ def install_fake_providers(
     *,
     judge_mode,
     fail_providers=frozenset(),
+    fail_judge=False,
     repair_providers=frozenset(),
     triage_source_id=None,
 ):
@@ -595,6 +791,7 @@ def install_fake_providers(
             prompt = sys.stdin.read()
             name = os.environ.get("BAKEOFF_FAKE_PROVIDER_NAME", pathlib.Path(sys.argv[0]).name)
             fail_providers = {sorted(fail_providers)!r}
+            fail_judge = {fail_judge!r}
             repair_providers = {sorted(repair_providers)!r}
             judge_mode = {judge_mode!r}
             triage_source_id = {triage_source_id!r}
@@ -611,6 +808,9 @@ def install_fake_providers(
                 print(name + " fake 1.0")
             elif name in fail_providers:
                 print("provider failed before final json", file=sys.stderr)
+                sys.exit(9)
+            elif fail_judge and ("deduplication and conflict-flagging judge" in prompt or "pairwise judge" in prompt or "synthesis judge" in prompt):
+                print("judge failed before final json", file=sys.stderr)
                 sys.exit(9)
             elif name in repair_providers and "BAKEOFF_FORMAT_RETRY_V1" not in prompt:
                 emit({{"status":"complete","claims":[{{"id":"R-001","finding":name + " malformed claim"}}],"conflicts":[],"unknowns":[],"recommended_next_checks":[]}})

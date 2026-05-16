@@ -37,19 +37,74 @@ For plugin dogfood, use the wrapper directly:
 "${CLAUDE_PLUGIN_ROOT:-$PWD}/bin/bakeoff" --help
 ```
 
+## Common Workflows
+
+Create and run a code-review work order:
+
+```bash
+bakeoff init review
+$EDITOR review.work-order.json
+bakeoff validate review.work-order.json
+bakeoff research review.work-order.json --base main --diff
+```
+
+`bakeoff init review` writes TODO placeholders. Edit them before `validate`;
+the validator rejects unedited templates on purpose.
+
+Inspect the newest report:
+
+```bash
+bakeoff show latest
+```
+
+Rerun a previous work order:
+
+```bash
+bakeoff rerun latest
+```
+
+Run or dry-run triage:
+
+```bash
+bakeoff triage latest --dry-run
+bakeoff triage latest --force
+```
+
+Verify a run ledger:
+
+```bash
+bakeoff runs verify latest
+```
+
 ## User Surface
 
 ```text
 bakeoff
 bakeoff init {gather|compare|analyze|review} [--force]
 bakeoff validate <work-order>
-bakeoff research <work-order> [--out runs] [--run-id ID] [--force] [--quiet] [--no-triage] [--base REF] [--diff] [--changed-files]
+bakeoff research <work-order> [--out runs] [--run-id ID] [--force] [--quiet] [--no-triage] [--base REF] [--diff] [--changed-files] [--json]
 bakeoff rerun <run-id> [--out runs] [--run-id ID] [--quiet] [--no-triage]
-bakeoff triage <run-id> [--out runs] [--force] [--dry-run] [--quiet]
+bakeoff triage <run-id> [--out runs] [--force] [--dry-run] [--quiet] [--json]
+bakeoff runs verify <run-id> [--out runs] [--json]
 bakeoff ls [--out runs] [--json] [--facet ID] [--triage-state {no|dry_run|yes|stale}]
 bakeoff show <run-id> [--out runs] [--judge | --judge-prompt | --triage]
 bakeoff doctor [--skip-auth-probe] [--quiet] [--json]
 ```
+
+Exit codes:
+
+| Code | Meaning |
+| --- | --- |
+| `0` | success |
+| `1` | generic runtime or verification failure |
+| `2` | usage, config, validation, or missing-input error |
+| `3` | completed run with unresolved judge disagreement |
+
+`research --json`, `triage --json`, and `runs verify --json` emit one final
+pretty-printed JSON object. `--json` implies effective `--quiet`, so provider
+heartbeats and human progress do not appear on stdout. Summary provider status
+uses the closed enum `ok | ok_after_format_retry | failed`, with raw Bakeoff
+statuses preserved when they differ or fail.
 
 `bakeoff research` writes a replayable ledger under `runs/<run-id>/`:
 
@@ -200,6 +255,10 @@ and `triage.md`. `bakeoff triage --dry-run` writes the prompt, status, citation
 checks, and source filter without invoking a provider; `bakeoff ls` reports that
 state as `triage:dry_run`.
 
+`bakeoff runs verify <run-id>` checks `manifest.json`, required artifacts, and
+recorded SHA-256/size fingerprints for one run ledger. Stale triage is reported
+with a recovery hint but does not make ledger verification fail.
+
 ## Effort Defaults
 
 `bakeoff init` writes quality-first per-mode effort defaults for dogfooding.
@@ -219,4 +278,5 @@ to `high`.
 - `validate` rejects unedited `TODO-*` ids on purpose.
 - Scope enforcement is best-effort unless a work order sets `advisory` or
   `required`.
+- Output is plain text; `NO_COLOR=1` remains ANSI-free.
 - The plugin wrapper remains a launcher-only future layer.

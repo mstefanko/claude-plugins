@@ -3,8 +3,9 @@
   //   bakeoff validate examples/review.work-order.json
   //   bakeoff research examples/review.work-order.json
   //
-  // Bakeoff does not compute branch diffs in v1. Paste the branch/diff context,
-  // changed files, acceptance criteria, and known risks into background.
+  // For generated review context, run research with --base main --diff.
+  // You can still paste branch context, acceptance criteria, and known risks
+  // into background when they are not present in git.
   "schema_version": 1,
   "id": "review-example",
   "type": "gather",
