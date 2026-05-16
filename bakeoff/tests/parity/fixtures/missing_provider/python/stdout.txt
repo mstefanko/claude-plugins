@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "command": "research",
+  "status": "ok",
+  "exit_code": 0,
+  "warnings": [],
+  "run_id": "missing-provider",
+  "run_dir": "runs/missing-provider",
+  "decision_kind": "single_provider_only",
+  "canonical_winner": "claude",
+  "judge_ran": false,
+  "providers": {
+    "claude": {
+      "status": "ok",
+      "raw_status": "ok",
+      "wall_seconds": 0.054,
+      "output_bytes": 224,
+      "stdout_bytes": 224,
+      "stderr_bytes": 0
+    },
+    "codex": {
+      "status": "failed",
+      "raw_status": "missing_provider",
+      "wall_seconds": 0.003,
+      "output_bytes": 0,
+      "stdout_bytes": 0,
+      "stderr_bytes": 0
+    }
+  },
+  "judge": {
+    "status": "not_run",
+    "raw_status": "not_run"
+  },
+  "triage": {
+    "auto_started": false,
+    "state": "no",
+    "status": null,
+    "exit_code": null,
+    "artifacts": {}
+  },
+  "artifacts": {
+    "work_order": "runs/missing-provider/work-order.json",
+    "decision": "runs/missing-provider/decision.json",
+    "meta": "runs/missing-provider/meta.json",
+    "manifest": "runs/missing-provider/manifest.json",
+    "report": "runs/missing-provider/report.md"
+  },
+  "next": "bakeoff show missing-provider"
+}

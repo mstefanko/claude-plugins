@@ -1,0 +1,6 @@
+{
+  "exit_code": 2,
+  "stderr": "error: missing.json: work order not found\n",
+  "stdout": "",
+  "workspace": {}
+}

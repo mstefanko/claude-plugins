@@ -1,0 +1,2 @@
+#!/usr/bin/env sh
+BAKEOFF_FAKE_PROVIDER_NAME=claude exec python3 "$(dirname "$0")/fake_provider.py" "$@"

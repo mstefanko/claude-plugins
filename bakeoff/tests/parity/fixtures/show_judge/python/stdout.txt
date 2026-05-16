@@ -1,0 +1,19 @@
+===== judge/result.json =====
+{
+  "conflicts": [],
+  "merged_claims": [
+    {
+      "claim": "Fake merged claim",
+      "confidence": "high",
+      "evidence": [
+        "fake:1"
+      ],
+      "sources": [
+        "A",
+        "B"
+      ]
+    }
+  ],
+  "unknowns_union": []
+}
+

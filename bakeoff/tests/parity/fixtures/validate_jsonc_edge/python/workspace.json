@@ -1,0 +1,6 @@
+{
+  "jsonc.work-order.json": {
+    "type": "text",
+    "value": "\n    {\n      // line comment should strip\n      \"schema_version\": 1,\n      \"id\": \"jsonc-edge\",\n      \"type\": \"gather\",\n      \"goal\": \"Markers like // and /* */ inside strings survive.\",\n      \"background\": \"literal // marker and literal /* marker */\",\n      \"providers\": [\n        {\"id\": \"claude\", \"backend\": \"claude\", \"model\": \"fake-claude\", \"scope\": \"codebase\"},\n        {\"id\": \"codex\", \"backend\": \"codex\", \"model\": \"fake-codex\", \"scope\": \"web\"}\n      ],\n      \"judge\": {\"backend\": \"claude\", \"model\": \"fake-judge\"},\n      /* block comment should strip */\n      \"budgets\": {\"wall_clock_seconds\": 3, \"max_output_bytes\": 20000, \"heartbeat_seconds\": 0}\n    }\n    "
+  }
+}

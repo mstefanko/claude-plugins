@@ -1,0 +1,722 @@
+{
+  "exit_code": 0,
+  "stderr": "",
+  "stdout": "{\n  \"out_dir\": \"runs\",\n  \"runs\": [\n    {\n      \"decision_kind\": \"structured_union\",\n      \"facet_id\": \"code-review\",\n      \"finished_at\": \"<TIMESTAMP>\",\n      \"manifest_path\": \"runs/ls-review/manifest.json\",\n      \"manifest_state\": \"present\",\n      \"report_path\": \"runs/ls-review/report.md\",\n      \"run_id\": \"ls-review\",\n      \"triage_state\": \"yes\",\n      \"type\": \"gather\"\n    }\n  ],\n  \"schema_version\": 1\n}\n",
+  "workspace": {
+    "review.json": {
+      "type": "json",
+      "value": {
+        "background": "Fake context.",
+        "budgets": {
+          "heartbeat_seconds": 0,
+          "max_output_bytes": 20000,
+          "wall_clock_seconds": 3
+        },
+        "facet": {
+          "exclude": [
+            "style-only preferences"
+          ],
+          "focus": "Find actionable defects introduced or exposed by the change.",
+          "id": "code-review",
+          "include": [
+            "correctness bugs and edge cases"
+          ],
+          "kind": "generic"
+        },
+        "goal": "Run fake bakeoff.",
+        "id": "gather-fake",
+        "judge": {
+          "backend": "claude",
+          "model": "fake-judge"
+        },
+        "providers": [
+          {
+            "backend": "claude",
+            "id": "claude",
+            "model": "fake-claude",
+            "scope": "codebase"
+          },
+          {
+            "backend": "codex",
+            "id": "codex",
+            "model": "fake-codex",
+            "scope": "codebase"
+          }
+        ],
+        "schema_version": 1,
+        "type": "gather"
+      }
+    },
+    "runs/ls-review/decision.json": {
+      "type": "json",
+      "value": {
+        "canonical_winner": null,
+        "caveats": [],
+        "decision_kind": "structured_union",
+        "judge_ran": true,
+        "judge_rationale": [],
+        "mode": "gather",
+        "order_maps": {
+          "pass1": {
+            "A": "claude",
+            "B": "codex"
+          }
+        },
+        "provider_statuses": {
+          "claude": {
+            "exit_code": 0,
+            "final_json_source": "stdout",
+            "io": {
+              "heartbeat_count": 0,
+              "last_output_age": 0,
+              "last_stderr_age": 0,
+              "last_stdout_age": 0,
+              "max_output_overrun_bytes": 20000,
+              "output_cap_grace_seconds": 10,
+              "quiet_threshold_seconds": 0,
+              "quiet_tick_count": 0,
+              "stderr_bytes": 0,
+              "stderr_observed_bytes": 0,
+              "stdout_bytes": 224,
+              "stdout_observed_bytes": 224,
+              "total_observed_bytes": 224
+            },
+            "output_bytes": 224,
+            "scope_enforcement": {
+              "cwd": "<CWD>",
+              "effective_scope": "codebase",
+              "enforcement_level": "partial",
+              "fallback_reason": null,
+              "mechanisms": [
+                "claude:disallowedTools=WebFetch,WebSearch"
+              ],
+              "policy": "best_effort",
+              "requested_scope": "codebase",
+              "temporary_cwd": false
+            },
+            "status": "ok",
+            "stderr_bytes": 0,
+            "stderr_observed_bytes": 0,
+            "stderr_path": "providers/claude/stderr.txt",
+            "stderr_truncated": false,
+            "stdout_bytes": 224,
+            "stdout_observed_bytes": 224,
+            "stdout_truncated": false,
+            "wall_seconds": 0
+          },
+          "codex": {
+            "exit_code": 0,
+            "final_json_source": "stdout",
+            "io": {
+              "heartbeat_count": 0,
+              "last_output_age": 0,
+              "last_stderr_age": 0,
+              "last_stdout_age": 0,
+              "max_output_overrun_bytes": 20000,
+              "output_cap_grace_seconds": 10,
+              "quiet_threshold_seconds": 0,
+              "quiet_tick_count": 0,
+              "stderr_bytes": 0,
+              "stderr_observed_bytes": 0,
+              "stdout_bytes": 223,
+              "stdout_observed_bytes": 223,
+              "total_observed_bytes": 223
+            },
+            "output_bytes": 223,
+            "scope_enforcement": {
+              "cwd": "<CWD>",
+              "effective_scope": "codebase",
+              "enforcement_level": "partial",
+              "fallback_reason": null,
+              "mechanisms": [
+                "codex:sandbox=read-only",
+                "codex:disable=web_search"
+              ],
+              "policy": "best_effort",
+              "requested_scope": "codebase",
+              "temporary_cwd": false
+            },
+            "status": "ok",
+            "stderr_bytes": 0,
+            "stderr_observed_bytes": 0,
+            "stderr_path": "providers/codex/stderr.txt",
+            "stderr_truncated": false,
+            "stdout_bytes": 223,
+            "stdout_observed_bytes": 223,
+            "stdout_truncated": false,
+            "wall_seconds": 0
+          }
+        }
+      }
+    },
+    "runs/ls-review/judge/prompt.txt": {
+      "type": "text",
+      "value": "You are a deduplication and conflict-flagging judge. You receive two coverage outputs (A and B) from research workers. Your job: produce a single unified union - merge duplicates, surface conflicts, preserve citations. Do NOT pick a winner.\n\nYou do not know which model produced A or B. Use the positional labels \"A\" and \"B\" only.\n\n<facet>\nFacet id: code-review\nFocus: Find actionable defects introduced or exposed by the change.\n\nThis is a task focus, not a persona. Do not role-play. Apply the facet only after the work-order goal, scope, citation rules, and output schema.\n\nInclude:\n- correctness bugs and edge cases\n\nExclude:\n- style-only preferences\n</facet>\n\n<worker_a_output>\n{\n  \"claims\": [\n    {\n      \"claim\": \"claude claim\",\n      \"confidence\": \"high\",\n      \"evidence\": [\n        \"fake:1\"\n      ],\n      \"id\": \"R-001\"\n    }\n  ],\n  \"conflicts\": [],\n  \"recommended_next_checks\": [],\n  \"status\": \"complete\",\n  \"unknowns\": []\n}\n</worker_a_output>\n\n<worker_b_output>\n{\n  \"claims\": [\n    {\n      \"claim\": \"codex claim\",\n      \"confidence\": \"high\",\n      \"evidence\": [\n        \"fake:1\"\n      ],\n      \"id\": \"R-001\"\n    }\n  ],\n  \"conflicts\": [],\n  \"recommended_next_checks\": [],\n  \"status\": \"complete\",\n  \"unknowns\": []\n}\n</worker_b_output>\n\n<rules>\n- Preserve only claims that satisfy the facet or are clearly severe out-of-facet next checks.\n- Do not reward a worker for broadening beyond the facet.\n- Do not penalize a worker for omitting material that the facet excluded.\n- The facet never overrides output schema, citation requirements, or scope enforcement.\n- When a claim is dropped solely because it is out of facet, include it in optional `out_of_facet_claims[]` with source labels, evidence, and a short reason. This is observability only; do not put these claims in `merged_claims`.\n- Merge claims that make the SAME assertion about the SAME entity, regardless of wording. Preserve all citations from both sources on the merged claim, and tag `sources` using the positional labels: [\"A\"], [\"B\"], or [\"A\",\"B\"].\n- If two claims make CONFLICTING assertions, do NOT pick a side. Emit a conflict entry listing both claims (`claim_a`, `claim_b`), both citations, and a one-line description of the disagreement.\n- Preserve confidence. If two merged claims have different confidences, take the lower.\n- Confidence reflects evidence strength, not corroboration. Do not raise confidence during judging. Use `sources` to show whether one or both workers found a claim.\n- Do not introduce new claims. You may only union, dedupe, and flag.\n- Leave near-duplicates separate when in doubt. Over-merging is the dominant failure mode of dedupe judges.\n</rules>\n\n<runtime_budget>\nThe harness will stop this provider after 3 seconds.\nPlan to stop investigation by about 1 seconds and reserve the\nremaining time to emit a schema-valid <final_json>.\n\nIf full coverage is not possible before the cutoff:\n- Prefer fewer well-cited findings over broad uncited coverage.\n- Emit a partial but schema-valid result before the cutoff.\n- Use existing uncertainty or rationale fields in the requested schema to record\n  unfinished areas.\n- Do not add fields outside the requested schema.\n- Do not wait for perfect coverage if that risks missing the final_json cutoff.\n\nDo not emit progress updates or partial JSON outside the final <final_json>\nblock. stdout is the structured answer channel.\n</runtime_budget>\n\n<process>\n1. In <scratchpad>, pair up claims that appear to be the same assertion. Note any near-duplicates you are unsure about - leave them separate if in doubt.\n2. Identify direct conflicts.\n3. Emit the unified JSON.\n</process>\n\n<output_format>\nReason in <scratchpad>...</scratchpad>, then emit one JSON object wrapped in <final_json>...</final_json>: merged_claims[] (with claim, evidence[], sources[] in {\"A\",\"B\"}, confidence), conflicts[] (with claim_a, claim_b, evidence), unknowns_union[], and optional out_of_facet_claims[] when a facet caused claims to be dropped. No content after </final_json>.\n</output_format>\n"
+    },
+    "runs/ls-review/judge/result.json": {
+      "type": "json",
+      "value": {
+        "conflicts": [],
+        "merged_claims": [
+          {
+            "claim": "Fake merged claim",
+            "confidence": "high",
+            "evidence": [
+              "fake:1"
+            ],
+            "sources": [
+              "A",
+              "B"
+            ]
+          }
+        ],
+        "unknowns_union": []
+      }
+    },
+    "runs/ls-review/judge/status.json": {
+      "type": "json",
+      "value": {
+        "exit_code": 0,
+        "final_json_source": "stdout",
+        "io": {
+          "heartbeat_count": 0,
+          "last_output_age": 0,
+          "last_stderr_age": 0,
+          "last_stdout_age": 0,
+          "max_output_overrun_bytes": 20000,
+          "output_cap_grace_seconds": 10,
+          "quiet_threshold_seconds": 0,
+          "quiet_tick_count": 0,
+          "stderr_bytes": 0,
+          "stderr_observed_bytes": 0,
+          "stdout_bytes": 200,
+          "stdout_observed_bytes": 200,
+          "total_observed_bytes": 200
+        },
+        "output_bytes": 200,
+        "status": "ok",
+        "stderr_bytes": 0,
+        "stderr_observed_bytes": 0,
+        "stderr_truncated": false,
+        "stdout_bytes": 200,
+        "stdout_observed_bytes": 200,
+        "stdout_truncated": false,
+        "wall_seconds": 0
+      }
+    },
+    "runs/ls-review/judge/stderr.txt": {
+      "type": "text",
+      "value": ""
+    },
+    "runs/ls-review/judge/stdout.txt": {
+      "type": "text",
+      "value": "<scratchpad>ok</scratchpad>\n<final_json>{\"merged_claims\":[{\"claim\":\"Fake merged claim\",\"evidence\":[\"fake:1\"],\"sources\":[\"A\",\"B\"],\"confidence\":\"high\"}],\"conflicts\":[],\"unknowns_union\":[]}</final_json>\n"
+    },
+    "runs/ls-review/manifest.json": {
+      "type": "json",
+      "value": {
+        "artifact_fingerprints": {
+          "decision.json": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "meta.json": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "report.md": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "triage/final.json": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "triage/status.json": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "triage/triage.md": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "work-order.json": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          }
+        },
+        "artifacts": {
+          "decision": "decision.json",
+          "meta": "meta.json",
+          "report": "report.md",
+          "triage": "triage/triage.md",
+          "work_order": "work-order.json"
+        },
+        "bakeoff_version": "<BAKEOFF_VERSION>",
+        "canonical_winner": null,
+        "cwd": "<CWD>",
+        "decision_kind": "structured_union",
+        "facet_id": "code-review",
+        "finished_at": "<TIMESTAMP>",
+        "judge": {
+          "backend": "claude",
+          "effort": "high",
+          "model": "fake-judge"
+        },
+        "judge_ran": true,
+        "providers": {
+          "claude": {
+            "backend": "claude",
+            "effort": "high",
+            "final_json_source": "stdout",
+            "model": "fake-claude",
+            "scope": "codebase",
+            "status": "ok",
+            "stderr_bytes": 0,
+            "stdout_bytes": 224,
+            "wall_seconds": 0
+          },
+          "codex": {
+            "backend": "codex",
+            "effort": "high",
+            "final_json_source": "stdout",
+            "model": "fake-codex",
+            "scope": "codebase",
+            "status": "ok",
+            "stderr_bytes": 0,
+            "stdout_bytes": 223,
+            "wall_seconds": 0
+          }
+        },
+        "review_context": {
+          "present": false
+        },
+        "run_id": "ls-review",
+        "schema_version": 1,
+        "started_at": "<TIMESTAMP>",
+        "triage": {
+          "attempt_status": "ok",
+          "highest_severity": null,
+          "input_hashes": {
+            "decision_sha256": "<SHA256>",
+            "report_sha256": "<SHA256>",
+            "work_order_sha256": "<SHA256>"
+          },
+          "item_count": 0,
+          "item_counts_by_classification": {
+            "already_fixed": 0,
+            "evidence_gap": 0,
+            "false_positive": 0,
+            "needs_repro": 0,
+            "plan_doc_drift": 0,
+            "product_decision": 0,
+            "real_issue": 0
+          },
+          "stale_inputs": [],
+          "state": "yes"
+        },
+        "type": "gather"
+      }
+    },
+    "runs/ls-review/meta.json": {
+      "type": "json",
+      "value": {
+        "bakeoff_version": "<BAKEOFF_VERSION>",
+        "cwd": "<CWD>",
+        "facet": {
+          "exclude": [
+            "style-only preferences"
+          ],
+          "focus": "Find actionable defects introduced or exposed by the change.",
+          "id": "code-review",
+          "include": [
+            "correctness bugs and edge cases"
+          ],
+          "kind": "generic"
+        },
+        "finished_at": "<TIMESTAMP>",
+        "input_hashes": {
+          "decision_sha256": "<SHA256>",
+          "report_sha256": "<SHA256>",
+          "work_order_sha256": "<SHA256>"
+        },
+        "provider_cli_versions": {
+          "claude": "claude fake 1.0",
+          "codex": "codex fake 1.0",
+          "git": "git version 2.39.5 (Apple Git-154)"
+        },
+        "resolved_models": {
+          "judge": {
+            "backend": "claude",
+            "effort": "high",
+            "model": "fake-judge"
+          },
+          "providers": {
+            "claude": {
+              "backend": "claude",
+              "effort": "high",
+              "model": "fake-claude",
+              "scope": "codebase",
+              "scope_enforcement": {
+                "cwd": "<CWD>",
+                "effective_scope": "codebase",
+                "enforcement_level": "partial",
+                "fallback_reason": null,
+                "mechanisms": [
+                  "claude:disallowedTools=WebFetch,WebSearch"
+                ],
+                "policy": "best_effort",
+                "requested_scope": "codebase",
+                "temporary_cwd": false
+              }
+            },
+            "codex": {
+              "backend": "codex",
+              "effort": "high",
+              "model": "fake-codex",
+              "scope": "codebase",
+              "scope_enforcement": {
+                "cwd": "<CWD>",
+                "effective_scope": "codebase",
+                "enforcement_level": "partial",
+                "fallback_reason": null,
+                "mechanisms": [
+                  "codex:sandbox=read-only",
+                  "codex:disable=web_search"
+                ],
+                "policy": "best_effort",
+                "requested_scope": "codebase",
+                "temporary_cwd": false
+              }
+            }
+          }
+        },
+        "run_id": "ls-review",
+        "scope_policy": {
+          "enforcement": "best_effort"
+        },
+        "started_at": "<TIMESTAMP>",
+        "type": "gather"
+      }
+    },
+    "runs/ls-review/providers/claude/final.json": {
+      "type": "json",
+      "value": {
+        "claims": [
+          {
+            "claim": "claude claim",
+            "confidence": "high",
+            "evidence": [
+              "fake:1"
+            ],
+            "id": "R-001"
+          }
+        ],
+        "conflicts": [],
+        "recommended_next_checks": [],
+        "status": "complete",
+        "unknowns": []
+      }
+    },
+    "runs/ls-review/providers/claude/prompt.txt": {
+      "type": "text",
+      "value": "You are a research worker. Your job is to enumerate facts, references, and existing artifacts relevant to the question - NOT to synthesize, recommend, or pick a winner. A separate judge will deduplicate your output against a peer worker's output later.\n\n<question>\nRun fake bakeoff.\n</question>\n\n<context>\nFake context.\n</context>\n\n<scope>\nSearch the current working directory and cite as `path/to/file.ext:line`. Do not invoke web search.\n</scope>\n\n<facet>\nFacet id: code-review\nFocus: Find actionable defects introduced or exposed by the change.\n\nThis is a task focus, not a persona. Do not role-play. Apply the facet only after the work-order goal, scope, citation rules, and output schema.\n\nInclude:\n- correctness bugs and edge cases\n\nExclude:\n- style-only preferences\n</facet>\n\n<rules>\n- Prefer findings inside the facet.\n- Do not invent domain facts to satisfy the facet.\n- If you notice a severe issue outside the facet, place it in `recommended_next_checks` with a citation instead of expanding the main `claims` set.\n- The facet never overrides output schema, citation requirements, or scope enforcement.\n- Enumerate findings. Do NOT synthesize, rank, or recommend.\n- Every claim MUST carry a citation: file:line, URL, or doc heading. If you cannot cite it, omit it from `claims` and add it to `unknowns`.\n- Do not invent citations. If a source is not in <context> and not retrievable, do not claim it.\n- Prefer breadth over depth. Surface 5-15 distinct findings rather than 2 exhaustive ones.\n- If two findings contradict, list both - do not resolve the conflict.\n- If you do not know, return `unknowns` rather than guessing.\n- Confidence is one of: high, medium, low. Default to medium when uncertain.\n</rules>\n\n<runtime_budget>\nThe harness will stop this provider after 3 seconds.\nPlan to stop investigation by about 1 seconds and reserve the\nremaining time to emit a schema-valid <final_json>.\n\nIf full coverage is not possible before the cutoff:\n- Prefer fewer well-cited findings over broad uncited coverage.\n- Emit a partial but schema-valid result before the cutoff.\n- Use existing uncertainty or rationale fields in the requested schema to record\n  unfinished areas.\n- Do not add fields outside the requested schema.\n- Do not wait for perfect coverage if that risks missing the final_json cutoff.\n\nDo not emit progress updates or partial JSON outside the final <final_json>\nblock. stdout is the structured answer channel.\n</runtime_budget>\n\n<worker_result_schema>\nAll worker <final_json> payloads MUST include this top-level shape:\n\n{\n  \"status\": \"complete\",\n  \"claims\": [\n    {\n      \"id\": \"R-001\",\n      \"claim\": \"One factual assertion, defended position claim, or analysis step.\",\n      \"evidence\": [\"path/to/file.ext:line or https://example.com/source or doc heading\"],\n      \"confidence\": \"high\"\n    }\n  ],\n  \"conflicts\": [],\n  \"unknowns\": [],\n  \"recommended_next_checks\": []\n}\n\nAllowed status values: \"complete\", \"complete_with_concerns\", \"needs_context\", \"blocked\".\nAllowed confidence values: \"high\", \"medium\", \"low\".\nConfidence reflects evidence strength, not agreement between providers: use \"high\" only when cited evidence directly proves the claim, \"medium\" when the citation supports the claim but requires interpretation or broader context, and \"low\" when evidence is indirect, incomplete, stale, or only partially supportive.\nEvery claims[] item MUST include these required fields with these exact names: \"id\", \"claim\", \"evidence\", \"confidence\".\nDo not rename fields. Use \"claim\", not \"finding\", \"summary\", or \"description\". Use \"evidence\", not \"citation\", \"citations\", \"source\", or \"sources\".\nPut unverified material in unknowns[] as strings instead of adding uncited claims.\n\n</worker_result_schema>\n\n<process>\n1. In <scratchpad> tags, list candidate findings and their sources. Cross out any you cannot cite.\n2. For each remaining finding, ask: \"Is this a fact, or my opinion?\" Drop opinions.\n3. Emit the JSON object matching the worker result schema. No prose outside the JSON.\n</process>\n\n<output_format>\nReason in <scratchpad>...</scratchpad>, then emit one JSON object wrapped in <final_json>...</final_json>, matching the worker result schema (status, claims[], conflicts[], unknowns[], recommended_next_checks[]). No content after </final_json>.\n</output_format>\n"
+    },
+    "runs/ls-review/providers/claude/status.json": {
+      "type": "json",
+      "value": {
+        "exit_code": 0,
+        "final_json_source": "stdout",
+        "io": {
+          "heartbeat_count": 0,
+          "last_output_age": 0,
+          "last_stderr_age": 0,
+          "last_stdout_age": 0,
+          "max_output_overrun_bytes": 20000,
+          "output_cap_grace_seconds": 10,
+          "quiet_threshold_seconds": 0,
+          "quiet_tick_count": 0,
+          "stderr_bytes": 0,
+          "stderr_observed_bytes": 0,
+          "stdout_bytes": 224,
+          "stdout_observed_bytes": 224,
+          "total_observed_bytes": 224
+        },
+        "output_bytes": 224,
+        "scope_enforcement": {
+          "cwd": "<CWD>",
+          "effective_scope": "codebase",
+          "enforcement_level": "partial",
+          "fallback_reason": null,
+          "mechanisms": [
+            "claude:disallowedTools=WebFetch,WebSearch"
+          ],
+          "policy": "best_effort",
+          "requested_scope": "codebase",
+          "temporary_cwd": false
+        },
+        "status": "ok",
+        "stderr_bytes": 0,
+        "stderr_observed_bytes": 0,
+        "stderr_truncated": false,
+        "stdout_bytes": 224,
+        "stdout_observed_bytes": 224,
+        "stdout_truncated": false,
+        "wall_seconds": 0
+      }
+    },
+    "runs/ls-review/providers/claude/stderr.txt": {
+      "type": "text",
+      "value": ""
+    },
+    "runs/ls-review/providers/claude/stdout.txt": {
+      "type": "text",
+      "value": "<scratchpad>ok</scratchpad>\n<final_json>{\"status\":\"complete\",\"claims\":[{\"id\":\"R-001\",\"claim\":\"claude claim\",\"evidence\":[\"fake:1\"],\"confidence\":\"high\"}],\"conflicts\":[],\"unknowns\":[],\"recommended_next_checks\":[]}</final_json>\n"
+    },
+    "runs/ls-review/providers/codex/final.json": {
+      "type": "json",
+      "value": {
+        "claims": [
+          {
+            "claim": "codex claim",
+            "confidence": "high",
+            "evidence": [
+              "fake:1"
+            ],
+            "id": "R-001"
+          }
+        ],
+        "conflicts": [],
+        "recommended_next_checks": [],
+        "status": "complete",
+        "unknowns": []
+      }
+    },
+    "runs/ls-review/providers/codex/prompt.txt": {
+      "type": "text",
+      "value": "You are a research worker. Your job is to enumerate facts, references, and existing artifacts relevant to the question - NOT to synthesize, recommend, or pick a winner. A separate judge will deduplicate your output against a peer worker's output later.\n\n<question>\nRun fake bakeoff.\n</question>\n\n<context>\nFake context.\n</context>\n\n<scope>\nSearch the current working directory and cite as `path/to/file.ext:line`. Do not invoke web search.\n</scope>\n\n<facet>\nFacet id: code-review\nFocus: Find actionable defects introduced or exposed by the change.\n\nThis is a task focus, not a persona. Do not role-play. Apply the facet only after the work-order goal, scope, citation rules, and output schema.\n\nInclude:\n- correctness bugs and edge cases\n\nExclude:\n- style-only preferences\n</facet>\n\n<rules>\n- Prefer findings inside the facet.\n- Do not invent domain facts to satisfy the facet.\n- If you notice a severe issue outside the facet, place it in `recommended_next_checks` with a citation instead of expanding the main `claims` set.\n- The facet never overrides output schema, citation requirements, or scope enforcement.\n- Enumerate findings. Do NOT synthesize, rank, or recommend.\n- Every claim MUST carry a citation: file:line, URL, or doc heading. If you cannot cite it, omit it from `claims` and add it to `unknowns`.\n- Do not invent citations. If a source is not in <context> and not retrievable, do not claim it.\n- Prefer breadth over depth. Surface 5-15 distinct findings rather than 2 exhaustive ones.\n- If two findings contradict, list both - do not resolve the conflict.\n- If you do not know, return `unknowns` rather than guessing.\n- Confidence is one of: high, medium, low. Default to medium when uncertain.\n</rules>\n\n<runtime_budget>\nThe harness will stop this provider after 3 seconds.\nPlan to stop investigation by about 1 seconds and reserve the\nremaining time to emit a schema-valid <final_json>.\n\nIf full coverage is not possible before the cutoff:\n- Prefer fewer well-cited findings over broad uncited coverage.\n- Emit a partial but schema-valid result before the cutoff.\n- Use existing uncertainty or rationale fields in the requested schema to record\n  unfinished areas.\n- Do not add fields outside the requested schema.\n- Do not wait for perfect coverage if that risks missing the final_json cutoff.\n\nDo not emit progress updates or partial JSON outside the final <final_json>\nblock. stdout is the structured answer channel.\n</runtime_budget>\n\n<worker_result_schema>\nAll worker <final_json> payloads MUST include this top-level shape:\n\n{\n  \"status\": \"complete\",\n  \"claims\": [\n    {\n      \"id\": \"R-001\",\n      \"claim\": \"One factual assertion, defended position claim, or analysis step.\",\n      \"evidence\": [\"path/to/file.ext:line or https://example.com/source or doc heading\"],\n      \"confidence\": \"high\"\n    }\n  ],\n  \"conflicts\": [],\n  \"unknowns\": [],\n  \"recommended_next_checks\": []\n}\n\nAllowed status values: \"complete\", \"complete_with_concerns\", \"needs_context\", \"blocked\".\nAllowed confidence values: \"high\", \"medium\", \"low\".\nConfidence reflects evidence strength, not agreement between providers: use \"high\" only when cited evidence directly proves the claim, \"medium\" when the citation supports the claim but requires interpretation or broader context, and \"low\" when evidence is indirect, incomplete, stale, or only partially supportive.\nEvery claims[] item MUST include these required fields with these exact names: \"id\", \"claim\", \"evidence\", \"confidence\".\nDo not rename fields. Use \"claim\", not \"finding\", \"summary\", or \"description\". Use \"evidence\", not \"citation\", \"citations\", \"source\", or \"sources\".\nPut unverified material in unknowns[] as strings instead of adding uncited claims.\n\n</worker_result_schema>\n\n<process>\n1. In <scratchpad> tags, list candidate findings and their sources. Cross out any you cannot cite.\n2. For each remaining finding, ask: \"Is this a fact, or my opinion?\" Drop opinions.\n3. Emit the JSON object matching the worker result schema. No prose outside the JSON.\n</process>\n\n<output_format>\nReason in <scratchpad>...</scratchpad>, then emit one JSON object wrapped in <final_json>...</final_json>, matching the worker result schema (status, claims[], conflicts[], unknowns[], recommended_next_checks[]). No content after </final_json>.\n</output_format>\n"
+    },
+    "runs/ls-review/providers/codex/status.json": {
+      "type": "json",
+      "value": {
+        "exit_code": 0,
+        "final_json_source": "stdout",
+        "io": {
+          "heartbeat_count": 0,
+          "last_output_age": 0,
+          "last_stderr_age": 0,
+          "last_stdout_age": 0,
+          "max_output_overrun_bytes": 20000,
+          "output_cap_grace_seconds": 10,
+          "quiet_threshold_seconds": 0,
+          "quiet_tick_count": 0,
+          "stderr_bytes": 0,
+          "stderr_observed_bytes": 0,
+          "stdout_bytes": 223,
+          "stdout_observed_bytes": 223,
+          "total_observed_bytes": 223
+        },
+        "output_bytes": 223,
+        "scope_enforcement": {
+          "cwd": "<CWD>",
+          "effective_scope": "codebase",
+          "enforcement_level": "partial",
+          "fallback_reason": null,
+          "mechanisms": [
+            "codex:sandbox=read-only",
+            "codex:disable=web_search"
+          ],
+          "policy": "best_effort",
+          "requested_scope": "codebase",
+          "temporary_cwd": false
+        },
+        "status": "ok",
+        "stderr_bytes": 0,
+        "stderr_observed_bytes": 0,
+        "stderr_truncated": false,
+        "stdout_bytes": 223,
+        "stdout_observed_bytes": 223,
+        "stdout_truncated": false,
+        "wall_seconds": 0
+      }
+    },
+    "runs/ls-review/providers/codex/stderr.txt": {
+      "type": "text",
+      "value": ""
+    },
+    "runs/ls-review/providers/codex/stdout.txt": {
+      "type": "text",
+      "value": "<scratchpad>ok</scratchpad>\n<final_json>{\"status\":\"complete\",\"claims\":[{\"id\":\"R-001\",\"claim\":\"codex claim\",\"evidence\":[\"fake:1\"],\"confidence\":\"high\"}],\"conflicts\":[],\"unknowns\":[],\"recommended_next_checks\":[]}</final_json>\n"
+    },
+    "runs/ls-review/report.md": {
+      "type": "text",
+      "value": "# Bakeoff Report: gather-fake\n\nMode: `gather`\nDecision: `structured_union`\nFacet: `code-review`\nFacet Focus: Find actionable defects introduced or exposed by the change.\n\n## Decision Audit\n\n- Judge ran: `true`\n- pass1: A=`claude`, B=`codex`\n\n## Provider Status\n\n- `claude`: `ok` (<SECONDS>s, stdout 224 bytes, stderr 0 bytes, stderr: `providers/claude/stderr.txt`)\n  Scope: `codebase` -> `codebase` (partial)\n- `codex`: `ok` (<SECONDS>s, stdout 223 bytes, stderr 0 bytes, stderr: `providers/codex/stderr.txt`)\n  Scope: `codebase` -> `codebase` (partial)\n\n## Findings\n\nProvider-set headings name the worker set that surfaced each claim. `single-source` means one worker surfaced it; `multi-source` means both workers surfaced materially similar claims.\n\nCorroboration describes worker overlap within the shared `code-review` facet; it is not proof of correctness.\n\n### claude+codex\n- **F-001** Fake merged claim (model confidence `high`, corroboration `multi-source`, sources `claude+codex`)\n  Evidence: fake:1\n\n## Conflicts\n\n- No conflicts found.\n\n## Unknowns\n\n- None reported.\n"
+    },
+    "runs/ls-review/triage/citation_checks.json": {
+      "type": "json",
+      "value": {
+        "checks": [],
+        "cwd": "<CWD>",
+        "schema_version": 1
+      }
+    },
+    "runs/ls-review/triage/final.json": {
+      "type": "json",
+      "value": {
+        "input_hashes": {
+          "decision_sha256": "<SHA256>",
+          "report_sha256": "<SHA256>",
+          "work_order_sha256": "<SHA256>"
+        },
+        "items": [],
+        "run_id": "ls-review",
+        "schema_version": 1,
+        "source_finding_filter": {
+          "included": 1,
+          "skipped_non_actionable": 0,
+          "skipped_out_of_facet": 0
+        },
+        "status": "complete",
+        "summary": "no selected findings",
+        "triage_participant": {
+          "backend": "claude",
+          "effort": "high",
+          "model": "fake-judge"
+        },
+        "unknowns": []
+      }
+    },
+    "runs/ls-review/triage/prompt.txt": {
+      "type": "text",
+      "value": "You are a senior engineer doing evidence-grounded triage of a Bakeoff report.\nYou are NOT the original judge.\nYour job is not to improve the report prose.\nYour job is to classify only the provided actionable-looking source_findings.\n\n<rules>\n- Classify each entry in triage_payload.source_findings by source_finding_id.\n- Do not create items for findings that are only present in report_md and absent from source_findings.\n- If source_findings is empty, emit an empty items[] array and explain that no actionable-looking findings were selected.\n- Check supporting citations when possible using the provided citation_checks data.\n- Look for counterevidence in the provided artifacts and codebase.\n- Verify that each source finding faithfully describes its supporting citations; citation_checks prove location existence, not semantic accuracy.\n- If triage_payload.facet is present, use it only as context for actionability and expected scope; do not invent new triage schema fields from it.\n- Decide whether it should be fixed now, deferred, documented, ignored, or reproduced.\n- Do not mark a finding real just because the report said it confidently.\n- Do not mark a finding false just because it is inconvenient.\n- If evidence is missing, use needs_repro or evidence_gap.\n- Keep summary consistent with item classifications and rationales; do not assign blame or correctness in the summary unless the items say the same thing.\n- Do not mutate the original decision or report.\n</rules>\n\n<runtime_budget>\nThe harness will stop this provider after 3 seconds.\nPlan to stop investigation by about 1 seconds and reserve the\nremaining time to emit a schema-valid <final_json>.\n\nIf full coverage is not possible before the cutoff:\n- Prefer fewer well-cited findings over broad uncited coverage.\n- Emit a partial but schema-valid result before the cutoff.\n- Use existing uncertainty or rationale fields in the requested schema to record\n  unfinished areas.\n- Do not add fields outside the requested schema.\n- Do not wait for perfect coverage if that risks missing the final_json cutoff.\n\nDo not emit progress updates or partial JSON outside the final <final_json>\nblock. stdout is the structured answer channel.\n</runtime_budget>\n\n<triage_payload>\n{\n  \"caveats\": [],\n  \"citation_checks\": {\n    \"checks\": [],\n    \"cwd\": \"/private<WORKDIR>\",\n    \"schema_version\": 1\n  },\n  \"decision\": {\n    \"canonical_winner\": null,\n    \"caveats\": [],\n    \"decision_kind\": \"structured_union\",\n    \"judge_ran\": true,\n    \"judge_rationale\": [],\n    \"mode\": \"gather\",\n    \"order_maps\": {\n      \"pass1\": {\n        \"A\": \"claude\",\n        \"B\": \"codex\"\n      }\n    },\n    \"provider_statuses\": {\n      \"claude\": {\n        \"exit_code\": 0,\n        \"final_json_source\": \"stdout\",\n        \"io\": {\n          \"heartbeat_count\": 0,\n          \"last_output_age\": 0,\n          \"last_stderr_age\": null,\n          \"last_stdout_age\": 0,\n          \"max_output_overrun_bytes\": 20000,\n          \"output_cap_grace_seconds\": 10,\n          \"quiet_threshold_seconds\": 0,\n          \"quiet_tick_count\": 0,\n          \"stderr_bytes\": 0,\n          \"stderr_observed_bytes\": 0,\n          \"stdout_bytes\": 224,\n          \"stdout_observed_bytes\": 224,\n          \"total_observed_bytes\": 224\n        },\n        \"output_bytes\": 224,\n        \"scope_enforcement\": {\n          \"cwd\": \"/private<WORKDIR>\",\n          \"effective_scope\": \"codebase\",\n          \"enforcement_level\": \"partial\",\n          \"fallback_reason\": null,\n          \"mechanisms\": [\n            \"claude:disallowedTools=WebFetch,WebSearch\"\n          ],\n          \"policy\": \"best_effort\",\n          \"requested_scope\": \"codebase\",\n          \"temporary_cwd\": false\n        },\n        \"status\": \"ok\",\n        \"stderr_bytes\": 0,\n        \"stderr_observed_bytes\": 0,\n        \"stderr_path\": \"providers/claude/stderr.txt\",\n        \"stderr_truncated\": false,\n        \"stdout_bytes\": 224,\n        \"stdout_observed_bytes\": 224,\n        \"stdout_truncated\": false,\n        \"wall_seconds\": 0\n      },\n      \"codex\": {\n        \"exit_code\": 0,\n        \"final_json_source\": \"stdout\",\n        \"io\": {\n          \"heartbeat_count\": 0,\n          \"last_output_age\": 0,\n          \"last_stderr_age\": null,\n          \"last_stdout_age\": 0,\n          \"max_output_overrun_bytes\": 20000,\n          \"output_cap_grace_seconds\": 10,\n          \"quiet_threshold_seconds\": 0,\n          \"quiet_tick_count\": 0,\n          \"stderr_bytes\": 0,\n          \"stderr_observed_bytes\": 0,\n          \"stdout_bytes\": 223,\n          \"stdout_observed_bytes\": 223,\n          \"total_observed_bytes\": 223\n        },\n        \"output_bytes\": 223,\n        \"scope_enforcement\": {\n          \"cwd\": \"/private<WORKDIR>\",\n          \"effective_scope\": \"codebase\",\n          \"enforcement_level\": \"partial\",\n          \"fallback_reason\": null,\n          \"mechanisms\": [\n            \"codex:sandbox=read-only\",\n            \"codex:disable=web_search\"\n          ],\n          \"policy\": \"best_effort\",\n          \"requested_scope\": \"codebase\",\n          \"temporary_cwd\": false\n        },\n        \"status\": \"ok\",\n        \"stderr_bytes\": 0,\n        \"stderr_observed_bytes\": 0,\n        \"stderr_path\": \"providers/codex/stderr.txt\",\n        \"stderr_truncated\": false,\n        \"stdout_bytes\": 223,\n        \"stdout_observed_bytes\": 223,\n        \"stdout_truncated\": false,\n        \"wall_seconds\": 0\n      }\n    }\n  },\n  \"facet\": {\n    \"exclude\": [\n      \"style-only preferences\"\n    ],\n    \"focus\": \"Find actionable defects introduced or exposed by the change.\",\n    \"id\": \"code-review\",\n    \"include\": [\n      \"correctness bugs and edge cases\"\n    ],\n    \"kind\": \"generic\"\n  },\n  \"input_hashes\": {\n    \"decision_sha256\": \"<SHA256>\",\n    \"report_sha256\": \"<SHA256>\",\n    \"work_order_sha256\": \"<SHA256>\"\n  },\n  \"meta\": {\n    \"bakeoff_version\": \"0.0.0\",\n    \"cwd\": \"/private<WORKDIR>\",\n    \"facet\": {\n      \"exclude\": [\n        \"style-only preferences\"\n      ],\n      \"focus\": \"Find actionable defects introduced or exposed by the change.\",\n      \"id\": \"code-review\",\n      \"include\": [\n        \"correctness bugs and edge cases\"\n      ],\n      \"kind\": \"generic\"\n    },\n    \"finished_at\": \"<TIMESTAMP>\",\n    \"input_hashes\": {\n      \"decision_sha256\": \"<SHA256>\",\n      \"report_sha256\": \"<SHA256>\",\n      \"work_order_sha256\": \"<SHA256>\"\n    },\n    \"provider_cli_versions\": {\n      \"claude\": \"claude fake 1.0\",\n      \"codex\": \"codex fake 1.0\",\n      \"git\": \"git version 2.39.5 (Apple Git-154)\"\n    },\n    \"resolved_models\": {\n      \"judge\": {\n        \"backend\": \"claude\",\n        \"effort\": \"high\",\n        \"model\": \"fake-judge\"\n      },\n      \"providers\": {\n        \"claude\": {\n          \"backend\": \"claude\",\n          \"effort\": \"high\",\n          \"model\": \"fake-claude\",\n          \"scope\": \"codebase\",\n          \"scope_enforcement\": {\n            \"cwd\": \"/private<WORKDIR>\",\n            \"effective_scope\": \"codebase\",\n            \"enforcement_level\": \"partial\",\n            \"fallback_reason\": null,\n            \"mechanisms\": [\n              \"claude:disallowedTools=WebFetch,WebSearch\"\n            ],\n            \"policy\": \"best_effort\",\n            \"requested_scope\": \"codebase\",\n            \"temporary_cwd\": false\n          }\n        },\n        \"codex\": {\n          \"backend\": \"codex\",\n          \"effort\": \"high\",\n          \"model\": \"fake-codex\",\n          \"scope\": \"codebase\",\n          \"scope_enforcement\": {\n            \"cwd\": \"/private<WORKDIR>\",\n            \"effective_scope\": \"codebase\",\n            \"enforcement_level\": \"partial\",\n            \"fallback_reason\": null,\n            \"mechanisms\": [\n              \"codex:sandbox=read-only\",\n              \"codex:disable=web_search\"\n            ],\n            \"policy\": \"best_effort\",\n            \"requested_scope\": \"codebase\",\n            \"temporary_cwd\": false\n          }\n        }\n      }\n    },\n    \"run_id\": \"ls-review\",\n    \"scope_policy\": {\n      \"enforcement\": \"best_effort\"\n    },\n    \"started_at\": \"<TIMESTAMP>\",\n    \"type\": \"gather\"\n  },\n  \"report_md\": \"# Bakeoff Report: gather-fake\\n\\nMode: `gather`\\nDecision: `structured_union`\\nFacet: `code-review`\\nFacet Focus: Find actionable defects introduced or exposed by the change.\\n\\n## Decision Audit\\n\\n- Judge ran: `true`\\n- pass1: A=`claude`, B=`codex`\\n\\n## Provider Status\\n\\n- `claude`: `ok` (<SECONDS>s, stdout 224 bytes, stderr 0 bytes, stderr: `providers/claude/stderr.txt`)\\n  Scope: `codebase` -> `codebase` (partial)\\n- `codex`: `ok` (<SECONDS>s, stdout 223 bytes, stderr 0 bytes, stderr: `providers/codex/stderr.txt`)\\n  Scope: `codebase` -> `codebase` (partial)\\n\\n## Findings\\n\\nProvider-set headings name the worker set that surfaced each claim. `single-source` means one worker surfaced it; `multi-source` means both workers surfaced materially similar claims.\\n\\nCorroboration describes worker overlap within the shared `code-review` facet; it is not proof of correctness.\\n\\n### claude+codex\\n- **F-001** Fake merged claim (model confidence `high`, corroboration `multi-source`, sources `claude+codex`)\\n  Evidence: fake:1\\n\\n## Conflicts\\n\\n- No conflicts found.\\n\\n## Unknowns\\n\\n- None reported.\\n\",\n  \"run_id\": \"ls-review\",\n  \"schema_version\": 1,\n  \"source_finding_filter\": {\n    \"included\": 1,\n    \"skipped_non_actionable\": 0,\n    \"skipped_out_of_facet\": 0\n  },\n  \"source_findings\": [\n    {\n      \"id\": \"F-001\",\n      \"section\": \"Findings\",\n      \"text\": \"Fake merged claim (model confidence `high`, corroboration `multi-source`, sources `claude+codex`)\"\n    }\n  ],\n  \"work_order_json\": \"{\\n  \\\"schema_version\\\": 1,\\n  \\\"id\\\": \\\"gather-fake\\\",\\n  \\\"type\\\": \\\"gather\\\",\\n  \\\"goal\\\": \\\"Run fake bakeoff.\\\",\\n  \\\"background\\\": \\\"Fake context.\\\",\\n  \\\"providers\\\": [\\n    {\\n      \\\"id\\\": \\\"claude\\\",\\n      \\\"backend\\\": \\\"claude\\\",\\n      \\\"model\\\": \\\"fake-claude\\\",\\n      \\\"scope\\\": \\\"codebase\\\"\\n    },\\n    {\\n      \\\"id\\\": \\\"codex\\\",\\n      \\\"backend\\\": \\\"codex\\\",\\n      \\\"model\\\": \\\"fake-codex\\\",\\n      \\\"scope\\\": \\\"codebase\\\"\\n    }\\n  ],\\n  \\\"judge\\\": {\\n    \\\"backend\\\": \\\"claude\\\",\\n    \\\"model\\\": \\\"fake-judge\\\"\\n  },\\n  \\\"budgets\\\": {\\n    \\\"wall_clock_seconds\\\": 3,\\n    \\\"max_output_bytes\\\": 20000,\\n    \\\"heartbeat_seconds\\\": 0\\n  },\\n  \\\"facet\\\": {\\n    \\\"id\\\": \\\"code-review\\\",\\n    \\\"kind\\\": \\\"generic\\\",\\n    \\\"focus\\\": \\\"Find actionable defects introduced or exposed by the change.\\\",\\n    \\\"include\\\": [\\n      \\\"correctness bugs and edge cases\\\"\\n    ],\\n    \\\"exclude\\\": [\\n      \\\"style-only preferences\\\"\\n    ]\\n  }\\n}\\n\"\n}\n</triage_payload>\n\n<triage_result_schema>\n{\n  \"schema_version\": 1,\n  \"status\": \"complete\",\n  \"summary\": \"Short assessment of report quality and actionability.\",\n  \"items\": [\n    {\n      \"id\": \"T-001\",\n      \"source_finding_id\": \"F-001\",\n      \"source_finding\": \"The report finding being triaged.\",\n      \"classification\": \"real_issue\",\n      \"severity\": \"medium\",\n      \"confidence\": \"high\",\n      \"supporting_evidence\": [\"src/bakeoff/cli.py:631\"],\n      \"counterevidence\": [\"tests/test_modes_end_to_end.py:19\"],\n      \"citation_check_ids\": [\"C-001\", \"C-014\"],\n      \"recommended_action\": \"fix_now\",\n      \"rationale\": \"Why this is or is not actionable.\"\n    }\n  ],\n  \"unknowns\": [\"Any checks triage could not perform.\"]\n}\n\nAllowed classification values: real_issue, false_positive, plan_doc_drift, product_decision, needs_repro, already_fixed, evidence_gap.\nAllowed recommended_action values: fix_now, document, defer, ignore, reproduce.\nAllowed severity values: high, medium, low, none.\nAllowed confidence values: high, medium, low.\n\n</triage_result_schema>\n\n<output_format>\nReason privately if needed, then emit only one JSON object wrapped in <final_json>...</final_json>, matching the triage schema. No prose before or after the final_json block.\n</output_format>\n"
+    },
+    "runs/ls-review/triage/source_finding_filter.json": {
+      "type": "json",
+      "value": {
+        "schema_version": 1,
+        "selected": [
+          {
+            "id": "F-001",
+            "section": "Findings",
+            "text": "Fake merged claim (model confidence `high`, corroboration `multi-source`, sources `claude+codex`)"
+          }
+        ],
+        "skipped": [],
+        "summary": {
+          "included": 1,
+          "skipped_non_actionable": 0,
+          "skipped_out_of_facet": 0
+        }
+      }
+    },
+    "runs/ls-review/triage/status.json": {
+      "type": "json",
+      "value": {
+        "exit_code": 0,
+        "final_json_source": "stdout",
+        "input_hashes": {
+          "decision_sha256": "<SHA256>",
+          "report_sha256": "<SHA256>",
+          "work_order_sha256": "<SHA256>"
+        },
+        "io": {
+          "heartbeat_count": 0,
+          "last_output_age": 0,
+          "last_stderr_age": 0,
+          "last_stdout_age": 0,
+          "max_output_overrun_bytes": 20000,
+          "output_cap_grace_seconds": 10,
+          "quiet_threshold_seconds": 0,
+          "quiet_tick_count": 0,
+          "stderr_bytes": 0,
+          "stderr_observed_bytes": 0,
+          "stdout_bytes": 152,
+          "stdout_observed_bytes": 152,
+          "total_observed_bytes": 152
+        },
+        "output_bytes": 152,
+        "source_finding_filter": {
+          "included": 1,
+          "skipped_non_actionable": 0,
+          "skipped_out_of_facet": 0
+        },
+        "status": "ok",
+        "stderr_bytes": 0,
+        "stderr_observed_bytes": 0,
+        "stderr_truncated": false,
+        "stdout_bytes": 152,
+        "stdout_observed_bytes": 152,
+        "stdout_truncated": false,
+        "triage_participant": {
+          "backend": "claude",
+          "effort": "high",
+          "model": "fake-judge"
+        },
+        "wall_seconds": 0
+      }
+    },
+    "runs/ls-review/triage/stderr.txt": {
+      "type": "text",
+      "value": ""
+    },
+    "runs/ls-review/triage/stdout.txt": {
+      "type": "text",
+      "value": "<scratchpad>ok</scratchpad>\n<final_json>{\"schema_version\":1,\"status\":\"complete\",\"summary\":\"no selected findings\",\"items\":[],\"unknowns\":[]}</final_json>\n"
+    },
+    "runs/ls-review/triage/triage.md": {
+      "type": "text",
+      "value": "# Bakeoff Triage: ls-review\n\n## Summary\n\nno selected findings\n\n## Source Findings\n\n- Selected: `1`\n- Skipped non-actionable: `0`\n- Skipped out-of-facet: `0`\n\n## Fix Now\n\n- None.\n\n## False Positives\n\n- None.\n\n## Already Fixed\n\n- None.\n\n## Needs Reproduction\n\n- None.\n\n## Defer / Product Decision\n\n- None.\n\n## Other Valid Items\n\n- None.\n\n## Unknowns\n\n- None.\n"
+    },
+    "runs/ls-review/work-order.json": {
+      "type": "json",
+      "value": {
+        "background": "Fake context.",
+        "budgets": {
+          "heartbeat_seconds": 0,
+          "max_output_bytes": 20000,
+          "wall_clock_seconds": 3
+        },
+        "facet": {
+          "exclude": [
+            "style-only preferences"
+          ],
+          "focus": "Find actionable defects introduced or exposed by the change.",
+          "id": "code-review",
+          "include": [
+            "correctness bugs and edge cases"
+          ],
+          "kind": "generic"
+        },
+        "goal": "Run fake bakeoff.",
+        "id": "gather-fake",
+        "judge": {
+          "backend": "claude",
+          "model": "fake-judge"
+        },
+        "providers": [
+          {
+            "backend": "claude",
+            "id": "claude",
+            "model": "fake-claude",
+            "scope": "codebase"
+          },
+          {
+            "backend": "codex",
+            "id": "codex",
+            "model": "fake-codex",
+            "scope": "codebase"
+          }
+        ],
+        "schema_version": 1,
+        "type": "gather"
+      }
+    }
+  }
+}

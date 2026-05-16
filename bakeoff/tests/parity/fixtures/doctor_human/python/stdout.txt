@@ -1,0 +1,16 @@
+bakeoff doctor
+- claude: /var/folders/yy/nld_s8b520j73kf7_xbl4v3w0000gn/T/bakeoff-parity-doctor_human-sbks0flv/fake-bin/claude (claude fake 1.0)
+- codex: /var/folders/yy/nld_s8b520j73kf7_xbl4v3w0000gn/T/bakeoff-parity-doctor_human-sbks0flv/fake-bin/codex (codex fake 1.0)
+- git: /usr/bin/git (git version 2.39.5 (Apple Git-154))
+- defaults:
+  claude_sonnet: claude-sonnet-4-6
+  claude_opus: claude-opus-4-7
+  claude_haiku: claude-haiku-4-5-20251001
+  codex: gpt-5.5
+  codex_gpt5: gpt-5
+- scope policy: best_effort by default; provider status records enforcement and advisory fallback.
+- scope capabilities:
+  claude: supports allowed_tools, disallowed_tools, tools, permission_mode
+  codex: supports sandbox, disable_feature, profile, config, output_last_message
+- cwd writable: ok (/private/var/folders/yy/nld_s8b520j73kf7_xbl4v3w0000gn/T/bakeoff-parity-doctor_human-sbks0flv)
+- bias: Default judge is claude/opus alongside claude/sonnet workers. Position-swap is the primary bias mitigation; same-family bias is an accepted v1 risk.

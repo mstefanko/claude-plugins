@@ -1,0 +1,6 @@
+{
+  "exit_code": 0,
+  "stderr": "",
+  "stdout": "bakeoff - run the same research task across multiple agents, then judge.\n\nFour starts. Pick one based on what you want:\n  gather   coverage research\n  compare  defended pick\n  analyze  thorough explanation\n  review   code-review recipe\n\nGet started:\n  bakeoff init gather\n  bakeoff validate gather.work-order.json\n  bakeoff research gather.work-order.json\n\nProvider CLIs required on PATH: `claude`, `codex`.\nRun `bakeoff doctor` to check.\n\n",
+  "workspace": {}
+}

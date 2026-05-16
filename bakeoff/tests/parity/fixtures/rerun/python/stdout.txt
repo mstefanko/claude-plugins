@@ -1,0 +1,16 @@
+bakeoff research  run-id: rerun-target
+  mode:           gather
+  run dir:        runs/rerun-target/
+  providers:      claude (fake-claude, codebase), codex (fake-codex, web)
+  budgets:        3s wall, 20000 bytes out, 10s cap grace
+  scope policy:   best_effort
+  judge:          claude fake-judge
+[claude] launching...
+[codex] launching...
+[claude] ok 0.053s 224 bytes
+[codex] ok 0.048s 223 bytes
+[judge:gather] running...
+[judge:gather] ok 0.046s
+manifest: runs/rerun-target/manifest.json
+report: runs/rerun-target/report.md
+next:   bakeoff show rerun-target

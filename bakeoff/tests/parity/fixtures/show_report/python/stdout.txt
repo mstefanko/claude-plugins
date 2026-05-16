@@ -1,0 +1,32 @@
+# Bakeoff Report: gather-fake
+
+Mode: `gather`
+Decision: `structured_union`
+
+## Decision Audit
+
+- Judge ran: `true`
+- pass1: A=`claude`, B=`codex`
+
+## Provider Status
+
+- `claude`: `ok` (0.059s, stdout 224 bytes, stderr 0 bytes, stderr: `providers/claude/stderr.txt`)
+  Scope: `codebase` -> `codebase` (partial)
+- `codex`: `ok` (0.05s, stdout 223 bytes, stderr 0 bytes, stderr: `providers/codex/stderr.txt`)
+  Scope: `web` -> `web` (partial)
+
+## Findings
+
+Provider-set headings name the worker set that surfaced each claim. `single-source` means one worker surfaced it; `multi-source` means both workers surfaced materially similar claims.
+
+### claude+codex
+- **F-001** Fake merged claim (model confidence `high`, corroboration `multi-source`, sources `claude+codex`)
+  Evidence: fake:1
+
+## Conflicts
+
+- No conflicts found.
+
+## Unknowns
+
+- None reported.

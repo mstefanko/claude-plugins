@@ -1,0 +1,39 @@
+# Bakeoff Triage: show-review
+
+## Summary
+
+no selected findings
+
+## Source Findings
+
+- Selected: `1`
+- Skipped non-actionable: `0`
+- Skipped out-of-facet: `0`
+
+## Fix Now
+
+- None.
+
+## False Positives
+
+- None.
+
+## Already Fixed
+
+- None.
+
+## Needs Reproduction
+
+- None.
+
+## Defer / Product Decision
+
+- None.
+
+## Other Valid Items
+
+- None.
+
+## Unknowns
+
+- None.

@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "command": "research",
+  "status": "ok",
+  "exit_code": 0,
+  "warnings": [],
+  "run_id": "output-cap-salvage",
+  "run_dir": "runs/output-cap-salvage",
+  "decision_kind": "structured_union",
+  "canonical_winner": null,
+  "judge_ran": true,
+  "providers": {
+    "claude": {
+      "status": "ok",
+      "raw_status": "ok",
+      "wall_seconds": 0.05,
+      "output_bytes": 393,
+      "stdout_bytes": 393,
+      "stderr_bytes": 0
+    },
+    "codex": {
+      "status": "ok",
+      "raw_status": "ok",
+      "wall_seconds": 0.091,
+      "output_bytes": 393,
+      "stdout_bytes": 393,
+      "stderr_bytes": 0
+    }
+  },
+  "judge": {
+    "status": "ok",
+    "raw_status": "ok"
+  },
+  "triage": {
+    "auto_started": false,
+    "state": "no",
+    "status": null,
+    "exit_code": null,
+    "artifacts": {}
+  },
+  "artifacts": {
+    "work_order": "runs/output-cap-salvage/work-order.json",
+    "decision": "runs/output-cap-salvage/decision.json",
+    "meta": "runs/output-cap-salvage/meta.json",
+    "manifest": "runs/output-cap-salvage/manifest.json",
+    "report": "runs/output-cap-salvage/report.md"
+  },
+  "next": "bakeoff show output-cap-salvage"
+}

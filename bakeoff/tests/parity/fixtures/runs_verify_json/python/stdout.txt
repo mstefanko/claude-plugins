@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "command": "runs verify",
+  "status": "ok",
+  "exit_code": 0,
+  "warnings": [],
+  "run_id": "verify-source",
+  "run_dir": "/private/var/folders/yy/nld_s8b520j73kf7_xbl4v3w0000gn/T/bakeoff-parity-runs_verify_json-d6ghynq7/runs/verify-source",
+  "manifest": {
+    "status": "ok",
+    "path": "/private/var/folders/yy/nld_s8b520j73kf7_xbl4v3w0000gn/T/bakeoff-parity-runs_verify_json-d6ghynq7/runs/verify-source/manifest.json"
+  },
+  "required_artifacts": {
+    "status": "ok",
+    "checked": [
+      "work-order.json",
+      "decision.json",
+      "meta.json",
+      "report.md"
+    ],
+    "missing": []
+  },
+  "fingerprints": {
+    "status": "ok",
+    "checked_count": 4,
+    "mismatches": []
+  },
+  "triage": {
+    "state": "no",
+    "stale_inputs": []
+  },
+  "problems": [],
+  "next": "bakeoff show verify-source"
+}

@@ -1,0 +1,40 @@
+{
+  "exit_code": 0,
+  "stderr": "",
+  "stdout": "valid work order\n  id:      gather-fake\n  mode:    gather\n  budgets: 3s wall, 20000 bytes out, 10s cap grace\n  scope:   best_effort\n  providers:\n    - claude: claude fake-claude (codebase, high)\n    - codex: codex fake-codex (web, high)\n  judge:   claude fake-judge (high)\n",
+  "workspace": {
+    "gather.json": {
+      "type": "json",
+      "value": {
+        "background": "Fake context.",
+        "budgets": {
+          "heartbeat_seconds": 0,
+          "max_output_bytes": 20000,
+          "wall_clock_seconds": 3
+        },
+        "goal": "Run fake bakeoff.",
+        "id": "gather-fake",
+        "judge": {
+          "backend": "claude",
+          "model": "fake-judge"
+        },
+        "providers": [
+          {
+            "backend": "claude",
+            "id": "claude",
+            "model": "fake-claude",
+            "scope": "codebase"
+          },
+          {
+            "backend": "codex",
+            "id": "codex",
+            "model": "fake-codex",
+            "scope": "web"
+          }
+        ],
+        "schema_version": 1,
+        "type": "gather"
+      }
+    }
+  }
+}

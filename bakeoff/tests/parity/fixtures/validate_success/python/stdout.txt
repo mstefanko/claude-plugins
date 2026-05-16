@@ -1,0 +1,9 @@
+valid work order
+  id:      gather-fake
+  mode:    gather
+  budgets: 3s wall, 20000 bytes out, 10s cap grace
+  scope:   best_effort
+  providers:
+    - claude: claude fake-claude (codebase, high)
+    - codex: codex fake-codex (web, high)
+  judge:   claude fake-judge (high)

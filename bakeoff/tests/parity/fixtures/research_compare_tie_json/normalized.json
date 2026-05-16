@@ -1,0 +1,649 @@
+{
+  "exit_code": 3,
+  "stderr": "",
+  "stdout": "{\n  \"schema_version\": 1,\n  \"command\": \"research\",\n  \"status\": \"judge_disagreement\",\n  \"exit_code\": 3,\n  \"warnings\": [],\n  \"run_id\": \"compare-tie\",\n  \"run_dir\": \"runs/compare-tie\",\n  \"decision_kind\": \"tie\",\n  \"canonical_winner\": null,\n  \"judge_ran\": true,\n  \"providers\": {\n    \"claude\": {\n      \"status\": \"ok\",\n      \"raw_status\": \"ok\",\n      \"wall_seconds\": 0,\n      \"output_bytes\": 253,\n      \"stdout_bytes\": 253,\n      \"stderr_bytes\": 0\n    },\n    \"codex\": {\n      \"status\": \"ok\",\n      \"raw_status\": \"ok\",\n      \"wall_seconds\": 0,\n      \"output_bytes\": 251,\n      \"stdout_bytes\": 251,\n      \"stderr_bytes\": 0\n    }\n  },\n  \"judge\": {\n    \"status\": \"ok\",\n    \"raw_status\": \"ok\",\n    \"passes\": {\n      \"pass1\": \"ok\",\n      \"pass2\": \"ok\"\n    }\n  },\n  \"triage\": {\n    \"auto_started\": false,\n    \"state\": \"no\",\n    \"status\": null,\n    \"exit_code\": null,\n    \"artifacts\": {}\n  },\n  \"artifacts\": {\n    \"work_order\": \"runs/compare-tie/work-order.json\",\n    \"decision\": \"runs/compare-tie/decision.json\",\n    \"meta\": \"runs/compare-tie/meta.json\",\n    \"manifest\": \"runs/compare-tie/manifest.json\",\n    \"report\": \"runs/compare-tie/report.md\"\n  },\n  \"next\": \"bakeoff show compare-tie\"\n}\n",
+  "workspace": {
+    "compare.json": {
+      "type": "json",
+      "value": {
+        "background": "Fake context.",
+        "budgets": {
+          "heartbeat_seconds": 0,
+          "max_output_bytes": 20000,
+          "wall_clock_seconds": 3
+        },
+        "goal": "Run fake bakeoff.",
+        "id": "compare-fake",
+        "judge": {
+          "backend": "claude",
+          "model": "fake-judge"
+        },
+        "providers": [
+          {
+            "backend": "claude",
+            "id": "claude",
+            "model": "fake-claude",
+            "scope": "mixed"
+          },
+          {
+            "backend": "codex",
+            "id": "codex",
+            "model": "fake-codex",
+            "scope": "mixed"
+          }
+        ],
+        "schema_version": 1,
+        "type": "compare"
+      }
+    },
+    "runs/compare-tie/decision.json": {
+      "type": "json",
+      "value": {
+        "canonical_winner": null,
+        "caveats": [
+          "position swap did not produce a stable winner"
+        ],
+        "decision_kind": "tie",
+        "judge_passes": {
+          "pass1": {
+            "A": "claude",
+            "B": "codex",
+            "canonical_winner": null,
+            "positional_winner": "tie",
+            "relation": "compare"
+          },
+          "pass2": {
+            "A": "codex",
+            "B": "claude",
+            "canonical_winner": null,
+            "positional_winner": "tie",
+            "relation": "compare"
+          }
+        },
+        "judge_ran": true,
+        "judge_rationale": [
+          "position tie looked better",
+          "position tie looked better"
+        ],
+        "kept_from_nonwinner": [
+          {
+            "claim": "useful material from loser",
+            "source_provider": "unknown"
+          }
+        ],
+        "mode": "compare",
+        "order_maps": {
+          "pass1": {
+            "A": "claude",
+            "B": "codex"
+          },
+          "pass2": {
+            "A": "codex",
+            "B": "claude"
+          }
+        },
+        "provider_statuses": {
+          "claude": {
+            "exit_code": 0,
+            "final_json_source": "stdout",
+            "io": {
+              "heartbeat_count": 0,
+              "last_output_age": 0,
+              "last_stderr_age": 0,
+              "last_stdout_age": 0,
+              "max_output_overrun_bytes": 20000,
+              "output_cap_grace_seconds": 10,
+              "quiet_threshold_seconds": 0,
+              "quiet_tick_count": 0,
+              "stderr_bytes": 0,
+              "stderr_observed_bytes": 0,
+              "stdout_bytes": 253,
+              "stdout_observed_bytes": 253,
+              "total_observed_bytes": 253
+            },
+            "output_bytes": 253,
+            "scope_enforcement": {
+              "cwd": "<CWD>",
+              "effective_scope": "mixed",
+              "enforcement_level": "enforced",
+              "fallback_reason": null,
+              "mechanisms": [
+                "mixed_scope_no_restriction"
+              ],
+              "policy": "best_effort",
+              "requested_scope": "mixed",
+              "temporary_cwd": false
+            },
+            "status": "ok",
+            "stderr_bytes": 0,
+            "stderr_observed_bytes": 0,
+            "stderr_path": "providers/claude/stderr.txt",
+            "stderr_truncated": false,
+            "stdout_bytes": 253,
+            "stdout_observed_bytes": 253,
+            "stdout_truncated": false,
+            "wall_seconds": 0
+          },
+          "codex": {
+            "exit_code": 0,
+            "final_json_source": "stdout",
+            "io": {
+              "heartbeat_count": 0,
+              "last_output_age": 0,
+              "last_stderr_age": 0,
+              "last_stdout_age": 0,
+              "max_output_overrun_bytes": 20000,
+              "output_cap_grace_seconds": 10,
+              "quiet_threshold_seconds": 0,
+              "quiet_tick_count": 0,
+              "stderr_bytes": 0,
+              "stderr_observed_bytes": 0,
+              "stdout_bytes": 251,
+              "stdout_observed_bytes": 251,
+              "total_observed_bytes": 251
+            },
+            "output_bytes": 251,
+            "scope_enforcement": {
+              "cwd": "<CWD>",
+              "effective_scope": "mixed",
+              "enforcement_level": "enforced",
+              "fallback_reason": null,
+              "mechanisms": [
+                "mixed_scope_no_restriction"
+              ],
+              "policy": "best_effort",
+              "requested_scope": "mixed",
+              "temporary_cwd": false
+            },
+            "status": "ok",
+            "stderr_bytes": 0,
+            "stderr_observed_bytes": 0,
+            "stderr_path": "providers/codex/stderr.txt",
+            "stderr_truncated": false,
+            "stdout_bytes": 251,
+            "stdout_observed_bytes": 251,
+            "stdout_truncated": false,
+            "wall_seconds": 0
+          }
+        }
+      }
+    },
+    "runs/compare-tie/judge/prompt-pass1.txt": {
+      "type": "text",
+      "value": "You are a pairwise judge. You will see two defended positions, A and B. Read each position's `position` field first.\n\nIf A and B defend the SAME position (semantically - same answer to the underlying question), emit `relation: \"consensus\"`, do NOT pick a winner, and instead identify (a) the strongest evidence each side brings and (b) any disagreements within the shared position.\n\nIf A and B defend DIFFERENT positions, emit `relation: \"compare\"` and pick a winner OR declare a tie. Be strict: prefer well-evidenced reasoning over verbose advocacy.\n\nYou do not know which model produced A or B. Use positional labels only.\n\n\n\n<position_a>\n{\n  \"claims\": [\n    {\n      \"claim\": \"claude claim\",\n      \"confidence\": \"high\",\n      \"evidence\": [\n        \"fake:1\"\n      ],\n      \"id\": \"R-001\"\n    }\n  ],\n  \"conflicts\": [],\n  \"position\": \"claude position\",\n  \"recommended_next_checks\": [],\n  \"status\": \"complete\",\n  \"unknowns\": []\n}\n</position_a>\n\n<position_b>\n{\n  \"claims\": [\n    {\n      \"claim\": \"codex claim\",\n      \"confidence\": \"high\",\n      \"evidence\": [\n        \"fake:1\"\n      ],\n      \"id\": \"R-001\"\n    }\n  ],\n  \"conflicts\": [],\n  \"position\": \"codex position\",\n  \"recommended_next_checks\": [],\n  \"status\": \"complete\",\n  \"unknowns\": []\n}\n</position_b>\n\n<rubric>\nScore each position on a 1-5 scale on each of:\n1. Evidence quality - are claims grounded in verifiable citations?\n2. Argument coherence - do claims actually support the thesis?\n3. Tradeoff honesty - does the position acknowledge real costs?\n4. Rebuttal strength - does it engage anticipated objections?\n\nLength is NOT a virtue. A concise, well-evidenced position beats a verbose, weakly-evidenced one.\n</rubric>\n\n<rules>\n\n- Determine `relation` first (\"consensus\" or \"compare\") based on the `position` fields.\n- Explain reasoning BEFORE the verdict. Score each position on each rubric dimension before naming a winner.\n- The harness will call you TWICE with positions swapped. Your verdict must be driven by the rubric, not by which position appears first. If the two positions are within rubric-noise of each other, declare TIE.\n- A verdict of \"tie\" is valid and expected when both positions defend their cases roughly equally well, or when both have similar critical flaws.\n- In the `consensus` case, populate `consensus_strongest[]` with the best-evidenced claim from each side and `consensus_disagreements[]` with any sub-claim disagreements. Set `winner` to `null`.\n- Do not penalize a position for being shorter if it covers the rubric.\n- Do not invent evidence that neither position cited.\n</rules>\n\n<runtime_budget>\nThe harness will stop this provider after 3 seconds.\nPlan to stop investigation by about 1 seconds and reserve the\nremaining time to emit a schema-valid <final_json>.\n\nIf full coverage is not possible before the cutoff:\n- Prefer fewer well-cited findings over broad uncited coverage.\n- Emit a partial but schema-valid result before the cutoff.\n- Use existing uncertainty or rationale fields in the requested schema to record\n  unfinished areas.\n- Do not add fields outside the requested schema.\n- Do not wait for perfect coverage if that risks missing the final_json cutoff.\n\nDo not emit progress updates or partial JSON outside the final <final_json>\nblock. stdout is the structured answer channel.\n</runtime_budget>\n\n<process>\n1. In <scratchpad>, compare the `position` fields to decide `relation`.\n2. Score A on each rubric dimension (1-5). Then score B. Then compare margins.\n3. Emit the JSON verdict.\n</process>\n\n<output_format>\nReason in <scratchpad>...</scratchpad>, then emit one JSON object wrapped in <final_json>...</final_json>: relation in {\"consensus\",\"compare\"}, scores_a {evidence, coherence, tradeoff_honesty, rebuttals} with integer values from 1 to 5, scores_b {...}, winner in {\"A\",\"B\",\"tie\",null}, rationale (2-4 sentences citing rubric dimensions), kept_from_nonwinner[] (claims worth preserving - from the loser in `compare`, or one from each side in `consensus`), consensus_strongest[] (populated only when relation=\"consensus\"), consensus_disagreements[] (populated only when relation=\"consensus\"). No content after </final_json>.\n</output_format>\n"
+    },
+    "runs/compare-tie/judge/prompt-pass2.txt": {
+      "type": "text",
+      "value": "You are a pairwise judge. You will see two defended positions, A and B. Read each position's `position` field first.\n\nIf A and B defend the SAME position (semantically - same answer to the underlying question), emit `relation: \"consensus\"`, do NOT pick a winner, and instead identify (a) the strongest evidence each side brings and (b) any disagreements within the shared position.\n\nIf A and B defend DIFFERENT positions, emit `relation: \"compare\"` and pick a winner OR declare a tie. Be strict: prefer well-evidenced reasoning over verbose advocacy.\n\nYou do not know which model produced A or B. Use positional labels only.\n\n\n\n<position_a>\n{\n  \"claims\": [\n    {\n      \"claim\": \"codex claim\",\n      \"confidence\": \"high\",\n      \"evidence\": [\n        \"fake:1\"\n      ],\n      \"id\": \"R-001\"\n    }\n  ],\n  \"conflicts\": [],\n  \"position\": \"codex position\",\n  \"recommended_next_checks\": [],\n  \"status\": \"complete\",\n  \"unknowns\": []\n}\n</position_a>\n\n<position_b>\n{\n  \"claims\": [\n    {\n      \"claim\": \"claude claim\",\n      \"confidence\": \"high\",\n      \"evidence\": [\n        \"fake:1\"\n      ],\n      \"id\": \"R-001\"\n    }\n  ],\n  \"conflicts\": [],\n  \"position\": \"claude position\",\n  \"recommended_next_checks\": [],\n  \"status\": \"complete\",\n  \"unknowns\": []\n}\n</position_b>\n\n<rubric>\nScore each position on a 1-5 scale on each of:\n1. Evidence quality - are claims grounded in verifiable citations?\n2. Argument coherence - do claims actually support the thesis?\n3. Tradeoff honesty - does the position acknowledge real costs?\n4. Rebuttal strength - does it engage anticipated objections?\n\nLength is NOT a virtue. A concise, well-evidenced position beats a verbose, weakly-evidenced one.\n</rubric>\n\n<rules>\n\n- Determine `relation` first (\"consensus\" or \"compare\") based on the `position` fields.\n- Explain reasoning BEFORE the verdict. Score each position on each rubric dimension before naming a winner.\n- The harness will call you TWICE with positions swapped. Your verdict must be driven by the rubric, not by which position appears first. If the two positions are within rubric-noise of each other, declare TIE.\n- A verdict of \"tie\" is valid and expected when both positions defend their cases roughly equally well, or when both have similar critical flaws.\n- In the `consensus` case, populate `consensus_strongest[]` with the best-evidenced claim from each side and `consensus_disagreements[]` with any sub-claim disagreements. Set `winner` to `null`.\n- Do not penalize a position for being shorter if it covers the rubric.\n- Do not invent evidence that neither position cited.\n</rules>\n\n<runtime_budget>\nThe harness will stop this provider after 3 seconds.\nPlan to stop investigation by about 1 seconds and reserve the\nremaining time to emit a schema-valid <final_json>.\n\nIf full coverage is not possible before the cutoff:\n- Prefer fewer well-cited findings over broad uncited coverage.\n- Emit a partial but schema-valid result before the cutoff.\n- Use existing uncertainty or rationale fields in the requested schema to record\n  unfinished areas.\n- Do not add fields outside the requested schema.\n- Do not wait for perfect coverage if that risks missing the final_json cutoff.\n\nDo not emit progress updates or partial JSON outside the final <final_json>\nblock. stdout is the structured answer channel.\n</runtime_budget>\n\n<process>\n1. In <scratchpad>, compare the `position` fields to decide `relation`.\n2. Score A on each rubric dimension (1-5). Then score B. Then compare margins.\n3. Emit the JSON verdict.\n</process>\n\n<output_format>\nReason in <scratchpad>...</scratchpad>, then emit one JSON object wrapped in <final_json>...</final_json>: relation in {\"consensus\",\"compare\"}, scores_a {evidence, coherence, tradeoff_honesty, rebuttals} with integer values from 1 to 5, scores_b {...}, winner in {\"A\",\"B\",\"tie\",null}, rationale (2-4 sentences citing rubric dimensions), kept_from_nonwinner[] (claims worth preserving - from the loser in `compare`, or one from each side in `consensus`), consensus_strongest[] (populated only when relation=\"consensus\"), consensus_disagreements[] (populated only when relation=\"consensus\"). No content after </final_json>.\n</output_format>\n"
+    },
+    "runs/compare-tie/judge/result-pass1.json": {
+      "type": "json",
+      "value": {
+        "consensus_disagreements": [],
+        "consensus_strongest": [],
+        "kept_from_nonwinner": [
+          {
+            "claim": "useful material from loser"
+          }
+        ],
+        "rationale": "position tie looked better",
+        "relation": "compare",
+        "scores_a": {
+          "coherence": 5,
+          "evidence": 5,
+          "rebuttals": 5,
+          "tradeoff_honesty": 5
+        },
+        "scores_b": {
+          "coherence": 4,
+          "evidence": 4,
+          "rebuttals": 4,
+          "tradeoff_honesty": 4
+        },
+        "winner": "tie"
+      }
+    },
+    "runs/compare-tie/judge/result-pass2.json": {
+      "type": "json",
+      "value": {
+        "consensus_disagreements": [],
+        "consensus_strongest": [],
+        "kept_from_nonwinner": [
+          {
+            "claim": "useful material from loser"
+          }
+        ],
+        "rationale": "position tie looked better",
+        "relation": "compare",
+        "scores_a": {
+          "coherence": 5,
+          "evidence": 5,
+          "rebuttals": 5,
+          "tradeoff_honesty": 5
+        },
+        "scores_b": {
+          "coherence": 4,
+          "evidence": 4,
+          "rebuttals": 4,
+          "tradeoff_honesty": 4
+        },
+        "winner": "tie"
+      }
+    },
+    "runs/compare-tie/judge/status-pass1.json": {
+      "type": "json",
+      "value": {
+        "exit_code": 0,
+        "final_json_source": "stdout",
+        "io": {
+          "heartbeat_count": 0,
+          "last_output_age": 0,
+          "last_stderr_age": 0,
+          "last_stdout_age": 0,
+          "max_output_overrun_bytes": 20000,
+          "output_cap_grace_seconds": 10,
+          "quiet_threshold_seconds": 0,
+          "quiet_tick_count": 0,
+          "stderr_bytes": 0,
+          "stderr_observed_bytes": 0,
+          "stdout_bytes": 399,
+          "stdout_observed_bytes": 399,
+          "total_observed_bytes": 399
+        },
+        "output_bytes": 399,
+        "status": "ok",
+        "stderr_bytes": 0,
+        "stderr_observed_bytes": 0,
+        "stderr_truncated": false,
+        "stdout_bytes": 399,
+        "stdout_observed_bytes": 399,
+        "stdout_truncated": false,
+        "wall_seconds": 0
+      }
+    },
+    "runs/compare-tie/judge/status-pass2.json": {
+      "type": "json",
+      "value": {
+        "exit_code": 0,
+        "final_json_source": "stdout",
+        "io": {
+          "heartbeat_count": 0,
+          "last_output_age": 0,
+          "last_stderr_age": 0,
+          "last_stdout_age": 0,
+          "max_output_overrun_bytes": 20000,
+          "output_cap_grace_seconds": 10,
+          "quiet_threshold_seconds": 0,
+          "quiet_tick_count": 0,
+          "stderr_bytes": 0,
+          "stderr_observed_bytes": 0,
+          "stdout_bytes": 399,
+          "stdout_observed_bytes": 399,
+          "total_observed_bytes": 399
+        },
+        "output_bytes": 399,
+        "status": "ok",
+        "stderr_bytes": 0,
+        "stderr_observed_bytes": 0,
+        "stderr_truncated": false,
+        "stdout_bytes": 399,
+        "stdout_observed_bytes": 399,
+        "stdout_truncated": false,
+        "wall_seconds": 0
+      }
+    },
+    "runs/compare-tie/judge/stderr-pass1.txt": {
+      "type": "text",
+      "value": ""
+    },
+    "runs/compare-tie/judge/stderr-pass2.txt": {
+      "type": "text",
+      "value": ""
+    },
+    "runs/compare-tie/judge/stdout-pass1.txt": {
+      "type": "text",
+      "value": "<scratchpad>ok</scratchpad>\n<final_json>{\"relation\":\"compare\",\"scores_a\":{\"evidence\":5,\"coherence\":5,\"tradeoff_honesty\":5,\"rebuttals\":5},\"scores_b\":{\"evidence\":4,\"coherence\":4,\"tradeoff_honesty\":4,\"rebuttals\":4},\"winner\":\"tie\",\"rationale\":\"position tie looked better\",\"kept_from_nonwinner\":[{\"claim\":\"useful material from loser\"}],\"consensus_strongest\":[],\"consensus_disagreements\":[]}</final_json>\n"
+    },
+    "runs/compare-tie/judge/stdout-pass2.txt": {
+      "type": "text",
+      "value": "<scratchpad>ok</scratchpad>\n<final_json>{\"relation\":\"compare\",\"scores_a\":{\"evidence\":5,\"coherence\":5,\"tradeoff_honesty\":5,\"rebuttals\":5},\"scores_b\":{\"evidence\":4,\"coherence\":4,\"tradeoff_honesty\":4,\"rebuttals\":4},\"winner\":\"tie\",\"rationale\":\"position tie looked better\",\"kept_from_nonwinner\":[{\"claim\":\"useful material from loser\"}],\"consensus_strongest\":[],\"consensus_disagreements\":[]}</final_json>\n"
+    },
+    "runs/compare-tie/manifest.json": {
+      "type": "json",
+      "value": {
+        "artifact_fingerprints": {
+          "decision.json": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "meta.json": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "report.md": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "work-order.json": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          }
+        },
+        "artifacts": {
+          "decision": "decision.json",
+          "meta": "meta.json",
+          "report": "report.md",
+          "work_order": "work-order.json"
+        },
+        "bakeoff_version": "<BAKEOFF_VERSION>",
+        "canonical_winner": null,
+        "cwd": "<CWD>",
+        "decision_kind": "tie",
+        "facet_id": null,
+        "finished_at": "<TIMESTAMP>",
+        "judge": {
+          "backend": "claude",
+          "effort": "high",
+          "model": "fake-judge"
+        },
+        "judge_ran": true,
+        "providers": {
+          "claude": {
+            "backend": "claude",
+            "effort": "high",
+            "final_json_source": "stdout",
+            "model": "fake-claude",
+            "scope": "mixed",
+            "status": "ok",
+            "stderr_bytes": 0,
+            "stdout_bytes": 253,
+            "wall_seconds": 0
+          },
+          "codex": {
+            "backend": "codex",
+            "effort": "high",
+            "final_json_source": "stdout",
+            "model": "fake-codex",
+            "scope": "mixed",
+            "status": "ok",
+            "stderr_bytes": 0,
+            "stdout_bytes": 251,
+            "wall_seconds": 0
+          }
+        },
+        "review_context": {
+          "present": false
+        },
+        "run_id": "compare-tie",
+        "schema_version": 1,
+        "started_at": "<TIMESTAMP>",
+        "triage": {
+          "stale_inputs": [],
+          "state": "no"
+        },
+        "type": "compare"
+      }
+    },
+    "runs/compare-tie/meta.json": {
+      "type": "json",
+      "value": {
+        "bakeoff_version": "<BAKEOFF_VERSION>",
+        "cwd": "<CWD>",
+        "facet": null,
+        "finished_at": "<TIMESTAMP>",
+        "input_hashes": {
+          "decision_sha256": "<SHA256>",
+          "report_sha256": "<SHA256>",
+          "work_order_sha256": "<SHA256>"
+        },
+        "provider_cli_versions": {
+          "claude": "claude fake 1.0",
+          "codex": "codex fake 1.0",
+          "git": "git version 2.39.5 (Apple Git-154)"
+        },
+        "resolved_models": {
+          "judge": {
+            "backend": "claude",
+            "effort": "high",
+            "model": "fake-judge"
+          },
+          "providers": {
+            "claude": {
+              "backend": "claude",
+              "effort": "high",
+              "model": "fake-claude",
+              "scope": "mixed",
+              "scope_enforcement": {
+                "cwd": "<CWD>",
+                "effective_scope": "mixed",
+                "enforcement_level": "enforced",
+                "fallback_reason": null,
+                "mechanisms": [
+                  "mixed_scope_no_restriction"
+                ],
+                "policy": "best_effort",
+                "requested_scope": "mixed",
+                "temporary_cwd": false
+              }
+            },
+            "codex": {
+              "backend": "codex",
+              "effort": "high",
+              "model": "fake-codex",
+              "scope": "mixed",
+              "scope_enforcement": {
+                "cwd": "<CWD>",
+                "effective_scope": "mixed",
+                "enforcement_level": "enforced",
+                "fallback_reason": null,
+                "mechanisms": [
+                  "mixed_scope_no_restriction"
+                ],
+                "policy": "best_effort",
+                "requested_scope": "mixed",
+                "temporary_cwd": false
+              }
+            }
+          }
+        },
+        "run_id": "compare-tie",
+        "scope_policy": {
+          "enforcement": "best_effort"
+        },
+        "started_at": "<TIMESTAMP>",
+        "type": "compare"
+      }
+    },
+    "runs/compare-tie/providers/claude/final.json": {
+      "type": "json",
+      "value": {
+        "claims": [
+          {
+            "claim": "claude claim",
+            "confidence": "high",
+            "evidence": [
+              "fake:1"
+            ],
+            "id": "R-001"
+          }
+        ],
+        "conflicts": [],
+        "position": "claude position",
+        "recommended_next_checks": [],
+        "status": "complete",
+        "unknowns": []
+      }
+    },
+    "runs/compare-tie/providers/claude/prompt.txt": {
+      "type": "text",
+      "value": "You are answering a comparison question. Your job:\n1. Reach a position on the question - pick one option, or \"neither\", or \"either is acceptable\".\n2. Mount the strongest honest defense of the position you reach - not a balanced essay. A judge will later weigh your case against a peer worker who answered the same question independently.\n\n<question>\nRun fake bakeoff.\n</question>\n\n<context>\nFake context.\n</context>\n\n<scope>\nUse both the codebase and web search. Cite as `path:line` for code, full URLs for web.\n</scope>\n\n\n\n<rules>\n\n- First decide your position; then defend it. Do not hedge after you've decided.\n- State your `position` as a single declarative sentence (\"X is the right choice because...\", \"Neither X nor Y because...\", \"X and Y are equivalent for this use case\").\n- Honesty constraint: if a fact undercuts your position, acknowledge it in tradeoffs rather than hiding it. Hidden weaknesses cost you credibility with the judge.\n- Cite evidence as file:line, URL, or doc heading. Do not invent citations.\n- Distinguish CLAIM (what you assert) from EVIDENCE (why a third party should believe it) from TRADEOFF (what you give up).\n- If you cannot defend a sub-claim, drop it rather than weakening it with \"may\" / \"might\" / \"could potentially\".\n- Confidence is one of: high, medium, low.\n</rules>\n\n<runtime_budget>\nThe harness will stop this provider after 3 seconds.\nPlan to stop investigation by about 1 seconds and reserve the\nremaining time to emit a schema-valid <final_json>.\n\nIf full coverage is not possible before the cutoff:\n- Prefer fewer well-cited findings over broad uncited coverage.\n- Emit a partial but schema-valid result before the cutoff.\n- Use existing uncertainty or rationale fields in the requested schema to record\n  unfinished areas.\n- Do not add fields outside the requested schema.\n- Do not wait for perfect coverage if that risks missing the final_json cutoff.\n\nDo not emit progress updates or partial JSON outside the final <final_json>\nblock. stdout is the structured answer channel.\n</runtime_budget>\n\n<worker_result_schema>\nAll worker <final_json> payloads MUST include this top-level shape:\n\n{\n  \"status\": \"complete\",\n  \"claims\": [\n    {\n      \"id\": \"R-001\",\n      \"claim\": \"One factual assertion, defended position claim, or analysis step.\",\n      \"evidence\": [\"path/to/file.ext:line or https://example.com/source or doc heading\"],\n      \"confidence\": \"high\"\n    }\n  ],\n  \"conflicts\": [],\n  \"unknowns\": [],\n  \"recommended_next_checks\": []\n}\n\nAllowed status values: \"complete\", \"complete_with_concerns\", \"needs_context\", \"blocked\".\nAllowed confidence values: \"high\", \"medium\", \"low\".\nConfidence reflects evidence strength, not agreement between providers: use \"high\" only when cited evidence directly proves the claim, \"medium\" when the citation supports the claim but requires interpretation or broader context, and \"low\" when evidence is indirect, incomplete, stale, or only partially supportive.\nEvery claims[] item MUST include these required fields with these exact names: \"id\", \"claim\", \"evidence\", \"confidence\".\nDo not rename fields. Use \"claim\", not \"finding\", \"summary\", or \"description\". Use \"evidence\", not \"citation\", \"citations\", \"source\", or \"sources\".\nPut unverified material in unknowns[] as strings instead of adding uncited claims.\n\nCompare mode MUST also include this top-level field:\n{\n  \"position\": \"One declarative sentence naming the answer you defend.\"\n}\n</worker_result_schema>\n\n<process>\n1. In <scratchpad>, decide your position. List the 3-5 strongest claims for it and the 2-3 strongest counter-arguments you must address.\n2. For each claim, locate concrete evidence. Drop claims you cannot ground.\n3. Decide which tradeoffs to surface honestly (judges penalize hidden ones).\n4. Emit the JSON object per the worker result schema. No prose outside the JSON.\n</process>\n\n<output_format>\nReason in <scratchpad>...</scratchpad>, then emit one JSON object wrapped in <final_json>...</final_json>, matching the worker result schema, plus a top-level `position` field (the one-sentence thesis you defended). The `claims[]` array carries the position's claims; the `conflicts[]` array carries the position's acknowledged tradeoffs (claims against your own position you choose to surface). No content after </final_json>.\n</output_format>\n"
+    },
+    "runs/compare-tie/providers/claude/status.json": {
+      "type": "json",
+      "value": {
+        "exit_code": 0,
+        "final_json_source": "stdout",
+        "io": {
+          "heartbeat_count": 0,
+          "last_output_age": 0,
+          "last_stderr_age": 0,
+          "last_stdout_age": 0,
+          "max_output_overrun_bytes": 20000,
+          "output_cap_grace_seconds": 10,
+          "quiet_threshold_seconds": 0,
+          "quiet_tick_count": 0,
+          "stderr_bytes": 0,
+          "stderr_observed_bytes": 0,
+          "stdout_bytes": 253,
+          "stdout_observed_bytes": 253,
+          "total_observed_bytes": 253
+        },
+        "output_bytes": 253,
+        "scope_enforcement": {
+          "cwd": "<CWD>",
+          "effective_scope": "mixed",
+          "enforcement_level": "enforced",
+          "fallback_reason": null,
+          "mechanisms": [
+            "mixed_scope_no_restriction"
+          ],
+          "policy": "best_effort",
+          "requested_scope": "mixed",
+          "temporary_cwd": false
+        },
+        "status": "ok",
+        "stderr_bytes": 0,
+        "stderr_observed_bytes": 0,
+        "stderr_truncated": false,
+        "stdout_bytes": 253,
+        "stdout_observed_bytes": 253,
+        "stdout_truncated": false,
+        "wall_seconds": 0
+      }
+    },
+    "runs/compare-tie/providers/claude/stderr.txt": {
+      "type": "text",
+      "value": ""
+    },
+    "runs/compare-tie/providers/claude/stdout.txt": {
+      "type": "text",
+      "value": "<scratchpad>ok</scratchpad>\n<final_json>{\"status\":\"complete\",\"claims\":[{\"id\":\"R-001\",\"claim\":\"claude claim\",\"evidence\":[\"fake:1\"],\"confidence\":\"high\"}],\"conflicts\":[],\"unknowns\":[],\"recommended_next_checks\":[],\"position\":\"claude position\"}</final_json>\n"
+    },
+    "runs/compare-tie/providers/codex/final.json": {
+      "type": "json",
+      "value": {
+        "claims": [
+          {
+            "claim": "codex claim",
+            "confidence": "high",
+            "evidence": [
+              "fake:1"
+            ],
+            "id": "R-001"
+          }
+        ],
+        "conflicts": [],
+        "position": "codex position",
+        "recommended_next_checks": [],
+        "status": "complete",
+        "unknowns": []
+      }
+    },
+    "runs/compare-tie/providers/codex/prompt.txt": {
+      "type": "text",
+      "value": "You are answering a comparison question. Your job:\n1. Reach a position on the question - pick one option, or \"neither\", or \"either is acceptable\".\n2. Mount the strongest honest defense of the position you reach - not a balanced essay. A judge will later weigh your case against a peer worker who answered the same question independently.\n\n<question>\nRun fake bakeoff.\n</question>\n\n<context>\nFake context.\n</context>\n\n<scope>\nUse both the codebase and web search. Cite as `path:line` for code, full URLs for web.\n</scope>\n\n\n\n<rules>\n\n- First decide your position; then defend it. Do not hedge after you've decided.\n- State your `position` as a single declarative sentence (\"X is the right choice because...\", \"Neither X nor Y because...\", \"X and Y are equivalent for this use case\").\n- Honesty constraint: if a fact undercuts your position, acknowledge it in tradeoffs rather than hiding it. Hidden weaknesses cost you credibility with the judge.\n- Cite evidence as file:line, URL, or doc heading. Do not invent citations.\n- Distinguish CLAIM (what you assert) from EVIDENCE (why a third party should believe it) from TRADEOFF (what you give up).\n- If you cannot defend a sub-claim, drop it rather than weakening it with \"may\" / \"might\" / \"could potentially\".\n- Confidence is one of: high, medium, low.\n</rules>\n\n<runtime_budget>\nThe harness will stop this provider after 3 seconds.\nPlan to stop investigation by about 1 seconds and reserve the\nremaining time to emit a schema-valid <final_json>.\n\nIf full coverage is not possible before the cutoff:\n- Prefer fewer well-cited findings over broad uncited coverage.\n- Emit a partial but schema-valid result before the cutoff.\n- Use existing uncertainty or rationale fields in the requested schema to record\n  unfinished areas.\n- Do not add fields outside the requested schema.\n- Do not wait for perfect coverage if that risks missing the final_json cutoff.\n\nDo not emit progress updates or partial JSON outside the final <final_json>\nblock. stdout is the structured answer channel.\n</runtime_budget>\n\n<worker_result_schema>\nAll worker <final_json> payloads MUST include this top-level shape:\n\n{\n  \"status\": \"complete\",\n  \"claims\": [\n    {\n      \"id\": \"R-001\",\n      \"claim\": \"One factual assertion, defended position claim, or analysis step.\",\n      \"evidence\": [\"path/to/file.ext:line or https://example.com/source or doc heading\"],\n      \"confidence\": \"high\"\n    }\n  ],\n  \"conflicts\": [],\n  \"unknowns\": [],\n  \"recommended_next_checks\": []\n}\n\nAllowed status values: \"complete\", \"complete_with_concerns\", \"needs_context\", \"blocked\".\nAllowed confidence values: \"high\", \"medium\", \"low\".\nConfidence reflects evidence strength, not agreement between providers: use \"high\" only when cited evidence directly proves the claim, \"medium\" when the citation supports the claim but requires interpretation or broader context, and \"low\" when evidence is indirect, incomplete, stale, or only partially supportive.\nEvery claims[] item MUST include these required fields with these exact names: \"id\", \"claim\", \"evidence\", \"confidence\".\nDo not rename fields. Use \"claim\", not \"finding\", \"summary\", or \"description\". Use \"evidence\", not \"citation\", \"citations\", \"source\", or \"sources\".\nPut unverified material in unknowns[] as strings instead of adding uncited claims.\n\nCompare mode MUST also include this top-level field:\n{\n  \"position\": \"One declarative sentence naming the answer you defend.\"\n}\n</worker_result_schema>\n\n<process>\n1. In <scratchpad>, decide your position. List the 3-5 strongest claims for it and the 2-3 strongest counter-arguments you must address.\n2. For each claim, locate concrete evidence. Drop claims you cannot ground.\n3. Decide which tradeoffs to surface honestly (judges penalize hidden ones).\n4. Emit the JSON object per the worker result schema. No prose outside the JSON.\n</process>\n\n<output_format>\nReason in <scratchpad>...</scratchpad>, then emit one JSON object wrapped in <final_json>...</final_json>, matching the worker result schema, plus a top-level `position` field (the one-sentence thesis you defended). The `claims[]` array carries the position's claims; the `conflicts[]` array carries the position's acknowledged tradeoffs (claims against your own position you choose to surface). No content after </final_json>.\n</output_format>\n"
+    },
+    "runs/compare-tie/providers/codex/status.json": {
+      "type": "json",
+      "value": {
+        "exit_code": 0,
+        "final_json_source": "stdout",
+        "io": {
+          "heartbeat_count": 0,
+          "last_output_age": 0,
+          "last_stderr_age": 0,
+          "last_stdout_age": 0,
+          "max_output_overrun_bytes": 20000,
+          "output_cap_grace_seconds": 10,
+          "quiet_threshold_seconds": 0,
+          "quiet_tick_count": 0,
+          "stderr_bytes": 0,
+          "stderr_observed_bytes": 0,
+          "stdout_bytes": 251,
+          "stdout_observed_bytes": 251,
+          "total_observed_bytes": 251
+        },
+        "output_bytes": 251,
+        "scope_enforcement": {
+          "cwd": "<CWD>",
+          "effective_scope": "mixed",
+          "enforcement_level": "enforced",
+          "fallback_reason": null,
+          "mechanisms": [
+            "mixed_scope_no_restriction"
+          ],
+          "policy": "best_effort",
+          "requested_scope": "mixed",
+          "temporary_cwd": false
+        },
+        "status": "ok",
+        "stderr_bytes": 0,
+        "stderr_observed_bytes": 0,
+        "stderr_truncated": false,
+        "stdout_bytes": 251,
+        "stdout_observed_bytes": 251,
+        "stdout_truncated": false,
+        "wall_seconds": 0
+      }
+    },
+    "runs/compare-tie/providers/codex/stderr.txt": {
+      "type": "text",
+      "value": ""
+    },
+    "runs/compare-tie/providers/codex/stdout.txt": {
+      "type": "text",
+      "value": "<scratchpad>ok</scratchpad>\n<final_json>{\"status\":\"complete\",\"claims\":[{\"id\":\"R-001\",\"claim\":\"codex claim\",\"evidence\":[\"fake:1\"],\"confidence\":\"high\"}],\"conflicts\":[],\"unknowns\":[],\"recommended_next_checks\":[],\"position\":\"codex position\"}</final_json>\n"
+    },
+    "runs/compare-tie/report.md": {
+      "type": "text",
+      "value": "# Bakeoff Report: compare-fake\n\nMode: `compare`\nDecision: `tie`\n\n## Decision Audit\n\n- Judge ran: `true`\n- pass1: A=`claude`, B=`codex`\n- pass2: A=`codex`, B=`claude`\n- Judge passes:\n  - pass1: A=`claude`, B=`codex`, winner=`tie` (positional `tie`, relation=`compare`)\n  - pass2: A=`codex`, B=`claude`, winner=`tie` (positional `tie`, relation=`compare`)\n- Judge rationale:\n  - pass1: position tie looked better\n  - pass2: position tie looked better\n\n## Provider Status\n\n- `claude`: `ok` (<SECONDS>s, stdout 253 bytes, stderr 0 bytes, stderr: `providers/claude/stderr.txt`)\n  Scope: `mixed` -> `mixed` (enforced)\n- `codex`: `ok` (<SECONDS>s, stdout 251 bytes, stderr 0 bytes, stderr: `providers/codex/stderr.txt`)\n  Scope: `mixed` -> `mixed` (enforced)\n\n## Comparison\n\nNo stable winner after position swap. Human decision required.\n\n## Kept From Nonwinner\n\n- **F-001** useful material from loser\n  Source: `unknown`\n\n## Caveats\n\n- position swap did not produce a stable winner\n"
+    },
+    "runs/compare-tie/work-order.json": {
+      "type": "json",
+      "value": {
+        "background": "Fake context.",
+        "budgets": {
+          "heartbeat_seconds": 0,
+          "max_output_bytes": 20000,
+          "wall_clock_seconds": 3
+        },
+        "goal": "Run fake bakeoff.",
+        "id": "compare-fake",
+        "judge": {
+          "backend": "claude",
+          "model": "fake-judge"
+        },
+        "providers": [
+          {
+            "backend": "claude",
+            "id": "claude",
+            "model": "fake-claude",
+            "scope": "mixed"
+          },
+          {
+            "backend": "codex",
+            "id": "codex",
+            "model": "fake-codex",
+            "scope": "mixed"
+          }
+        ],
+        "schema_version": 1,
+        "type": "compare"
+      }
+    }
+  }
+}

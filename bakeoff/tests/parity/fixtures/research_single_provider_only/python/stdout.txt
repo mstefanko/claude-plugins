@@ -1,0 +1,15 @@
+bakeoff research  run-id: single-provider
+  mode:           gather
+  run dir:        runs/single-provider/
+  providers:      claude (fake-claude, codebase), codex (fake-codex, web)
+  budgets:        3s wall, 20000 bytes out, 10s cap grace
+  scope policy:   best_effort
+  judge:          claude fake-judge
+[claude] launching...
+[codex] launching...
+[claude] ok 0.053s 224 bytes
+[codex] exit_error 0.043s 0 bytes
+manifest: runs/single-provider/manifest.json
+report: runs/single-provider/report.md
+next:   bakeoff show single-provider
+recommended: bakeoff triage single-provider  (only one provider completed; inspect decision.json and verify before fixing)

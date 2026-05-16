@@ -1,0 +1,6 @@
+{
+  "analyze.work-order.json": {
+    "type": "text",
+    "value": "// bakeoff analyze work order - edit `id`, `goal`, `background`, then run:\n//   bakeoff validate <this-file>\n//   bakeoff research <this-file>\n{\n  \"schema_version\": 1,\n  \"id\": \"TODO-rename-this\",\n  \"type\": \"analyze\",\n  \"goal\": \"ONE SENTENCE: what subject should be explained thoroughly?\",\n  \"background\": \"MULTI-LINE: relevant files, design notes, links, and questions.\",\n  \"providers\": [\n    { \"id\": \"claude\", \"backend\": \"claude\", \"model\": \"claude-sonnet-4-6\", \"effort\": \"high\", \"scope\": \"codebase\" },\n    { \"id\": \"codex\",  \"backend\": \"codex\",  \"model\": \"gpt-5.5\",           \"effort\": \"high\", \"scope\": \"codebase\" }\n  ],\n  \"scope_policy\": { \"enforcement\": \"best_effort\" },\n  \"judge\":   { \"backend\": \"claude\", \"model\": \"claude-opus-4-7\", \"effort\": \"xhigh\" },\n  \"budgets\": {\n    \"wall_clock_seconds\": 900,\n    \"max_output_bytes\": 60000,\n    \"heartbeat_seconds\": 60,\n    \"output_cap_grace_seconds\": 10,\n    \"max_output_overrun_bytes\": 60000\n  }\n}\n"
+  }
+}

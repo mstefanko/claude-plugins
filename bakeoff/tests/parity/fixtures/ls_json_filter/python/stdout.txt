@@ -1,0 +1,17 @@
+{
+  "out_dir": "runs",
+  "runs": [
+    {
+      "decision_kind": "structured_union",
+      "facet_id": "code-review",
+      "finished_at": "2026-05-16T22:25:06+00:00",
+      "manifest_path": "runs/ls-review/manifest.json",
+      "manifest_state": "present",
+      "report_path": "runs/ls-review/report.md",
+      "run_id": "ls-review",
+      "triage_state": "yes",
+      "type": "gather"
+    }
+  ],
+  "schema_version": 1
+}
