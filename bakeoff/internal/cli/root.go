@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"os"
+	"strings"
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/apperror"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands"
@@ -95,7 +96,11 @@ func NewRootCommand(f *Factory) *cobra.Command {
 		},
 	}
 	root.SetHelpFunc(func(cmd *cobra.Command, args []string) {
-		f.Streams().Printf("%s", rootHelp)
+		if cmd == root {
+			f.Streams().Printf("%s", rootHelp)
+			return
+		}
+		renderCommandHelp(f, cmd)
 	})
 	root.SetVersionTemplate("{{.Use}} {{.Version}}\n")
 	root.SetFlagErrorFunc(func(cmd *cobra.Command, err error) error {
@@ -113,4 +118,28 @@ func NewRootCommand(f *Factory) *cobra.Command {
 		doctorcmd.NewCmdDoctor(f, nil),
 	)
 	return root
+}
+
+func renderCommandHelp(f *Factory, cmd *cobra.Command) {
+	if cmd.Short != "" {
+		f.Streams().Printf("%s\n\n", cmd.Short)
+	}
+	f.Streams().Printf("Usage:\n  %s\n", cmd.UseLine())
+	if cmd.HasAvailableSubCommands() {
+		f.Streams().Printf("\nAvailable Commands:\n")
+		for _, child := range cmd.Commands() {
+			if !child.IsAvailableCommand() && child.Name() != "help" {
+				continue
+			}
+			f.Streams().Printf("  %-12s %s\n", child.Name(), child.Short)
+		}
+	}
+	flags := cmd.NonInheritedFlags()
+	if flags.HasAvailableFlags() {
+		usages := strings.TrimRight(flags.FlagUsagesWrapped(80), "\n")
+		if usages != "" {
+			f.Streams().Printf("\nFlags:\n%s\n", usages)
+		}
+	}
+	f.Streams().Printf("\n")
 }

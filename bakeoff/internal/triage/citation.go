@@ -19,7 +19,7 @@ func ResolveCitationCWD(meta map[string]any) (string, []string) {
 		if err != nil {
 			caveats = append(caveats, "original cwd from meta.json does not exist; using current working directory for citation checks")
 		} else if info.IsDir() {
-			resolved, err := filepath.Abs(candidate)
+			resolved, err := realAbs(candidate)
 			if err == nil {
 				return resolved, caveats
 			}
@@ -34,7 +34,7 @@ func ResolveCitationCWD(meta map[string]any) (string, []string) {
 	if err != nil {
 		return "", caveats
 	}
-	resolved, err := filepath.Abs(cwd)
+	resolved, err := realAbs(cwd)
 	if err != nil {
 		return cwd, caveats
 	}
@@ -97,6 +97,7 @@ func CheckCitations(citations []string, cwd string) map[string]any {
 }
 
 func CheckCitation(citation string, cwd string) map[string]any {
+	cwd, _ = realAbs(cwd)
 	rawPath, lineStart, lineEnd, ok := ParseCitation(citation)
 	if !ok {
 		return map[string]any{"citation": citation, "status": "unsupported"}
@@ -105,7 +106,7 @@ func CheckCitation(citation string, cwd string) map[string]any {
 	if !filepath.IsAbs(resolved) {
 		resolved = filepath.Join(cwd, resolved)
 	}
-	resolved, _ = filepath.Abs(resolved)
+	resolved = resolvePathBestEffort(resolved)
 	base := map[string]any{
 		"citation":      citation,
 		"resolved_path": resolved,
@@ -234,19 +235,44 @@ func isPathChar(char byte) bool {
 }
 
 func isRelativeTo(path string, parent string) bool {
-	parentAbs, err := filepath.Abs(parent)
+	parentAbs, err := realAbs(parent)
 	if err != nil {
 		return false
 	}
-	pathAbs, err := filepath.Abs(path)
-	if err != nil {
-		return false
-	}
+	pathAbs := resolvePathBestEffort(path)
 	rel, err := filepath.Rel(parentAbs, pathAbs)
 	if err != nil {
 		return false
 	}
 	return rel == "." || (!strings.HasPrefix(rel, ".."+string(os.PathSeparator)) && rel != "..")
+}
+
+func realAbs(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	real, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return abs, nil
+	}
+	return real, nil
+}
+
+func resolvePathBestEffort(path string) string {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return path
+	}
+	real, err := filepath.EvalSymlinks(abs)
+	if err == nil {
+		return real
+	}
+	parent, err := filepath.EvalSymlinks(filepath.Dir(abs))
+	if err == nil {
+		return filepath.Join(parent, filepath.Base(abs))
+	}
+	return abs
 }
 
 func expandUser(path string) string {

@@ -1,0 +1,50 @@
+{
+  "artifact_fingerprints": {
+    "decision.json": {
+      "mtime_ns": 1778982902029060463,
+      "sha256": "c6e0005fa4a63d30381b97ec169d48fb15fd387e6cbd70aa77cdc8a8e0840b12",
+      "size_bytes": 57
+    },
+    "meta.json": {
+      "mtime_ns": 1778982902029116629,
+      "sha256": "e71cf2bdba3cd117e68626e79ea5ec360b6b787ff42c2add665362e04d29f339",
+      "size_bytes": 129
+    },
+    "report.md": {
+      "mtime_ns": 1778982902029165421,
+      "sha256": "d2f56516fd6c35644826ae6f1876a47870b7fa19acedac3e52fb6f2a94aa2624",
+      "size_bytes": 9
+    },
+    "work-order.json": {
+      "mtime_ns": 1778982902028983630,
+      "sha256": "9917ea36c94bb387fb4ae4089a98d25f2ed4eb8889322039a80ba6c5a3253573",
+      "size_bytes": 19
+    }
+  },
+  "artifacts": {
+    "decision": "decision.json",
+    "meta": "meta.json",
+    "report": "report.md",
+    "work_order": "work-order.json"
+  },
+  "bakeoff_version": "0.0.0",
+  "canonical_winner": null,
+  "cwd": null,
+  "decision_kind": "structured_union",
+  "facet_id": null,
+  "finished_at": "2026-05-16T12:01:00+00:00",
+  "judge": {},
+  "judge_ran": true,
+  "providers": {},
+  "review_context": {
+    "present": false
+  },
+  "run_id": "run",
+  "schema_version": 1,
+  "started_at": "2026-05-16T12:00:00+00:00",
+  "triage": {
+    "stale_inputs": [],
+    "state": "no"
+  },
+  "type": "gather"
+}

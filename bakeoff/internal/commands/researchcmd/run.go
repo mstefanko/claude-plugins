@@ -255,8 +255,12 @@ func runWorkers(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder
 				}
 				result = internalErrorResult(err)
 				providerDir := filepath.Join(runDir, "providers", participant.ID)
-				_ = os.MkdirAll(providerDir, 0o755)
-				_ = artifact.WriteProviderArtifacts(providerDir, result)
+				if mkdirErr := os.MkdirAll(providerDir, 0o755); mkdirErr != nil {
+					return mkdirErr
+				}
+				if writeErr := artifact.WriteProviderArtifacts(providerDir, result); writeErr != nil {
+					return writeErr
+				}
 			}
 			pairs[index] = pair{id: participant.ID, result: result}
 			return nil
@@ -309,7 +313,7 @@ func runOneWorker(ctx context.Context, f commands.Factory, wo *workorder.WorkOrd
 	result := artifact.ResultMap(runner.RunProviderWithFormatRetry(ctx, runner.Options{
 		Argv:             scopeExecution.Argv,
 		Prompt:           workerPrompt,
-		Budgets:          runnerBudgets(wo.Budgets),
+		Budgets:          commands.RunnerBudgets(wo.Budgets),
 		CWD:              scopeExecution.CWD,
 		Env:              os.Environ(),
 		Validator:        func(data any) (any, error) { return workorder.ValidateWorkerResult(data, wo.Type) },
@@ -408,7 +412,7 @@ func runSingleJudge(ctx context.Context, f commands.Factory, wo *workorder.WorkO
 	result := artifact.ResultMap(runner.RunProviderWithFormatRetry(ctx, runner.Options{
 		Argv:             argv,
 		Prompt:           judgePrompt,
-		Budgets:          runnerBudgets(wo.Budgets),
+		Budgets:          commands.RunnerBudgets(wo.Budgets),
 		CWD:              cwd,
 		Env:              os.Environ(),
 		Validator:        judgeValidator(wo.Type),
@@ -424,16 +428,6 @@ func runSingleJudge(ctx context.Context, f commands.Factory, wo *workorder.WorkO
 	return result, nil
 }
 
-func runnerBudgets(b workorder.Budgets) runner.Budgets {
-	return runner.Budgets{
-		WallClockSeconds:      b.WallClockSeconds,
-		MaxOutputBytes:        b.MaxOutputBytes,
-		HeartbeatSeconds:      b.HeartbeatSeconds,
-		OutputCapGraceSeconds: b.OutputCapGraceSeconds,
-		MaxOutputOverrunBytes: b.MaxOutputOverrunBytes,
-	}
-}
-
 func judgeValidator(mode string) func(any) (any, error) {
 	switch mode {
 	case "gather":
@@ -442,18 +436,6 @@ func judgeValidator(mode string) func(any) (any, error) {
 		return workorder.ValidateCompareJudgeResult
 	default:
 		return workorder.ValidateAnalyzeJudgeResult
-	}
-}
-
-func makeTickPrinter(f commands.Factory, label string, quiet bool) func(runner.Tick) {
-	if quiet {
-		return nil
-	}
-	return func(tick runner.Tick) {
-		elapsed := int(tick.Elapsed)
-		wallSeconds := tick.WallSeconds
-		lastOutputAge := int(tick.LastOutputAge)
-		f.Streams().Errorf("[%s] %s t=%ds/%ds out=%.1fKB err=%.1fKB last=%ds\n", label, tick.Phase, elapsed, wallSeconds, float64(tick.StdoutBytes)/1024, float64(tick.StderrBytes)/1024, lastOutputAge)
 	}
 }
 

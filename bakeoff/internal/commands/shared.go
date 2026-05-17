@@ -20,10 +20,6 @@ type Factory interface {
 	Capabilities() *provider.CapabilityRegistry
 }
 
-func PlaceholderError(command string) error {
-	return apperror.Runtimef("%s command is not implemented in bakeoff-go yet", command)
-}
-
 func WrapValidation(err error) error {
 	var validation *workorder.ValidationError
 	if errors.As(err, &validation) {

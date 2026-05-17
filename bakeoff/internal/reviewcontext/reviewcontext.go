@@ -63,12 +63,15 @@ func Build(options Options, cwd string, runStartedAt string) (*Context, error) {
 	if !options.Enabled() {
 		return nil, fmt.Errorf("review context options are not enabled")
 	}
-	captureCWD, err := filepath.Abs(cwd)
+	captureCWD, err := realAbs(cwd)
 	if err != nil {
 		return nil, workorder.Validationf("review context cwd failed: %v", err)
 	}
 	gitRoot := runGit([]string{"git", "rev-parse", "--show-toplevel"}, captureCWD)
 	if gitRoot.returnCode != 0 {
+		if gitRoot.err != nil && !isExitError(gitRoot.err) {
+			return nil, workorder.Validationf("review context repo root command failed: %s", gitRoot.err)
+		}
 		return nil, workorder.Validationf("review context requires a git repository")
 	}
 	headCommit, err := checkedGit([]string{"git", "rev-parse", "HEAD"}, captureCWD, "head commit")
@@ -82,6 +85,9 @@ func Build(options Options, cwd string, runStartedAt string) (*Context, error) {
 	baseRef := options.EffectiveBaseRef()
 	baseCommit := runGit([]string{"git", "rev-parse", "--verify", baseRef + "^{commit}"}, captureCWD)
 	if baseCommit.returnCode != 0 {
+		if baseCommit.err != nil && !isExitError(baseCommit.err) {
+			return nil, workorder.Validationf("review context base ref command failed: %s", baseCommit.err)
+		}
 		return nil, workorder.Validationf("review context base ref not found: %s", baseRef)
 	}
 	dirty, err := checkedGit([]string{"git", "status", "--porcelain"}, captureCWD, "dirty status")
@@ -284,9 +290,28 @@ func runGit(argv []string, cwd string) gitResult {
 		code = 1
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			code = exitErr.ExitCode()
+		} else if stderr.Len() == 0 {
+			stderr.WriteString(err.Error())
 		}
 	}
 	return gitResult{stdout: stdout.String(), stderr: stderr.String(), returnCode: code, err: err}
+}
+
+func realAbs(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	real, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return abs, nil
+	}
+	return real, nil
+}
+
+func isExitError(err error) bool {
+	_, ok := err.(*exec.ExitError)
+	return ok
 }
 
 func checkedGit(argv []string, cwd string, label string) (gitResult, error) {
