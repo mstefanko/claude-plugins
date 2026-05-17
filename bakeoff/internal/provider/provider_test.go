@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -96,6 +97,21 @@ func TestProbeFailureWithoutHelpMarksBackendUnavailable(t *testing.T) {
 	}
 	if !strings.Contains(caps.ProbeError, "probe failed") {
 		t.Fatalf("probe error = %q, want probe failed", caps.ProbeError)
+	}
+}
+
+func TestMissingProbeUsesPythonStyleDiagnostic(t *testing.T) {
+	registry := NewCapabilityRegistry(func(string) (string, error) {
+		return "", exec.ErrNotFound
+	})
+
+	caps := registry.DetectScopeCapabilities(context.Background(), "claude")
+	if caps.Available {
+		t.Fatalf("capabilities = %#v, want unavailable", caps)
+	}
+	want := "FileNotFoundError: [Errno 2] No such file or directory: 'claude'"
+	if caps.ProbeError != want {
+		t.Fatalf("probe error = %q, want %q", caps.ProbeError, want)
 	}
 }
 

@@ -1,0 +1,57 @@
+{
+  "auth_probes": {},
+  "bias": "Default judge is claude/opus alongside claude/sonnet workers. Position-swap is the primary bias mitigation; same-family bias is an accepted v1 risk.",
+  "command": "doctor",
+  "cwd_writable": {
+    "cwd": "/private/var/folders/yy/nld_s8b520j73kf7_xbl4v3w0000gn/T/bakeoff-parity-doctor_missing_tools_json-55ri_2sb",
+    "detail": "/private/var/folders/yy/nld_s8b520j73kf7_xbl4v3w0000gn/T/bakeoff-parity-doctor_missing_tools_json-55ri_2sb",
+    "ok": true
+  },
+  "defaults": {
+    "claude_haiku": "claude-haiku-4-5-20251001",
+    "claude_opus": "claude-opus-4-7",
+    "claude_sonnet": "claude-sonnet-4-6",
+    "codex": "gpt-5.5",
+    "codex_gpt5": "gpt-5"
+  },
+  "scope_capabilities": {
+    "claude": {
+      "available": false,
+      "backend": "claude",
+      "probe_error": "FileNotFoundError: [Errno 2] No such file or directory: 'claude'",
+      "supports": {}
+    },
+    "codex": {
+      "available": false,
+      "backend": "codex",
+      "probe_error": "FileNotFoundError: [Errno 2] No such file or directory: 'codex'",
+      "supports": {}
+    }
+  },
+  "scope_policy": {
+    "default_enforcement": "best_effort",
+    "status_artifacts": [
+      "provider status.json",
+      "meta.json"
+    ]
+  },
+  "status": "failed",
+  "tools": {
+    "claude": {
+      "ok": false,
+      "path": null,
+      "version": null
+    },
+    "codex": {
+      "ok": false,
+      "path": null,
+      "version": null
+    },
+    "git": {
+      "ok": true,
+      "path": "/usr/bin/git",
+      "version": "git version 2.39.5 (Apple Git-154)"
+    }
+  },
+  "warnings": []
+}

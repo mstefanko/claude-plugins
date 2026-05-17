@@ -163,8 +163,15 @@ func runDoctor(ctx context.Context, f commands.Factory, opts *DoctorOptions) err
 			return &apperror.RuntimeError{Err: err}
 		}
 	}
+	if failed {
+		return &apperror.SilentError{Err: errDoctorFailed{}}
+	}
 	return nil
 }
+
+type errDoctorFailed struct{}
+
+func (errDoctorFailed) Error() string { return "doctor failed" }
 
 func runAuthProbes(ctx context.Context, f commands.Factory, opts *DoctorOptions, report map[string]any) error {
 	authProbes := report["auth_probes"].(map[string]any)

@@ -163,7 +163,7 @@ func (r *CapabilityRegistry) runProbe(ctx context.Context, argv []string, timeou
 	}
 	exe, err := r.lookup(argv[0])
 	if err != nil {
-		return "", fmt.Errorf("%s lookup failed: %w", argv[0], err)
+		return "", fmt.Errorf("FileNotFoundError: [Errno 2] No such file or directory: '%s'", argv[0])
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

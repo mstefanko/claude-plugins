@@ -119,6 +119,18 @@ def cases() -> list[Case]:
             },
         )
     }
+    zero_overrun_cap = {
+        "gather.json": base_work_order(
+            "gather",
+            budgets={
+                "wall_clock_seconds": 3,
+                "max_output_bytes": 120,
+                "heartbeat_seconds": 0,
+                "output_cap_grace_seconds": 30,
+                "max_output_overrun_bytes": 0,
+            },
+        )
+    }
     stderr_cap = {
         "gather.json": base_work_order(
             "gather",
@@ -179,6 +191,12 @@ def cases() -> list[Case]:
         Case("validate_jsonc_edge", ["validate", "jsonc.work-order.json"], jsonc_work_orders={"jsonc.work-order.json": jsonc_text}),
         Case("validate_failure", ["validate", "missing.json"], expect={2}),
         Case("doctor_skip_auth_json", ["doctor", "--skip-auth-probe", "--json"]),
+        Case(
+            "doctor_missing_tools_json",
+            ["doctor", "--skip-auth-probe", "--json"],
+            omit_fake_tools={"claude", "codex"},
+            expect={1},
+        ),
         Case("doctor_human", ["doctor", "--skip-auth-probe"]),
         Case("research_success", ["research", "gather.json", "--out", "runs", "--run-id", "research-success"], work_orders=gather),
         Case("research_json", ["research", "gather.json", "--out", "runs", "--run-id", "research-json", "--json"], work_orders=gather),
@@ -319,6 +337,13 @@ def cases() -> list[Case]:
             ["research", "gather.json", "--out", "runs", "--run-id", "output-cap-salvage", "--json"],
             work_orders=salvage_cap,
             env={"BAKEOFF_FAKE_OUTPUT_CAP_SALVAGE_PROVIDERS": "claude,codex"},
+        ),
+        Case(
+            "output_cap_zero_overrun",
+            ["research", "gather.json", "--out", "runs", "--run-id", "output-cap-zero-overrun", "--json"],
+            work_orders=zero_overrun_cap,
+            env={"BAKEOFF_FAKE_OUTPUT_CAP_PROVIDERS": "claude,codex"},
+            expect={1},
         ),
         Case(
             "stderr_truncation",

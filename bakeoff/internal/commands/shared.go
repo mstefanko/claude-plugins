@@ -30,11 +30,12 @@ func WrapValidation(err error) error {
 
 func RunnerBudgets(b workorder.Budgets) runner.Budgets {
 	return runner.Budgets{
-		WallClockSeconds:      b.WallClockSeconds,
-		MaxOutputBytes:        b.MaxOutputBytes,
-		HeartbeatSeconds:      b.HeartbeatSeconds,
-		OutputCapGraceSeconds: b.OutputCapGraceSeconds,
-		MaxOutputOverrunBytes: b.MaxOutputOverrunBytes,
+		WallClockSeconds:           b.WallClockSeconds,
+		MaxOutputBytes:             b.MaxOutputBytes,
+		HeartbeatSeconds:           b.HeartbeatSeconds,
+		OutputCapGraceSeconds:      b.OutputCapGraceSeconds,
+		MaxOutputOverrunBytes:      b.MaxOutputOverrunBytes,
+		MaxOutputOverrunBytesIsSet: true,
 	}
 }
 

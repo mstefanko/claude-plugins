@@ -155,6 +155,20 @@ func TestRunProviderHardStopsOnOutputCapGraceAndOverrun(t *testing.T) {
 	if overrun.Status != StatusOutputCap || overrun.OutputCap == nil || overrun.OutputCap.Reason != OutputCapOverrunLimit {
 		t.Fatalf("overrun result = %#v", overrun)
 	}
+
+	zeroOverrun := RunProvider(context.Background(), helperOptions("overrun", Budgets{
+		WallClockSeconds:           10,
+		MaxOutputBytes:             100,
+		MaxOutputOverrunBytes:      0,
+		MaxOutputOverrunBytesIsSet: true,
+		OutputCapGraceSeconds:      30,
+	}))
+	if zeroOverrun.Status != StatusOutputCap || zeroOverrun.OutputCap == nil || zeroOverrun.OutputCap.Reason != OutputCapOverrunLimit {
+		t.Fatalf("zero overrun result = %#v", zeroOverrun)
+	}
+	if zeroOverrun.OutputCap.MaxOutputOverrunBytes != 0 {
+		t.Fatalf("zero overrun budget was not preserved: %#v", zeroOverrun.OutputCap)
+	}
 }
 
 func TestRunProviderReportsStderrTruncationWithoutFailingSuccess(t *testing.T) {

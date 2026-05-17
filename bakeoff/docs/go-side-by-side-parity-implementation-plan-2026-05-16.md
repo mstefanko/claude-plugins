@@ -1063,6 +1063,33 @@ Prepare Go Bakeoff CLI for cutover
 
 Do this only after Phase 7 passes.
 
+Before switching the default command:
+
+- Resolve all open parity review findings at P1/P2 severity. At minimum, verify
+  `doctor` readiness failures exit nonzero and `max_output_overrun_bytes: 0`
+  preserves the Python hard-stop behavior.
+- Close Go-only cancellation gaps in public workflows. In particular,
+  review-context git subprocesses must be driven from the root command context
+  with `exec.CommandContext` or an equivalent bounded subprocess path, so
+  `--base`/`--diff` runs interrupt and time out through the same exit-code path
+  as provider runs.
+- Add a parity case with provider ids whose work-order order differs from
+  lexicographic order. Use it to prove command summaries, reports, manifests,
+  and ledger readers either preserve the Python-visible order or intentionally
+  adopt a documented sorted-object contract.
+- Run one last side-by-side dogfood pass from the public launcher shape, not
+  only from a temporary `bakeoff-go` binary.
+- Add `go test -race ./...` to the final local or CI cutover gate. The runner,
+  capability registry, and heartbeat/output readers are concurrent enough that
+  the race detector should be part of the default-switch proof, not an optional
+  later cleanup.
+- Decide the binary artifact policy. Do not leave a local platform-specific
+  root-level `bakeoff-go` executable as the release source of truth; build into
+  a deliberate `dist/`/release location or ignore local binaries.
+- Update operator-facing docs before removing Python: README development
+  commands, plugin wrapper expectations, cutover rollback notes, and any
+  references that still say orchestration belongs to the Python package.
+
 Possible cutover shape:
 
 - rename `cmd/bakeoff-go` to `cmd/bakeoff`
@@ -1076,11 +1103,23 @@ Possible cutover shape:
 Do not remove Python in the same commit that first switches the default command.
 Keep rollback cheap.
 
+Do not use the first default-switch commit for broad Go-only cleanup unless it
+is required for parity or safe operation. Defer workflow-package extraction,
+summary/manifest contract consolidation, exported mutable-global cleanup, prompt
+template cleanup, and expanded artifact fingerprinting to follow-up commits
+tracked in the post-cutover cleanup plan. These are good Go improvements, but
+they should not make the cutover harder to review or roll back.
+
 Done criteria:
 
 - `bin/bakeoff --help` invokes the Go path intentionally, not accidentally.
 - The full parity harness is still green through the new default entry point.
-- `go test ./...`, `pytest`, and `python3 scripts/parity-go.py` pass.
+- `go test ./...`, `go test -race ./...`, `pytest`, and
+  `python3 scripts/parity-go.py` pass.
+- Review-context interrupt behavior is covered by an automated or documented
+  smoke check.
+- Non-lexicographic provider-id parity is covered, or sorted provider-key output
+  is documented as an intentional contract change.
 - Rollback instructions are documented in the cutover commit or release notes.
 
 ## Risk Notes

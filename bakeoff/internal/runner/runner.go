@@ -46,11 +46,12 @@ const (
 )
 
 type Budgets struct {
-	WallClockSeconds      int
-	MaxOutputBytes        int
-	HeartbeatSeconds      int
-	OutputCapGraceSeconds int
-	MaxOutputOverrunBytes int
+	WallClockSeconds           int
+	MaxOutputBytes             int
+	HeartbeatSeconds           int
+	OutputCapGraceSeconds      int
+	MaxOutputOverrunBytes      int
+	MaxOutputOverrunBytesIsSet bool
 }
 
 type Options struct {
@@ -839,7 +840,7 @@ func normalizeBudgets(b Budgets) Budgets {
 	if b.MaxOutputOverrunBytes < 0 {
 		b.MaxOutputOverrunBytes = 0
 	}
-	if b.MaxOutputOverrunBytes == 0 {
+	if b.MaxOutputOverrunBytes == 0 && !b.MaxOutputOverrunBytesIsSet {
 		b.MaxOutputOverrunBytes = b.MaxOutputBytes
 	}
 	return b
