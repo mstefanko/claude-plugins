@@ -8,10 +8,10 @@ operation.
 
 ## Context
 
-The Go port has moved to the public launcher path. Python remains available as
-the legacy oracle/rollback path, but this file now tracks Go-only cleanup for
-follow-up commits: ledger contracts, manifest coverage, JSON summary surfaces,
-and internal duplication.
+The Go port has moved to the public launcher path, and the legacy Python CLI
+has been removed. This file now tracks Go-only cleanup for follow-up commits:
+ledger contracts, manifest coverage, JSON summary surfaces, and internal
+duplication.
 
 ## Findings Collected
 
@@ -47,7 +47,8 @@ Risk:
   README.
 
 Notes:
-- This mirrors the Python oracle, so it is not a Go-port parity bug.
+- This mirrored the historical Python oracle, so it was not a Go-port parity
+  bug.
 - Treat this as a post-cutover contract tightening unless later dogfood shows
   it blocks safe operation.
 - This is the useful small piece to borrow from heavier orchestration systems:
@@ -101,7 +102,8 @@ Risk:
   point.
 
 Notes:
-- This also mirrors the Python oracle, so it is not a Go-port parity bug.
+- This also mirrored the historical Python oracle, so it was not a Go-port
+  parity bug.
 - The immediate issue is maintainability and contract clarity, not current run
   correctness.
 
@@ -141,7 +143,7 @@ Current behavior:
   `StatusCancelled` from a canceled context.
 - If stdout output cap and wall-clock timeout coincide, the current runner
   reports `output_cap`; that may be correct, but the combined precedence should
-  be documented and pinned against the oracle before cleanup.
+  be documented and pinned before cleanup.
 
 Risk:
 - Downstream summaries, reports, and manifest logic can accidentally treat
@@ -165,8 +167,8 @@ Possible implementation direction:
   internal errors include a consistent status artifact shape.
 - Add unit tests for direct context cancellation and timeout-plus-output-cap
   precedence in `internal/runner`.
-- Extend parity coverage only after confirming Python oracle behavior for the
-  combined timeout/output-cap path.
+- Extend parity coverage only after deciding the intended combined
+  timeout/output-cap contract.
 
 ### 4. Review-context and rerun replay invariants need tightening
 
@@ -247,7 +249,7 @@ Possible implementation direction:
 - Clarify and test code-review auto-triage behavior for single-provider
   successful runs.
 - Add parity cases for generated review context and review-context rerun replay
-  once the oracle expectations are frozen.
+  once the expected behavior is frozen.
 
 ### 5. Scope enforcement and provider argv boundaries need hardening
 
@@ -299,8 +301,9 @@ Current behavior:
   missing-controls failure and Codex codebase mechanisms. It does not cover web
   scope, mixed scope, caps-vs-registry precedence, `ScopeErrorResult`, or the
   cwd split between runner `cmd.Dir` and Codex `-C`.
-- The Python suite has some of the missing contract coverage, including web
-  temporary cwd behavior, so this is largely Go parity/test-hardening work.
+- The removed Python suite had some of the missing contract coverage,
+  including web temporary cwd behavior, so this is largely Go test-hardening
+  work.
 
 Risk:
 - Scope policy logic is acceptably cohesive for the current two-backend v1, but
@@ -517,5 +520,5 @@ Possible implementation direction:
 
 - Continue adding dogfood findings here before making broad cleanup changes.
 - After cutover, convert this collection into a scoped implementation sequence.
-- Revisit whether changes should be Go-only or should first be represented in
-  parity fixtures as intentional oracle departures.
+- Revisit whether behavior changes should first be represented in parity
+  fixtures as intentional contract changes.

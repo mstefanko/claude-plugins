@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import filecmp
 import json
 import os
 import re
@@ -391,8 +390,6 @@ def build_go_binary(out_dir: Path) -> Path:
 def cli_argv(target: str, *, go_binary: Path | None = None) -> list[str]:
     if target == "public":
         return [str(ROOT / "bin" / "bakeoff")]
-    if target == "python":
-        return [str(ROOT / "bin" / "bakeoff-python")]
     if go_binary is None:
         raise RuntimeError("go target requires a built bakeoff binary")
     return [str(go_binary)]
@@ -566,24 +563,6 @@ def normalize(value: Any, *, workdir: Path) -> Any:
     return value
 
 
-def write_snapshot(case: Case, result: dict[str, Any]) -> None:
-    target_dir = FIXTURE_ROOT / case.name / result["target"]
-    if target_dir.exists():
-        shutil.rmtree(target_dir)
-    target_dir.mkdir(parents=True)
-    (target_dir / "stdout.txt").write_text(result["stdout"], encoding="utf-8")
-    (target_dir / "stderr.txt").write_text(result["stderr"], encoding="utf-8")
-    (target_dir / "exit_code.txt").write_text(str(result["exit_code"]) + "\n", encoding="utf-8")
-    (target_dir / "workspace.json").write_text(
-        json.dumps(result["workspace"], indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    (FIXTURE_ROOT / case.name / "normalized.json").write_text(
-        json.dumps(result["normalized"], indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-
-
 def compare_snapshot(case: Case, result: dict[str, Any]) -> str | None:
     expected_path = FIXTURE_ROOT / case.name / "normalized.json"
     if not expected_path.exists():
@@ -612,12 +591,10 @@ def selected_cases(names: list[str]) -> list[Case]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Bakeoff side-by-side parity harness.")
+    parser = argparse.ArgumentParser(description="Bakeoff Go parity harness.")
     parser.add_argument("cases", nargs="*", help="optional fixture case names")
-    parser.add_argument("--python-only", action="store_true", help="run only the frozen Python oracle")
     parser.add_argument("--go-only", action="store_true", help="run a temporary compiled Go binary directly")
     parser.add_argument("--public", action="store_true", help="run bin/bakeoff, the default cutover launcher")
-    parser.add_argument("--update", action="store_true", help="refresh committed Python oracle snapshots")
     parser.add_argument("--list", action="store_true", help="list fixture case names")
     args = parser.parse_args()
 
@@ -626,31 +603,20 @@ def main() -> int:
             print(case.name)
         return 0
 
-    selected_targets = [args.python_only, args.go_only, args.public]
+    selected_targets = [args.go_only, args.public]
     if sum(1 for selected in selected_targets if selected) > 1:
-        parser.error("--python-only, --go-only, and --public are mutually exclusive")
+        parser.error("--go-only and --public are mutually exclusive")
 
     target = "public"
     if args.go_only:
         target = "go"
-    elif args.python_only:
-        target = "python"
     failures: list[str] = []
-    go_temp: tempfile.TemporaryDirectory[str] | None = None
-    go_binary: Path | None = None
-    if target in {"go", "public"}:
-        go_temp = tempfile.TemporaryDirectory(prefix="bakeoff-bin-")
-        go_binary = build_go_binary(Path(go_temp.name))
+    go_temp = tempfile.TemporaryDirectory(prefix="bakeoff-bin-")
+    go_binary = build_go_binary(Path(go_temp.name))
 
     try:
         for case in selected_cases(args.cases):
             result = run_case(target, case, go_binary=go_binary)
-            if args.update:
-                if target != "python":
-                    raise SystemExit("--update is only supported for the Python oracle")
-                write_snapshot(case, result)
-                print(f"updated {case.name}")
-                continue
             failure = compare_snapshot(case, result)
             if failure:
                 failures.append(f"== {case.name} ==\n{failure}")

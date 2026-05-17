@@ -1,3 +1,0 @@
-wrote review.work-order.json
-recipe: review (mode gather)
-effort defaults: workers=high, judge=xhigh

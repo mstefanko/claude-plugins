@@ -1,2 +1,0 @@
-wrote analyze.work-order.json
-effort defaults: workers=high, judge=xhigh

@@ -1,1 +1,0 @@
-note: triage invokes one provider call; use --dry-run to inspect inputs only

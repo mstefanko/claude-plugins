@@ -1,2 +1,0 @@
-wrote compare.work-order.json
-effort defaults: workers=high, judge=xhigh

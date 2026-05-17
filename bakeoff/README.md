@@ -15,13 +15,10 @@ Go CLI.
 bakeoff/
   .claude-plugin/plugin.json
   bin/bakeoff
-  bin/bakeoff-python
   go.mod
   cmd/bakeoff/
   internal/
-  pyproject.toml
-  src/bakeoff/
-  tests/
+  tests/parity/
   examples/
 ```
 
@@ -31,7 +28,6 @@ bakeoff/
 go run ./cmd/bakeoff --help
 go test ./...
 go test -race ./...
-python3 -m pytest
 python3 scripts/parity-go.py
 ```
 
@@ -45,12 +41,8 @@ mkdir -p dist
 go build -o dist/bakeoff ./cmd/bakeoff
 ```
 
-The frozen Python implementation is kept only as a rollback/oracle path:
-
-```bash
-bin/bakeoff-python --help
-python3 scripts/parity-go.py --python-only
-```
+The legacy Python CLI has been removed after cutover. The remaining Python files
+under `scripts/` and `tests/parity/fakes/` are test harness utilities only.
 
 For plugin dogfood, use the wrapper directly:
 
@@ -58,10 +50,8 @@ For plugin dogfood, use the wrapper directly:
 "${CLAUDE_PLUGIN_ROOT:-$PWD}/bin/bakeoff" --help
 ```
 
-Rollback during the cutover window is intentionally cheap: restore
-`bin/bakeoff` to the Python launcher body used by `bin/bakeoff-python`, or set
-callers to `bin/bakeoff-python` while the Go issue is fixed. Do not remove
-`src/bakeoff/` until the rollback window closes.
+Rollback after this cleanup means reverting the cutover commit or restoring the
+legacy Python implementation from git history.
 
 ## Common Workflows
 
