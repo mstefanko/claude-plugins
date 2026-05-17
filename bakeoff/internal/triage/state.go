@@ -248,7 +248,7 @@ func StaleInputsText(items []string) string {
 	if len(items) == 0 {
 		return ""
 	}
-	return " (" + strings.Join(items, ", ") + ")"
+	return " (" + strings.Join(items, ", ") + " changed)"
 }
 
 func sha256File(path string) (string, error) {

@@ -8,16 +8,17 @@ import (
 )
 
 type ResearchOptions struct {
-	WorkOrder    string
-	Out          string
-	RunID        string
-	Force        bool
-	Quiet        bool
-	NoTriage     bool
-	Base         string
-	Diff         bool
-	ChangedFiles bool
-	JSON         bool
+	WorkOrder          string
+	Out                string
+	RunID              string
+	Force              bool
+	Quiet              bool
+	NoTriage           bool
+	Base               string
+	Diff               bool
+	ChangedFiles       bool
+	JSON               bool
+	ReplaySourceRunDir string
 }
 
 func NewCmdResearch(f commands.Factory, runF func(context.Context, *ResearchOptions) error) *cobra.Command {
@@ -32,7 +33,7 @@ func NewCmdResearch(f commands.Factory, runF func(context.Context, *ResearchOpti
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.WorkOrder = args[0]
 			if runF == nil {
-				return runResearch(cmd.Context(), f, opts)
+				return RunResearch(cmd.Context(), f, opts)
 			}
 			return runF(cmd.Context(), opts)
 		},

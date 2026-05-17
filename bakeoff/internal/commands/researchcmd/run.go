@@ -16,20 +16,22 @@ import (
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/apperror"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/artifact"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands"
+	triagecmd "github.com/mstefanko/claude-plugins/bakeoff/internal/commands/triagecmd"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/decision"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/ledger"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/manifest"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/prompt"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/provider"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/report"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/reviewcontext"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/runner"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/scope"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/summary"
-	"github.com/mstefanko/claude-plugins/bakeoff/internal/triage"
+	triagepkg "github.com/mstefanko/claude-plugins/bakeoff/internal/triage"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
 )
 
-func runResearch(ctx context.Context, f commands.Factory, opts *ResearchOptions) error {
+func RunResearch(ctx context.Context, f commands.Factory, opts *ResearchOptions) error {
 	humanOutput := !opts.JSON
 	effectiveQuiet := opts.Quiet || opts.JSON
 	wo, err := workorder.Load(opts.WorkOrder)
@@ -60,17 +62,57 @@ func runResearch(ctx context.Context, f commands.Factory, opts *ResearchOptions)
 		}
 	}
 	startedAt := artifact.UTCNow()
+	var reviewContext *reviewcontext.Context
+	if reviewOptions(opts).Enabled() {
+		cwd, _ := os.Getwd()
+		reviewContext, err = reviewcontext.Build(reviewOptions(opts), cwd, startedAt)
+		if err != nil {
+			return commands.WrapValidation(err)
+		}
+		if triagepkg.FacetID(wo.Raw) != triagepkg.CodeReviewFacetID {
+			f.Streams().Errorf("note: generated review context was requested for a non-code-review facet\n")
+		}
+		wo, err = reviewcontext.Apply(wo, reviewContext)
+		if err != nil {
+			return commands.WrapValidation(err)
+		}
+	}
 	if err := os.MkdirAll(runDir, 0o755); err != nil {
 		return &apperror.RuntimeError{Err: err}
 	}
 	if err := ledger.UpdateLatest(opts.Out, runID); err != nil {
 		return &apperror.RuntimeError{Err: err}
 	}
-	if err := workorder.WriteTextAtomic(filepath.Join(runDir, "work-order.json"), string(sourceText)); err != nil {
-		return &apperror.RuntimeError{Err: err}
+	if reviewContext != nil {
+		if err := workorder.WriteTextAtomic(filepath.Join(runDir, "source-work-order.json"), string(sourceText)); err != nil {
+			return &apperror.RuntimeError{Err: err}
+		}
+		if err := workorder.WriteJSONAtomic(filepath.Join(runDir, "work-order.json"), wo.Raw); err != nil {
+			return &apperror.RuntimeError{Err: err}
+		}
+		if err := workorder.WriteTextAtomic(filepath.Join(runDir, "review-context.md"), reviewcontext.RenderMarkdown(reviewContext)); err != nil {
+			return &apperror.RuntimeError{Err: err}
+		}
+		if err := workorder.WriteJSONAtomic(filepath.Join(runDir, "review-context.json"), reviewcontext.Metadata(reviewContext)); err != nil {
+			return &apperror.RuntimeError{Err: err}
+		}
+	} else {
+		if err := workorder.WriteTextAtomic(filepath.Join(runDir, "work-order.json"), string(sourceText)); err != nil {
+			return &apperror.RuntimeError{Err: err}
+		}
+		if opts.ReplaySourceRunDir != "" {
+			if err := copyReplayContextArtifacts(opts.ReplaySourceRunDir, runDir); err != nil {
+				return &apperror.RuntimeError{Err: err}
+			}
+		}
 	}
 	if humanOutput {
 		printRunHeader(f, wo, runDir, runID)
+	}
+	if reviewContext != nil && humanOutput {
+		f.Streams().Printf("%s\n", reviewcontext.FormatSummary(reviewContext))
+	} else if opts.ReplaySourceRunDir != "" && fileExists(filepath.Join(runDir, "review-context.md")) && humanOutput {
+		f.Streams().Printf("review context: replayed from %s\n", opts.ReplaySourceRunDir)
 	}
 
 	workerResults, err := runWorkers(ctx, f, wo, runDir, effectiveQuiet, humanOutput)
@@ -128,24 +170,48 @@ func runResearch(ctx context.Context, f commands.Factory, opts *ResearchOptions)
 		return &apperror.RuntimeError{Err: err}
 	}
 	if humanOutput {
+		if fileExists(filepath.Join(runDir, "review-context.md")) {
+			f.Streams().Printf("context-md: %s\n", filepath.Join(runDir, "review-context.md"))
+		}
 		f.Streams().Printf("manifest: %s\n", filepath.Join(runDir, "manifest.json"))
 		f.Streams().Printf("report: %s\n", filepath.Join(runDir, "report.md"))
 		f.Streams().Printf("next:   %s\n", ledger.BakeoffShowCommand(runID, opts.Out, ""))
 	}
 	autoTriageReason := ""
+	autoTriageStarted := false
+	var triageExitCode any
 	if !opts.NoTriage && exitCode == 0 {
-		autoTriageReason = triage.ShouldAutoTriage(wo.Raw, decisionDoc)
+		autoTriageReason = triagepkg.ShouldAutoTriage(wo.Raw, decisionDoc)
 		if autoTriageReason != "" && humanOutput {
-			f.Streams().Printf("auto-triage recommended: %s\n", autoTriageReason)
+			f.Streams().Printf("auto-triage starting: %s\n", autoTriageReason)
+		}
+		if autoTriageReason != "" {
+			autoTriageStarted = true
+			triageOpts := &triagecmd.TriageOptions{
+				RunID:        runID,
+				Out:          opts.Out,
+				Quiet:        effectiveQuiet,
+				RunDir:       runDir,
+				DisplayRunID: runID,
+				HumanOutput:  &humanOutput,
+			}
+			triageCode, err := triagecmd.Run(ctx, f, triageOpts)
+			if err != nil {
+				return err
+			}
+			triageExitCode = triageCode
+			if triageCode != 0 {
+				exitCode = 1
+			}
 		}
 	}
-	if !opts.NoTriage && autoTriageReason == "" && humanOutput {
-		if recommendation := triage.ShouldRecommendTriage(wo.Raw, decisionDoc, reportText); recommendation != "" {
+	if !opts.NoTriage && !autoTriageStarted && humanOutput {
+		if recommendation := triagepkg.ShouldRecommendTriage(wo.Raw, decisionDoc, reportText); recommendation != "" {
 			f.Streams().Printf("recommended: %s  (%s)\n", ledger.BakeoffTriageCommand(runID, opts.Out, false), recommendation)
 		}
 	}
 	if opts.JSON {
-		value := summary.BuildResearch(runDir, runID, opts.Out, decisionDoc, workerResults, exitCode, false, nil)
+		value := summary.BuildResearch(runDir, runID, opts.Out, decisionDoc, workerResults, exitCode, autoTriageStarted, triageExitCode)
 		if err := summary.Print(f.Streams().Out, value); err != nil {
 			return &apperror.RuntimeError{Err: err}
 		}
@@ -247,7 +313,7 @@ func runOneWorker(ctx context.Context, f commands.Factory, wo *workorder.WorkOrd
 		CWD:              scopeExecution.CWD,
 		Env:              os.Environ(),
 		Validator:        func(data any) (any, error) { return workorder.ValidateWorkerResult(data, wo.Type) },
-		OnTick:           makeTickPrinter(f, participant.ID, quiet),
+		OnTick:           commands.MakeTickPrinter(f, participant.ID, quiet),
 		FinalMessagePath: finalMessagePath,
 	}))
 	result["scope_enforcement"] = scopeExecution.Metadata
@@ -346,7 +412,7 @@ func runSingleJudge(ctx context.Context, f commands.Factory, wo *workorder.WorkO
 		CWD:              cwd,
 		Env:              os.Environ(),
 		Validator:        judgeValidator(wo.Type),
-		OnTick:           makeTickPrinter(f, "judge:"+label, quiet),
+		OnTick:           commands.MakeTickPrinter(f, "judge:"+label, quiet),
 		FinalMessagePath: lastMessage,
 	}))
 	if err := artifact.WriteJudgeArtifacts(judgeDir, label, result); err != nil {
@@ -451,4 +517,34 @@ func sortedProviderIDs(results map[string]map[string]any) []string {
 	}
 	sort.Strings(ids)
 	return ids
+}
+
+func reviewOptions(opts *ResearchOptions) reviewcontext.Options {
+	return reviewcontext.Options{
+		BaseRef:             opts.Base,
+		IncludePatch:        opts.Diff,
+		IncludeChangedFiles: opts.ChangedFiles,
+	}
+}
+
+func copyReplayContextArtifacts(sourceRunDir string, runDir string) error {
+	for _, name := range []string{"source-work-order.json", "review-context.md", "review-context.json"} {
+		source := filepath.Join(sourceRunDir, name)
+		data, err := os.ReadFile(source)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return err
+		}
+		if err := workorder.WriteTextAtomic(filepath.Join(runDir, name), string(data)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }

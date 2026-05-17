@@ -33,13 +33,13 @@ type JudgeSummary struct {
 }
 
 type ResearchTriageSummary struct {
-	AutoStarted bool              `json:"auto_started"`
-	State       string            `json:"state"`
-	Status      any               `json:"status"`
-	ExitCode    any               `json:"exit_code"`
-	Artifacts   map[string]string `json:"artifacts"`
-	RawStatus   string            `json:"raw_status,omitempty"`
-	StaleInputs []string          `json:"stale_inputs,omitempty"`
+	AutoStarted bool            `json:"auto_started"`
+	State       string          `json:"state"`
+	Status      any             `json:"status"`
+	ExitCode    any             `json:"exit_code"`
+	Artifacts   TriageArtifacts `json:"artifacts"`
+	RawStatus   string          `json:"raw_status,omitempty"`
+	StaleInputs []string        `json:"stale_inputs,omitempty"`
 }
 
 type ResearchSummary struct {
@@ -69,6 +69,39 @@ type ResearchArtifacts struct {
 	SourceWorkOrder   string `json:"source_work_order,omitempty"`
 	ReviewContextMD   string `json:"review_context_md,omitempty"`
 	ReviewContextJSON string `json:"review_context_json,omitempty"`
+}
+
+type TriageArtifacts struct {
+	Prompt              string `json:"prompt,omitempty"`
+	Status              string `json:"status,omitempty"`
+	CitationChecks      string `json:"citation_checks,omitempty"`
+	SourceFindingFilter string `json:"source_finding_filter,omitempty"`
+	FindingIndex        string `json:"finding_index,omitempty"`
+	Final               string `json:"final,omitempty"`
+	Triage              string `json:"triage,omitempty"`
+}
+
+type TriageDetails struct {
+	State                string `json:"state"`
+	Status               any    `json:"status"`
+	RawStatus            any    `json:"raw_status"`
+	SelectedFindings     any    `json:"selected_findings"`
+	SkippedNonActionable any    `json:"skipped_non_actionable"`
+	SkippedOutOfFacet    any    `json:"skipped_out_of_facet"`
+}
+
+type TriageSummary struct {
+	SchemaVersion int             `json:"schema_version"`
+	Command       string          `json:"command"`
+	Status        string          `json:"status"`
+	ExitCode      int             `json:"exit_code"`
+	Warnings      []string        `json:"warnings"`
+	RunID         string          `json:"run_id"`
+	RunDir        string          `json:"run_dir"`
+	DryRun        bool            `json:"dry_run"`
+	Triage        TriageDetails   `json:"triage"`
+	Artifacts     TriageArtifacts `json:"artifacts"`
+	Next          string          `json:"next"`
 }
 
 func Print(w io.Writer, value any) error {
@@ -245,25 +278,72 @@ func ResearchArtifactPaths(runDir string) ResearchArtifacts {
 	return out
 }
 
-func TriageArtifactPaths(runDir string) map[string]string {
+func TriageArtifactPaths(runDir string) TriageArtifacts {
 	triageDir := filepath.Join(runDir, "triage")
-	candidates := map[string]string{
-		"prompt":                "prompt.txt",
-		"status":                "status.json",
-		"citation_checks":       "citation_checks.json",
-		"source_finding_filter": "source_finding_filter.json",
-		"finding_index":         "finding_index.json",
-		"final":                 "final.json",
-		"triage":                "triage.md",
-	}
-	out := map[string]string{}
-	for key, relative := range candidates {
+	out := TriageArtifacts{}
+	set := func(relative string) string {
 		path := filepath.Join(triageDir, relative)
 		if fileExists(path) {
-			out[key] = path
+			return path
+		}
+		return ""
+	}
+	out.Prompt = set("prompt.txt")
+	out.Status = set("status.json")
+	out.CitationChecks = set("citation_checks.json")
+	out.SourceFindingFilter = set("source_finding_filter.json")
+	out.FindingIndex = set("finding_index.json")
+	out.Final = set("final.json")
+	out.Triage = set("triage.md")
+	return out
+}
+
+func BuildTriage(runDir string, runID string, outDir string, exitCode int, dryRun bool) TriageSummary {
+	triageDir := filepath.Join(runDir, "triage")
+	statusData := readJSON(filepath.Join(triageDir, "status.json"))
+	statusObj, _ := statusData.(map[string]any)
+	if statusObj == nil {
+		statusObj = map[string]any{}
+	}
+	rawStatus := statusObj["status"]
+	filterSummary, _ := statusObj["source_finding_filter"].(map[string]any)
+	if filterSummary == nil {
+		final, _ := readJSON(filepath.Join(triageDir, "final.json")).(map[string]any)
+		if final != nil {
+			filterSummary, _ = final["source_finding_filter"].(map[string]any)
 		}
 	}
-	return out
+	if filterSummary == nil {
+		filterSummary = map[string]any{}
+	}
+	triageStatus := any(CompactStatus(rawStatus))
+	if stringValue(rawStatus) == "dry_run" {
+		triageStatus = "dry_run"
+	}
+	next := ledger.BakeoffTriageCommand(runID, outDir, true)
+	if !dryRun && exitCode == 0 {
+		next = ledger.BakeoffShowCommand(runID, outDir, "--triage")
+	}
+	return TriageSummary{
+		SchemaVersion: 1,
+		Command:       "triage",
+		Status:        CommandStatus(exitCode),
+		ExitCode:      exitCode,
+		Warnings:      []string{},
+		RunID:         runID,
+		RunDir:        runDir,
+		DryRun:        dryRun,
+		Triage: TriageDetails{
+			State:                triage.State(runDir),
+			Status:               triageStatus,
+			RawStatus:            rawStatus,
+			SelectedFindings:     defaultNumber(filterSummary["included"]),
+			SkippedNonActionable: defaultNumber(filterSummary["skipped_non_actionable"]),
+			SkippedOutOfFacet:    defaultNumber(filterSummary["skipped_out_of_facet"]),
+		},
+		Artifacts: TriageArtifactPaths(runDir),
+		Next:      next,
+	}
 }
 
 func StatusMap(result map[string]map[string]any, providerID string) map[string]any {
@@ -303,6 +383,13 @@ func stringValue(value any) string {
 func boolValue(value any) bool {
 	v, _ := value.(bool)
 	return v
+}
+
+func defaultNumber(value any) any {
+	if value == nil {
+		return 0
+	}
+	return value
 }
 
 func allSame(items []string) bool {

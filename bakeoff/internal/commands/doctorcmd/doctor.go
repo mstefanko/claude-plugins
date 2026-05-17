@@ -4,12 +4,15 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/apperror"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/artifact"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/provider"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/runner"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/summary"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
 	"github.com/spf13/cobra"
 )
 
@@ -99,6 +102,59 @@ func runDoctor(ctx context.Context, f commands.Factory, opts *DoctorOptions) err
 	}
 	report["bias"] = "Default judge is claude/opus alongside claude/sonnet workers. Position-swap is the primary bias mitigation; same-family bias is an accepted v1 risk."
 
+	if !opts.JSON {
+		streams := f.Streams()
+		streams.Printf("bakeoff doctor\n")
+		for _, tool := range []string{"claude", "codex", "git"} {
+			toolStatus := tools[tool].(map[string]any)
+			if !toolStatus["ok"].(bool) {
+				streams.Printf("- %s: missing\n", tool)
+			} else {
+				streams.Printf("- %s: %s (%s)\n", tool, toolStatus["path"], toolStatus["version"])
+			}
+		}
+		streams.Printf("- defaults:\n")
+		for _, key := range []string{"claude_sonnet", "claude_opus", "claude_haiku", "codex", "codex_gpt5"} {
+			streams.Printf("  %s: %s\n", key, provider.DefaultModelIDs[key])
+		}
+		streams.Printf("- scope policy: best_effort by default; provider status records enforcement and advisory fallback.\n")
+		streams.Printf("- scope capabilities:\n")
+		for _, backend := range []string{"claude", "codex"} {
+			caps := capabilityValues[backend]
+			if !caps.Available {
+				streams.Printf("  %s: unavailable (%s)\n", backend, caps.ProbeError)
+				continue
+			}
+			supported := []string{}
+			missing := []string{}
+			for _, name := range supportOrder(backend) {
+				if caps.Supports[name] {
+					supported = append(supported, name)
+				} else {
+					missing = append(missing, name)
+				}
+			}
+			supportedText := "none"
+			if len(supported) > 0 {
+				supportedText = joinComma(supported)
+			}
+			streams.Printf("  %s: supports %s\n", backend, supportedText)
+			if len(missing) > 0 {
+				streams.Printf("    missing: %s\n", joinComma(missing))
+			}
+		}
+		status := "failed"
+		if writable {
+			status = "ok"
+		}
+		streams.Printf("- cwd writable: %s (%s)\n", status, detail)
+		streams.Printf("- bias: %s\n", report["bias"])
+	}
+	if !opts.SkipAuthProbe && !failed {
+		if err := runAuthProbes(ctx, f, opts, report); err != nil {
+			return err
+		}
+	}
 	if failed {
 		report["status"] = "failed"
 	}
@@ -106,55 +162,69 @@ func runDoctor(ctx context.Context, f commands.Factory, opts *DoctorOptions) err
 		if err := summary.Print(f.Streams().Out, report); err != nil {
 			return &apperror.RuntimeError{Err: err}
 		}
-		return nil
 	}
-	streams := f.Streams()
-	streams.Printf("bakeoff doctor\n")
-	for _, tool := range []string{"claude", "codex", "git"} {
-		toolStatus := tools[tool].(map[string]any)
-		if !toolStatus["ok"].(bool) {
-			streams.Printf("- %s: missing\n", tool)
-		} else {
-			streams.Printf("- %s: %s (%s)\n", tool, toolStatus["path"], toolStatus["version"])
+	return nil
+}
+
+func runAuthProbes(ctx context.Context, f commands.Factory, opts *DoctorOptions, report map[string]any) error {
+	authProbes := report["auth_probes"].(map[string]any)
+	prompt := `Auth probe. Reply exactly with <final_json>{"status":"complete","claims":[],"conflicts":[],"unknowns":[],"recommended_next_checks":[]}</final_json>`
+	cwd, _ := os.Getwd()
+	participants := []workorder.Participant{
+		{Backend: "claude", Model: provider.DefaultModelIDs["claude_sonnet"], Effort: "low"},
+		{Backend: "codex", Model: provider.DefaultModelIDs["codex"], Effort: "low"},
+	}
+	for _, participant := range participants {
+		argv, err := provider.BuildParticipantArgv(participant, cwd, nil, "", false)
+		if err != nil {
+			return &apperror.RuntimeError{Err: err}
 		}
-	}
-	streams.Printf("- defaults:\n")
-	for _, key := range []string{"claude_sonnet", "claude_opus", "claude_haiku", "codex", "codex_gpt5"} {
-		streams.Printf("  %s: %s\n", key, provider.DefaultModelIDs[key])
-	}
-	streams.Printf("- scope policy: best_effort by default; provider status records enforcement and advisory fallback.\n")
-	streams.Printf("- scope capabilities:\n")
-	for _, backend := range []string{"claude", "codex"} {
-		caps := capabilityValues[backend]
-		if !caps.Available {
-			streams.Printf("  %s: unavailable (%s)\n", backend, caps.ProbeError)
-			continue
+		result := artifact.ResultMap(runner.RunProvider(ctx, runner.Options{
+			Argv:    argv,
+			Prompt:  prompt,
+			Budgets: runner.Budgets{WallClockSeconds: 30, MaxOutputBytes: 10000},
+			CWD:     cwd,
+			Env:     os.Environ(),
+			OnTick:  commands.MakeTickPrinter(f, participant.Backend+":auth", opts.Quiet),
+		}))
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
-		supported := []string{}
-		missing := []string{}
-		for _, name := range supportOrder(backend) {
-			if caps.Supports[name] {
-				supported = append(supported, name)
-			} else {
-				missing = append(missing, name)
+		probeStatus := authProbeStatus(result)
+		authProbes[participant.Backend] = probeStatus
+		if !opts.JSON {
+			f.Streams().Printf("- %s auth probe: %s\n", participant.Backend, result["status"])
+		}
+		if result["status"] != runner.StatusOK {
+			warning := participant.Backend + " auth probe failed with " + stringValue(result["status"])
+			if reason := stringValue(probeStatus["reason"]); reason != "" {
+				warning += ": " + reason
+			}
+			report["warnings"] = appendStringAny(report["warnings"], warning)
+			if !opts.JSON {
+				f.Streams().Errorf("warning: %s\n", warning)
 			}
 		}
-		supportedText := "none"
-		if len(supported) > 0 {
-			supportedText = joinComma(supported)
-		}
-		streams.Printf("  %s: supports %s\n", backend, supportedText)
-		if len(missing) > 0 {
-			streams.Printf("    missing: %s\n", joinComma(missing))
-		}
 	}
-	status := "failed"
-	if writable {
-		status = "ok"
-	}
-	streams.Printf("- cwd writable: %s (%s)\n", status, detail)
-	streams.Printf("- bias: %s\n", report["bias"])
 	return nil
+}
+
+func authProbeStatus(result map[string]any) map[string]any {
+	status := artifact.StatusWithoutPayload(result)
+	if result["status"] == runner.StatusOK {
+		return status
+	}
+	diagnosticText := stringValue(result["stderr"])
+	if diagnosticText == "" {
+		diagnosticText = stringValue(result["stdout"])
+	}
+	if reason := lastNonemptyLine(diagnosticText); reason != "" {
+		status["reason"] = reason
+	}
+	if tail := diagnosticTail(diagnosticText); tail != "" {
+		status["diagnostic_tail"] = tail
+	}
+	return status
 }
 
 func checkCWDWritable() (bool, string) {
@@ -198,4 +268,45 @@ func joinComma(items []string) string {
 		out += item
 	}
 	return out
+}
+
+func lastNonemptyLine(text string) string {
+	lines := strings.Split(text, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		stripped := strings.TrimSpace(lines[i])
+		if stripped != "" {
+			return stripped
+		}
+	}
+	return ""
+}
+
+func diagnosticTail(text string) string {
+	lines := []string{}
+	for _, line := range strings.Split(text, "\n") {
+		if strings.TrimSpace(line) != "" {
+			lines = append(lines, strings.TrimRight(line, " \t\r"))
+		}
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	if len(lines) > 5 {
+		lines = lines[len(lines)-5:]
+	}
+	tail := strings.Join(lines, "\n")
+	if len(tail) > 1000 {
+		return tail[len(tail)-1000:]
+	}
+	return tail
+}
+
+func appendStringAny(value any, item string) []string {
+	items, _ := value.([]string)
+	return append(items, item)
+}
+
+func stringValue(value any) string {
+	text, _ := value.(string)
+	return text
 }
