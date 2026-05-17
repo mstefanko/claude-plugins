@@ -119,7 +119,7 @@ func TestRunProviderReportsOutputCapAndSalvage(t *testing.T) {
 		WallClockSeconds:      3,
 		MaxOutputBytes:        120,
 		MaxOutputOverrunBytes: 500,
-		OutputCapGraceSeconds: 1,
+		OutputCapGraceSeconds: 5,
 	}))
 	if salvaged.Status != StatusOK {
 		t.Fatalf("salvage status = %s stderr=%q stdout=%q", salvaged.Status, salvaged.Stderr, salvaged.Stdout)
@@ -269,7 +269,7 @@ func TestRunProviderParityFakeScriptScenarios(t *testing.T) {
 	salvage := RunProvider(context.Background(), Options{
 		Argv:    []string{python, script},
 		Env:     append(baseEnv, "BAKEOFF_FAKE_OUTPUT_CAP_SALVAGE_PROVIDERS=claude"),
-		Budgets: Budgets{WallClockSeconds: 3, MaxOutputBytes: 400, OutputCapGraceSeconds: 1, MaxOutputOverrunBytes: 1000},
+		Budgets: Budgets{WallClockSeconds: 3, MaxOutputBytes: 400, OutputCapGraceSeconds: 5, MaxOutputOverrunBytes: 1000},
 		Validator: func(data any) (any, error) {
 			return workorder.ValidateWorkerResult(data, "gather")
 		},

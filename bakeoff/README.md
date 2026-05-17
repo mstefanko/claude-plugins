@@ -7,7 +7,7 @@ replayable report.
 The project is CLI-first. The Claude Code plugin wrapper exists only as a future
 launcher surface: it may draft or approve work orders and shell out to the CLI,
 but orchestration, validation, provider execution, and reports belong in the
-Python package.
+Go CLI.
 
 ## Layout
 
@@ -15,6 +15,10 @@ Python package.
 bakeoff/
   .claude-plugin/plugin.json
   bin/bakeoff
+  bin/bakeoff-python
+  go.mod
+  cmd/bakeoff/
+  internal/
   pyproject.toml
   src/bakeoff/
   tests/
@@ -24,11 +28,28 @@ bakeoff/
 ## Development
 
 ```bash
-python3 -m venv .venv
-. .venv/bin/activate
-python3 -m pip install -e ".[dev]"
-bakeoff --help
-pytest
+go run ./cmd/bakeoff --help
+go test ./...
+go test -race ./...
+python3 -m pytest
+python3 scripts/parity-go.py
+```
+
+`bin/bakeoff` is the public launcher. It runs `dist/bakeoff` when a release
+binary is present, honors `BAKEOFF_GO_BINARY` for tests and local dogfood, and
+falls back to `go run ./cmd/bakeoff` from a checkout. Build a local release
+binary with:
+
+```bash
+mkdir -p dist
+go build -o dist/bakeoff ./cmd/bakeoff
+```
+
+The frozen Python implementation is kept only as a rollback/oracle path:
+
+```bash
+bin/bakeoff-python --help
+python3 scripts/parity-go.py --python-only
 ```
 
 For plugin dogfood, use the wrapper directly:
@@ -36,6 +57,11 @@ For plugin dogfood, use the wrapper directly:
 ```bash
 "${CLAUDE_PLUGIN_ROOT:-$PWD}/bin/bakeoff" --help
 ```
+
+Rollback during the cutover window is intentionally cheap: restore
+`bin/bakeoff` to the Python launcher body used by `bin/bakeoff-python`, or set
+callers to `bin/bakeoff-python` while the Go issue is fixed. Do not remove
+`src/bakeoff/` until the rollback window closes.
 
 ## Common Workflows
 
@@ -105,6 +131,10 @@ pretty-printed JSON object. `--json` implies effective `--quiet`, so provider
 heartbeats and human progress do not appear on stdout. Summary provider status
 uses the closed enum `ok | ok_after_format_retry | failed`, with raw Bakeoff
 statuses preserved when they differ or fail.
+
+Provider object keys in Go-written JSON and provider sections in reports are
+sorted by provider id for deterministic output. The provider order in the work
+order still controls judge A/B assignment and position-swap semantics.
 
 `bakeoff research` writes a replayable ledger under `runs/<run-id>/`:
 

@@ -1,11 +1,15 @@
 package reviewcontext
 
 import (
+	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
 )
@@ -23,14 +27,14 @@ func TestBuildApplyAndRenderReviewContext(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	context, err := Build(Options{BaseRef: "HEAD", IncludePatch: true}, repo, "2026-05-16T00:00:00Z")
+	reviewCtx, err := Build(context.Background(), Options{BaseRef: "HEAD", IncludePatch: true}, repo, "2026-05-16T00:00:00Z")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if context.BaseRef != "HEAD" || context.Patch == nil || changedFileCount(context.ChangedFiles) != 1 {
-		t.Fatalf("unexpected context: %#v", context)
+	if reviewCtx.BaseRef != "HEAD" || reviewCtx.Patch == nil || changedFileCount(reviewCtx.ChangedFiles) != 1 {
+		t.Fatalf("unexpected context: %#v", reviewCtx)
 	}
-	markdown := RenderMarkdown(context)
+	markdown := RenderMarkdown(reviewCtx)
 	if !strings.Contains(markdown, "## Patch") || !strings.Contains(markdown, "app.go") {
 		t.Fatalf("markdown missing patch context:\n%s", markdown)
 	}
@@ -51,12 +55,35 @@ func TestBuildApplyAndRenderReviewContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	applied, err := Apply(wo, context)
+	applied, err := Apply(wo, reviewCtx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(applied.Background, "<generated_review_context>") || !strings.Contains(applied.Background, "Original background.") {
 		t.Fatalf("background missing generated context:\n%s", applied.Background)
+	}
+}
+
+func TestBuildCancelsGitSubprocessesWithContext(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test uses a POSIX shell fake git")
+	}
+	binDir := t.TempDir()
+	fakeGit := filepath.Join(binDir, "git")
+	if err := os.WriteFile(fakeGit, []byte("#!/bin/sh\nsleep 5\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	started := time.Now()
+	_, err := Build(ctx, Options{BaseRef: "HEAD"}, t.TempDir(), "2026-05-16T00:00:00Z")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Build error = %v, want deadline exceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("git subprocess did not stop promptly: %s", elapsed)
 	}
 }
 

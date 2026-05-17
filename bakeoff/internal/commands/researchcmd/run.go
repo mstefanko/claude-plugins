@@ -65,8 +65,11 @@ func RunResearch(ctx context.Context, f commands.Factory, opts *ResearchOptions)
 	var reviewContext *reviewcontext.Context
 	if reviewOptions(opts).Enabled() {
 		cwd, _ := os.Getwd()
-		reviewContext, err = reviewcontext.Build(reviewOptions(opts), cwd, startedAt)
+		reviewContext, err = reviewcontext.Build(ctx, reviewOptions(opts), cwd, startedAt)
 		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return err
+			}
 			return commands.WrapValidation(err)
 		}
 		if triagepkg.FacetID(wo.Raw) != triagepkg.CodeReviewFacetID {

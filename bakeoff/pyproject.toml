@@ -11,7 +11,7 @@ dev = [
 ]
 
 [project.scripts]
-bakeoff = "bakeoff.cli:main"
+bakeoff-python = "bakeoff.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

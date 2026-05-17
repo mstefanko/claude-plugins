@@ -1,7 +1,9 @@
 package reviewcontext
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -59,7 +61,7 @@ type Context struct {
 	Patch            *string
 }
 
-func Build(options Options, cwd string, runStartedAt string) (*Context, error) {
+func Build(ctx context.Context, options Options, cwd string, runStartedAt string) (*Context, error) {
 	if !options.Enabled() {
 		return nil, fmt.Errorf("review context options are not enabled")
 	}
@@ -67,38 +69,44 @@ func Build(options Options, cwd string, runStartedAt string) (*Context, error) {
 	if err != nil {
 		return nil, workorder.Validationf("review context cwd failed: %v", err)
 	}
-	gitRoot := runGit([]string{"git", "rev-parse", "--show-toplevel"}, captureCWD)
+	gitRoot := runGit(ctx, []string{"git", "rev-parse", "--show-toplevel"}, captureCWD)
 	if gitRoot.returnCode != 0 {
+		if isContextError(gitRoot.err) {
+			return nil, gitRoot.err
+		}
 		if gitRoot.err != nil && !isExitError(gitRoot.err) {
 			return nil, workorder.Validationf("review context repo root command failed: %s", gitRoot.err)
 		}
 		return nil, workorder.Validationf("review context requires a git repository")
 	}
-	headCommit, err := checkedGit([]string{"git", "rev-parse", "HEAD"}, captureCWD, "head commit")
+	headCommit, err := checkedGit(ctx, []string{"git", "rev-parse", "HEAD"}, captureCWD, "head commit")
 	if err != nil {
 		return nil, err
 	}
-	headRef, err := checkedGit([]string{"git", "branch", "--show-current"}, captureCWD, "head ref")
+	headRef, err := checkedGit(ctx, []string{"git", "branch", "--show-current"}, captureCWD, "head ref")
 	if err != nil {
 		return nil, err
 	}
 	baseRef := options.EffectiveBaseRef()
-	baseCommit := runGit([]string{"git", "rev-parse", "--verify", baseRef + "^{commit}"}, captureCWD)
+	baseCommit := runGit(ctx, []string{"git", "rev-parse", "--verify", baseRef + "^{commit}"}, captureCWD)
 	if baseCommit.returnCode != 0 {
+		if isContextError(baseCommit.err) {
+			return nil, baseCommit.err
+		}
 		if baseCommit.err != nil && !isExitError(baseCommit.err) {
 			return nil, workorder.Validationf("review context base ref command failed: %s", baseCommit.err)
 		}
 		return nil, workorder.Validationf("review context base ref not found: %s", baseRef)
 	}
-	dirty, err := checkedGit([]string{"git", "status", "--porcelain"}, captureCWD, "dirty status")
+	dirty, err := checkedGit(ctx, []string{"git", "status", "--porcelain"}, captureCWD, "dirty status")
 	if err != nil {
 		return nil, err
 	}
-	diffstat, err := checkedGit([]string{"git", "diff", "--stat", "--find-renames", strings.TrimSpace(baseCommit.stdout), "--", Pathspec}, captureCWD, "diffstat")
+	diffstat, err := checkedGit(ctx, []string{"git", "diff", "--stat", "--find-renames", strings.TrimSpace(baseCommit.stdout), "--", Pathspec}, captureCWD, "diffstat")
 	if err != nil {
 		return nil, err
 	}
-	changedFiles, err := checkedGit([]string{"git", "diff", "--name-status", "--find-renames", strings.TrimSpace(baseCommit.stdout), "--", Pathspec}, captureCWD, "changed files")
+	changedFiles, err := checkedGit(ctx, []string{"git", "diff", "--name-status", "--find-renames", strings.TrimSpace(baseCommit.stdout), "--", Pathspec}, captureCWD, "changed files")
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +119,7 @@ func Build(options Options, cwd string, runStartedAt string) (*Context, error) {
 	included := []string{"metadata", "diffstat", "changed_files"}
 	var patch *string
 	if options.IncludePatch {
-		patchResult, err := checkedGit([]string{"git", "diff", "--no-ext-diff", "--find-renames", "--patch", strings.TrimSpace(baseCommit.stdout), "--", Pathspec}, captureCWD, "patch")
+		patchResult, err := checkedGit(ctx, []string{"git", "diff", "--no-ext-diff", "--find-renames", "--patch", strings.TrimSpace(baseCommit.stdout), "--", Pathspec}, captureCWD, "patch")
 		if err != nil {
 			return nil, err
 		}
@@ -278,13 +286,19 @@ type gitResult struct {
 	err        error
 }
 
-func runGit(argv []string, cwd string) gitResult {
-	cmd := exec.Command(argv[0], argv[1:]...)
+func runGit(ctx context.Context, argv []string, cwd string) gitResult {
+	if err := ctx.Err(); err != nil {
+		return gitResult{returnCode: 1, err: err}
+	}
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = cwd
 	stdout, stderr := strings.Builder{}, strings.Builder{}
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err := cmd.Run()
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		err = ctxErr
+	}
 	code := 0
 	if err != nil {
 		code = 1
@@ -314,8 +328,15 @@ func isExitError(err error) bool {
 	return ok
 }
 
-func checkedGit(argv []string, cwd string, label string) (gitResult, error) {
-	result := runGit(argv, cwd)
+func isContextError(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+func checkedGit(ctx context.Context, argv []string, cwd string, label string) (gitResult, error) {
+	result := runGit(ctx, argv, cwd)
+	if isContextError(result.err) {
+		return result, result.err
+	}
 	if result.returnCode != 0 {
 		tail := stderrTail(result.stderr)
 		suffix := ""

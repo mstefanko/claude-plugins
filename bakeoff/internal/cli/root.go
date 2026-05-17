@@ -81,7 +81,7 @@ func Main(ctx context.Context, argv []string) int {
 
 func NewRootCommand(f *Factory) *cobra.Command {
 	root := &cobra.Command{
-		Use:           "bakeoff-go",
+		Use:           "bakeoff",
 		Short:         "Tiny research bakeoff harness.",
 		SilenceUsage:  true,
 		SilenceErrors: true,

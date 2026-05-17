@@ -1,18 +1,17 @@
 # Go Post-Cutover Cleanup Implementation Plan
 
 Date: 2026-05-17
-Status: collecting dogfood findings
-Scope: Go-only cleanup items discovered while dogfooding `bakeoff-go`; defer
-behavior-changing cleanup until after the Go cutover unless a finding blocks
-parity or safe operation.
+Status: post-cutover cleanup queue
+Scope: Go-only cleanup items discovered while dogfooding the Go CLI; defer
+behavior-changing cleanup until follow-up commits unless a finding blocks safe
+operation.
 
 ## Context
 
-The Go port is currently being exercised through live dogfood runs. During the
-parity period, Python remains the behavior oracle, so issues that mirror Python
-should usually be recorded here instead of fixed immediately in Go. After
-cutover, use this file to batch cleanup of ledger contracts, manifest coverage,
-JSON summary surfaces, and internal duplication.
+The Go port has moved to the public launcher path. Python remains available as
+the legacy oracle/rollback path, but this file now tracks Go-only cleanup for
+follow-up commits: ledger contracts, manifest coverage, JSON summary surfaces,
+and internal duplication.
 
 ## Findings Collected
 
@@ -35,10 +34,15 @@ Current behavior:
 - Provider and judge evidence such as `providers/*/status.json`,
   `providers/*/final.json`, `providers/*/last-message.txt`,
   `judge/status.json`, and `judge/result.json` is not fingerprinted.
+- Provider and judge prompt artifacts are also outside the fingerprint set even
+  though they define exactly what each provider or judge was asked to do:
+  `providers/*/prompt.txt` and `judge/prompt*.txt`.
 
 Risk:
 - A run can pass `runs verify` even if important provider or judge evidence was
   changed, removed, or mismatched after the run.
+- A run can pass `runs verify` even if the captured prompt was changed after
+  execution, weakening the replayability of the ledger.
 - This weakens the replay/audit value of the run ledger described in the
   README.
 
@@ -46,16 +50,29 @@ Notes:
 - This mirrors the Python oracle, so it is not a Go-port parity bug.
 - Treat this as a post-cutover contract tightening unless later dogfood shows
   it blocks safe operation.
+- This is the useful small piece to borrow from heavier orchestration systems:
+  trust the structured ledger only after verifying the stable evidence files.
+  Do not turn this into event streaming, transcript databases, provenance
+  services, or task orchestration state.
 
 Possible implementation direction:
 - Define a ledger artifact inventory that distinguishes required core files,
   optional review files, provider artifacts, judge artifacts, triage artifacts,
   and diagnostic/transient artifacts.
-- Expand manifest fingerprinting to include stable provider and judge evidence.
+- Expand manifest fingerprinting to include stable provider and judge evidence:
+  provider `prompt.txt`, `status.json`, successful `final.json`, and
+  `last-message.txt` when present or when `final_json_source` says
+  `last_message`; judge `prompt*.txt`, `status*.json`, successful
+  `result*.json`, and `last-message*.txt` when present or used.
 - Decide whether large or noisy outputs such as `stdout.txt`, `stderr.txt`, and
   repair artifacts should be fingerprinted, summarized, or explicitly excluded.
+- Prefer conditional requirements derived from recorded status over broad file
+  glob requirements; failed providers should not need `final.json`, and older
+  ledgers should remain readable with clear legacy warnings.
 - Add tests that mutate provider and judge artifacts and assert
   `runs verify` reports the mismatch.
+- Add tests that mutate provider and judge prompts and assert `runs verify`
+  reports the mismatch.
 
 ### 2. Summary surfaces can drift independently
 
@@ -254,7 +271,7 @@ Current behavior:
   `status: ok`.
 - The same run first failed under the surrounding Codex execution sandbox
   because provider CLIs could not use normal auth/state/network. Treat that as
-  a dogfood environment issue, not evidence that `bakeoff-go` failed.
+  a dogfood environment issue, not evidence that the Go CLI failed.
 - The required-scope run exercised a Claude codebase worker with
   `claude:disallowedTools=WebFetch,WebSearch` and a Codex web worker with
   `isolated_cwd` plus `codex:sandbox=read-only`; both recorded
@@ -366,10 +383,15 @@ Current behavior:
   with no stale triage inputs.
 - The same run first failed under the surrounding Codex execution sandbox
   because provider CLIs could not use normal auth/session/network. Treat that
-  as a dogfood environment issue, not evidence that `bakeoff-go` failed.
+  as a dogfood environment issue, not evidence that the Go CLI failed.
 - `triagecmd.Run` builds the triage prompt payload as `map[string]any` and
   passes it to `prompt.BuildTriagePrompt`, so the required payload fields and
   their source types are not compiler-visible.
+- Code-review facet runs already get the same generic triage prompt as other
+  facet runs. The prompt tells triage to classify selected findings, verify
+  citation semantics, and use the facet only as actionability context, but it
+  does not explicitly say "judge against the stated acceptance criteria or
+  changed-behavior contract" for review-style runs.
 - `BuildFindingIndex` returns source findings as `map[string]string` entries
   with `id`, `text`, and optional `section`, while the prompt fixture and
   result schema describe `source_finding_id`. Runtime validation then maps
@@ -421,6 +443,9 @@ Risk:
   validation, weakening the audit value of `citation_checks.json`.
 - Map-shaped payloads and filter summaries make summary, manifest, markdown,
   prompt, and validator schemas easy to change independently.
+- Code-review triage can blur contract violations, evidence gaps, warnings,
+  and style preferences unless the prompt makes the review contract explicit
+  while still using the existing triage schema.
 - Duplicate classification lists, state strings, section constants, and helper
   functions create small but real drift hazards across triage, report,
   manifest, summary, verify, and work-order validation.
@@ -437,6 +462,11 @@ Notes:
   source-finding key naming, F-017 folds into citation-check ID validation,
   F-018/F-020 fold into typed triage state, and F-021 folds into safe
   `--force` replacement.
+- This is the other small useful borrowing from heavier orchestration systems:
+  code-review verification should require concrete evidence against the stated
+  work contract. Do not import binary PASS/FAIL gates, multi-reviewer design
+  gates, coverage enforcement, per-DoD state machines, or PR shepherding into
+  Bakeoff.
 - F-013 needs a focused reproduction before changing behavior; it may turn out
   to be only a theoretical divergence between manifest and triage facet lookup.
 - F-003 had one out-of-range `show.go` citation in the triage evidence, but the
@@ -451,6 +481,19 @@ Possible implementation direction:
   fixtures, and result validation. Either emit `source_finding_id` in payload
   entries or update the prompt/schema language to state that payload entries use
   `id` while result entries must echo that value as `source_finding_id`.
+- For `facet.id == "code-review"`, add a tiny triage prompt block that says:
+  verify each selected finding against the work-order goal/background,
+  generated review context, acceptance criteria when present, and changed
+  behavior; require file:line evidence for actionable defects; use existing
+  `classification`, `severity`, `confidence`, and `recommended_action` fields
+  to distinguish real defects from warnings, product decisions, evidence gaps,
+  and style-only findings.
+- Keep that review-contract language prompt-only and schema-neutral: no new
+  verdict enum, no per-DoD checklist artifact, no new mode, and no orchestration
+  gate.
+- Add prompt fixture/golden tests that prove the code-review-specific triage
+  block appears for `code-review` facet payloads and does not appear for generic
+  or non-review facets.
 - Validate `citation_check_ids` against the generated citation-check ID set,
   or explicitly document why those IDs are advisory-only.
 - Split triage validation from enrichment: keep structural result validation,

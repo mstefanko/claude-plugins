@@ -2,5 +2,19 @@
 set -euo pipefail
 
 ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-export PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
-exec python3 -m bakeoff.cli "$@"
+
+if [[ -n "${BAKEOFF_GO_BINARY:-}" ]]; then
+  exec "$BAKEOFF_GO_BINARY" "$@"
+fi
+
+if [[ -x "$ROOT/dist/bakeoff" ]]; then
+  exec "$ROOT/dist/bakeoff" "$@"
+fi
+
+if command -v go >/dev/null 2>&1; then
+  export GOCACHE="${GOCACHE:-/tmp/bakeoff-go-cache}"
+  exec go run "$ROOT/cmd/bakeoff" "$@"
+fi
+
+echo "error: bakeoff Go CLI is not built and Go is not on PATH" >&2
+exit 1

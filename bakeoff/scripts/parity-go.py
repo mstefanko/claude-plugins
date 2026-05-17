@@ -368,12 +368,12 @@ def cases() -> list[Case]:
 
 
 def build_go_binary(out_dir: Path) -> Path:
-    binary = out_dir / ("bakeoff-go.exe" if os.name == "nt" else "bakeoff-go")
+    binary = out_dir / ("bakeoff.exe" if os.name == "nt" else "bakeoff")
     env = os.environ.copy()
     env.setdefault("GOCACHE", "/tmp/bakeoff-go-cache")
     Path(env["GOCACHE"]).mkdir(parents=True, exist_ok=True)
     completed = subprocess.run(
-        ["go", "build", "-o", str(binary), "./cmd/bakeoff-go"],
+        ["go", "build", "-o", str(binary), "./cmd/bakeoff"],
         cwd=ROOT,
         env=env,
         text=True,
@@ -389,10 +389,12 @@ def build_go_binary(out_dir: Path) -> Path:
 
 
 def cli_argv(target: str, *, go_binary: Path | None = None) -> list[str]:
-    if target == "python":
+    if target == "public":
         return [str(ROOT / "bin" / "bakeoff")]
+    if target == "python":
+        return [str(ROOT / "bin" / "bakeoff-python")]
     if go_binary is None:
-        raise RuntimeError("go target requires a built bakeoff-go binary")
+        raise RuntimeError("go target requires a built bakeoff binary")
     return [str(go_binary)]
 
 
@@ -465,6 +467,8 @@ def run_case(target: str, case: Case, *, go_binary: Path | None = None) -> dict[
     with tempfile.TemporaryDirectory(prefix=f"bakeoff-parity-{case.name}-") as tmp:
         workdir = Path(tmp)
         env = prepare_case(workdir, case)
+        if target == "public" and go_binary is not None:
+            env["BAKEOFF_GO_BINARY"] = str(go_binary)
         for action in case.setup:
             completed = run_cli(target, action.argv, workdir=workdir, env=env, go_binary=go_binary)
             if completed.returncode not in action.expect:
@@ -611,7 +615,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Bakeoff side-by-side parity harness.")
     parser.add_argument("cases", nargs="*", help="optional fixture case names")
     parser.add_argument("--python-only", action="store_true", help="run only the frozen Python oracle")
-    parser.add_argument("--go-only", action="store_true", help="run only bakeoff-go")
+    parser.add_argument("--go-only", action="store_true", help="run a temporary compiled Go binary directly")
+    parser.add_argument("--public", action="store_true", help="run bin/bakeoff, the default cutover launcher")
     parser.add_argument("--update", action="store_true", help="refresh committed Python oracle snapshots")
     parser.add_argument("--list", action="store_true", help="list fixture case names")
     args = parser.parse_args()
@@ -621,15 +626,20 @@ def main() -> int:
             print(case.name)
         return 0
 
-    if args.python_only and args.go_only:
-        parser.error("--python-only and --go-only are mutually exclusive")
+    selected_targets = [args.python_only, args.go_only, args.public]
+    if sum(1 for selected in selected_targets if selected) > 1:
+        parser.error("--python-only, --go-only, and --public are mutually exclusive")
 
-    target = "go" if args.go_only else "python"
+    target = "public"
+    if args.go_only:
+        target = "go"
+    elif args.python_only:
+        target = "python"
     failures: list[str] = []
     go_temp: tempfile.TemporaryDirectory[str] | None = None
     go_binary: Path | None = None
-    if target == "go":
-        go_temp = tempfile.TemporaryDirectory(prefix="bakeoff-go-bin-")
+    if target in {"go", "public"}:
+        go_temp = tempfile.TemporaryDirectory(prefix="bakeoff-bin-")
         go_binary = build_go_binary(Path(go_temp.name))
 
     try:
