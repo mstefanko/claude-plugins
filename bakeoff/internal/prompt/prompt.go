@@ -21,7 +21,7 @@ var scopeInstructions = map[string]string{
 }
 
 func BuildWorkerPrompt(wo *workorder.WorkOrder, provider workorder.Participant) (string, error) {
-	base, err := fixturePrompt(fmt.Sprintf("worker-%s-claude.txt", wo.Type))
+	base, err := fixturePrompt(fmt.Sprintf("worker-%s-%s.txt", wo.Type, workerFixtureBackend(provider)))
 	if err != nil {
 		return "", err
 	}
@@ -176,8 +176,15 @@ func fixturePrompt(name string) (string, error) {
 	return string(data), nil
 }
 
+func workerFixtureBackend(provider workorder.Participant) string {
+	if provider.Backend == "codex" {
+		return "codex"
+	}
+	return "claude"
+}
+
 func sortedJSON(value any) (string, error) {
-	text, err := workorder.JSONText(value, true)
+	text, err := workorder.JSONText(value)
 	if err != nil {
 		return "", err
 	}
@@ -186,7 +193,7 @@ func sortedJSON(value any) (string, error) {
 
 func replaceTagInner(text string, tag string, replacement string) string {
 	open := "<" + tag + ">"
-	close := "</" + tag + ">"
+	closeTag := "</" + tag + ">"
 	start := strings.Index(text, open)
 	if start == -1 {
 		return text
@@ -195,7 +202,7 @@ func replaceTagInner(text string, tag string, replacement string) string {
 	if strings.HasPrefix(text[contentStart:], "\n") {
 		contentStart++
 	}
-	end := strings.Index(text[contentStart:], close)
+	end := strings.Index(text[contentStart:], closeTag)
 	if end == -1 {
 		return text
 	}

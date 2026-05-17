@@ -282,7 +282,7 @@ func Validate(data map[string]any) (*WorkOrder, error) {
 
 func InitTemplate(kind string) (string, error) {
 	if !contains(initKinds, kind) {
-		return "", Validationf("type must be one of: %s (got %s)", strings.Join(modes, ", "), pyRepr(kind))
+		return "", Validationf("type must be one of: %s (got %s)", strings.Join(initKinds, ", "), pyRepr(kind))
 	}
 	data, err := templateFS.ReadFile(filepath.ToSlash(filepath.Join("templates", kind+".work-order.json")))
 	if err != nil {

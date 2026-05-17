@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 )
 
-func JSONText(value any, sortKeys bool) (string, error) {
+func JSONText(value any) (string, error) {
 	var buf bytes.Buffer
 	encoder := json.NewEncoder(&buf)
 	encoder.SetEscapeHTML(false)
@@ -49,6 +49,9 @@ func WriteTextAtomic(path string, text string) error {
 		return err
 	}
 	closed = true
+	if err := os.Chmod(tmpName, 0o644); err != nil {
+		return err
+	}
 	if err := os.Rename(tmpName, path); err != nil {
 		return err
 	}
@@ -56,7 +59,7 @@ func WriteTextAtomic(path string, text string) error {
 }
 
 func WriteJSONAtomic(path string, value any) error {
-	text, err := JSONText(value, true)
+	text, err := JSONText(value)
 	if err != nil {
 		return err
 	}

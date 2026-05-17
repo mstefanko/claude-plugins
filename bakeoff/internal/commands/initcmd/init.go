@@ -2,7 +2,6 @@ package initcmd
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 
@@ -49,7 +48,7 @@ func runInit(_ context.Context, f commands.Factory, opts *InitOptions) error {
 	}
 	template, err := workorder.InitTemplate(opts.Type)
 	if err != nil {
-		return wrapValidation(err)
+		return commands.WrapValidation(err)
 	}
 	if err := workorder.WriteTextAtomic(path, template); err != nil {
 		return &apperror.RuntimeError{Err: err}
@@ -74,12 +73,4 @@ func effectiveMode(kind string) string {
 func exists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
-}
-
-func wrapValidation(err error) error {
-	var validation *workorder.ValidationError
-	if errors.As(err, &validation) {
-		return &apperror.ValidationError{Message: validation.Error(), Err: err}
-	}
-	return err
 }

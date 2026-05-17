@@ -204,9 +204,7 @@ func RunProvider(ctx context.Context, opts Options) Result {
 		_ = os.Remove(opts.FinalMessagePath)
 	}
 
-	commandCtx, commandCancel := context.WithCancel(ctx)
-	defer commandCancel()
-	cmd := exec.CommandContext(commandCtx, opts.Argv[0], opts.Argv[1:]...)
+	cmd := exec.CommandContext(ctx, opts.Argv[0], opts.Argv[1:]...)
 	if opts.CWD != "" {
 		cmd.Dir = opts.CWD
 	}
@@ -824,13 +822,7 @@ func normalizeBudgets(b Budgets) Budgets {
 	if b.HeartbeatSeconds < 0 {
 		b.HeartbeatSeconds = 0
 	}
-	if b.HeartbeatSeconds == 0 {
-		b.HeartbeatSeconds = 0
-	}
 	if b.OutputCapGraceSeconds < 0 {
-		b.OutputCapGraceSeconds = 0
-	}
-	if b.OutputCapGraceSeconds == 0 {
 		b.OutputCapGraceSeconds = 0
 	}
 	if b.MaxOutputOverrunBytes < 0 {

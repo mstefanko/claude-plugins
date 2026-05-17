@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -107,6 +108,49 @@ func TestInitTemplatesMatchFrozenShape(t *testing.T) {
 		if !strings.HasSuffix(text, "\n") {
 			t.Fatalf("%s template must end in newline", mode)
 		}
+	}
+}
+
+func TestWriteTextAtomicWritesWorldReadableFiles(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nested", "work-order.json")
+	if err := WriteTextAtomic(path, "ok\n"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "ok\n" {
+		t.Fatalf("content = %q", data)
+	}
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != 0o644 {
+			t.Fatalf("mode = %o, want 0644", got)
+		}
+	}
+}
+
+func TestWriteTextAtomicCleansTempFileWhenRenameFails(t *testing.T) {
+	dir := t.TempDir()
+	targetDir := filepath.Join(dir, "target")
+	if err := os.Mkdir(targetDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := WriteTextAtomic(targetDir, "cannot replace directory\n"); err == nil {
+		t.Fatal("expected rename failure")
+	}
+
+	matches, err := filepath.Glob(filepath.Join(dir, ".target.*.tmp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("temporary files were not cleaned up: %#v", matches)
 	}
 }
 

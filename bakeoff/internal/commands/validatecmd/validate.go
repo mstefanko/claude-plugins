@@ -2,9 +2,7 @@ package validatecmd
 
 import (
 	"context"
-	"errors"
 
-	"github.com/mstefanko/claude-plugins/bakeoff/internal/apperror"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
 	"github.com/spf13/cobra"
@@ -36,7 +34,7 @@ func NewCmdValidate(f commands.Factory, runF func(context.Context, *ValidateOpti
 func runValidate(_ context.Context, f commands.Factory, opts *ValidateOptions) error {
 	wo, err := workorder.Load(opts.WorkOrder)
 	if err != nil {
-		return wrapValidation(err)
+		return commands.WrapValidation(err)
 	}
 	streams := f.Streams()
 	streams.Printf("valid work order\n")
@@ -53,12 +51,4 @@ func runValidate(_ context.Context, f commands.Factory, opts *ValidateOptions) e
 	}
 	streams.Printf("  judge:   %s %s (%s)\n", wo.Judge.Backend, wo.Judge.Model, wo.Judge.Effort)
 	return nil
-}
-
-func wrapValidation(err error) error {
-	var validation *workorder.ValidationError
-	if errors.As(err, &validation) {
-		return &apperror.ValidationError{Message: validation.Error(), Err: err}
-	}
-	return err
 }
