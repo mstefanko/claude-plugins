@@ -2,8 +2,14 @@ package lscmd
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"sort"
 
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/apperror"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/manifest"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/summary"
 	"github.com/spf13/cobra"
 )
 
@@ -28,7 +34,7 @@ func NewCmdLs(f commands.Factory, runF func(context.Context, *LsOptions) error) 
 				return err
 			}
 			if runF == nil {
-				return commands.PlaceholderError("ls")
+				return runLs(cmd.Context(), f, opts)
 			}
 			return runF(cmd.Context(), opts)
 		},
@@ -38,4 +44,67 @@ func NewCmdLs(f commands.Factory, runF func(context.Context, *LsOptions) error) 
 	cmd.Flags().StringVar(&opts.Facet, "facet", "", "filter by facet id")
 	cmd.Flags().StringVar(&opts.TriageState, "triage-state", "", "filter by triage state")
 	return cmd
+}
+
+func runLs(_ context.Context, f commands.Factory, opts *LsOptions) error {
+	if _, err := os.Stat(opts.Out); err != nil {
+		if opts.JSON {
+			return summary.Print(f.Streams().Out, map[string]any{"schema_version": 1, "out_dir": opts.Out, "runs": []any{}})
+		}
+		f.Streams().Printf("no runs found under %s\n", opts.Out)
+		return nil
+	}
+	entries, err := os.ReadDir(opts.Out)
+	if err != nil {
+		return &apperror.RuntimeError{Err: err}
+	}
+	runDirs := []string{}
+	for _, entry := range entries {
+		if entry.IsDir() && entry.Name() != "latest" {
+			runDirs = append(runDirs, filepath.Join(opts.Out, entry.Name()))
+		}
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(runDirs)))
+	rows := []map[string]any{}
+	for _, runDir := range runDirs {
+		row := manifest.RowForLS(runDir)
+		if opts.Facet != "" && row["facet_id"] != opts.Facet {
+			continue
+		}
+		if opts.TriageState != "" && row["triage_state"] != opts.TriageState {
+			continue
+		}
+		rows = append(rows, row)
+	}
+	if opts.JSON {
+		outRows := make([]any, len(rows))
+		for i, row := range rows {
+			outRows[i] = row
+		}
+		if err := summary.Print(f.Streams().Out, map[string]any{"schema_version": 1, "out_dir": opts.Out, "runs": outRows}); err != nil {
+			return &apperror.RuntimeError{Err: err}
+		}
+		return nil
+	}
+	f.Streams().Printf("run_id\ttype\tfacet\tdecision\ttriage\tfinished_at\n")
+	for _, row := range rows {
+		facet := stringValue(row["facet_id"])
+		if facet == "" {
+			facet = "-"
+		}
+		f.Streams().Printf("%s\t%s\t%s\t%s\ttriage:%s\t%s\n", stringValue(row["run_id"]), defaultString(row["type"], "?"), facet, defaultString(row["decision_kind"], "?"), defaultString(row["triage_state"], "no"), defaultString(row["finished_at"], "-"))
+	}
+	return nil
+}
+
+func stringValue(value any) string {
+	text, _ := value.(string)
+	return text
+}
+
+func defaultString(value any, fallback string) string {
+	if text := stringValue(value); text != "" {
+		return text
+	}
+	return fallback
 }

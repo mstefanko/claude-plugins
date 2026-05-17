@@ -6,6 +6,7 @@ import (
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/buildinfo"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/output"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/provider"
 )
 
 type Factory struct {
@@ -13,15 +14,18 @@ type Factory struct {
 	buildInfo      buildinfo.Info
 	now            func() time.Time
 	lookupProvider func(string) (string, error)
+	capabilities   *provider.CapabilityRegistry
 }
 
 func NewFactory(streams output.Streams) *Factory {
-	return &Factory{
+	f := &Factory{
 		streams:        streams,
 		buildInfo:      buildinfo.Current(),
 		now:            time.Now,
 		lookupProvider: exec.LookPath,
 	}
+	f.capabilities = provider.NewCapabilityRegistry(f.LookupProvider)
+	return f
 }
 
 func (f *Factory) Streams() output.Streams {
@@ -38,4 +42,8 @@ func (f *Factory) Now() time.Time {
 
 func (f *Factory) LookupProvider(name string) (string, error) {
 	return f.lookupProvider(name)
+}
+
+func (f *Factory) Capabilities() *provider.CapabilityRegistry {
+	return f.capabilities
 }

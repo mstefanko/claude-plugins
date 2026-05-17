@@ -37,3 +37,21 @@ func killProcessGroup(process *os.Process) error {
 	}
 	return nil
 }
+
+func processExitCode(state *os.ProcessState) *int {
+	if state == nil {
+		return nil
+	}
+	if status, ok := state.Sys().(syscall.WaitStatus); ok {
+		if status.Signaled() {
+			code := -int(status.Signal())
+			return &code
+		}
+		if status.Exited() {
+			code := status.ExitStatus()
+			return &code
+		}
+	}
+	code := state.ExitCode()
+	return &code
+}

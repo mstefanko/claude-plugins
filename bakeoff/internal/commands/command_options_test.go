@@ -3,9 +3,12 @@ package commands_test
 import (
 	"bytes"
 	"context"
+	"os/exec"
 	"reflect"
 	"testing"
+	"time"
 
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/buildinfo"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/doctorcmd"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/initcmd"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/lscmd"
@@ -16,6 +19,7 @@ import (
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/triagecmd"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/validatecmd"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/output"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/provider"
 	"github.com/spf13/cobra"
 )
 
@@ -25,6 +29,22 @@ type fakeFactory struct {
 
 func (f fakeFactory) Streams() output.Streams {
 	return f.streams
+}
+
+func (f fakeFactory) BuildInfo() buildinfo.Info {
+	return buildinfo.Current()
+}
+
+func (f fakeFactory) Now() time.Time {
+	return time.Unix(0, 0).UTC()
+}
+
+func (f fakeFactory) LookupProvider(name string) (string, error) {
+	return exec.LookPath(name)
+}
+
+func (f fakeFactory) Capabilities() *provider.CapabilityRegistry {
+	return provider.NewCapabilityRegistry(f.LookupProvider)
 }
 
 func testFactory() fakeFactory {

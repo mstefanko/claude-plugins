@@ -32,7 +32,7 @@ func NewCmdResearch(f commands.Factory, runF func(context.Context, *ResearchOpti
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.WorkOrder = args[0]
 			if runF == nil {
-				return commands.PlaceholderError("research")
+				return runResearch(cmd.Context(), f, opts)
 			}
 			return runF(cmd.Context(), opts)
 		},

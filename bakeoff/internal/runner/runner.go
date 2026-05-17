@@ -233,7 +233,15 @@ func RunProvider(ctx context.Context, opts Options) Result {
 		return state.status(StatusExitError, nil, "", err.Error(), nil, "")
 	}
 	if err := cmd.Start(); err != nil {
-		return state.status(StatusMissingProvider, nil, "", err.Error(), nil, "")
+		message := err.Error()
+		if errors.Is(err, exec.ErrNotFound) {
+			message = fmt.Sprintf("[Errno 2] No such file or directory: '%s'", opts.Argv[0])
+		}
+		result := state.status(StatusMissingProvider, nil, "", message, nil, "")
+		if result.WallSeconds == 0 {
+			result.WallSeconds = 0.001
+		}
+		return result
 	}
 
 	groupCtx, groupCancel := context.WithCancel(ctx)
@@ -499,6 +507,9 @@ func (s *captureState) appendStdout(chunk []byte, cmd *exec.Cmd) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
+	if s.outputCapHardStop {
+		return
+	}
 	s.stdoutObservedBytes += len(chunk)
 	if s.outputCapHit {
 		s.appendStdoutTailLocked(chunk)
@@ -842,11 +853,7 @@ func quietThreshold(heartbeat int) int {
 }
 
 func exitCodePtr(cmd *exec.Cmd) *int {
-	if cmd.ProcessState == nil {
-		return nil
-	}
-	code := cmd.ProcessState.ExitCode()
-	return &code
+	return processExitCode(cmd.ProcessState)
 }
 
 func processStateError(cmd *exec.Cmd) error {

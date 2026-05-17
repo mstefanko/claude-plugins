@@ -30,7 +30,7 @@ func TestRootHelpAndPlaceholder(t *testing.T) {
 	root.SetErr(&errOut)
 	root.SetArgs([]string{"doctor", "--skip-auth-probe"})
 	runErr := root.ExecuteContext(context.Background())
-	if runErr == nil || !strings.Contains(runErr.Error(), "doctor command is not implemented") {
-		t.Fatalf("placeholder error = %v", runErr)
+	if runErr != nil {
+		t.Fatalf("doctor returned error = %v", runErr)
 	}
 }
