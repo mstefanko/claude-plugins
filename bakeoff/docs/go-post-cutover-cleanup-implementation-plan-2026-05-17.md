@@ -232,6 +232,244 @@ Possible implementation direction:
 - Add parity cases for generated review context and review-context rerun replay
   once the oracle expectations are frozen.
 
+### 5. Scope enforcement and provider argv boundaries need hardening
+
+Priority: P2
+
+Source: live Go dogfood run `scope-enforcement-provider-argv-20260516`
+
+Files:
+- `internal/scope/scope.go`
+- `internal/provider/provider.go`
+- `internal/commands/researchcmd/run.go`
+- `internal/scope/scope_test.go`
+- `internal/provider/provider_test.go`
+- `tests/test_scope_enforcement.py`
+- `scripts/parity-go.py`
+
+Current behavior:
+- The run succeeded through the Go CLI after provider auth/state/network access
+  was allowed: both workers and both judge passes completed with `status: ok`,
+  the final decision was `pick_winner`, and `runs verify --json` returned
+  `status: ok`.
+- The same run first failed under the surrounding Codex execution sandbox
+  because provider CLIs could not use normal auth/state/network. Treat that as
+  a dogfood environment issue, not evidence that `bakeoff-go` failed.
+- The required-scope run exercised a Claude codebase worker with
+  `claude:disallowedTools=WebFetch,WebSearch` and a Codex web worker with
+  `isolated_cwd` plus `codex:sandbox=read-only`; both recorded
+  `fallback_reason: null`.
+- The Codex web worker's temporary cwd was removed after the run, matching the
+  expected cleanup contract.
+- `BuildExecution` currently owns scope defaulting, enforcement defaulting,
+  frozen-capability-vs-registry resolution, provider-specific scope mechanism
+  selection, web temporary cwd creation, scope metadata, and the call into
+  `provider.BuildParticipantArgv`.
+- `runWorkers` freezes scope capabilities once per backend and passes the
+  backend snapshot into each worker's `BuildExecution` call.
+- Provider capability probing is help-text based: `internal/provider` builds
+  `claude -p --help` or `codex exec --help`, extracts long option tokens, and
+  maps those tokens to semantic support keys.
+- `ScopeCapabilitiesFromHelp` records Codex `output_last_message` support, but
+  `scope.execution` also calls a separate
+  `CodexExecSupportsOutputLastMessage` probe when constructing argv.
+- Required enforcement fails only when `BuildExecution` accumulates fallback
+  reasons. `mixed` scope records `mixed_scope_no_restriction`, reports
+  `enforced`, and does not fail under `required`.
+- `ScopeErrorResult` reports `policy.Enforcement` directly instead of applying
+  the `best_effort` default that `BuildExecution` applies.
+- `internal/scope/scope_test.go` currently covers only required Claude
+  missing-controls failure and Codex codebase mechanisms. It does not cover web
+  scope, mixed scope, caps-vs-registry precedence, `ScopeErrorResult`, or the
+  cwd split between runner `cmd.Dir` and Codex `-C`.
+- The Python suite has some of the missing contract coverage, including web
+  temporary cwd behavior, so this is largely Go parity/test-hardening work.
+
+Risk:
+- Scope policy logic is acceptably cohesive for the current two-backend v1, but
+  it is coupled to provider support-key names, provider flag names, provider
+  feature names, provider tool names, and temporary-cwd behavior.
+- Adding a third backend or a new scope mode will expand the central
+  `BuildExecution` switch unless provider-owned scope adapters are introduced.
+- Required failure semantics can regress silently because successful required
+  enforcement was dogfooded, but required `scope_error` artifact flow was not
+  exercised by this live run.
+- The `ScopeErrorResult` default-policy mismatch can produce inconsistent
+  metadata when a caller passes an empty policy value.
+- The duplicated Codex `--output-last-message` help parsing is a small
+  maintainability smell and can make future capability cache changes harder to
+  reason about.
+- Cwd behavior is split across runner `CWD`, Codex `-C`, and Claude relying on
+  the subprocess working directory; it worked in this run but should be pinned
+  with tests so future argv changes do not break isolation.
+
+Notes:
+- Do not treat the provider-adapter refactor as a cutover blocker for the
+  current Claude/Codex scope matrix. It is a boundary cleanup to do before
+  adding providers or scope modes.
+- The tests and the `ScopeErrorResult` metadata default are small enough to fix
+  before or immediately after cutover, and they give the most confidence for the
+  least churn.
+- Codex stderr was truncated in the successful run while stdout/final-json
+  remained valid. This is already represented in runner metadata and is not a
+  separate scope failure.
+- The report's duplicated caps-precedence findings are one item here:
+  pre-fetched caps should explicitly win over registry probing, and that should
+  be tested.
+
+Possible implementation direction:
+- Add Go scope tests for Claude web scope, Codex web scope, mixed scope under
+  `required`, missing controls under `required`, and web temporary-cwd cleanup.
+- Add a Go test where both `caps` and `registry` are provided to
+  `BuildExecution`, asserting the frozen `caps` snapshot wins and the registry
+  is not consulted.
+- Add `ScopeErrorResult` tests for status shape, stderr/fallback reason,
+  enforcement metadata, and defaulting an empty policy to `best_effort`.
+- Add a command-level or focused integration test that forces a required
+  `scope_error` worker and verifies research summaries, reports, manifest/meta
+  data, and `runs verify` handle the synthesized provider result consistently.
+- Add tests or assertions for cwd behavior: Claude should rely on `cmd.Dir`,
+  Codex should receive both runner `CWD` and `-C`, and web scope should clean up
+  its temp cwd after provider completion.
+- Collapse Codex final-message support detection to one capability source, or
+  document why scope capability reporting and argv support probing intentionally
+  remain separate cache entries.
+- When extending beyond the current two backends, move provider-specific scope
+  mechanism construction behind provider-owned adapters so `internal/scope`
+  owns policy orchestration and metadata while `internal/provider` owns flag
+  details.
+
+### 6. Triage payload and freshness contracts need typed boundaries
+
+Priority: P2
+
+Source: live Go dogfood run
+`triage-source-selection-citation-freshness-live-go`
+
+Files:
+- `internal/commands/triagecmd/triage.go`
+- `internal/triage/state.go`
+- `internal/triage/citation.go`
+- `internal/triage/markdown.go`
+- `internal/workorder/workorder.go`
+- `internal/summary/summary.go`
+- `internal/manifest/manifest.go`
+- `internal/report/report.go`
+- `internal/prompt/fixtures/triage.txt`
+- `internal/verify/verify.go`
+
+Current behavior:
+- The run succeeded through the Go CLI after provider auth/state/network access
+  was allowed: `research --json` completed with `decision_kind: pick_winner`,
+  both workers completed, both judge passes completed, forced triage completed
+  with `triage.state: yes`, and `runs verify --json` returned `status: ok`
+  with no stale triage inputs.
+- The same run first failed under the surrounding Codex execution sandbox
+  because provider CLIs could not use normal auth/session/network. Treat that
+  as a dogfood environment issue, not evidence that `bakeoff-go` failed.
+- `triagecmd.Run` builds the triage prompt payload as `map[string]any` and
+  passes it to `prompt.BuildTriagePrompt`, so the required payload fields and
+  their source types are not compiler-visible.
+- `BuildFindingIndex` returns source findings as `map[string]string` entries
+  with `id`, `text`, and optional `section`, while the prompt fixture and
+  result schema describe `source_finding_id`. Runtime validation then maps
+  result `source_finding_id` values back to selected finding `id` values.
+- `SummarizeSourceFindingFilter` returns `map[string]int`; the same summary is
+  written to `source_finding_filter.json`, `status.json`, and `final.json`, then
+  read back by summary and markdown code as `map[string]any`. `markdown.go`
+  carries bridge helpers such as `sourceFilterMap` and `intLike` for this JSON
+  round trip.
+- `ValidateTriageResult` validates the triage item shape and enum values, while
+  the `triageValidator` closure performs source-finding referential integrity
+  and mutates the final JSON with `run_id`, `input_hashes`,
+  `triage_participant`, and `source_finding_filter`.
+- `citation_check_ids` are validated only as strings. They are not checked
+  against the generated `C-###` IDs from `citation_checks.json`.
+- `citation.CheckCitations` emits map-shaped citation results. In this run,
+  the citation artifact contained many successful checks, but also shorthand
+  citations that resolved as `missing_file` and one `line_out_of_range` check;
+  the triage result still succeeded because the actionable findings had enough
+  full-path evidence.
+- `triage --force` deletes the existing triage directory before invoking the
+  provider. If the provider fails after deletion, the previous successful
+  `final.json` and `triage.md` are gone and only failure artifacts remain.
+- Triage states are plain strings (`no`, `dry_run`, `yes`, `stale`) flowing
+  through `StateDetail`, `show`, `ls`, `summary`, `manifest`, and `verify`.
+  `verify` has a `TriageStatus` wrapper, but the state inside it is still raw.
+- `StateDetail` hashes `decision.json`, `report.md`, and `work-order.json`;
+  it intentionally skips work-order freshness for older triage files that lack
+  `work_order_sha256`, but that compatibility path is not directly tested.
+- Report rendering and triage indexing both maintain actionable-section and
+  skip-bullet constants. Report rendering also assigns `F-###` IDs, while
+  triage indexing re-parses those IDs and synthesizes legacy IDs when needed.
+- Triage classifications are duplicated between `triage.Classifications` and
+  `workorder.triageClasses`; manifests count with one list and result
+  validation uses the other.
+- Manifest facet extraction falls back from `meta.facet.id` to
+  `work-order.facet.id`, while triage source selection reads only
+  `work-order.facet.id`; no reproduction currently proves those can diverge.
+- Small helpers are duplicated across packages: `readJSON`, `fileExists`, and
+  `stringValue` appear in several packages, and `triagecmd.stringsJoin`
+  reimplements `strings.Join`.
+
+Risk:
+- Forced triage replacement can destroy a previously valid triage report before
+  the replacement provider call succeeds.
+- Source-finding key drift (`id` versus `source_finding_id`) can make prompt
+  examples, runtime payloads, and validator logic harder to reason about.
+- A model can reference nonexistent citation check IDs and still pass
+  validation, weakening the audit value of `citation_checks.json`.
+- Map-shaped payloads and filter summaries make summary, manifest, markdown,
+  prompt, and validator schemas easy to change independently.
+- Duplicate classification lists, state strings, section constants, and helper
+  functions create small but real drift hazards across triage, report,
+  manifest, summary, verify, and work-order validation.
+- Stale detection behavior for legacy triage files and possible facet-ID
+  divergence are currently policy-shaped but under-tested.
+
+Notes:
+- The live run itself succeeded. The Go CLI exercised `research --json`,
+  `triage --dry-run --json`, dry-run-only `show --triage` rejection,
+  `triage --force --json`, successful `show --triage`, `runs verify --json`,
+  and `ls --triage-state yes`.
+- The report's duplicate findings should be collapsed when implemented:
+  F-014/F-015 fold into shared report-index constants, F-016/F-019 fold into
+  source-finding key naming, F-017 folds into citation-check ID validation,
+  F-018/F-020 fold into typed triage state, and F-021 folds into safe
+  `--force` replacement.
+- F-013 needs a focused reproduction before changing behavior; it may turn out
+  to be only a theoretical divergence between manifest and triage facet lookup.
+- F-003 had one out-of-range `show.go` citation in the triage evidence, but the
+  broader helper-duplication finding is still valid from the other cited
+  packages.
+
+Possible implementation direction:
+- Introduce typed contracts for `TriagePayload`, `SourceFinding`,
+  `SourceFindingFilter`, `CitationCheck`, `TriageParticipant`, and
+  `TriageState`; keep JSON tags explicit so artifact schemas stay stable.
+- Make source-finding key naming consistent across runtime payloads, prompt
+  fixtures, and result validation. Either emit `source_finding_id` in payload
+  entries or update the prompt/schema language to state that payload entries use
+  `id` while result entries must echo that value as `source_finding_id`.
+- Validate `citation_check_ids` against the generated citation-check ID set,
+  or explicitly document why those IDs are advisory-only.
+- Split triage validation from enrichment: keep structural result validation,
+  referential integrity checks, and final JSON metadata injection as separate,
+  testable steps.
+- Replace destructive `triage --force` replacement with stage-then-swap or a
+  rollback path so a provider failure preserves the previous successful triage.
+- Move triage classifications, actions/severities if useful, report actionable
+  sections, skip bullets, and finding-ID parsing into shared typed helpers used
+  by report rendering, triage selection, manifest summaries, and validation.
+- Add tests for the legacy missing-`work_order_sha256` stale path, stale
+  detection after each hashed input changes, dry-run-only `show --triage`,
+  forced triage provider failure preserving previous results, source filter
+  summary JSON surfaces, and citation-check ID referential integrity.
+- Add a focused reproduction for manifest-vs-triage facet lookup divergence
+  before changing either behavior.
+- Consolidate repeated `readJSON`, `fileExists`, and `stringValue` helpers, and
+  replace `triagecmd.stringsJoin` with `strings.Join`.
+
 ## Follow-Up Queue
 
 - Continue adding dogfood findings here before making broad cleanup changes.
