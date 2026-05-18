@@ -184,6 +184,7 @@ func ScopeCapabilitiesFromHelp(backend string, helpText string) ScopeCapabilitie
 		supports["permission_mode"] = HasHelpOption(options, "--permission-mode")
 	case "codex":
 		supports["sandbox"] = HasHelpOption(options, "--sandbox")
+		supports["sandbox_workspace_write"] = supports["sandbox"] && strings.Contains(helpText, "workspace-write")
 		supports["disable_feature"] = HasHelpOption(options, "--disable")
 		supports["profile"] = HasHelpOption(options, "--profile")
 		supports["config"] = HasHelpOption(options, "--config")

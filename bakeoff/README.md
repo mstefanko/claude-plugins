@@ -109,11 +109,14 @@ second copy. For example, with `~/plugins/bakeoff` pointing at this directory,
 Bakeoff does not own provider API keys. Auth stays with the underlying provider
 CLIs (`claude`, `codex`, and `git` for local review context). `bakeoff doctor`
 checks that those CLIs are present and can optionally run auth probes; use
-`--skip-auth-probe` when you only want local readiness checks. Do not put API
-keys, session tokens, or secrets in work orders, backgrounds, generated review
-context, or provider output. Bakeoff records prompts, stdout/stderr, status
-JSON, reports, and manifests in the run ledger, so any secret printed by a
-provider can become part of `runs/<run-id>/`.
+`--skip-auth-probe` when you only want local readiness checks.
+`bakeoff doctor --build` runs live edit probes in temporary directories and
+treats provider launch, auth/session, network, sandbox, or filesystem failures
+as host environment readiness failures. Do not put API keys, session tokens, or
+secrets in work orders, backgrounds, generated review context, or provider
+output. Bakeoff records prompts, stdout/stderr, status JSON, reports, and
+manifests in the run ledger, so any secret printed by a provider can become
+part of `runs/<run-id>/`.
 
 ## Common Workflows
 
@@ -166,7 +169,7 @@ bakeoff triage <run-id> [--out runs] [--force] [--dry-run] [--quiet] [--json]
 bakeoff runs verify <run-id> [--out runs] [--json]
 bakeoff ls [--out runs] [--json] [--facet ID] [--triage-state {no|dry_run|yes|stale}]
 bakeoff show <run-id> [--out runs] [--judge | --judge-prompt | --triage]
-bakeoff doctor [--skip-auth-probe] [--quiet] [--json]
+bakeoff doctor [--build] [--skip-auth-probe] [--quiet] [--json]
 ```
 
 Exit codes:
@@ -323,7 +326,9 @@ available. For `web`, Bakeoff runs the provider from a private temporary
 working directory and cleans it up after the provider exits while applying
 web-tool allowlisting where available. `mixed` scope is recorded but not
 narrowed. `bakeoff doctor` prints the installed CLI controls that Bakeoff can
-detect; pass `--json` for a parseable readiness report.
+detect; pass `--json` for a parseable readiness report. `doctor --build`
+additionally verifies that Claude can edit a temporary workspace and that Codex
+advertises and can use `--sandbox workspace-write`.
 
 `bakeoff show <run-id> --out runs` prints the report from the default ledger;
 `--judge`, `--judge-prompt`, and `--triage` select individual artifacts.

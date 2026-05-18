@@ -198,10 +198,10 @@ func TestCommandOptions(t *testing.T) {
 			got = &copy
 			return nil
 		})
-		if err := execute(cmd, "--skip-auth-probe", "--quiet", "--json"); err != nil {
+		if err := execute(cmd, "--build", "--skip-auth-probe", "--quiet", "--json"); err != nil {
 			t.Fatal(err)
 		}
-		want := &doctorcmd.DoctorOptions{SkipAuthProbe: true, Quiet: true, JSON: true}
+		want := &doctorcmd.DoctorOptions{SkipAuthProbe: true, Build: true, Quiet: true, JSON: true}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("got %#v, want %#v", got, want)
 		}

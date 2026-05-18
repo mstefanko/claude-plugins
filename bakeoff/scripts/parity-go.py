@@ -197,6 +197,7 @@ def cases() -> list[Case]:
             expect={1},
         ),
         Case("doctor_human", ["doctor", "--skip-auth-probe"]),
+        Case("doctor_build_json", ["doctor", "--build", "--skip-auth-probe", "--json"]),
         Case("research_success", ["research", "gather.json", "--out", "runs", "--run-id", "research-success"], work_orders=gather),
         Case("research_json", ["research", "gather.json", "--out", "runs", "--run-id", "research-json", "--json"], work_orders=gather),
         Case(

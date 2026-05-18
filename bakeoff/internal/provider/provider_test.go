@@ -18,8 +18,8 @@ func TestScopeCapabilitiesFromHelp(t *testing.T) {
 		t.Fatalf("claude capabilities = %#v", claude)
 	}
 
-	codex := ScopeCapabilitiesFromHelp("codex", "--sandbox --disable --profile --config --output-last-message")
-	if !codex.Available || !codex.Supports["sandbox"] || !codex.Supports["disable_feature"] || !codex.Supports["profile"] || !codex.Supports["config"] || !codex.Supports["output_last_message"] {
+	codex := ScopeCapabilitiesFromHelp("codex", "--sandbox <read-only|workspace-write> --disable --profile --config --output-last-message")
+	if !codex.Available || !codex.Supports["sandbox"] || !codex.Supports["sandbox_workspace_write"] || !codex.Supports["disable_feature"] || !codex.Supports["profile"] || !codex.Supports["config"] || !codex.Supports["output_last_message"] {
 		t.Fatalf("codex capabilities = %#v", codex)
 	}
 }
@@ -58,11 +58,21 @@ func TestScopeCapabilitiesFromHelpVariants(t *testing.T) {
 			backend: "codex",
 			help:    "codex exec --sandbox read-only --disable web_search --profile p --config k=v",
 			supports: map[string]bool{
-				"sandbox":             true,
-				"disable_feature":     true,
-				"profile":             true,
-				"config":              true,
-				"output_last_message": false,
+				"sandbox":                 true,
+				"sandbox_workspace_write": false,
+				"disable_feature":         true,
+				"profile":                 true,
+				"config":                  true,
+				"output_last_message":     false,
+			},
+		},
+		{
+			name:    "codex workspace write sandbox",
+			backend: "codex",
+			help:    "codex exec --sandbox <read-only|workspace-write|danger-full-access>",
+			supports: map[string]bool{
+				"sandbox":                 true,
+				"sandbox_workspace_write": true,
 			},
 		},
 	}

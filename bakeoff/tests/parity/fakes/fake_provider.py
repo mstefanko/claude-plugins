@@ -33,7 +33,7 @@ def print_help(name: str) -> None:
         print("  --permission-mode")
         return
     print("fake codex exec help")
-    print("  --sandbox")
+    print("  --sandbox <read-only|workspace-write>")
     print("  --disable")
     print("  --profile")
     print("  --config")
@@ -90,6 +90,13 @@ def main() -> int:
         or "synthesis judge" in prompt
     )
     is_triage = "evidence-grounded triage of a Bakeoff report" in prompt
+
+    if "BAKEOFF_DOCTOR_BUILD_EDIT_PROBE_V1" in prompt:
+        pathlib.Path("bakeoff-doctor-build-probe.txt").write_text(
+            f"bakeoff-build-write-ok-{name}\n", encoding="utf-8"
+        )
+        emit(worker_payload(name, prompt))
+        return 0
 
     if name in timeout_providers and not is_judge and not is_triage:
         time.sleep(float(os.environ.get("BAKEOFF_FAKE_TIMEOUT_SECONDS", "5")))
