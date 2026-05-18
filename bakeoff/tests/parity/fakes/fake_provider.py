@@ -46,6 +46,21 @@ def emit(obj: dict) -> None:
 
 
 def worker_payload(name: str, prompt: str) -> dict:
+    if all(marker in prompt for marker in ("files_touched", "tests_added_or_changed", "manual_checks")):
+        pathlib.Path("bakeoff-build-output.txt").write_text(
+            f"build output from {name}\n", encoding="utf-8"
+        )
+        pathlib.Path(f"{name}-build.txt").write_text(
+            f"provider-specific build output from {name}\n", encoding="utf-8"
+        )
+        return {
+            "status": "complete",
+            "summary": f"{name} wrote build output",
+            "files_touched": ["bakeoff-build-output.txt", f"{name}-build.txt"],
+            "tests_added_or_changed": [],
+            "risks": [],
+            "manual_checks": [],
+        }
     payload = {
         "status": "complete",
         "claims": [

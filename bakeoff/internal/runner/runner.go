@@ -187,6 +187,14 @@ type captureState struct {
 }
 
 func RunProvider(ctx context.Context, opts Options) Result {
+	return runProcess(ctx, opts, true)
+}
+
+func RunCommand(ctx context.Context, opts Options) Result {
+	return runProcess(ctx, opts, false)
+}
+
+func runProcess(ctx context.Context, opts Options, requireFinalJSON bool) Result {
 	started := time.Now()
 	budgets := normalizeBudgets(opts.Budgets)
 	state := &captureState{
@@ -321,6 +329,12 @@ func RunProvider(ctx context.Context, opts Options) Result {
 	}
 	if waitErr != nil {
 		return state.status(StatusExitError, exitCode, stdoutText, stderrText, nil, "")
+	}
+	if !requireFinalJSON {
+		if state.hasOutputCap() {
+			return state.status(StatusOutputCap, exitCode, stdoutText, stderrText, nil, "")
+		}
+		return state.status(StatusOK, exitCode, stdoutText, stderrText, nil, "")
 	}
 
 	finalJSONText, finalJSONSource := finalJSONText(stdoutText, opts.FinalMessagePath)

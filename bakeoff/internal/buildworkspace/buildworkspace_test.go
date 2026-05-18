@@ -2,6 +2,7 @@ package buildworkspace
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -258,6 +259,40 @@ func TestLockAndGitlinkHelpers(t *testing.T) {
 	lock, err = AcquireLock(ctx, repo.CommonDir, time.Second)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if err := lock.Release(); err != nil {
+		t.Fatal(err)
+	}
+
+	emptyLockPath := filepath.Join(repo.CommonDir, lockFileName)
+	if err := os.WriteFile(emptyLockPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = AcquireLock(ctx, repo.CommonDir, 50*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "another build run is active") {
+		t.Fatalf("fresh empty lock should not be stolen, got %v", err)
+	}
+	old := time.Now().Add(-lockStaleAfter - time.Minute)
+	if err := os.Chtimes(emptyLockPath, old, old); err != nil {
+		t.Fatal(err)
+	}
+	lock, err = AcquireLock(ctx, repo.CommonDir, time.Second)
+	if err != nil {
+		t.Fatalf("expected stale empty lock to be replaced: %v", err)
+	}
+	if err := lock.Release(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(emptyLockPath, []byte(fmt.Sprintf("pid=%d\ncreated_at=2000-01-01T00:00:00Z\n", os.Getpid())), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(emptyLockPath, old, old); err != nil {
+		t.Fatal(err)
+	}
+	lock, err = AcquireLock(ctx, repo.CommonDir, time.Second)
+	if err != nil {
+		t.Fatalf("expected stale current-pid lock to be replaced by mtime sanity: %v", err)
 	}
 	if err := lock.Release(); err != nil {
 		t.Fatal(err)

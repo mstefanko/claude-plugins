@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/buildinfo"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/buildcmd"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/doctorcmd"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/initcmd"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/lscmd"
@@ -111,6 +112,30 @@ func TestCommandOptions(t *testing.T) {
 			Diff:         true,
 			ChangedFiles: true,
 			JSON:         true,
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("got %#v, want %#v", got, want)
+		}
+	})
+	t.Run("build", func(t *testing.T) {
+		var got *buildcmd.BuildOptions
+		cmd := buildcmd.NewCmdBuild(testFactory(), func(_ context.Context, opts *buildcmd.BuildOptions) error {
+			copy := *opts
+			got = &copy
+			return nil
+		})
+		err := execute(cmd, "work.json", "--out", "ledger", "--run-id", "run-1", "--force", "--quiet", "--json", "--keep-worktrees")
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := &buildcmd.BuildOptions{
+			WorkOrder:     "work.json",
+			Out:           "ledger",
+			RunID:         "run-1",
+			Force:         true,
+			Quiet:         true,
+			JSON:          true,
+			KeepWorktrees: true,
 		}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("got %#v, want %#v", got, want)

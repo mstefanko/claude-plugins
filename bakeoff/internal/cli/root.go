@@ -7,6 +7,7 @@ import (
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/apperror"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/buildcmd"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/doctorcmd"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/initcmd"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/lscmd"
@@ -20,13 +21,14 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const orientation = `bakeoff - run the same research task across multiple agents, then judge.
+const orientation = `bakeoff - run the same research or build task across multiple agents.
 
-Four starts. Pick one based on what you want:
+Five starts. Pick one based on what you want:
   gather   coverage research
   compare  defended pick
   analyze  thorough explanation
   review   code-review recipe
+  build    isolated implementation candidates
 
 Get started:
   bakeoff init gather
@@ -38,15 +40,16 @@ Run ` + "`bakeoff doctor`" + ` to check.
 `
 
 const rootHelp = `usage: bakeoff [-h] [--version]
-               {init,validate,research,rerun,triage,runs,ls,show,doctor} ...
+               {init,validate,research,build,rerun,triage,runs,ls,show,doctor} ...
 
 Tiny research bakeoff harness.
 
 positional arguments:
-  {init,validate,research,rerun,triage,runs,ls,show,doctor}
+  {init,validate,research,build,rerun,triage,runs,ls,show,doctor}
     init                write an example work order
     validate            validate and dry-run a work order
     research            run a research bakeoff
+    build               run a competitive build bakeoff
     rerun               replay a previous work order with a fresh run id
     triage              triage a completed bakeoff report
     runs                inspect run ledgers
@@ -110,6 +113,7 @@ func NewRootCommand(f *Factory) *cobra.Command {
 		initcmd.NewCmdInit(f, nil),
 		validatecmd.NewCmdValidate(f, nil),
 		researchcmd.NewCmdResearch(f, nil),
+		buildcmd.NewCmdBuild(f, nil),
 		reruncmd.NewCmdRerun(f, nil),
 		triagecmd.NewCmdTriage(f, nil),
 		runscmd.NewCmdRuns(f, nil),

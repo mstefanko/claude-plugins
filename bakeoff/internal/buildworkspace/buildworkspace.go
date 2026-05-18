@@ -19,6 +19,7 @@ import (
 const (
 	ContextSchemaVersion = 1
 	lockFileName         = "bakeoff-build.lock"
+	lockStaleAfter       = 6 * time.Hour
 )
 
 type Repository struct {
@@ -118,8 +119,10 @@ type ChangedFile struct {
 }
 
 type Lock struct {
-	Path string
-	file *os.File
+	Path          string
+	file          *os.File
+	heartbeatStop chan struct{}
+	heartbeatDone chan struct{}
 }
 
 // ResolveRepository performs source-checkout preflight. Build command callers
@@ -180,6 +183,22 @@ func ResolveRepository(ctx context.Context, cwd string, baseRef string) (Reposit
 		BaseRef:                baseRef,
 		BaseCommit:             strings.TrimSpace(baseCommit),
 	}, nil
+}
+
+func ResolveCommonDir(ctx context.Context, cwd string) (string, error) {
+	root, err := gitOutput(ctx, cwd, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return "", err
+	}
+	root, err = filepath.Abs(strings.TrimSpace(root))
+	if err != nil {
+		return "", err
+	}
+	commonDir, err := gitOutput(ctx, root, "rev-parse", "--git-common-dir")
+	if err != nil {
+		return "", err
+	}
+	return absGitPath(root, commonDir), nil
 }
 
 func RequireCleanSource(ctx context.Context, root string) error {
@@ -450,13 +469,15 @@ func AcquireLock(ctx context.Context, commonDir string, timeout time.Duration) (
 	defer deadline.Stop()
 	ticker := time.NewTicker(25 * time.Millisecond)
 	defer ticker.Stop()
+	metadata := fmt.Sprintf("pid=%d\ncreated_at=%s\n", os.Getpid(), time.Now().UTC().Format(time.RFC3339))
 	for {
-		file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if err == nil {
-			_, _ = fmt.Fprintf(file, "pid=%d\ncreated_at=%s\n", os.Getpid(), time.Now().UTC().Format(time.RFC3339))
-			return &Lock{Path: lockPath, file: file}, nil
+		acquired, err := createLockFile(lockPath, metadata)
+		if err == nil && acquired {
+			lock := &Lock{Path: lockPath}
+			lock.startHeartbeat()
+			return lock, nil
 		}
-		if !os.IsExist(err) {
+		if err != nil {
 			return nil, err
 		}
 		if removeStaleLock(lockPath) {
@@ -472,20 +493,67 @@ func AcquireLock(ctx context.Context, commonDir string, timeout time.Duration) (
 	}
 }
 
+func createLockFile(path string, contents string) (bool, error) {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".")
+	if err != nil {
+		return false, err
+	}
+	tmpName := tmp.Name()
+	removeTmp := true
+	defer func() {
+		if removeTmp {
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if _, err := tmp.WriteString(contents); err != nil {
+		_ = tmp.Close()
+		return false, err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return false, err
+	}
+	if err := tmp.Close(); err != nil {
+		return false, err
+	}
+	if err := os.Link(tmpName, path); err == nil {
+		return true, nil
+	} else if os.IsExist(err) {
+		return false, nil
+	} else {
+		return false, err
+	}
+}
+
 func removeStaleLock(path string) bool {
+	info, statErr := os.Stat(path)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return false
 	}
+	age := time.Duration(0)
+	if statErr == nil {
+		age = time.Since(info.ModTime())
+	}
 	pid, ok := parseLockPID(string(data))
-	if !ok || pid == os.Getpid() {
+	if statErr == nil && age > lockStaleAfter {
+		return os.Remove(path) == nil
+	}
+	if !ok {
+		return false
+	}
+	if pid == os.Getpid() {
 		return false
 	}
 	alive, known := processAlive(pid)
-	if !known || alive {
+	if known && !alive {
+		return os.Remove(path) == nil
+	}
+	if alive {
 		return false
 	}
-	return os.Remove(path) == nil
+	return false
 }
 
 func parseLockPID(text string) (int, bool) {
@@ -506,6 +574,7 @@ func (l *Lock) Release() error {
 	if l == nil {
 		return nil
 	}
+	l.stopHeartbeat()
 	var messages []string
 	if l.file != nil {
 		if err := l.file.Close(); err != nil {
@@ -521,6 +590,37 @@ func (l *Lock) Release() error {
 		return errors.New(strings.Join(messages, "; "))
 	}
 	return nil
+}
+
+func (l *Lock) startHeartbeat() {
+	l.heartbeatStop = make(chan struct{})
+	l.heartbeatDone = make(chan struct{})
+	go func() {
+		defer close(l.heartbeatDone)
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-l.heartbeatStop:
+				return
+			case <-ticker.C:
+				now := time.Now()
+				_ = os.Chtimes(l.Path, now, now)
+			}
+		}
+	}()
+}
+
+func (l *Lock) stopHeartbeat() {
+	if l.heartbeatStop == nil {
+		return
+	}
+	close(l.heartbeatStop)
+	if l.heartbeatDone != nil {
+		<-l.heartbeatDone
+	}
+	l.heartbeatStop = nil
+	l.heartbeatDone = nil
 }
 
 func WriteContext(runDir string, metadata ContextMetadata) error {
