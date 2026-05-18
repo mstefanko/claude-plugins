@@ -62,6 +62,37 @@ func TestBuildApplyAndRenderReviewContext(t *testing.T) {
 	if !strings.Contains(applied.Background, "<generated_review_context>") || !strings.Contains(applied.Background, "Original background.") {
 		t.Fatalf("background missing generated context:\n%s", applied.Background)
 	}
+
+	arrayWO, err := workorder.Validate(map[string]any{
+		"schema_version": float64(1),
+		"id":             "review-context-array-test",
+		"type":           "gather",
+		"goal":           "Find bugs.",
+		"background":     []any{"Base branch: main.", "Acceptance criteria: pass."},
+		"providers": []any{
+			map[string]any{"id": "claude", "backend": "claude", "model": "claude-sonnet-4-6", "scope": "codebase"},
+			map[string]any{"id": "codex", "backend": "codex", "model": "gpt-5.5", "scope": "web"},
+		},
+		"judge":   map[string]any{"backend": "claude", "model": "claude-opus-4-7"},
+		"budgets": map[string]any{"wall_clock_seconds": float64(30), "max_output_bytes": float64(1000)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	appliedArray, err := Apply(arrayWO, reviewCtx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(appliedArray.Background, "Base branch: main.\n\nAcceptance criteria: pass.\n\n<generated_review_context>") {
+		t.Fatalf("array background not joined with generated context:\n%s", appliedArray.Background)
+	}
+	rawBackground, ok := appliedArray.Raw["background"].([]any)
+	if !ok {
+		t.Fatalf("raw array background was not preserved: %#v", appliedArray.Raw["background"])
+	}
+	if len(rawBackground) != 3 || !strings.Contains(rawBackground[2].(string), "<generated_review_context>") {
+		t.Fatalf("raw array background missing appended context: %#v", rawBackground)
+	}
 }
 
 func TestBuildCancelsGitSubprocessesWithContext(t *testing.T) {

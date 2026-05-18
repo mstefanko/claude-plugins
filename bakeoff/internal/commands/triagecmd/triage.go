@@ -11,11 +11,13 @@ import (
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/apperror"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/artifact"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/jsonutil"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/ledger"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/manifest"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/prompt"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/provider"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/runner"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/runnerenv"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/summary"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/triage"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
@@ -141,7 +143,7 @@ func Run(ctx context.Context, f commands.Factory, opts *TriageOptions) (int, err
 			}
 		}()
 	}
-	if err := os.MkdirAll(triageDir, 0o755); err != nil {
+	if err := os.MkdirAll(triageDir, 0o700); err != nil {
 		return 0, &apperror.RuntimeError{Err: err}
 	}
 
@@ -248,7 +250,7 @@ func Run(ctx context.Context, f commands.Factory, opts *TriageOptions) (int, err
 		Prompt:           triagePrompt,
 		Budgets:          commands.RunnerBudgets(wo.Budgets),
 		CWD:              citationCWD,
-		Env:              os.Environ(),
+		Env:              runnerenv.SafeEnv(os.Environ()),
 		Validator:        triageValidator(selectedSourceIDs, citationCheckIDs, filepath.Base(runDir), inputHashes, participant, sourceFindingFilter),
 		OnTick:           commands.MakeTickPrinter(f, "triage", effectiveQuiet),
 		FinalMessagePath: finalMessagePath,
@@ -298,6 +300,8 @@ func Run(ctx context.Context, f commands.Factory, opts *TriageOptions) (int, err
 	}
 	if humanOutput {
 		f.Streams().Printf("triage: %s\n", filepath.Join(targetTriageDir, "triage.md"))
+		items, fixNow := triageResultCounts(finalJSON)
+		f.Streams().Printf("result: triage complete, items=%d, fix_now=%d\n", items, fixNow)
 		f.Streams().Printf("next:   %s\n", ledger.BakeoffShowCommand(commandRunID, displayOutDir, "--triage"))
 	}
 	if opts.JSON {
@@ -353,10 +357,10 @@ func triageValidator(selectedSourceIDs map[string]bool, citationCheckIDs map[str
 }
 
 func writeTriageResultArtifacts(triageDir string, result map[string]any, participant map[string]any, inputHashes map[string]string, sourceFindingFilter map[string]int) error {
-	if err := workorder.WriteTextAtomic(filepath.Join(triageDir, "stdout.txt"), stringValue(result["stdout"])); err != nil {
+	if err := workorder.WriteTextAtomic(filepath.Join(triageDir, "stdout.txt"), jsonutil.StringValue(result["stdout"])); err != nil {
 		return err
 	}
-	if err := workorder.WriteTextAtomic(filepath.Join(triageDir, "stderr.txt"), stringValue(result["stderr"])); err != nil {
+	if err := workorder.WriteTextAtomic(filepath.Join(triageDir, "stderr.txt"), jsonutil.StringValue(result["stderr"])); err != nil {
 		return err
 	}
 	if err := artifact.WriteFormatRetryArtifacts(triageDir, result, ""); err != nil {
@@ -377,9 +381,16 @@ func triageParticipant(participant workorder.Participant) map[string]any {
 	}
 }
 
-func stringValue(value any) string {
-	text, _ := value.(string)
-	return text
+func triageResultCounts(final map[string]any) (int, int) {
+	items, _ := final["items"].([]any)
+	fixNow := 0
+	for _, item := range items {
+		obj, _ := item.(map[string]any)
+		if obj["recommended_action"] == "fix_now" {
+			fixNow++
+		}
+	}
+	return len(items), fixNow
 }
 
 func stringList(value any) []string {

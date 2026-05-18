@@ -9,6 +9,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/fsutil"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/jsonutil"
 )
 
 const CodeReviewFacetID = "code-review"
@@ -48,7 +51,7 @@ func ComputeInputHashes(runDir string) (map[string]string, error) {
 	}
 	present := 0
 	for _, relative := range reviewArtifacts {
-		if fileExists(filepath.Join(runDir, relative)) {
+		if fsutil.FileExists(filepath.Join(runDir, relative)) {
 			present++
 		}
 	}
@@ -74,7 +77,7 @@ func State(runDir string) string {
 
 func StateDetail(runDir string) (string, []string) {
 	final := readJSON(filepath.Join(runDir, "triage", "final.json"))
-	if final == nil || !fileExists(filepath.Join(runDir, "triage", "triage.md")) {
+	if final == nil || !fsutil.FileExists(filepath.Join(runDir, "triage", "triage.md")) {
 		status := readJSON(filepath.Join(runDir, "triage", "status.json"))
 		if obj, ok := status.(map[string]any); ok && obj["status"] == "dry_run" {
 			return "dry_run", []string{}
@@ -94,13 +97,13 @@ func StateDetail(runDir string) (string, []string) {
 		return "stale", []string{"current inputs"}
 	}
 	changed := []string{}
-	if stringValue(hashes["decision_sha256"]) != current["decision_sha256"] {
+	if jsonutil.StringValue(hashes["decision_sha256"]) != current["decision_sha256"] {
 		changed = append(changed, "decision.json")
 	}
-	if stringValue(hashes["report_sha256"]) != current["report_sha256"] {
+	if jsonutil.StringValue(hashes["report_sha256"]) != current["report_sha256"] {
 		changed = append(changed, "report.md")
 	}
-	if _, ok := hashes["work_order_sha256"]; ok && stringValue(hashes["work_order_sha256"]) != current["work_order_sha256"] {
+	if _, ok := hashes["work_order_sha256"]; ok && jsonutil.StringValue(hashes["work_order_sha256"]) != current["work_order_sha256"] {
 		changed = append(changed, "work-order.json")
 	}
 	for key, relative := range map[string]string{
@@ -108,7 +111,7 @@ func StateDetail(runDir string) (string, []string) {
 		"review_context_md_sha256":   "review-context.md",
 		"review_context_json_sha256": "review-context.json",
 	} {
-		if _, ok := hashes[key]; ok && stringValue(hashes[key]) != current[key] {
+		if _, ok := hashes[key]; ok && jsonutil.StringValue(hashes[key]) != current[key] {
 			changed = append(changed, relative)
 		}
 	}
@@ -303,16 +306,6 @@ func readJSON(path string) any {
 		return nil
 	}
 	return value
-}
-
-func fileExists(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && !info.IsDir()
-}
-
-func stringValue(value any) string {
-	text, _ := value.(string)
-	return text
 }
 
 func withSkipReason(finding map[string]string, reason string) map[string]string {

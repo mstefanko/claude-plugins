@@ -1,7 +1,7 @@
 {
   "exit_code": 0,
   "stderr": "",
-  "stdout": "bakeoff research  run-id: research-success\n  mode:           gather\n  run dir:        runs/research-success/\n  providers:      claude (fake-claude, codebase), codex (fake-codex, web)\n  budgets:        3s wall, 20000 bytes out, 10s cap grace\n  scope policy:   best_effort\n  judge:          claude fake-judge\n[claude] launching...\n[codex] launching...\n[claude] ok <SECONDS>s 224 bytes\n[codex] ok <SECONDS>s 223 bytes\n[judge:gather] running...\n[judge:gather] ok <SECONDS>s\nmanifest: runs/research-success/manifest.json\nreport: runs/research-success/report.md\nnext:   bakeoff show research-success\n",
+  "stdout": "bakeoff research  run-id: research-success\n  mode:           gather\n  run dir:        runs/research-success/\n  providers:      claude (fake-claude, codebase), codex (fake-codex, web)\n  budgets:        3s wall, 20000 bytes out, 10s cap grace\n  scope policy:   best_effort\n  judge:          claude fake-judge\n[claude] launching...\n[codex] launching...\n[claude] ok <SECONDS>s 224 bytes\n[codex] ok <SECONDS>s 223 bytes\n[judge:gather] running...\n[judge:gather] ok <SECONDS>s\nmanifest: runs/research-success/manifest.json\nreport: runs/research-success/report.md\nnext:   bakeoff show research-success\nresult: structured_union, judge=yes\n",
   "workspace": {
     "gather.json": {
       "type": "json",
@@ -548,7 +548,7 @@
     },
     "runs/research-success/report.md": {
       "type": "text",
-      "value": "# Bakeoff Report: gather-fake\n\nMode: `gather`\nDecision: `structured_union`\n\n## Decision Audit\n\n- Judge ran: `true`\n- pass1: A=`claude`, B=`codex`\n\n## Provider Status\n\n- `claude`: `ok` (<SECONDS>s, stdout 224 bytes, stderr 0 bytes, stderr: `providers/claude/stderr.txt`)\n  Scope: `codebase` -> `codebase` (partial)\n- `codex`: `ok` (<SECONDS>s, stdout 223 bytes, stderr 0 bytes, stderr: `providers/codex/stderr.txt`)\n  Scope: `web` -> `web` (partial)\n\n## Findings\n\nProvider-set headings name the worker set that surfaced each claim. `single-source` means one worker surfaced it; `multi-source` means both workers surfaced materially similar claims.\n\n### claude+codex\n- **F-001** Fake merged claim (model confidence `high`, corroboration `multi-source`, sources `claude+codex`)\n  Evidence: fake:1\n\n## Conflicts\n\n- No conflicts found.\n\n## Unknowns\n\n- None reported.\n"
+      "value": "# Bakeoff Report: gather-fake\n\n## Outcome\n\nMode: `gather`\nDecision: `structured_union`\nResult: `structured_union`\nNext: `bakeoff show research-success`\n\n## Decision Audit\n\n- Judge ran: `true`\n- pass1: A=`claude`, B=`codex`\n\n## Provider Status\n\n| Provider | Status | Wall | Stdout | Stderr | Scope | Notes |\n|----------|--------|------|--------|--------|-------|-------|\n| `claude` | `ok` | <SECONDS>s | 224 B | 0 B | codebase -> codebase (partial) | stderr: `providers/claude/stderr.txt` |\n| `codex` | `ok` | <SECONDS>s | 223 B | 0 B | web -> web (partial) | stderr: `providers/codex/stderr.txt` |\n\n## Findings\n\nProvider-set headings name the worker set that surfaced each claim. `single-source` means one worker surfaced it; `multi-source` means both workers surfaced materially similar claims.\n\n### claude+codex\n- **F-001** Fake merged claim (model confidence `high`, corroboration `multi-source`, sources `claude+codex`)\n  Evidence: fake:1\n\n## Conflicts\n\n- No conflicts found.\n\n## Unknowns\n\n- None reported.\n"
     },
     "runs/research-success/work-order.json": {
       "type": "json",

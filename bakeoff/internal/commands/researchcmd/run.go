@@ -2,8 +2,6 @@ package researchcmd
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -18,6 +16,8 @@ import (
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands"
 	triagecmd "github.com/mstefanko/claude-plugins/bakeoff/internal/commands/triagecmd"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/decision"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/fsutil"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/jsonutil"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/ledger"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/manifest"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/prompt"
@@ -25,6 +25,8 @@ import (
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/report"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/reviewcontext"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/runner"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/runnerenv"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/runresult"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/scope"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/summary"
 	triagepkg "github.com/mstefanko/claude-plugins/bakeoff/internal/triage"
@@ -47,7 +49,7 @@ func RunResearch(ctx context.Context, f commands.Factory, opts *ResearchOptions)
 	}
 	runID := opts.RunID
 	if runID == "" {
-		runID = ledger.MakeRunID(f.Now(), randomSuffix())
+		runID = ledger.MakeRunID(f.Now(), fsutil.RandomSuffix())
 	}
 	if err := ledger.ValidateRunID(runID); err != nil {
 		return &apperror.ValidationError{Message: err.Error(), Err: err}
@@ -87,7 +89,7 @@ func RunResearch(ctx context.Context, f commands.Factory, opts *ResearchOptions)
 			return &apperror.RuntimeError{Err: err}
 		}
 	}
-	if err := os.MkdirAll(runDir, 0o755); err != nil {
+	if err := os.MkdirAll(runDir, 0o700); err != nil {
 		return &apperror.RuntimeError{Err: err}
 	}
 	if err := ledger.UpdateLatest(opts.Out, runID); err != nil {
@@ -121,7 +123,7 @@ func RunResearch(ctx context.Context, f commands.Factory, opts *ResearchOptions)
 	}
 	if reviewContext != nil && humanOutput {
 		f.Streams().Printf("%s\n", reviewcontext.FormatSummary(reviewContext))
-	} else if opts.ReplaySourceRunDir != "" && fileExists(filepath.Join(runDir, "review-context.md")) && humanOutput {
+	} else if opts.ReplaySourceRunDir != "" && fsutil.FileExists(filepath.Join(runDir, "review-context.md")) && humanOutput {
 		f.Streams().Printf("review context: replayed from %s\n", opts.ReplaySourceRunDir)
 	}
 
@@ -169,7 +171,7 @@ func RunResearch(ctx context.Context, f commands.Factory, opts *ResearchOptions)
 	if err := workorder.WriteJSONAtomic(filepath.Join(runDir, "decision.json"), decisionDoc); err != nil {
 		return &apperror.RuntimeError{Err: err}
 	}
-	reportText := report.Render(wo, decisionDoc, workerResults, judgeResults)
+	reportText := report.Render(wo, decisionDoc, workerResults, judgeResults, report.RenderOptions{RunID: runID, OutDir: opts.Out, RunDir: runDir})
 	if err := workorder.WriteTextAtomic(filepath.Join(runDir, "report.md"), reportText); err != nil {
 		return &apperror.RuntimeError{Err: err}
 	}
@@ -180,12 +182,13 @@ func RunResearch(ctx context.Context, f commands.Factory, opts *ResearchOptions)
 		return &apperror.RuntimeError{Err: err}
 	}
 	if humanOutput {
-		if fileExists(filepath.Join(runDir, "review-context.md")) {
+		if fsutil.FileExists(filepath.Join(runDir, "review-context.md")) {
 			f.Streams().Printf("context-md: %s\n", filepath.Join(runDir, "review-context.md"))
 		}
 		f.Streams().Printf("manifest: %s\n", filepath.Join(runDir, "manifest.json"))
 		f.Streams().Printf("report: %s\n", filepath.Join(runDir, "report.md"))
 		f.Streams().Printf("next:   %s\n", ledger.BakeoffShowCommand(runID, opts.Out, ""))
+		f.Streams().Printf("result: %s\n", researchResultLine(wo, decisionDoc, reportText))
 	}
 	autoTriageReason := ""
 	autoTriageStarted := false
@@ -268,9 +271,9 @@ func runWorkers(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder
 				if errors.Is(err, context.Canceled) {
 					return err
 				}
-				result = internalErrorResult(err)
+				result = runresult.InternalError(err)
 				providerDir := filepath.Join(runDir, "providers", participant.ID)
-				if mkdirErr := os.MkdirAll(providerDir, 0o755); mkdirErr != nil {
+				if mkdirErr := os.MkdirAll(providerDir, 0o700); mkdirErr != nil {
 					return mkdirErr
 				}
 				if writeErr := artifact.WriteProviderArtifacts(providerDir, result); writeErr != nil {
@@ -297,7 +300,7 @@ func runWorkers(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder
 
 func runOneWorker(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder, participant workorder.Participant, runDir string, cwd string, capabilities map[string]provider.ScopeCapabilities, quiet bool) (map[string]any, error) {
 	providerDir := filepath.Join(runDir, "providers", participant.ID)
-	if err := os.MkdirAll(providerDir, 0o755); err != nil {
+	if err := os.MkdirAll(providerDir, 0o700); err != nil {
 		return nil, err
 	}
 	workerPrompt, err := prompt.BuildWorkerPrompt(wo, participant)
@@ -329,7 +332,7 @@ func runOneWorker(ctx context.Context, f commands.Factory, wo *workorder.WorkOrd
 		Prompt:           workerPrompt,
 		Budgets:          commands.RunnerBudgets(wo.Budgets),
 		CWD:              scopeExecution.CWD,
-		Env:              os.Environ(),
+		Env:              runnerenv.SafeEnv(os.Environ()),
 		Validator:        func(data any) (any, error) { return workorder.ValidateWorkerResult(data, wo.Type) },
 		OnTick:           commands.MakeTickPrinter(f, participant.ID, quiet),
 		FinalMessagePath: finalMessagePath,
@@ -368,7 +371,7 @@ func runJudgePhase(ctx context.Context, f commands.Factory, wo *workorder.WorkOr
 	if err != nil {
 		return nil, nil, 0, err
 	}
-	judgeResults := map[string]map[string]any{"pass1": finalJSONMap(pass1), "pass2": finalJSONMap(pass2)}
+	judgeResults := map[string]map[string]any{"pass1": jsonutil.FinalJSONMap(pass1), "pass2": jsonutil.FinalJSONMap(pass2)}
 	if !artifact.ProviderSucceeded(pass1) || !artifact.ProviderSucceeded(pass2) {
 		decisionDoc := cloneMap(base)
 		decisionDoc["decision_kind"] = "tie"
@@ -391,14 +394,14 @@ func runJudgePhase(ctx context.Context, f commands.Factory, wo *workorder.WorkOr
 }
 
 func runSingleJudge(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder, workerResults map[string]map[string]any, orderMap map[string]string, runDir string, label string, quiet bool, humanOutput bool) (map[string]any, error) {
-	workerA := finalJSONMap(workerResults[orderMap["A"]])
-	workerB := finalJSONMap(workerResults[orderMap["B"]])
+	workerA := jsonutil.FinalJSONMap(workerResults[orderMap["A"]])
+	workerB := jsonutil.FinalJSONMap(workerResults[orderMap["B"]])
 	judgePrompt, err := prompt.BuildJudgePrompt(wo, workerA, workerB, "")
 	if err != nil {
 		return nil, err
 	}
 	judgeDir := filepath.Join(runDir, "judge")
-	if err := os.MkdirAll(judgeDir, 0o755); err != nil {
+	if err := os.MkdirAll(judgeDir, 0o700); err != nil {
 		return nil, err
 	}
 	promptPath := filepath.Join(judgeDir, "prompt.txt")
@@ -429,7 +432,7 @@ func runSingleJudge(ctx context.Context, f commands.Factory, wo *workorder.WorkO
 		Prompt:           judgePrompt,
 		Budgets:          commands.RunnerBudgets(wo.Budgets),
 		CWD:              cwd,
-		Env:              os.Environ(),
+		Env:              runnerenv.SafeEnv(os.Environ()),
 		Validator:        judgeValidator(wo.Type),
 		OnTick:           commands.MakeTickPrinter(f, "judge:"+label, quiet),
 		FinalMessagePath: lastMessage,
@@ -473,32 +476,35 @@ func printRunHeader(f commands.Factory, wo *workorder.WorkOrder, runDir string, 
 	f.Streams().Printf("  judge:          %s %s\n", wo.Judge.Backend, wo.Judge.Model)
 }
 
-func finalJSONMap(result map[string]any) map[string]any {
-	final, _ := result["final_json"].(map[string]any)
-	if final == nil {
-		return map[string]any{}
+func researchResultLine(wo *workorder.WorkOrder, decisionDoc map[string]any, reportText string) string {
+	mode, _ := decisionDoc["mode"].(string)
+	if mode == "" {
+		mode = wo.Type
 	}
-	return final
-}
-
-func internalErrorResult(err error) map[string]any {
-	message := fmt.Sprintf("internal provider task error: %T: %v", err, err)
-	stderrBytes := len([]byte(message))
-	return map[string]any{
-		"status":                runner.StatusExitError,
-		"exit_code":             nil,
-		"wall_seconds":          0,
-		"output_bytes":          0,
-		"stdout_bytes":          0,
-		"stderr_bytes":          stderrBytes,
-		"stdout_observed_bytes": 0,
-		"stderr_observed_bytes": stderrBytes,
-		"stdout_truncated":      false,
-		"stderr_truncated":      false,
-		"io":                    map[string]any{"stdout_bytes": 0, "stderr_bytes": stderrBytes, "stdout_observed_bytes": 0, "stderr_observed_bytes": stderrBytes, "total_observed_bytes": stderrBytes},
-		"stdout":                "",
-		"stderr":                message,
-		"final_json":            nil,
+	kind := fmt.Sprint(decisionDoc["decision_kind"])
+	switch mode {
+	case "gather":
+		judge := "no"
+		if ran, _ := decisionDoc["judge_ran"].(bool); ran {
+			judge = "yes"
+		}
+		line := fmt.Sprintf("%s, judge=%s", kind, judge)
+		if triagepkg.ShouldRecommendTriage(wo.Raw, decisionDoc, reportText) != "" {
+			line += ", recommended: triage"
+		}
+		return line
+	default:
+		winner, _ := decisionDoc["canonical_winner"].(string)
+		if winner == "" {
+			winner = "none"
+		}
+		basis := "n/a"
+		if tiebreak, _ := decisionDoc["spine_tiebreak"].(string); tiebreak != "" {
+			basis = tiebreak
+		} else if ran, _ := decisionDoc["judge_ran"].(bool); ran {
+			basis = "judge"
+		}
+		return fmt.Sprintf("winner=%s, basis=%s", winner, basis)
 	}
 }
 
@@ -508,14 +514,6 @@ func cloneMap(in map[string]any) map[string]any {
 		out[key] = value
 	}
 	return out
-}
-
-func randomSuffix() string {
-	var data [2]byte
-	if _, err := rand.Read(data[:]); err != nil {
-		return "0000"
-	}
-	return hex.EncodeToString(data[:])
 }
 
 func sortedProviderIDs(results map[string]map[string]any) []string {
@@ -568,9 +566,4 @@ func copyReplayContextArtifacts(sourceRunDir string, runDir string) error {
 		}
 	}
 	return nil
-}
-
-func fileExists(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && !info.IsDir()
 }

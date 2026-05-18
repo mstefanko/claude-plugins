@@ -11,8 +11,10 @@ import (
 	"time"
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/buildinfo"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/jsonutil"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/provider"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/runner"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/runnerenv"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/triage"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
 )
@@ -82,10 +84,10 @@ func ProviderSucceeded(result map[string]any) bool {
 }
 
 func WriteProviderArtifacts(providerDir string, result map[string]any) error {
-	if err := workorder.WriteTextAtomic(filepath.Join(providerDir, "stdout.txt"), stringValue(result["stdout"])); err != nil {
+	if err := workorder.WriteTextAtomic(filepath.Join(providerDir, "stdout.txt"), jsonutil.StringValue(result["stdout"])); err != nil {
 		return err
 	}
-	if err := workorder.WriteTextAtomic(filepath.Join(providerDir, "stderr.txt"), stringValue(result["stderr"])); err != nil {
+	if err := workorder.WriteTextAtomic(filepath.Join(providerDir, "stderr.txt"), jsonutil.StringValue(result["stderr"])); err != nil {
 		return err
 	}
 	if err := WriteFormatRetryArtifacts(providerDir, result, ""); err != nil {
@@ -110,10 +112,10 @@ func WriteJudgeArtifacts(judgeDir string, label string, result map[string]any) e
 		stdoutName = "stdout-" + label + ".txt"
 		stderrName = "stderr-" + label + ".txt"
 	}
-	if err := workorder.WriteTextAtomic(filepath.Join(judgeDir, stdoutName), stringValue(result["stdout"])); err != nil {
+	if err := workorder.WriteTextAtomic(filepath.Join(judgeDir, stdoutName), jsonutil.StringValue(result["stdout"])); err != nil {
 		return err
 	}
-	if err := workorder.WriteTextAtomic(filepath.Join(judgeDir, stderrName), stringValue(result["stderr"])); err != nil {
+	if err := workorder.WriteTextAtomic(filepath.Join(judgeDir, stderrName), jsonutil.StringValue(result["stderr"])); err != nil {
 		return err
 	}
 	suffix := ""
@@ -158,13 +160,13 @@ func WriteFormatRetryArtifacts(directory string, result map[string]any, suffix s
 	if suffix != "" {
 		suffixPart = "-" + suffix
 	}
-	if err := workorder.WriteTextAtomic(filepath.Join(directory, "repair-prompt"+suffixPart+".txt"), stringValue(obj["prompt"])); err != nil {
+	if err := workorder.WriteTextAtomic(filepath.Join(directory, "repair-prompt"+suffixPart+".txt"), jsonutil.StringValue(obj["prompt"])); err != nil {
 		return err
 	}
-	if err := workorder.WriteTextAtomic(filepath.Join(directory, "repair-stdout"+suffixPart+".txt"), stringValue(obj["stdout"])); err != nil {
+	if err := workorder.WriteTextAtomic(filepath.Join(directory, "repair-stdout"+suffixPart+".txt"), jsonutil.StringValue(obj["stdout"])); err != nil {
 		return err
 	}
-	if err := workorder.WriteTextAtomic(filepath.Join(directory, "repair-stderr"+suffixPart+".txt"), stringValue(obj["stderr"])); err != nil {
+	if err := workorder.WriteTextAtomic(filepath.Join(directory, "repair-stderr"+suffixPart+".txt"), jsonutil.StringValue(obj["stderr"])); err != nil {
 		return err
 	}
 	return workorder.WriteJSONAtomic(filepath.Join(directory, "repair-status"+suffixPart+".json"), obj["status"])
@@ -228,6 +230,7 @@ func ToolVersion(ctx context.Context, tool string, lookup provider.LookupFunc) s
 	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(probeCtx, exe, argv[1:]...)
+	cmd.Env = runnerenv.SafeEnv(os.Environ())
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -266,11 +269,6 @@ func facetMap(facet *workorder.Facet) any {
 		out["notes"] = facet.Notes
 	}
 	return out
-}
-
-func stringValue(value any) string {
-	text, _ := value.(string)
-	return text
 }
 
 func mustGetwd() string {

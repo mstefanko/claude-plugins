@@ -17,6 +17,7 @@ import (
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/buildworkspace"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/output"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/provider"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/runnerenv"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
 )
 
@@ -66,7 +67,7 @@ func TestBuildParticipantArgvRequiresCodexWorkspaceWrite(t *testing.T) {
 }
 
 func TestBuildEnvScrubsSecrets(t *testing.T) {
-	got := buildEnv([]string{
+	got := runnerenv.SafeEnv([]string{
 		"PATH=/bin",
 		"BAKEOFF_FAKE_FAIL_PROVIDERS=codex",
 		"ANTHROPIC_API_KEY=secret",
@@ -84,6 +85,59 @@ func TestBuildEnvScrubsSecrets(t *testing.T) {
 		if strings.Contains(joined, forbidden) {
 			t.Fatalf("env leaked %s in %q", forbidden, joined)
 		}
+	}
+}
+
+func TestRenderBuildReportOutcomeAndSingleSelectionBasis(t *testing.T) {
+	decision := map[string]any{
+		"decision_kind":    "pick_winner",
+		"canonical_winner": "claude",
+		"selection_basis":  "metric",
+	}
+	report := renderBuildReport(
+		&workorder.WorkOrder{ID: "build-report"},
+		"build-run",
+		"runs",
+		filepath.Join(t.TempDir(), "run"),
+		decision,
+		buildverify.Result{GatesPassed: true},
+		[]providerRun{{
+			ID:           "claude",
+			WorkerResult: map[string]any{"status": "complete"},
+			Capture:      &buildworkspace.CaptureResult{PatchBytes: 123},
+			Verify:       buildverify.Result{GatesPassed: true},
+		}},
+		nil,
+		buildDiagnostics{},
+	)
+	for _, want := range []string{
+		"## Outcome",
+		"Decision: `pick_winner`",
+		"Winner: `claude`",
+		"Selection basis: `metric`",
+		"Patch: `providers/claude/build/diff.patch`",
+		"Next: `bakeoff show build-run`",
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing %q:\n%s", want, report)
+		}
+	}
+	if strings.Count(report, "Selection basis:") != 1 {
+		t.Fatalf("report should render selection basis once:\n%s", report)
+	}
+	if strings.Index(report, "## Outcome") > strings.Index(report, "## Baseline Verification") {
+		t.Fatalf("outcome should be first substantive report section:\n%s", report)
+	}
+}
+
+func TestBuildResultLineSummarizesDecision(t *testing.T) {
+	got := buildResultLine(map[string]any{
+		"decision_kind":    "pick_winner",
+		"canonical_winner": "claude",
+		"selection_basis":  "judge",
+	})
+	if got != "pick_winner, winner=claude, basis=judge" {
+		t.Fatalf("buildResultLine = %q", got)
 	}
 }
 
@@ -664,9 +718,9 @@ func TestRunBuildFailsWhenSameRepoLockHeld(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer lock.Release()
-	previousTimeout := buildLockTimeout
-	buildLockTimeout = 50 * time.Millisecond
-	defer func() { buildLockTimeout = previousTimeout }()
+	previousTimeout := buildSetupLockTimeout
+	buildSetupLockTimeout = 50 * time.Millisecond
+	defer func() { buildSetupLockTimeout = previousTimeout }()
 
 	outDir := filepath.Join(root, "runs")
 	out, errOut, err := runBuildTest(t, repoDir, workOrderPath, outDir, BuildOptions{RunID: "locked", Quiet: true, JSON: true})

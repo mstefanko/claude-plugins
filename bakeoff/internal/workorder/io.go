@@ -23,7 +23,7 @@ func JSONText(value any) (string, error) {
 }
 
 func WriteTextAtomic(path string, text string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
@@ -49,7 +49,7 @@ func WriteTextAtomic(path string, text string) error {
 		return err
 	}
 	closed = true
-	if err := os.Chmod(tmpName, 0o644); err != nil {
+	if err := os.Chmod(tmpName, 0o600); err != nil {
 		return err
 	}
 	if err := os.Rename(tmpName, path); err != nil {

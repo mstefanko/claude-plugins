@@ -10,7 +10,14 @@
   "id": "review-example",
   "type": "gather",
   "goal": "Review the branch diff for actionable defects.",
-  "background": "Base branch: TODO. Review branch: TODO. Diff command/output: TODO. Changed files: TODO. Acceptance criteria: TODO. Known risk areas: TODO.",
+  "background": [
+    "Base branch: TODO.",
+    "Review branch: TODO.",
+    "Diff command/output: TODO.",
+    "Changed files: TODO.",
+    "Acceptance criteria: TODO.",
+    "Known risk areas: TODO."
+  ],
   "facet": {
     "id": "code-review",
     "kind": "generic",

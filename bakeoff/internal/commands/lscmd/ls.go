@@ -10,6 +10,7 @@ import (
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/apperror"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/jsonutil"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/manifest"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/summary"
 	"github.com/spf13/cobra"
@@ -89,11 +90,11 @@ func runLs(_ context.Context, f commands.Factory, opts *LsOptions) error {
 	}
 	f.Streams().Printf("run_id\ttype\tfacet\tdecision\ttriage\tfinished_at\n")
 	for _, row := range rows {
-		facet := stringValue(row["facet_id"])
+		facet := jsonutil.StringValue(row["facet_id"])
 		if facet == "" {
 			facet = "-"
 		}
-		f.Streams().Printf("%s\t%s\t%s\t%s\ttriage:%s\t%s\n", stringValue(row["run_id"]), defaultString(row["type"], "?"), facet, defaultString(row["decision_kind"], "?"), defaultString(row["triage_state"], "no"), defaultString(row["finished_at"], "-"))
+		f.Streams().Printf("%s\t%s\t%s\t%s\ttriage:%s\t%s\n", jsonutil.StringValue(row["run_id"]), defaultString(row["type"], "?"), facet, defaultString(row["decision_kind"], "?"), defaultString(row["triage_state"], "no"), defaultString(row["finished_at"], "-"))
 	}
 	return nil
 }
@@ -130,13 +131,8 @@ func rowsForLS(runDirs []string) []map[string]any {
 	return rows
 }
 
-func stringValue(value any) string {
-	text, _ := value.(string)
-	return text
-}
-
 func defaultString(value any, fallback string) string {
-	if text := stringValue(value); text != "" {
+	if text := jsonutil.StringValue(value); text != "" {
 		return text
 	}
 	return fallback

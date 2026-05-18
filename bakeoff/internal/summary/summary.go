@@ -2,7 +2,6 @@ package summary
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -10,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/artifact"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/fsutil"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/jsonutil"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/ledger"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/runner"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/triage"
@@ -124,7 +125,7 @@ func CommandStatus(exitCode int) string {
 func CompactStatus(raw any) string {
 	text := "missing_status"
 	if raw != nil {
-		text = strings.TrimSpace(stringValue(raw))
+		text = strings.TrimSpace(jsonutil.StringValue(raw))
 	}
 	if okStatuses[text] {
 		return text
@@ -136,7 +137,7 @@ func ProviderStatusSummary(status map[string]any) ProviderSummary {
 	raw := status["status"]
 	rawText := ""
 	if raw != nil {
-		rawText = stringValue(raw)
+		rawText = jsonutil.StringValue(raw)
 	}
 	out := ProviderSummary{Status: CompactStatus(raw)}
 	if rawText != "" {
@@ -150,7 +151,7 @@ func ProviderStatusSummary(status map[string]any) ProviderSummary {
 }
 
 func JudgeJSONSummary(runDir string, decision map[string]any) JudgeSummary {
-	if !boolValue(decision["judge_ran"]) {
+	if !jsonutil.BoolValue(decision["judge_ran"]) {
 		return JudgeSummary{Status: "not_run", RawStatus: "not_run"}
 	}
 	judgeDir := filepath.Join(runDir, "judge")
@@ -172,7 +173,7 @@ func JudgeJSONSummary(runDir string, decision map[string]any) JudgeSummary {
 		status := readJSON(path)
 		raw := "invalid_status"
 		if obj, ok := status.(map[string]any); ok {
-			raw = stringValue(obj["status"])
+			raw = jsonutil.StringValue(obj["status"])
 		}
 		label := strings.TrimSuffix(filepath.Base(path), ".json")
 		label = strings.TrimPrefix(label, "status-")
@@ -218,7 +219,7 @@ func BuildResearch(runDir string, runID string, outDir string, decision map[stri
 		RunDir:          runDir,
 		DecisionKind:    decision["decision_kind"],
 		CanonicalWinner: decision["canonical_winner"],
-		JudgeRan:        boolValue(decision["judge_ran"]),
+		JudgeRan:        jsonutil.BoolValue(decision["judge_ran"]),
 		Providers:       providers,
 		Judge:           JudgeJSONSummary(runDir, decision),
 		Triage:          ResearchTriage(runDir, autoTriageStarted, triageExitCode),
@@ -232,7 +233,7 @@ func ResearchTriage(runDir string, autoStarted bool, triageExitCode any) Researc
 	statusData := readJSON(filepath.Join(runDir, "triage", "status.json"))
 	rawStatus := ""
 	if obj, ok := statusData.(map[string]any); ok {
-		rawStatus = stringValue(obj["status"])
+		rawStatus = jsonutil.StringValue(obj["status"])
 	}
 	var status any
 	if rawStatus == "" {
@@ -249,7 +250,7 @@ func ResearchTriage(runDir string, autoStarted bool, triageExitCode any) Researc
 		ExitCode:    triageExitCode,
 		Artifacts:   TriageArtifactPaths(runDir),
 	}
-	if rawStatus != "" && rawStatus != stringValue(status) {
+	if rawStatus != "" && rawStatus != jsonutil.StringValue(status) {
 		out.RawStatus = rawStatus
 	}
 	if len(staleInputs) > 0 {
@@ -262,7 +263,7 @@ func ResearchArtifactPaths(runDir string) ResearchArtifacts {
 	out := ResearchArtifacts{}
 	set := func(relative string) string {
 		path := filepath.Join(runDir, relative)
-		if fileExists(path) {
+		if fsutil.FileExists(path) {
 			return path
 		}
 		return ""
@@ -283,7 +284,7 @@ func TriageArtifactPaths(runDir string) TriageArtifacts {
 	out := TriageArtifacts{}
 	set := func(relative string) string {
 		path := filepath.Join(triageDir, relative)
-		if fileExists(path) {
+		if fsutil.FileExists(path) {
 			return path
 		}
 		return ""
@@ -317,7 +318,7 @@ func BuildTriage(runDir string, runID string, outDir string, exitCode int, dryRu
 		filterSummary = map[string]any{}
 	}
 	triageStatus := any(CompactStatus(rawStatus))
-	if stringValue(rawStatus) == "dry_run" {
+	if jsonutil.StringValue(rawStatus) == "dry_run" {
 		triageStatus = "dry_run"
 	}
 	next := ledger.BakeoffTriageCommand(runID, outDir, true)
@@ -363,26 +364,6 @@ func readJSON(path string) any {
 		return nil
 	}
 	return value
-}
-
-func fileExists(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && !info.IsDir()
-}
-
-func stringValue(value any) string {
-	if value == nil {
-		return ""
-	}
-	if text, ok := value.(string); ok {
-		return text
-	}
-	return fmt.Sprint(value)
-}
-
-func boolValue(value any) bool {
-	v, _ := value.(bool)
-	return v
 }
 
 func defaultNumber(value any) any {

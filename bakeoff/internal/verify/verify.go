@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/fsutil"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/jsonutil"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/ledger"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/manifest"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/summary"
@@ -58,7 +60,7 @@ func Run(runDir string, displayOutDir string) Result {
 	warnings := []string{}
 	var loadedManifest *manifestDocument
 	manifestStatus := "ok"
-	if !fileExists(manifestPath) {
+	if !fsutil.FileExists(manifestPath) {
 		manifestStatus = "failed"
 		problems = append(problems, "missing manifest: "+manifestPath)
 	} else {
@@ -97,7 +99,7 @@ func Run(runDir string, displayOutDir string) Result {
 	requiredArtifacts := manifest.RequiredArtifactsForType(runType)
 	missingRequired := []string{}
 	for _, relative := range requiredArtifacts {
-		if !fileExists(filepath.Join(runDir, relative)) {
+		if !fsutil.FileExists(filepath.Join(runDir, relative)) {
 			missingRequired = append(missingRequired, relative)
 			problems = append(problems, "missing artifact: "+filepath.Join(runDir, relative))
 		}
@@ -124,6 +126,8 @@ func Run(runDir string, displayOutDir string) Result {
 					fingerprintMismatches = append(fingerprintMismatches, map[string]string{"path": relative, "reason": reason})
 					if reason == "missing" {
 						problems = append(problems, "missing artifact: "+filepath.Join(runDir, relative))
+					} else if reason == "invalid" {
+						problems = append(problems, "unsafe manifest path: "+relative)
 					} else {
 						problems = append(problems, "fingerprint mismatch: "+filepath.Join(runDir, relative))
 					}
@@ -222,10 +226,10 @@ func isStableEvidenceArtifact(relative string) bool {
 }
 
 func verifyFingerprintValues(runDir string, relative string, expectedSize int64, expectedSHA string) string {
-	if relative == "" {
+	path, ok := safeChild(runDir, relative)
+	if !ok {
 		return "invalid"
 	}
-	path := filepath.Join(runDir, relative)
 	size, sha, err := workorder.FileFingerprint(path)
 	if err != nil {
 		return "missing"
@@ -236,11 +240,27 @@ func verifyFingerprintValues(runDir string, relative string, expectedSize int64,
 	return ""
 }
 
+func safeChild(runDir, relative string) (string, bool) {
+	if relative == "" || filepath.IsAbs(relative) {
+		return "", false
+	}
+	cleaned := filepath.Clean(relative)
+	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	abs := filepath.Join(runDir, cleaned)
+	rel, err := filepath.Rel(runDir, abs)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return abs, true
+}
+
 func reviewContextSetStatus(runDir string) (bool, []string) {
 	presentCount := 0
 	missing := []string{}
 	for _, relative := range manifest.ReviewContextArtifacts {
-		if fileExists(filepath.Join(runDir, relative)) {
+		if fsutil.FileExists(filepath.Join(runDir, relative)) {
 			presentCount++
 		} else {
 			missing = append(missing, relative)
@@ -260,7 +280,7 @@ func VerifyFingerprintEntry(runDir string, relative string, expected any) string
 	if !ok || relative == "" {
 		return "invalid"
 	}
-	return verifyFingerprintValues(runDir, relative, int64Value(obj["size_bytes"]), stringValue(obj["sha256"]))
+	return verifyFingerprintValues(runDir, relative, jsonutil.Int64Value(obj["size_bytes"]), jsonutil.StringValue(obj["sha256"]))
 }
 
 func Next(runDir string, outDir string, exitCode int, triageState string) string {
@@ -274,31 +294,8 @@ func Next(runDir string, outDir string, exitCode int, triageState string) string
 		}
 		return ledger.BakeoffShowCommand(runID, outDir, "")
 	}
-	if fileExists(filepath.Join(runDir, "work-order.json")) {
+	if fsutil.FileExists(filepath.Join(runDir, "work-order.json")) {
 		return ledger.BakeoffRerunCommand(runID, outDir)
 	}
 	return "restore the listed artifacts or rerun the original work order"
-}
-
-func fileExists(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && !info.IsDir()
-}
-
-func int64Value(value any) int64 {
-	switch typed := value.(type) {
-	case int64:
-		return typed
-	case int:
-		return int64(typed)
-	case float64:
-		return int64(typed)
-	default:
-		return 0
-	}
-}
-
-func stringValue(value any) string {
-	text, _ := value.(string)
-	return text
 }

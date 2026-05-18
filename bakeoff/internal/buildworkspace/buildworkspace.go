@@ -406,7 +406,7 @@ func CreateDetachedWorktree(ctx context.Context, repo Repository, path string) e
 	if repo.BaseCommit == "" {
 		return fmt.Errorf("base commit is required")
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 	_, err := gitOutput(ctx, repo.Root, "worktree", "add", "--detach", path, repo.BaseCommit)
@@ -499,7 +499,7 @@ func CaptureChanges(ctx context.Context, opts CaptureOptions) (CaptureResult, er
 	}
 	result.TestFiles, result.BenchmarkFiles = ClassifyBuildEvidenceFiles(result.ChangedFiles)
 	if opts.OutputDir != "" {
-		if err := os.MkdirAll(opts.OutputDir, 0o755); err != nil {
+		if err := os.MkdirAll(opts.OutputDir, 0o700); err != nil {
 			return CaptureResult{}, err
 		}
 		result.ChangedFilesPath = filepath.Join(opts.OutputDir, "changed-files.txt")
@@ -713,7 +713,7 @@ func AcquireLock(ctx context.Context, commonDir string, timeout time.Duration) (
 	if timeout <= 0 {
 		timeout = 5 * time.Second
 	}
-	if err := os.MkdirAll(commonDir, 0o755); err != nil {
+	if err := os.MkdirAll(commonDir, 0o700); err != nil {
 		return nil, err
 	}
 	lockPath := filepath.Join(commonDir, lockFileName)

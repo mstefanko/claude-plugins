@@ -267,9 +267,9 @@ func Validate(data map[string]any) (*WorkOrder, error) {
 	if !ok || strings.TrimSpace(goal) == "" {
 		return nil, Validationf("goal must be a non-empty string")
 	}
-	background, ok := data["background"].(string)
+	background, ok := backgroundAsString(data["background"])
 	if !ok {
-		return nil, Validationf("background must be a string")
+		return nil, Validationf("background must be a string or an array of strings")
 	}
 
 	providers, err := validateProviders(data["providers"])
@@ -323,6 +323,25 @@ func Validate(data map[string]any) (*WorkOrder, error) {
 		Build:         build,
 		Raw:           data,
 	}, nil
+}
+
+func backgroundAsString(value any) (string, bool) {
+	switch typed := value.(type) {
+	case string:
+		return typed, true
+	case []any:
+		parts := make([]string, 0, len(typed))
+		for _, item := range typed {
+			part, ok := item.(string)
+			if !ok {
+				return "", false
+			}
+			parts = append(parts, part)
+		}
+		return strings.Join(parts, "\n\n"), true
+	default:
+		return "", false
+	}
 }
 
 func InitTemplate(kind string) (string, error) {

@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/jsonutil"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/ledger"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
 )
 
@@ -26,22 +28,21 @@ var skipBullets = map[string]bool{
 	"No provider completed successfully.": true,
 }
 
-func Render(wo *workorder.WorkOrder, decision map[string]any, workerResults map[string]map[string]any, judgeResults map[string]map[string]any) string {
+type RenderOptions struct {
+	RunID  string
+	OutDir string
+	RunDir string
+}
+
+func Render(wo *workorder.WorkOrder, decision map[string]any, workerResults map[string]map[string]any, judgeResults map[string]map[string]any, opts RenderOptions) string {
 	mode, _ := decision["mode"].(string)
 	lines := []string{
 		"# Bakeoff Report: " + wo.ID,
 		"",
-		"Mode: `" + mode + "`",
-		"Decision: `" + stringValue(decision["decision_kind"]) + "`",
 	}
-	if wo.Facet != nil && strings.TrimSpace(wo.Facet.ID) != "" {
-		lines = append(lines, "Facet: `"+wo.Facet.ID+"`")
-		if wo.Facet.Focus != "" {
-			lines = append(lines, "Facet Focus: "+wo.Facet.Focus)
-		}
-	}
-	lines = append(lines, "")
+	lines = append(lines, renderOutcome(wo, decision, workerResults, opts)...)
 	lines = append(lines, decisionAudit(decision)...)
+	lines = append(lines, renderProviderStatusTable(decision)...)
 	switch mode {
 	case "gather":
 		lines = append(lines, renderGather(wo, decision, workerResults, judgeResults)...)
@@ -56,12 +57,50 @@ func Render(wo *workorder.WorkOrder, decision map[string]any, workerResults map[
 	return addFindingIDs(strings.TrimRight(strings.Join(lines, "\n"), "\n")) + "\n"
 }
 
+func renderOutcome(wo *workorder.WorkOrder, decision map[string]any, workerResults map[string]map[string]any, opts RenderOptions) []string {
+	_ = workerResults
+	mode := jsonutil.StringValue(decision["mode"])
+	if mode == "" {
+		mode = wo.Type
+	}
+	kind := jsonutil.StringValue(decision["decision_kind"])
+	winner := jsonutil.StringValue(decision["canonical_winner"])
+	lines := []string{
+		"## Outcome",
+		"",
+		"Mode: `" + mode + "`",
+		"Decision: `" + kind + "`",
+	}
+	if wo.Facet != nil && strings.TrimSpace(wo.Facet.ID) != "" {
+		lines = append(lines, "Facet: `"+wo.Facet.ID+"`")
+		if wo.Facet.Focus != "" {
+			lines = append(lines, "Facet Focus: "+wo.Facet.Focus)
+		}
+	}
+	if winner != "" && mode != "gather" {
+		lines = append(lines, "Winner: `"+winner+"`")
+	} else if winner != "" && kind == "single_provider_only" {
+		lines = append(lines, "Winner: `"+winner+"`")
+	} else {
+		result := kind
+		if result == "" {
+			result = "unknown"
+		}
+		lines = append(lines, "Result: `"+result+"`")
+	}
+	if opts.RunID != "" {
+		lines = append(lines, "Next: `"+ledger.BakeoffShowCommand(opts.RunID, opts.OutDir, "")+"`")
+	}
+	lines = append(lines, "")
+	return lines
+}
+
 func decisionAudit(decision map[string]any) []string {
-	lines := []string{"## Decision Audit", "", "- Judge ran: `" + strings.ToLower(fmt.Sprintf("%v", boolValue(decision["judge_ran"]))) + "`"}
-	if winner := stringValue(decision["canonical_winner"]); winner != "" {
+	lines := []string{"## Decision Audit", "", "- Judge ran: `" + strings.ToLower(fmt.Sprintf("%v", jsonutil.BoolValue(decision["judge_ran"]))) + "`"}
+	if winner := jsonutil.StringValue(decision["canonical_winner"]); winner != "" {
 		lines = append(lines, "- Canonical winner: `"+winner+"`")
 	}
-	if tiebreak := stringValue(decision["spine_tiebreak"]); tiebreak != "" {
+	if tiebreak := jsonutil.StringValue(decision["spine_tiebreak"]); tiebreak != "" {
 		lines = append(lines, "- Spine tiebreak: `"+tiebreak+"`")
 	}
 	if maps, ok := decision["order_maps"].(map[string]any); ok {
@@ -70,7 +109,7 @@ func decisionAudit(decision map[string]any) []string {
 			mapping, _ := maps[name].(map[string]string)
 			if mapping == nil {
 				if raw, ok := maps[name].(map[string]any); ok {
-					mapping = map[string]string{"A": stringValue(raw["A"]), "B": stringValue(raw["B"])}
+					mapping = map[string]string{"A": jsonutil.StringValue(raw["A"]), "B": jsonutil.StringValue(raw["B"])}
 				}
 			}
 			lines = append(lines, fmt.Sprintf("- %s: A=`%s`, B=`%s`", name, mapping["A"], mapping["B"]))
@@ -80,22 +119,22 @@ func decisionAudit(decision map[string]any) []string {
 		lines = append(lines, "- Judge passes:")
 		for _, name := range sortedMapKeys(passes) {
 			summary, _ := passes[name].(map[string]any)
-			verdict := stringValue(summary["canonical_winner"])
+			verdict := jsonutil.StringValue(summary["canonical_winner"])
 			if verdict == "" {
-				verdict = stringValue(summary["positional_winner"])
+				verdict = jsonutil.StringValue(summary["positional_winner"])
 			}
 			if verdict == "" {
 				verdict = "none"
 			}
-			positional := stringValue(summary["positional_winner"])
+			positional := jsonutil.StringValue(summary["positional_winner"])
 			relation := ""
 			if summary["relation"] != nil {
-				relation = ", relation=`" + stringValue(summary["relation"]) + "`"
+				relation = ", relation=`" + jsonutil.StringValue(summary["relation"]) + "`"
 			}
-			lines = append(lines, fmt.Sprintf("  - %s: A=`%s`, B=`%s`, winner=`%s` (positional `%s`%s)", name, stringValue(summary["A"]), stringValue(summary["B"]), verdict, positional, relation))
+			lines = append(lines, fmt.Sprintf("  - %s: A=`%s`, B=`%s`, winner=`%s` (positional `%s`%s)", name, jsonutil.StringValue(summary["A"]), jsonutil.StringValue(summary["B"]), verdict, positional, relation))
 		}
 	}
-	if rationale := listValue(decision["judge_rationale"]); len(rationale) > 0 {
+	if rationale := jsonutil.ListValue(decision["judge_rationale"]); len(rationale) > 0 {
 		lines = append(lines, "- Judge rationale:")
 		passNames := []string{}
 		if passes, ok := decision["judge_passes"].(map[string]any); ok {
@@ -111,42 +150,77 @@ func decisionAudit(decision map[string]any) []string {
 			lines = append(lines, "  - "+prefix+fmt.Sprint(item))
 		}
 	}
-	lines = append(lines, "", "## Provider Status", "")
+	lines = append(lines, "")
+	return lines
+}
+
+func renderProviderStatusTable(decision map[string]any) []string {
 	statuses, _ := decision["provider_statuses"].(map[string]any)
+	if len(statuses) == 0 {
+		return nil
+	}
+	lines := []string{
+		"## Provider Status",
+		"",
+		"| Provider | Status | Wall | Stdout | Stderr | Scope | Notes |",
+		"|----------|--------|------|--------|--------|-------|-------|",
+	}
 	for _, providerID := range sortedMapKeys(statuses) {
 		status, _ := statuses[providerID].(map[string]any)
-		stdoutBytes := firstNonNil(status["stdout_bytes"], status["output_bytes"], 0)
-		detail := fmt.Sprintf("%vs, stdout %v bytes, stderr %v bytes", firstNonNil(status["wall_seconds"], 0), stdoutBytes, firstNonNil(status["stderr_bytes"], 0))
-		if observed := numberValue(status["stdout_observed_bytes"]); observed != 0 && observed != numberValue(stdoutBytes) {
-			detail += fmt.Sprintf(", stdout observed %v bytes", observed)
+		stdoutBytes := jsonutil.IntValue(jsonutil.FirstNonNil(status["stdout_bytes"], status["output_bytes"], 0))
+		stderrBytes := jsonutil.IntValue(jsonutil.FirstNonNil(status["stderr_bytes"], 0))
+		notes := []string{}
+		if jsonutil.BoolValue(status["stdout_truncated"]) {
+			notes = append(notes, "stdout truncated")
 		}
-		if observed := numberValue(status["stderr_observed_bytes"]); observed != 0 && observed != numberValue(status["stderr_bytes"]) {
-			detail += fmt.Sprintf(", stderr observed %v bytes", observed)
+		if jsonutil.BoolValue(status["stderr_truncated"]) {
+			notes = append(notes, "stderr truncated")
 		}
-		if boolValue(status["stdout_truncated"]) {
-			detail += ", stdout truncated"
+		if observed := jsonutil.IntValue(status["stdout_observed_bytes"]); observed != 0 && observed != stdoutBytes {
+			notes = append(notes, fmt.Sprintf("stdout observed %s", humanBytes(observed)))
 		}
-		if boolValue(status["stderr_truncated"]) {
-			detail += ", stderr truncated"
+		if observed := jsonutil.IntValue(status["stderr_observed_bytes"]); observed != 0 && observed != stderrBytes {
+			notes = append(notes, fmt.Sprintf("stderr observed %s", humanBytes(observed)))
 		}
-		suffix := ""
-		if path := stringValue(status["stderr_path"]); path != "" {
-			suffix = ", stderr: `" + path + "`"
+		if path := jsonutil.StringValue(status["stderr_path"]); path != "" {
+			notes = append(notes, "stderr: `"+path+"`")
 		}
-		lines = append(lines, fmt.Sprintf("- `%s`: `%s` (%s%s)", providerID, stringValue(status["status"]), detail, suffix))
+		scopeText := ""
 		if scope, ok := status["scope_enforcement"].(map[string]any); ok {
 			level := defaultString(scope["enforcement_level"], "unknown")
 			requested := defaultString(scope["requested_scope"], "unknown")
 			effective := defaultString(scope["effective_scope"], "unknown")
-			fallback := ""
-			if reason := stringValue(scope["fallback_reason"]); reason != "" {
-				fallback = ", fallback: " + reason
+			if reason := jsonutil.StringValue(scope["fallback_reason"]); reason != "" {
+				notes = append(notes, "fallback: "+reason)
 			}
-			lines = append(lines, fmt.Sprintf("  Scope: `%s` -> `%s` (%s%s)", requested, effective, level, fallback))
+			scopeText = requested + " -> " + effective + " (" + level + ")"
 		}
+		lines = append(lines, fmt.Sprintf("| `%s` | `%s` | %vs | %s | %s | %s | %s |",
+			providerID,
+			jsonutil.StringValue(status["status"]),
+			jsonutil.FirstNonNil(status["wall_seconds"], 0),
+			humanBytes(stdoutBytes),
+			humanBytes(stderrBytes),
+			escapeTableCell(scopeText),
+			escapeTableCell(strings.Join(notes, "; ")),
+		))
 	}
 	lines = append(lines, "")
 	return lines
+}
+
+func humanBytes(size int) string {
+	if size >= 1024*1024 {
+		return fmt.Sprintf("%.1f MB", float64(size)/(1024*1024))
+	}
+	if size >= 1024 {
+		return fmt.Sprintf("%.1f KB", float64(size)/1024)
+	}
+	return fmt.Sprintf("%d B", size)
+}
+
+func escapeTableCell(text string) string {
+	return strings.ReplaceAll(text, "|", `\|`)
 }
 
 func renderGather(wo *workorder.WorkOrder, decision map[string]any, workerResults map[string]map[string]any, judgeResults map[string]map[string]any) []string {
@@ -154,28 +228,28 @@ func renderGather(wo *workorder.WorkOrder, decision map[string]any, workerResult
 	case "both_failed":
 		return []string{"## Findings", "", "No provider completed successfully.", ""}
 	case "single_provider_only":
-		providerID := stringValue(decision["canonical_winner"])
-		worker := finalJSONMap(workerResults[providerID])
-		return append(append([]string{"## Findings", ""}, claimLines(listValue(worker["claims"]), providerID, false)...), unknowns(worker)...)
+		providerID := jsonutil.StringValue(decision["canonical_winner"])
+		worker := jsonutil.FinalJSONMap(workerResults[providerID])
+		return append(append([]string{"## Findings", ""}, claimLines(jsonutil.ListValue(worker["claims"]), providerID, false)...), unknowns(worker)...)
 	}
 	judge := judgeResults["pass1"]
 	if judge == nil {
 		judge = judgeResults["gather"]
 	}
-	merged := listValue(judge["merged_claims"])
+	merged := jsonutil.ListValue(judge["merged_claims"])
 	orderMap := map[string]string{}
 	if maps, ok := decision["order_maps"].(map[string]any); ok {
 		if raw, ok := maps["pass1"].(map[string]string); ok {
 			orderMap = raw
 		} else if raw, ok := maps["pass1"].(map[string]any); ok {
-			orderMap = map[string]string{"A": stringValue(raw["A"]), "B": stringValue(raw["B"])}
+			orderMap = map[string]string{"A": jsonutil.StringValue(raw["A"]), "B": jsonutil.StringValue(raw["B"])}
 		}
 	}
 	grouped := map[string][]any{}
 	for _, item := range merged {
 		claim, _ := item.(map[string]any)
 		sources := []string{}
-		for _, rawSource := range listValue(claim["sources"]) {
+		for _, rawSource := range jsonutil.ListValue(claim["sources"]) {
 			source := fmt.Sprint(rawSource)
 			if mapped := orderMap[source]; mapped != "" {
 				source = mapped
@@ -205,9 +279,9 @@ func renderGather(wo *workorder.WorkOrder, decision map[string]any, workerResult
 		lines = append(lines, "")
 	}
 	lines = append(lines, "## Conflicts", "")
-	lines = append(lines, conflictLines(listValue(judge["conflicts"]))...)
+	lines = append(lines, conflictLines(jsonutil.ListValue(judge["conflicts"]))...)
 	lines = append(lines, "", "## Unknowns", "")
-	unknownsUnion := listValue(judge["unknowns_union"])
+	unknownsUnion := jsonutil.ListValue(judge["unknowns_union"])
 	if len(unknownsUnion) == 0 {
 		lines = append(lines, "- None reported.")
 	} else {
@@ -216,7 +290,7 @@ func renderGather(wo *workorder.WorkOrder, decision map[string]any, workerResult
 		}
 	}
 	lines = append(lines, "")
-	if outOfFacet := listValue(judge["out_of_facet_claims"]); len(outOfFacet) > 0 {
+	if outOfFacet := jsonutil.ListValue(judge["out_of_facet_claims"]); len(outOfFacet) > 0 {
 		lines = append(lines, "## Out-of-Facet Claims", "", "These claims are observability-only and are excluded from triage source selection.", "")
 		lines = append(lines, outOfFacetLines(outOfFacet)...)
 		lines = append(lines, "")
@@ -226,36 +300,36 @@ func renderGather(wo *workorder.WorkOrder, decision map[string]any, workerResult
 
 func renderCompare(decision map[string]any, workerResults map[string]map[string]any) []string {
 	lines := []string{"## Comparison", ""}
-	kind := stringValue(decision["decision_kind"])
-	winner := stringValue(decision["canonical_winner"])
+	kind := jsonutil.StringValue(decision["decision_kind"])
+	winner := jsonutil.StringValue(decision["canonical_winner"])
 	switch {
 	case kind == "pick_winner" && winner != "":
-		final := finalJSONMap(workerResults[winner])
+		final := jsonutil.FinalJSONMap(workerResults[winner])
 		lines = append(lines, "Winner: `"+winner+"`")
-		if position := stringValue(final["position"]); position != "" {
+		if position := jsonutil.StringValue(final["position"]); position != "" {
 			lines = append(lines, "Position: "+position)
 		}
 		lines = append(lines, "")
-		lines = append(lines, claimLines(listValue(final["claims"]), winner, false)...)
+		lines = append(lines, claimLines(jsonutil.ListValue(final["claims"]), winner, false)...)
 	case kind == "consensus":
 		lines = append(lines, "The judge found both providers reached the same position.", "", "### Strongest Material", "")
-		lines = append(lines, genericItemLines(listValue(decision["consensus_strongest"]))...)
+		lines = append(lines, genericItemLines(jsonutil.ListValue(decision["consensus_strongest"]))...)
 		lines = append(lines, "", "### Consensus Disagreements", "")
-		lines = append(lines, genericItemLines(listValue(decision["consensus_disagreements"]))...)
+		lines = append(lines, genericItemLines(jsonutil.ListValue(decision["consensus_disagreements"]))...)
 	case kind == "single_provider_only" && winner != "":
-		final := finalJSONMap(workerResults[winner])
+		final := jsonutil.FinalJSONMap(workerResults[winner])
 		lines = append(lines, "No comparison possible - surfacing the single completed result.")
-		if position := stringValue(final["position"]); position != "" {
+		if position := jsonutil.StringValue(final["position"]); position != "" {
 			lines = append(lines, "Position: "+position)
 		}
 		lines = append(lines, "")
-		lines = append(lines, claimLines(listValue(final["claims"]), winner, false)...)
+		lines = append(lines, claimLines(jsonutil.ListValue(final["claims"]), winner, false)...)
 	case kind == "both_failed":
 		lines = append(lines, "No provider completed successfully.")
 	default:
 		lines = append(lines, "No stable winner after position swap. Human decision required.")
 	}
-	if kept := listValue(decision["kept_from_nonwinner"]); len(kept) > 0 {
+	if kept := jsonutil.ListValue(decision["kept_from_nonwinner"]); len(kept) > 0 {
 		lines = append(lines, "", "## Kept From Nonwinner", "")
 		lines = append(lines, genericItemLines(kept)...)
 	}
@@ -265,33 +339,33 @@ func renderCompare(decision map[string]any, workerResults map[string]map[string]
 
 func renderAnalyze(decision map[string]any, workerResults map[string]map[string]any) []string {
 	lines := []string{"## Primary Explanation", ""}
-	winner := stringValue(decision["canonical_winner"])
+	winner := jsonutil.StringValue(decision["canonical_winner"])
 	if decision["decision_kind"] == "both_failed" {
 		return append(lines, "No provider completed successfully.", "")
 	}
 	if winner == "" {
 		return append(lines, "No stable spine was selected. Human decision required.", "")
 	}
-	final := finalJSONMap(workerResults[winner])
+	final := jsonutil.FinalJSONMap(workerResults[winner])
 	verdicts := map[string]map[string]any{}
-	for _, item := range listValue(decision["claim_verdicts"]) {
+	for _, item := range jsonutil.ListValue(decision["claim_verdicts"]) {
 		obj, ok := item.(map[string]any)
 		if !ok {
 			continue
 		}
-		verdicts[stringValue(obj["claim_id"])] = obj
+		verdicts[jsonutil.StringValue(obj["claim_id"])] = obj
 	}
-	claims := listValue(final["claims"])
+	claims := jsonutil.ListValue(final["claims"])
 	for _, item := range claims {
 		claim, _ := item.(map[string]any)
-		verdict := verdicts[stringValue(claim["id"])]
-		marker := stringValue(verdict["loser_position"])
+		verdict := verdicts[jsonutil.StringValue(claim["id"])]
+		marker := jsonutil.StringValue(verdict["loser_position"])
 		note := ""
 		if marker != "" {
-			note = " [" + marker + ": " + stringValue(verdict["loser_note"]) + "]"
+			note = " [" + marker + ": " + jsonutil.StringValue(verdict["loser_note"]) + "]"
 		}
 		evidence := joinList(claim["evidence"], ", ")
-		lines = append(lines, fmt.Sprintf("- **%s** %s%s", defaultString(claim["id"], "?"), stringValue(claim["claim"]), note))
+		lines = append(lines, fmt.Sprintf("- **%s** %s%s", defaultString(claim["id"], "?"), jsonutil.StringValue(claim["claim"]), note))
 		if evidence != "" {
 			lines = append(lines, "  Evidence: "+evidence)
 		}
@@ -299,11 +373,11 @@ func renderAnalyze(decision map[string]any, workerResults map[string]map[string]
 	if len(claims) == 0 {
 		lines = append(lines, "No claims were available to render.")
 	}
-	if followups := listValue(decision["actionable_followups"]); len(followups) > 0 {
+	if followups := jsonutil.ListValue(decision["actionable_followups"]); len(followups) > 0 {
 		lines = append(lines, "", "## Actionable Follow-ups", "")
 		lines = append(lines, genericItemLines(followups)...)
 	}
-	if additions := listValue(decision["additions_from_loser"]); len(additions) > 0 {
+	if additions := jsonutil.ListValue(decision["additions_from_loser"]); len(additions) > 0 {
 		lines = append(lines, "", "## Additions From Loser", "")
 		lines = append(lines, genericItemLines(additions)...)
 	}
@@ -326,7 +400,7 @@ func claimLines(claims []any, source string, showCorroboration bool) []string {
 		details = append(details, "model confidence `"+confidence+"`")
 		if showCorroboration {
 			sourceProviders := []string{}
-			for _, raw := range listValue(claim["_source_providers"]) {
+			for _, raw := range jsonutil.ListValue(claim["_source_providers"]) {
 				sourceProviders = append(sourceProviders, fmt.Sprint(raw))
 			}
 			sort.Strings(sourceProviders)
@@ -340,7 +414,7 @@ func claimLines(claims []any, source string, showCorroboration bool) []string {
 				details = append(details, "corroboration `unknown`")
 			}
 		}
-		lines = append(lines, fmt.Sprintf("- %s (%s)", stringValue(claim["claim"]), strings.Join(details, ", ")))
+		lines = append(lines, fmt.Sprintf("- %s (%s)", jsonutil.StringValue(claim["claim"]), strings.Join(details, ", ")))
 		if evidence := joinList(claim["evidence"], ", "); evidence != "" {
 			lines = append(lines, "  Evidence: "+evidence)
 		}
@@ -357,7 +431,7 @@ func conflictLines(conflicts []any) []string {
 
 func unknowns(worker map[string]any) []string {
 	lines := []string{"", "## Unknowns", ""}
-	items := listValue(worker["unknowns"])
+	items := jsonutil.ListValue(worker["unknowns"])
 	if len(items) == 0 {
 		lines = append(lines, "- None reported.")
 	} else {
@@ -385,7 +459,7 @@ func genericItemLines(items []any) []string {
 			if evidence := joinList(obj["evidence"], ", "); evidence != "" {
 				lines = append(lines, "  Evidence: "+evidence)
 			}
-			if source := stringValue(obj["source_provider"]); source != "" {
+			if source := jsonutil.StringValue(obj["source_provider"]); source != "" {
 				lines = append(lines, "  Source: `"+source+"`")
 			}
 			continue
@@ -408,14 +482,14 @@ func outOfFacetLines(items []any) []string {
 		}
 		claim := firstString(obj["claim"], obj["description"], fmt.Sprint(obj))
 		details := []string{}
-		if sources := listValue(firstNonNil(obj["sources"], obj["source_labels"])); len(sources) > 0 {
+		if sources := jsonutil.ListValue(jsonutil.FirstNonNil(obj["sources"], obj["source_labels"])); len(sources) > 0 {
 			parts := []string{}
 			for _, source := range sources {
 				parts = append(parts, fmt.Sprint(source))
 			}
 			details = append(details, "sources `"+strings.Join(parts, "+")+"`")
 		}
-		if reason := stringValue(obj["reason"]); reason != "" {
+		if reason := jsonutil.StringValue(obj["reason"]); reason != "" {
 			details = append(details, "reason `"+reason+"`")
 		}
 		suffix := ""
@@ -431,7 +505,7 @@ func outOfFacetLines(items []any) []string {
 }
 
 func caveats(decision map[string]any) []string {
-	items := listValue(decision["caveats"])
+	items := jsonutil.ListValue(decision["caveats"])
 	if len(items) == 0 {
 		return nil
 	}
@@ -465,14 +539,6 @@ func addFindingIDs(text string) string {
 	return strings.Join(lines, "\n")
 }
 
-func finalJSONMap(result map[string]any) map[string]any {
-	final, _ := result["final_json"].(map[string]any)
-	if final == nil {
-		return map[string]any{}
-	}
-	return final
-}
-
 func sortedMapKeys(m map[string]any) []string {
 	keys := make([]string, 0, len(m))
 	for key := range m {
@@ -499,69 +565,15 @@ func cloneMap(in map[string]any) map[string]any {
 	return out
 }
 
-func listValue(value any) []any {
-	items, ok := value.([]any)
-	if ok {
-		return items
-	}
-	stringsValue, ok := value.([]string)
-	if ok {
-		out := make([]any, len(stringsValue))
-		for i, item := range stringsValue {
-			out[i] = item
-		}
-		return out
-	}
-	return nil
-}
-
-func stringValue(value any) string {
-	if value == nil {
-		return ""
-	}
-	text, ok := value.(string)
-	if ok {
-		return text
-	}
-	return fmt.Sprint(value)
-}
-
 func defaultString(value any, fallback string) string {
-	if text := stringValue(value); text != "" {
+	if text := jsonutil.StringValue(value); text != "" {
 		return text
 	}
 	return fallback
 }
 
-func boolValue(value any) bool {
-	v, _ := value.(bool)
-	return v
-}
-
-func firstNonNil(values ...any) any {
-	for _, value := range values {
-		if value != nil {
-			return value
-		}
-	}
-	return nil
-}
-
-func numberValue(value any) int {
-	switch typed := value.(type) {
-	case int:
-		return typed
-	case int64:
-		return int(typed)
-	case float64:
-		return int(typed)
-	default:
-		return 0
-	}
-}
-
 func joinList(value any, sep string) string {
-	items := listValue(value)
+	items := jsonutil.ListValue(value)
 	parts := []string{}
 	for _, item := range items {
 		parts = append(parts, fmt.Sprint(item))
@@ -571,7 +583,7 @@ func joinList(value any, sep string) string {
 
 func firstString(values ...any) string {
 	for _, value := range values {
-		if text := stringValue(value); text != "" {
+		if text := jsonutil.StringValue(value); text != "" {
 			return text
 		}
 	}

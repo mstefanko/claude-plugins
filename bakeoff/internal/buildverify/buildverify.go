@@ -154,7 +154,7 @@ func Run(ctx context.Context, opts Options) Result {
 }
 
 func WriteVerifierArtifacts(dir string, result VerifierResult, commandResult runner.Result) error {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
 	result.StdoutPath = filepath.Join(dir, "stdout.txt")

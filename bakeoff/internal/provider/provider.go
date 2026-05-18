@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/runnerenv"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
 )
 
@@ -155,6 +157,7 @@ func (r *CapabilityRegistry) runProbe(ctx context.Context, argv []string, timeou
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(probeCtx, exe, argv[1:]...)
+	cmd.Env = runnerenv.SafeEnv(os.Environ())
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

@@ -116,7 +116,14 @@ as host environment readiness failures. Do not put API keys, session tokens, or
 secrets in work orders, backgrounds, generated review context, or provider
 output. Bakeoff records prompts, stdout/stderr, status JSON, reports, and
 manifests in the run ledger, so any secret printed by a provider can become
-part of `runs/<run-id>/`.
+part of `runs/<run-id>/`. Provider subprocesses inherit a scrubbed environment;
+variables matching credential-bearing patterns are removed before exec. New run
+artifacts are written with user-private file and directory permissions.
+This is intentional for provider auth too: Bakeoff does not forward
+`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or similar env-key auth into provider
+runs. Authenticate `claude` and `codex` with their normal CLI login/session
+flows before running Bakeoff; use `doctor --skip-auth-probe` only to verify
+local binary readiness without testing those sessions.
 
 ## Common Workflows
 
@@ -159,6 +166,10 @@ Rerun a previous work order:
 ```bash
 bakeoff rerun latest
 ```
+
+Research reruns replay the captured effective `work-order.json` from the source
+run. Build reruns execute the build work order fresh against the current source
+tree, not a snapshot of the original run.
 
 Run or dry-run triage:
 
@@ -269,6 +280,10 @@ shared task filter applied to both workers and the judge; it is not a persona,
 provider-specific lens, new mode, or replacement for `scope`. Facets preserve
 the existing citation and schema rules while narrowing what should count as
 in-scope evidence.
+
+`background` may be either a single string or an array of strings. Array entries
+are joined as separate paragraphs in provider prompts, which keeps branch
+context, acceptance criteria, diff notes, and risk areas easier to edit.
 
 `bakeoff init review` writes `review.work-order.json`, a normal `type:
 "gather"` work order with a `code-review` facet and `codebase` scope for both

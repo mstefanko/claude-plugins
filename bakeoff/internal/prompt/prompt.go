@@ -90,15 +90,73 @@ func BuildTriagePrompt(payload any, budgets workorder.Budgets) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	payloadJSON, err := sortedJSON(payload)
+	payloadBlocks, err := renderTriagePayloadBlocks(payload)
 	if err != nil {
 		return "", err
 	}
 	text := base
 	text = replaceBlock(text, fixtureRuntimeBudgetBlock(), RenderRuntimeBudgetBlock(budgets, "triage"))
 	text = replaceBlock(text, fixtureTriageReviewContractBlock(), RenderTriageReviewContractRules(payload))
-	text = replaceTagInner(text, "triage_payload", payloadJSON)
+	text = replaceTagInner(text, "triage_payload_blocks", payloadBlocks)
 	return text, nil
+}
+
+func renderTriagePayloadBlocks(payload any) (string, error) {
+	obj, ok := payload.(map[string]any)
+	if !ok {
+		payloadJSON, err := sortedJSON(payload)
+		if err != nil {
+			return "", err
+		}
+		return "<triage_payload>\n" + escapePromptBlockBody(payloadJSON) + "\n</triage_payload>", nil
+	}
+	type block struct {
+		tag string
+		key string
+	}
+	blocks := []block{
+		{tag: "work_order_json", key: "work_order_json"},
+		{tag: "report_md", key: "report_md"},
+		{tag: "decision_json", key: "decision"},
+		{tag: "source_findings", key: "source_findings"},
+		{tag: "source_finding_filter", key: "source_finding_filter"},
+		{tag: "citation_checks", key: "citation_checks"},
+		{tag: "meta", key: "meta"},
+		{tag: "facet", key: "facet"},
+		{tag: "caveats", key: "caveats"},
+		{tag: "input_hashes", key: "input_hashes"},
+	}
+	lines := []string{}
+	for _, item := range blocks {
+		value, exists := obj[item.key]
+		if !exists {
+			continue
+		}
+		rendered, err := renderTriageBlockValue(item.tag, value)
+		if err != nil {
+			return "", err
+		}
+		lines = append(lines, rendered)
+	}
+	return strings.Join(lines, "\n\n"), nil
+}
+
+func renderTriageBlockValue(tag string, value any) (string, error) {
+	var body string
+	if text, ok := value.(string); ok && (tag == "work_order_json" || tag == "report_md") {
+		body = strings.TrimRight(text, "\n")
+	} else {
+		payloadJSON, err := sortedJSON(value)
+		if err != nil {
+			return "", err
+		}
+		body = payloadJSON
+	}
+	return "<" + tag + ">\n" + escapePromptBlockBody(body) + "\n</" + tag + ">", nil
+}
+
+func escapePromptBlockBody(body string) string {
+	return strings.ReplaceAll(body, "</", `<\/`)
 }
 
 func RenderTriageReviewContractRules(payload any) string {
@@ -301,6 +359,10 @@ func fixtureBuildSpecBlock() string {
 
 func fixtureTriageReviewContractBlock() string {
 	return "<review_contract_rules>\n</review_contract_rules>\n"
+}
+
+func fixtureTriagePayloadBlocks() string {
+	return "<triage_payload_blocks>\n</triage_payload_blocks>\n"
 }
 
 func fixtureFacet() *workorder.Facet {

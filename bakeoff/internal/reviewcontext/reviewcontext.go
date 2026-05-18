@@ -155,13 +155,35 @@ func Apply(wo *workorder.WorkOrder, context *Context) (*workorder.WorkOrder, err
 	if err != nil {
 		return nil, err
 	}
-	background, _ := data["background"].(string)
+	block := renderPromptBlock(context)
+	switch background := data["background"].(type) {
+	case string:
+		separator := ""
+		if strings.TrimSpace(background) != "" {
+			separator = "\n\n"
+		}
+		data["background"] = strings.TrimRight(background, " \t\r\n") + separator + block
+	case []any:
+		items := append([]any(nil), background...)
+		for _, item := range items {
+			if _, ok := item.(string); !ok {
+				data["background"] = appendGeneratedContext(wo.Background, block)
+				return workorder.Validate(data)
+			}
+		}
+		data["background"] = append(items, block)
+	default:
+		data["background"] = appendGeneratedContext(wo.Background, block)
+	}
+	return workorder.Validate(data)
+}
+
+func appendGeneratedContext(background string, block string) string {
 	separator := ""
 	if strings.TrimSpace(background) != "" {
 		separator = "\n\n"
 	}
-	data["background"] = strings.TrimRight(background, " \t\r\n") + separator + renderPromptBlock(context)
-	return workorder.Validate(data)
+	return strings.TrimRight(background, " \t\r\n") + separator + block
 }
 
 func RenderMarkdown(context *Context) string {

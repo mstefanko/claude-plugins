@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/artifact"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/jsonutil"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
 )
 
@@ -63,7 +64,7 @@ func SingleProviderOnly(wo *workorder.WorkOrder, workerResults map[string]map[st
 
 func GatherStructuredUnion(wo *workorder.WorkOrder, workerResults map[string]map[string]any, judgeResult map[string]any) (map[string]any, map[string]map[string]any, int) {
 	order := map[string]string{"A": wo.Providers[0].ID, "B": wo.Providers[1].ID}
-	judgeResults := map[string]map[string]any{"pass1": finalJSONMap(judgeResult)}
+	judgeResults := map[string]map[string]any{"pass1": jsonutil.FinalJSONMap(judgeResult)}
 	out := Base(wo, workerResults)
 	out["decision_kind"] = "structured_union"
 	out["judge_ran"] = true
@@ -130,7 +131,7 @@ func ResolveAnalyze(base map[string]any, workerResults map[string]map[string]any
 	} else {
 		counts := map[string]int{}
 		for _, id := range providerIDs {
-			counts[id] = len(asList(finalJSONMap(workerResults[id])["claims"]))
+			counts[id] = len(asList(jsonutil.FinalJSONMap(workerResults[id])["claims"]))
 		}
 		if counts[providerIDs[0]] != counts[providerIDs[1]] {
 			if counts[providerIDs[0]] > counts[providerIDs[1]] {
@@ -433,14 +434,6 @@ func SingleProviderCaveat(mode string, survivor string, failed string, status st
 	default:
 		return "single_provider_only: " + failed + " " + status + "; no overlay possible - surfacing " + survivor + " analysis only"
 	}
-}
-
-func finalJSONMap(result map[string]any) map[string]any {
-	final, _ := result["final_json"].(map[string]any)
-	if final == nil {
-		return map[string]any{}
-	}
-	return final
 }
 
 func rationale(result map[string]any) string {

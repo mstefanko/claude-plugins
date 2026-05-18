@@ -744,7 +744,7 @@
     },
     "runs/schema-error/report.md": {
       "type": "text",
-      "value": "# Bakeoff Report: gather-fake\n\nMode: `gather`\nDecision: `both_failed`\n\n## Decision Audit\n\n- Judge ran: `false`\n\n## Provider Status\n\n- `claude`: `schema_error` (<SECONDS>s, stdout 194 bytes, stderr 0 bytes, stderr: `providers/claude/stderr.txt`)\n  Scope: `codebase` -> `codebase` (partial)\n- `codex`: `schema_error` (<SECONDS>s, stdout 193 bytes, stderr 0 bytes, stderr: `providers/codex/stderr.txt`)\n  Scope: `web` -> `web` (partial)\n\n## Findings\n\nNo provider completed successfully.\n\n## Caveats\n\n- both providers failed; judge skipped\n"
+      "value": "# Bakeoff Report: gather-fake\n\n## Outcome\n\nMode: `gather`\nDecision: `both_failed`\nResult: `both_failed`\nNext: `bakeoff show schema-error`\n\n## Decision Audit\n\n- Judge ran: `false`\n\n## Provider Status\n\n| Provider | Status | Wall | Stdout | Stderr | Scope | Notes |\n|----------|--------|------|--------|--------|-------|-------|\n| `claude` | `schema_error` | <SECONDS>s | 194 B | 0 B | codebase -> codebase (partial) | stderr: `providers/claude/stderr.txt` |\n| `codex` | `schema_error` | <SECONDS>s | 193 B | 0 B | web -> web (partial) | stderr: `providers/codex/stderr.txt` |\n\n## Findings\n\nNo provider completed successfully.\n\n## Caveats\n\n- both providers failed; judge skipped\n"
     },
     "runs/schema-error/work-order.json": {
       "type": "json",

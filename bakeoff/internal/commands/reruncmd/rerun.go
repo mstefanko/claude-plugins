@@ -8,8 +8,10 @@ import (
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/apperror"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/buildcmd"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/researchcmd"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/ledger"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
 	"github.com/spf13/cobra"
 )
 
@@ -20,6 +22,11 @@ type RerunOptions struct {
 	Quiet       bool
 	NoTriage    bool
 }
+
+var (
+	runResearch = researchcmd.RunResearch
+	runBuild    = buildcmd.RunBuild
+)
 
 func NewCmdRerun(f commands.Factory, runF func(context.Context, *RerunOptions) error) *cobra.Command {
 	_ = f
@@ -57,7 +64,20 @@ func runRerun(ctx context.Context, f commands.Factory, opts *RerunOptions) error
 	if info, err := os.Stat(workOrderPath); err != nil || info.IsDir() {
 		return &apperror.ValidationError{Message: fmt.Sprintf("%s has no work-order.json", sourceRun), Err: err}
 	}
-	return researchcmd.RunResearch(ctx, f, &researchcmd.ResearchOptions{
+	wo, err := workorder.Load(workOrderPath)
+	if err != nil {
+		return commands.WrapValidation(err)
+	}
+	if wo.Type == "build" {
+		f.Streams().Printf("note: build rerun runs against the current source tree, not the original run's snapshot\n")
+		return runBuild(ctx, f, &buildcmd.BuildOptions{
+			WorkOrder: workOrderPath,
+			Out:       opts.Out,
+			RunID:     opts.NewRunID,
+			Quiet:     opts.Quiet,
+		})
+	}
+	return runResearch(ctx, f, &researchcmd.ResearchOptions{
 		WorkOrder:          workOrderPath,
 		Out:                opts.Out,
 		RunID:              opts.NewRunID,

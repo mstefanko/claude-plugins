@@ -3,6 +3,8 @@ package triage
 import (
 	"fmt"
 	"strings"
+
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/jsonutil"
 )
 
 func RenderTriageMarkdown(final map[string]any, caveats []string) string {
@@ -18,9 +20,9 @@ func RenderTriageMarkdown(final map[string]any, caveats []string) string {
 			"",
 			"## Source Findings",
 			"",
-			fmt.Sprintf("- Selected: `%v`", intLike(sourceFilter["included"])),
-			fmt.Sprintf("- Skipped non-actionable: `%v`", intLike(sourceFilter["skipped_non_actionable"])),
-			fmt.Sprintf("- Skipped out-of-facet: `%v`", intLike(sourceFilter["skipped_out_of_facet"])),
+			fmt.Sprintf("- Selected: `%v`", jsonutil.IntLike(sourceFilter["included"])),
+			fmt.Sprintf("- Skipped non-actionable: `%v`", jsonutil.IntLike(sourceFilter["skipped_non_actionable"])),
+			fmt.Sprintf("- Skipped out-of-facet: `%v`", jsonutil.IntLike(sourceFilter["skipped_out_of_facet"])),
 		)
 	}
 	if len(caveats) > 0 {
@@ -94,10 +96,73 @@ func triageMarkdownBucket(item map[string]any) string {
 }
 
 func formatTriageItem(item map[string]any) string {
-	source := fmt.Sprint(firstNonNil(item["source_finding"], item["source_finding_id"]))
-	source = strings.Join(strings.Fields(source), " ")
-	rationale := strings.Join(strings.Fields(fmt.Sprint(item["rationale"])), " ")
-	return fmt.Sprintf("- [%v] %s - %s", item["id"], source, rationale)
+	header := fmt.Sprintf("- [%s]", jsonutil.StringValue(item["id"]))
+	if classification := collapseWhitespace(jsonutil.StringValue(item["classification"])); classification != "" {
+		header += " **" + classification + "**"
+	}
+	tokens := []string{}
+	for _, field := range []struct {
+		label string
+		key   string
+	}{
+		{label: "severity", key: "severity"},
+		{label: "confidence", key: "confidence"},
+		{label: "action", key: "recommended_action"},
+	} {
+		if value := collapseWhitespace(jsonutil.StringValue(item[field.key])); value != "" {
+			tokens = append(tokens, field.label+"="+value)
+		}
+	}
+	if len(tokens) > 0 {
+		header += " · " + strings.Join(tokens, " · ")
+	}
+	source := jsonutil.StringValue(jsonutil.FirstNonNil(item["source_finding"], item["source_finding_id"]))
+	lines := []string{header}
+	for _, detail := range []string{
+		formatTriageDetail("Source", source),
+		formatTriageDetail("Rationale", jsonutil.StringValue(item["rationale"])),
+		formatTriageListDetail("Supporting evidence", item["supporting_evidence"]),
+		formatTriageListDetail("Counter-evidence", item["counterevidence"]),
+		formatTriageListDetail("Citation checks", item["citation_check_ids"]),
+	} {
+		if detail != "" {
+			lines = append(lines, detail)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func formatTriageDetail(label, value string) string {
+	value = collapseWhitespace(value)
+	if value == "" {
+		return ""
+	}
+	return "  " + label + ": " + value
+}
+
+func formatTriageListDetail(label string, value any) string {
+	switch typed := value.(type) {
+	case nil:
+		return ""
+	case []any, []string:
+		items := stringSlice(typed)
+		parts := make([]string, 0, len(items))
+		for _, item := range items {
+			if text := collapseWhitespace(item); text != "" {
+				parts = append(parts, text)
+			}
+		}
+		if len(parts) == 0 {
+			return ""
+		}
+		return "  " + label + ": " + strings.Join(parts, ", ")
+	default:
+		return formatTriageDetail(label, jsonutil.StringValue(value))
+	}
+}
+
+func collapseWhitespace(value string) string {
+	return strings.Join(strings.Fields(value), " ")
 }
 
 func triageItems(value any) []map[string]any {
@@ -115,34 +180,18 @@ func triageItems(value any) []map[string]any {
 }
 
 func stringSlice(value any) []string {
-	raw, ok := value.([]any)
-	if !ok {
+	switch raw := value.(type) {
+	case []string:
+		return append([]string(nil), raw...)
+	case []any:
+		items := make([]string, 0, len(raw))
+		for _, item := range raw {
+			items = append(items, fmt.Sprint(item))
+		}
+		return items
+	default:
 		return nil
 	}
-	items := make([]string, 0, len(raw))
-	for _, item := range raw {
-		items = append(items, fmt.Sprint(item))
-	}
-	return items
-}
-
-func firstNonNil(values ...any) any {
-	for _, value := range values {
-		if value != nil {
-			return value
-		}
-	}
-	return ""
-}
-
-func intLike(value any) any {
-	switch typed := value.(type) {
-	case float64:
-		if typed == float64(int(typed)) {
-			return int(typed)
-		}
-	}
-	return value
 }
 
 func sourceFilterMap(value any) (map[string]any, bool) {

@@ -59,7 +59,7 @@ func RunDir(outDir string, runID string) string {
 }
 
 func UpdateLatest(outDir string, runID string) error {
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
+	if err := os.MkdirAll(outDir, 0o700); err != nil {
 		return err
 	}
 	latest := filepath.Join(outDir, "latest")
@@ -69,7 +69,7 @@ func UpdateLatest(outDir string, runID string) error {
 		return os.Rename(tmp, latest)
 	}
 	_ = os.Remove(latest)
-	return os.WriteFile(latest, []byte(runID+"\n"), 0o644)
+	return os.WriteFile(latest, []byte(runID+"\n"), 0o600)
 }
 
 func ResolveRunDir(outDir string, runID string) (string, error) {

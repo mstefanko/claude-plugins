@@ -12,6 +12,8 @@ import (
 	"strings"
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/buildinfo"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/fsutil"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/jsonutil"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/triage"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
 )
@@ -71,7 +73,7 @@ func BuildRunManifest(runDir string) (map[string]any, error) {
 		"schema_version":        SchemaVersion,
 		"run_id":                filepath.Base(runDir),
 		"bakeoff_version":       buildinfo.Current().Version,
-		"type":                  firstNonNil(meta["type"], workOrder["type"]),
+		"type":                  jsonutil.FirstNonNil(meta["type"], workOrder["type"]),
 		"facet_id":              nilIfEmpty(facetID),
 		"started_at":            meta["started_at"],
 		"finished_at":           meta["finished_at"],
@@ -127,7 +129,7 @@ func RowForLS(runDir string) map[string]any {
 	}
 	if report := loaded.Artifacts["report"]; report != "" {
 		row["report_path"] = filepath.Join(runDir, report)
-	} else if fileExists(filepath.Join(runDir, "report.md")) {
+	} else if fsutil.FileExists(filepath.Join(runDir, "report.md")) {
 		row["report_path"] = filepath.Join(runDir, "report.md")
 	}
 	return row
@@ -228,7 +230,7 @@ func providerSummaries(meta map[string]any, decision map[string]any) map[string]
 			"effort":       modelInfo["effort"],
 			"status":       statusInfo["status"],
 			"wall_seconds": statusInfo["wall_seconds"],
-			"stdout_bytes": firstNonNil(statusInfo["stdout_bytes"], statusInfo["output_bytes"]),
+			"stdout_bytes": jsonutil.FirstNonNil(statusInfo["stdout_bytes"], statusInfo["output_bytes"]),
 			"stderr_bytes": statusInfo["stderr_bytes"],
 		}
 		if value, ok := statusInfo["final_json_source"]; ok {
@@ -291,7 +293,7 @@ func artifactPathsForType(runDir string, runType string) (map[string]any, error)
 		"triage": "triage/triage.md",
 	}
 	for key, relative := range optional {
-		if fileExists(filepath.Join(runDir, relative)) {
+		if fsutil.FileExists(filepath.Join(runDir, relative)) {
 			artifacts[key] = relative
 		}
 	}
@@ -322,7 +324,7 @@ func fingerprintArtifactPathsForType(runDir string, runType string) []string {
 		if relative == "" || seen[relative] {
 			return
 		}
-		if !fileExists(filepath.Join(runDir, relative)) {
+		if !fsutil.FileExists(filepath.Join(runDir, relative)) {
 			return
 		}
 		seen[relative] = true
@@ -445,7 +447,7 @@ func addNamedFiles(runDir string, dirRel string, names []string, add func(string
 func addDirEntryFile(runDir string, dirRel string, entry os.DirEntry, add func(string)) {
 	relative := filepath.Join(dirRel, entry.Name())
 	if entry.Type()&os.ModeSymlink != 0 {
-		if fileExists(filepath.Join(runDir, relative)) {
+		if fsutil.FileExists(filepath.Join(runDir, relative)) {
 			add(relative)
 		}
 		return
@@ -487,7 +489,7 @@ func reviewContextSetStatus(runDir string) (bool, []string) {
 	presentCount := 0
 	missing := []string{}
 	for _, relative := range ReviewContextArtifacts {
-		if fileExists(filepath.Join(runDir, relative)) {
+		if fsutil.FileExists(filepath.Join(runDir, relative)) {
 			presentCount++
 		} else {
 			missing = append(missing, relative)
@@ -521,7 +523,7 @@ func legacyLSRow(runDir string, manifestState string) map[string]any {
 		"triage_state":   state,
 		"finished_at":    metaObj["finished_at"],
 	}
-	if fileExists(filepath.Join(runDir, "report.md")) {
+	if fsutil.FileExists(filepath.Join(runDir, "report.md")) {
 		row["report_path"] = filepath.Join(runDir, "report.md")
 	}
 	return row
@@ -575,7 +577,7 @@ func runTypeFromWorkOrder(workOrder map[string]any) string {
 	if _, ok := workOrder["type"]; !ok {
 		return ""
 	}
-	return stringValue(workOrder["type"])
+	return jsonutil.StringValue(workOrder["type"])
 }
 
 func RunTypeForRun(runDir string) (string, error) {
@@ -637,11 +639,6 @@ func requireFile(path string) error {
 	return nil
 }
 
-func fileExists(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && !info.IsDir()
-}
-
 func nestedMap(obj map[string]any, key string) map[string]any {
 	if obj == nil {
 		return map[string]any{}
@@ -672,11 +669,6 @@ func sortedKeys(values map[string]bool) []string {
 	return keys
 }
 
-func stringValue(value any) string {
-	text, _ := value.(string)
-	return text
-}
-
 func stringPtrValue(value *string) string {
 	if value == nil {
 		return ""
@@ -687,13 +679,6 @@ func stringPtrValue(value *string) string {
 func truthy(value any) bool {
 	v, _ := value.(bool)
 	return v
-}
-
-func firstNonNil(left any, right any) any {
-	if left != nil {
-		return left
-	}
-	return right
 }
 
 func nilIfEmpty(value string) any {

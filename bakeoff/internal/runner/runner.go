@@ -211,7 +211,7 @@ func runProcess(ctx context.Context, opts Options, requireFinalJSON bool) Result
 		return state.status(StatusMissingProvider, nil, "", "missing provider argv", nil, "")
 	}
 	if opts.FinalMessagePath != "" {
-		_ = os.MkdirAll(filepathDir(opts.FinalMessagePath), 0o755)
+		_ = os.MkdirAll(filepathDir(opts.FinalMessagePath), 0o700)
 		_ = os.Remove(opts.FinalMessagePath)
 	}
 

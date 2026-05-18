@@ -225,7 +225,60 @@ func TestBuildResultValidators(t *testing.T) {
 	}
 }
 
-func TestWriteTextAtomicWritesWorldReadableFiles(t *testing.T) {
+func TestValidateBackgroundShapes(t *testing.T) {
+	t.Run("string", func(t *testing.T) {
+		data := validWorkOrder()
+		data["background"] = "single string"
+		wo, err := Validate(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if wo.Background != "single string" {
+			t.Fatalf("Background = %q", wo.Background)
+		}
+	})
+	t.Run("string array", func(t *testing.T) {
+		data := validWorkOrder()
+		data["background"] = []any{"line one", "line two"}
+		wo, err := Validate(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if wo.Background != "line one\n\nline two" {
+			t.Fatalf("Background = %q", wo.Background)
+		}
+		if _, ok := wo.Raw["background"].([]any); !ok {
+			t.Fatalf("raw background was not preserved as array: %#v", wo.Raw["background"])
+		}
+	})
+	t.Run("empty string array", func(t *testing.T) {
+		data := validWorkOrder()
+		data["background"] = []any{}
+		wo, err := Validate(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if wo.Background != "" {
+			t.Fatalf("Background = %q", wo.Background)
+		}
+	})
+	t.Run("non-string array item", func(t *testing.T) {
+		data := validWorkOrder()
+		data["background"] = []any{123}
+		if _, err := Validate(data); err == nil || !strings.Contains(err.Error(), "background must be a string or an array of strings") {
+			t.Fatalf("expected background array validation error, got %v", err)
+		}
+	})
+	t.Run("null", func(t *testing.T) {
+		data := validWorkOrder()
+		data["background"] = nil
+		if _, err := Validate(data); err == nil || !strings.Contains(err.Error(), "background must be a string or an array of strings") {
+			t.Fatalf("expected background validation error, got %v", err)
+		}
+	})
+}
+
+func TestWriteTextAtomicWritesPrivateFiles(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "work-order.json")
 	if err := WriteTextAtomic(path, "ok\n"); err != nil {
 		t.Fatal(err)
@@ -242,8 +295,15 @@ func TestWriteTextAtomicWritesWorldReadableFiles(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := info.Mode().Perm(); got != 0o644 {
-			t.Fatalf("mode = %o, want 0644", got)
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Fatalf("mode = %o, want 0600", got)
+		}
+		parent, err := os.Stat(filepath.Dir(path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := parent.Mode().Perm(); got != 0o700 {
+			t.Fatalf("parent mode = %o, want 0700", got)
 		}
 	}
 }

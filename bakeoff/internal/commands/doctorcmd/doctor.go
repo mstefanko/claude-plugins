@@ -9,8 +9,10 @@ import (
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/apperror"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/artifact"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/jsonutil"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/provider"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/runner"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/runnerenv"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/summary"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
 	"github.com/spf13/cobra"
@@ -201,7 +203,7 @@ func runAuthProbes(ctx context.Context, f commands.Factory, opts *DoctorOptions,
 			Prompt:  prompt,
 			Budgets: runner.Budgets{WallClockSeconds: 30, MaxOutputBytes: 10000},
 			CWD:     cwd,
-			Env:     os.Environ(),
+			Env:     runnerenv.SafeEnv(os.Environ()),
 			OnTick:  commands.MakeTickPrinter(f, participant.Backend+":auth", opts.Quiet),
 		}))
 		if ctx.Err() != nil {
@@ -213,8 +215,8 @@ func runAuthProbes(ctx context.Context, f commands.Factory, opts *DoctorOptions,
 			f.Streams().Printf("- %s auth probe: %s\n", participant.Backend, result["status"])
 		}
 		if result["status"] != runner.StatusOK {
-			warning := participant.Backend + " auth probe failed with " + stringValue(result["status"])
-			if reason := stringValue(probeStatus["reason"]); reason != "" {
+			warning := participant.Backend + " auth probe failed with " + jsonutil.StringValue(result["status"])
+			if reason := jsonutil.StringValue(probeStatus["reason"]); reason != "" {
 				warning += ": " + reason
 			}
 			report["warnings"] = appendStringAny(report["warnings"], warning)
@@ -275,7 +277,7 @@ func runBuildPreflight(ctx context.Context, f commands.Factory, opts *DoctorOpti
 			if ok {
 				status = "ok"
 			}
-			reason := stringValue(entry["reason"])
+			reason := jsonutil.StringValue(entry["reason"])
 			if reason != "" {
 				f.Streams().Printf("  %s: %s (%s)\n", backend, status, reason)
 			} else {
@@ -331,7 +333,7 @@ func runBuildProviderPreflight(ctx context.Context, f commands.Factory, opts *Do
 		Prompt:  buildProbePrompt(token),
 		Budgets: runner.Budgets{WallClockSeconds: 60, MaxOutputBytes: 10000, HeartbeatSeconds: 10},
 		CWD:     workspace,
-		Env:     os.Environ(),
+		Env:     runnerenv.SafeEnv(os.Environ()),
 		OnTick:  commands.MakeTickPrinter(f, backend+":build", opts.Quiet || opts.JSON),
 	}))
 	if ctx.Err() != nil {
@@ -340,8 +342,8 @@ func runBuildProviderPreflight(ctx context.Context, f commands.Factory, opts *Do
 	entry["runner"] = authProbeStatus(result)
 	entry["runner_status"] = result["status"]
 	if result["status"] != runner.StatusOK {
-		reason := "provider live edit probe failed with " + stringValue(result["status"])
-		if detail := stringValue(entry["runner"].(map[string]any)["reason"]); detail != "" {
+		reason := "provider live edit probe failed with " + jsonutil.StringValue(result["status"])
+		if detail := jsonutil.StringValue(entry["runner"].(map[string]any)["reason"]); detail != "" {
 			reason += ": " + detail
 		}
 		entry["reason"] = reason
@@ -388,9 +390,9 @@ func authProbeStatus(result map[string]any) map[string]any {
 	if result["status"] == runner.StatusOK {
 		return status
 	}
-	diagnosticText := stringValue(result["stderr"])
+	diagnosticText := jsonutil.StringValue(result["stderr"])
 	if diagnosticText == "" {
-		diagnosticText = stringValue(result["stdout"])
+		diagnosticText = jsonutil.StringValue(result["stdout"])
 	}
 	if reason := lastNonemptyLine(diagnosticText); reason != "" {
 		status["reason"] = reason
@@ -478,9 +480,4 @@ func diagnosticTail(text string) string {
 func appendStringAny(value any, item string) []string {
 	items, _ := value.([]string)
 	return append(items, item)
-}
-
-func stringValue(value any) string {
-	text, _ := value.(string)
-	return text
 }
