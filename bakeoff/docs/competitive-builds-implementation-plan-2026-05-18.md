@@ -1242,6 +1242,7 @@ Do not auto-apply in v1.
 
 ### Phase 6: Dogfood and tighten
 
+- Dogfood evidence: `docs/competitive-builds-phase-6-dogfood-2026-05-18.md`.
 - Dogfood the five concrete Bakeoff cases below before calling v1 ready.
 - Inspect whether the judge prompt overweights patch size or verbosity.
 - Inspect artifact size and manifest verification performance.

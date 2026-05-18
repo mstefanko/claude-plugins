@@ -99,12 +99,12 @@ def main() -> int:
     schema_error_providers = csv_env("BAKEOFF_FAKE_SCHEMA_ERROR_PROVIDERS")
     judge_mode = os.environ.get("BAKEOFF_FAKE_JUDGE_MODE", "gather")
     triage_source_id = os.environ.get("BAKEOFF_FAKE_TRIAGE_SOURCE_ID") or None
-    is_judge = (
-        "deduplication and conflict-flagging judge" in prompt
-        or "pairwise judge" in prompt
-        or "synthesis judge" in prompt
-        or "build judge" in prompt
-    )
+    stripped_prompt = prompt.lstrip()
+    is_gather_judge = stripped_prompt.startswith("You are a deduplication and conflict-flagging judge.")
+    is_compare_judge = stripped_prompt.startswith("You are a pairwise judge.")
+    is_analyze_judge = stripped_prompt.startswith("You are a synthesis judge.")
+    is_build_judge = stripped_prompt.startswith("You are a build judge.")
+    is_judge = is_gather_judge or is_compare_judge or is_analyze_judge or is_build_judge
     is_triage = "evidence-grounded triage of a Bakeoff report" in prompt
 
     if "BAKEOFF_DOCTOR_BUILD_EDIT_PROBE_V1" in prompt:
@@ -169,10 +169,10 @@ def main() -> int:
                 }
             )
         return 0
-    if "deduplication and conflict-flagging judge" in prompt:
+    if is_gather_judge:
         emit({"merged_claims": [{"claim": "Fake merged claim", "evidence": ["fake:1"], "sources": ["A", "B"], "confidence": "high"}], "conflicts": [], "unknowns_union": []})
         return 0
-    if "pairwise judge" in prompt:
+    if is_compare_judge:
         compare_scores_a = {"evidence": 5, "coherence": 5, "tradeoff_honesty": 5, "rebuttals": 5}
         compare_scores_b = {"evidence": 4, "coherence": 4, "tradeoff_honesty": 4, "rebuttals": 4}
         winner = "B" if judge_mode == "compare_always_b" else "tie" if judge_mode == "compare_tie" else "A"
@@ -189,7 +189,7 @@ def main() -> int:
             }
         )
         return 0
-    if "synthesis judge" in prompt:
+    if is_analyze_judge:
         analyze_scores_a = {"step_atomicity": 5, "citation_grounding": 5, "assumption_transparency": 5, "coherence": 5}
         analyze_scores_b = {"step_atomicity": 4, "citation_grounding": 4, "assumption_transparency": 4, "coherence": 4}
         spine_winner = "B" if judge_mode == "analyze_always_b" else "A"
@@ -204,7 +204,7 @@ def main() -> int:
             }
         )
         return 0
-    if "build judge" in prompt:
+    if is_build_judge:
         build_scores_a = {
             "correctness": 5,
             "verifier_evidence": 5,
