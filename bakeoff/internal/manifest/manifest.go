@@ -218,7 +218,8 @@ func reviewContextSummary(runDir string) map[string]any {
 }
 
 func artifactPaths(runDir string) (map[string]any, error) {
-	for _, relative := range RequiredArtifacts {
+	runType := runType(runDir)
+	for _, relative := range RequiredArtifactsForType(runType) {
 		if err := requireFile(filepath.Join(runDir, relative)); err != nil {
 			return nil, err
 		}
@@ -237,6 +238,9 @@ func artifactPaths(runDir string) (map[string]any, error) {
 		artifacts["review_context_md"] = "review-context.md"
 		artifacts["review_context_json"] = "review-context.json"
 	}
+	if runType == "build" {
+		artifacts["build_context"] = "build-context.json"
+	}
 	optional := map[string]string{
 		"triage": "triage/triage.md",
 	}
@@ -248,7 +252,21 @@ func artifactPaths(runDir string) (map[string]any, error) {
 	return artifacts, nil
 }
 
+func RequiredArtifactsForRun(runDir string) []string {
+	runType, _ := RunTypeForRun(runDir)
+	return RequiredArtifactsForType(runType)
+}
+
+func RequiredArtifactsForType(runType string) []string {
+	required := append([]string(nil), RequiredArtifacts...)
+	if runType == "build" {
+		required = append(required, "build-context.json")
+	}
+	return required
+}
+
 func FingerprintArtifactPaths(runDir string) []string {
+	runType := runType(runDir)
 	seen := map[string]bool{}
 	paths := []string{}
 	add := func(relative string) {
@@ -263,6 +281,9 @@ func FingerprintArtifactPaths(runDir string) []string {
 	}
 	for _, relative := range CoreFingerprintArtifacts {
 		add(relative)
+	}
+	if runType == "build" {
+		add("build-context.json")
 	}
 	for _, pattern := range []string{
 		"providers/*/prompt.txt",
@@ -280,6 +301,35 @@ func FingerprintArtifactPaths(runDir string) []string {
 			relative, err := filepath.Rel(runDir, path)
 			if err == nil {
 				add(relative)
+			}
+		}
+	}
+	if runType == "build" {
+		for _, pattern := range []string{
+			"baseline/verify/*/status.json",
+			"baseline/verify/*/stdout.txt",
+			"baseline/verify/*/stderr.txt",
+			"baseline/verify/*/metric.json",
+			"providers/*/build/workspace.json",
+			"providers/*/build/capture.json",
+			"providers/*/build/ineligible.json",
+			"providers/*/build/changed-files.txt",
+			"providers/*/build/diff.patch",
+			"providers/*/build/diffstat.txt",
+			"providers/*/build/test-files.json",
+			"providers/*/build/benchmark-files.json",
+			"providers/*/build/verify/*/status.json",
+			"providers/*/build/verify/*/stdout.txt",
+			"providers/*/build/verify/*/stderr.txt",
+			"providers/*/build/verify/*/metric.json",
+		} {
+			matches, _ := filepath.Glob(filepath.Join(runDir, pattern))
+			sort.Strings(matches)
+			for _, path := range matches {
+				relative, err := filepath.Rel(runDir, path)
+				if err == nil {
+					add(relative)
+				}
 			}
 		}
 	}
@@ -395,6 +445,41 @@ func manifestTriageState(manifest map[string]any) string {
 	}
 	state, _ := triageObj["state"].(string)
 	return state
+}
+
+func runType(runDir string) string {
+	runType, _ := RunTypeForRun(runDir)
+	return runType
+}
+
+func RunTypeForRun(runDir string) (string, error) {
+	for _, relative := range []string{"work-order.json", "meta.json", "manifest.json"} {
+		path := filepath.Join(runDir, relative)
+		data, err := os.ReadFile(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("%s run type source is unreadable: %w", path, err)
+		}
+		var obj map[string]any
+		if err := json.Unmarshal(data, &obj); err != nil {
+			return "", fmt.Errorf("%s run type source is invalid JSON: %w", path, err)
+		}
+		value, ok := obj["type"]
+		if !ok {
+			if relative == "work-order.json" || relative == "manifest.json" {
+				return "", fmt.Errorf("%s run type source is missing type", path)
+			}
+			continue
+		}
+		runType, ok := value.(string)
+		if !ok || runType == "" {
+			return "", fmt.Errorf("%s run type source has non-string type", path)
+		}
+		return runType, nil
+	}
+	return "", nil
 }
 
 func readRequiredJSON(path string) (map[string]any, error) {

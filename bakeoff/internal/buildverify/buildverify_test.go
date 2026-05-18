@@ -144,3 +144,27 @@ func TestCompareMetricHonorsThresholdAndDirection(t *testing.T) {
 		t.Fatalf("expected threshold miss, got %#v", comparison)
 	}
 }
+
+func TestRunMetricVerifierWritesMetricArtifact(t *testing.T) {
+	dir := t.TempDir()
+	result := Run(context.Background(), Options{
+		CWD: dir,
+		Verifiers: []workorder.VerifierSpec{
+			{
+				ID:               "metric",
+				Kind:             "metric",
+				Argv:             []string{"sh", "-c", "printf '{\"score\":2}\\n'"},
+				WallClockSeconds: 2,
+				MaxOutputBytes:   1000,
+				Metric:           &workorder.MetricSpec{Name: "score", Direction: "lower", MinDeltaPercent: 10},
+			},
+		},
+		ArtifactDir: filepath.Join(dir, "artifacts"),
+	})
+	if len(result.Results) != 1 || result.Results[0].MetricPath == "" {
+		t.Fatalf("result = %#v", result)
+	}
+	if _, err := os.Stat(result.Results[0].MetricPath); err != nil {
+		t.Fatalf("metric artifact missing: %v", err)
+	}
+}

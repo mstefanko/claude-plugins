@@ -174,6 +174,130 @@ func ResolveAnalyze(base map[string]any, workerResults map[string]map[string]any
 	return out
 }
 
+type BuildResolutionInput struct {
+	WorkOrder        *workorder.WorkOrder
+	ProviderIDs      []string
+	ProviderStatuses map[string]map[string]any
+	GateResults      map[string]map[string]map[string]any
+	MetricResults    map[string]map[string]map[string]any
+	MetricDecisions  []map[string]any
+	JudgeResults     map[string]map[string]any
+	Pass1Order       map[string]string
+	Pass2Order       map[string]string
+	BaselineVerify   any
+	ProviderBuild    map[string]any
+	Caveats          []string
+}
+
+func ResolveBuild(input BuildResolutionInput) (map[string]any, int) {
+	providerIDs := input.ProviderIDs
+	if len(providerIDs) == 0 && input.WorkOrder != nil {
+		for _, provider := range input.WorkOrder.Providers {
+			providerIDs = append(providerIDs, provider.ID)
+		}
+	}
+	out := map[string]any{
+		"mode":               "build",
+		"decision_kind":      "tie",
+		"selection_basis":    "none",
+		"canonical_winner":   nil,
+		"judge_ran":          false,
+		"judge_rationale":    []string{},
+		"provider_statuses":  input.ProviderStatuses,
+		"gate_results":       input.GateResults,
+		"metric_results":     input.MetricResults,
+		"metric_decisions":   input.MetricDecisions,
+		"metric_comparisons": input.MetricDecisions,
+		"caveats":            append([]string(nil), input.Caveats...),
+	}
+	if input.BaselineVerify != nil {
+		out["baseline_verify"] = input.BaselineVerify
+	}
+	if input.ProviderBuild != nil {
+		out["provider_build"] = input.ProviderBuild
+	}
+
+	captured := []string{}
+	gatePassed := []string{}
+	for _, id := range providerIDs {
+		status := input.ProviderStatuses[id]
+		if buildPatchCaptured(status) {
+			captured = append(captured, id)
+			if buildGatesPassed(status) {
+				gatePassed = append(gatePassed, id)
+			}
+		}
+	}
+	if len(captured) == 0 {
+		out["decision_kind"] = "both_failed"
+		out["caveats"] = appendCaveat(out["caveats"], "no provider produced an eligible captured patch")
+		return out, 1
+	}
+	if len(captured) == 1 {
+		if len(gatePassed) == 1 {
+			out["decision_kind"] = "single_provider_only"
+			out["selection_basis"] = "gate"
+			out["canonical_winner"] = gatePassed[0]
+			out["caveats"] = appendCaveat(out["caveats"], "only one provider produced an eligible patch and passed required gate verifiers")
+			return out, 0
+		}
+		out["decision_kind"] = "both_failed_verification"
+		out["caveats"] = appendCaveat(out["caveats"], "the only provider with an eligible patch failed required gate verifiers")
+		return out, 1
+	}
+	if len(gatePassed) == 0 {
+		out["decision_kind"] = "both_failed_verification"
+		out["caveats"] = appendCaveat(out["caveats"], "no provider passed required gate verifiers")
+		return out, 1
+	}
+	if len(gatePassed) == 1 {
+		out["decision_kind"] = "pick_winner"
+		out["selection_basis"] = "gate"
+		out["canonical_winner"] = gatePassed[0]
+		return out, 0
+	}
+
+	if winner, ok, split := buildMetricWinner(input.MetricDecisions); ok {
+		out["decision_kind"] = "pick_winner"
+		out["selection_basis"] = "metric"
+		out["canonical_winner"] = winner
+		return out, 0
+	} else if split {
+		out["caveats"] = appendCaveat(out["caveats"], "metric verifiers selected conflicting winners")
+	}
+
+	if len(input.JudgeResults) == 0 {
+		out["decision_kind"] = "tie"
+		out["caveats"] = appendCaveat(out["caveats"], "both providers passed gates, but metric evidence was inconclusive and build judge was not run")
+		return out, 3
+	}
+
+	pass1 := input.JudgeResults["pass1"]
+	pass2 := input.JudgeResults["pass2"]
+	out["judge_ran"] = true
+	out["order_maps"] = map[string]any{"pass1": input.Pass1Order, "pass2": input.Pass2Order}
+	out["judge_passes"] = map[string]any{
+		"pass1": JudgePassSummary(pass1, input.Pass1Order, "winner"),
+		"pass2": JudgePassSummary(pass2, input.Pass2Order, "winner"),
+	}
+	out["judge_rationale"] = []string{rationale(pass1), rationale(pass2)}
+	out["judge_risks"] = map[string]any{
+		"pass1": valueOrList(pass1["risks"]),
+		"pass2": valueOrList(pass2["risks"]),
+	}
+	winner1 := CanonicalWinner(pass1["winner"], input.Pass1Order)
+	winner2 := CanonicalWinner(pass2["winner"], input.Pass2Order)
+	if winner1 != "" && winner1 == winner2 {
+		out["decision_kind"] = "pick_winner"
+		out["selection_basis"] = "judge"
+		out["canonical_winner"] = winner1
+		return out, 0
+	}
+	out["decision_kind"] = "tie"
+	out["caveats"] = appendCaveat(out["caveats"], "position swap did not produce a stable build winner")
+	return out, 3
+}
+
 func JudgePassSummary(result map[string]any, orderMap map[string]string, verdictKey string) map[string]any {
 	positional, _ := result[verdictKey].(string)
 	out := map[string]any{
@@ -187,6 +311,59 @@ func JudgePassSummary(result map[string]any, orderMap map[string]string, verdict
 	}
 	if relation, ok := result["relation"]; ok && relation != nil {
 		out["relation"] = relation
+	}
+	return out
+}
+
+func buildPatchCaptured(status map[string]any) bool {
+	if status == nil {
+		return false
+	}
+	return status["patch_state"] == "patch_captured"
+}
+
+func buildGatesPassed(status map[string]any) bool {
+	if status == nil {
+		return false
+	}
+	if status["verify_state"] == "gate_passed" {
+		return true
+	}
+	passed, _ := status["gates_passed"].(bool)
+	return passed
+}
+
+func buildMetricWinner(decisions []map[string]any) (string, bool, bool) {
+	winner := ""
+	for _, decision := range decisions {
+		conclusive, _ := decision["conclusive"].(bool)
+		candidate, _ := decision["winner"].(string)
+		if !conclusive || candidate == "" {
+			continue
+		}
+		if winner == "" {
+			winner = candidate
+			continue
+		}
+		if winner != candidate {
+			return "", false, true
+		}
+	}
+	return winner, winner != "", false
+}
+
+func appendCaveat(value any, caveat string) []string {
+	out := []string{}
+	switch typed := value.(type) {
+	case []string:
+		out = append(out, typed...)
+	case []any:
+		for _, item := range typed {
+			out = append(out, stringify(item))
+		}
+	}
+	if strings.TrimSpace(caveat) != "" {
+		out = append(out, caveat)
 	}
 	return out
 }

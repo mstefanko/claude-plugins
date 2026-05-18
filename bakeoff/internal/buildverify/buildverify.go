@@ -62,6 +62,7 @@ type VerifierResult struct {
 	StdoutPath          string                    `json:"stdout_path,omitempty"`
 	StderrPath          string                    `json:"stderr_path,omitempty"`
 	StatusPath          string                    `json:"status_path,omitempty"`
+	MetricPath          string                    `json:"metric_path,omitempty"`
 	ArtifactError       string                    `json:"artifact_error,omitempty"`
 	Metric              *MetricResult             `json:"metric,omitempty"`
 }
@@ -136,6 +137,9 @@ func Run(ctx context.Context, opts Options) Result {
 			verifierResult.StdoutPath = filepath.Join(verifierDir, "stdout.txt")
 			verifierResult.StderrPath = filepath.Join(verifierDir, "stderr.txt")
 			verifierResult.StatusPath = filepath.Join(verifierDir, "status.json")
+			if verifierResult.Metric != nil {
+				verifierResult.MetricPath = filepath.Join(verifierDir, "metric.json")
+			}
 			writeErr := WriteVerifierArtifacts(verifierDir, verifierResult, commandResult)
 			if writeErr != nil {
 				verifierResult.ArtifactError = writeErr.Error()
@@ -161,6 +165,12 @@ func WriteVerifierArtifacts(dir string, result VerifierResult, commandResult run
 	}
 	if err := workorder.WriteTextAtomic(result.StderrPath, commandResult.Stderr); err != nil {
 		return err
+	}
+	if result.Metric != nil {
+		result.MetricPath = filepath.Join(dir, "metric.json")
+		if err := workorder.WriteJSONAtomic(result.MetricPath, result.Metric); err != nil {
+			return err
+		}
 	}
 	return workorder.WriteJSONAtomic(result.StatusPath, result)
 }

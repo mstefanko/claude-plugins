@@ -166,6 +166,164 @@ func TestRunBuildMutatesIsolatedWorktreesAndCapturesPatches(t *testing.T) {
 	}
 }
 
+func TestRunBuildGateVerifierSelectsOnlyPassingPatch(t *testing.T) {
+	repoDir := initBuildGitRepo(t)
+	writeAndCommitFile(t, repoDir, "gate-no-codex.sh", `#!/bin/sh
+if [ -f codex-build.txt ]; then
+  exit 1
+fi
+test -f README.md
+`, 0o755)
+	root := t.TempDir()
+	workOrderPath := filepath.Join(root, "build.work-order.json")
+	writeBuildWorkOrder(t, workOrderPath, "gate-winner", 100000, []map[string]any{
+		{"id": "no-codex", "kind": "gate", "argv": []string{"./gate-no-codex.sh"}, "wall_clock_seconds": 5, "max_output_bytes": 2000},
+	})
+	outDir := filepath.Join(root, "runs")
+	if out, errOut, err := runBuildTest(t, repoDir, workOrderPath, outDir, BuildOptions{RunID: "gate-winner", Quiet: true, JSON: true}); err != nil {
+		t.Fatalf("build failed: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
+	}
+	decision := readJSONFile(t, filepath.Join(outDir, "gate-winner", "decision.json"))
+	if decision["decision_kind"] != "pick_winner" || decision["selection_basis"] != "gate" || decision["canonical_winner"] != "claude" || decision["judge_ran"] != false {
+		t.Fatalf("decision = %#v", decision)
+	}
+}
+
+func TestRunBuildBothPassJudgeWinner(t *testing.T) {
+	repoDir := initBuildGitRepo(t)
+	root := t.TempDir()
+	workOrderPath := filepath.Join(root, "build.work-order.json")
+	writeBuildWorkOrder(t, workOrderPath, "judge-winner", 100000, []map[string]any{
+		{"id": "readme", "kind": "gate", "argv": []string{"test", "-f", "README.md"}, "wall_clock_seconds": 5, "max_output_bytes": 2000},
+	})
+	t.Setenv("BAKEOFF_FAKE_JUDGE_MODE", "build_pick_claude")
+	outDir := filepath.Join(root, "runs")
+	if out, errOut, err := runBuildTest(t, repoDir, workOrderPath, outDir, BuildOptions{RunID: "judge-winner", Quiet: true, JSON: true}); err != nil {
+		t.Fatalf("build failed: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
+	}
+	runDir := filepath.Join(outDir, "judge-winner")
+	decision := readJSONFile(t, filepath.Join(runDir, "decision.json"))
+	if decision["decision_kind"] != "pick_winner" || decision["selection_basis"] != "judge" || decision["canonical_winner"] != "claude" || decision["judge_ran"] != true {
+		t.Fatalf("decision = %#v", decision)
+	}
+	if _, err := os.Stat(filepath.Join(runDir, "judge", "result-pass1.json")); err != nil {
+		t.Fatalf("missing build judge result: %v", err)
+	}
+	report, err := os.ReadFile(filepath.Join(runDir, "report.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(report), "## Winner Handoff") || !strings.Contains(string(report), "Selection basis: `judge`") {
+		t.Fatalf("report missing judge handoff:\n%s", report)
+	}
+}
+
+func TestRunBuildBothFailVerification(t *testing.T) {
+	repoDir := initBuildGitRepo(t)
+	writeAndCommitFile(t, repoDir, "gate-no-build-output.sh", `#!/bin/sh
+if [ -f claude-build.txt ] || [ -f codex-build.txt ]; then
+  exit 1
+fi
+test -f README.md
+`, 0o755)
+	root := t.TempDir()
+	workOrderPath := filepath.Join(root, "build.work-order.json")
+	writeBuildWorkOrder(t, workOrderPath, "both-fail-verify", 100000, []map[string]any{
+		{"id": "no-build-output", "kind": "gate", "argv": []string{"./gate-no-build-output.sh"}, "wall_clock_seconds": 5, "max_output_bytes": 2000},
+	})
+	outDir := filepath.Join(root, "runs")
+	out, errOut, err := runBuildTest(t, repoDir, workOrderPath, outDir, BuildOptions{RunID: "both-fail-verify", Quiet: true, JSON: true})
+	if err == nil {
+		t.Fatalf("expected verifier failure\nstdout:\n%s\nstderr:\n%s", out, errOut)
+	}
+	decision := readJSONFile(t, filepath.Join(outDir, "both-fail-verify", "decision.json"))
+	if decision["decision_kind"] != "both_failed_verification" || decision["selection_basis"] != "none" || decision["canonical_winner"] != nil {
+		t.Fatalf("decision = %#v", decision)
+	}
+}
+
+func TestRunBuildMetricInconclusiveFallsBackToJudge(t *testing.T) {
+	repoDir := initBuildGitRepo(t)
+	writeAndCommitFile(t, repoDir, "metric-equal.sh", `#!/bin/sh
+printf '{"score":1}\n'
+`, 0o755)
+	root := t.TempDir()
+	workOrderPath := filepath.Join(root, "build.work-order.json")
+	writeBuildWorkOrder(t, workOrderPath, "metric-judge", 100000, []map[string]any{
+		{"id": "readme", "kind": "gate", "argv": []string{"test", "-f", "README.md"}, "wall_clock_seconds": 5, "max_output_bytes": 2000},
+		{"id": "score", "kind": "metric", "argv": []string{"./metric-equal.sh"}, "wall_clock_seconds": 5, "max_output_bytes": 2000, "metric": map[string]any{"name": "score", "direction": "lower", "min_delta_percent": 10}},
+	})
+	t.Setenv("BAKEOFF_FAKE_JUDGE_MODE", "build_pick_claude")
+	outDir := filepath.Join(root, "runs")
+	if out, errOut, err := runBuildTest(t, repoDir, workOrderPath, outDir, BuildOptions{RunID: "metric-judge", Quiet: true, JSON: true}); err != nil {
+		t.Fatalf("build failed: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
+	}
+	decision := readJSONFile(t, filepath.Join(outDir, "metric-judge", "decision.json"))
+	if decision["selection_basis"] != "judge" || decision["canonical_winner"] != "claude" {
+		t.Fatalf("decision = %#v", decision)
+	}
+}
+
+func TestRunBuildJudgeDisagreementExitsThree(t *testing.T) {
+	repoDir := initBuildGitRepo(t)
+	root := t.TempDir()
+	workOrderPath := filepath.Join(root, "build.work-order.json")
+	writeBuildWorkOrder(t, workOrderPath, "judge-disagree", 100000, []map[string]any{
+		{"id": "readme", "kind": "gate", "argv": []string{"test", "-f", "README.md"}, "wall_clock_seconds": 5, "max_output_bytes": 2000},
+	})
+	t.Setenv("BAKEOFF_FAKE_JUDGE_MODE", "build_always_a")
+	outDir := filepath.Join(root, "runs")
+	out, errOut, err := runBuildTest(t, repoDir, workOrderPath, outDir, BuildOptions{RunID: "judge-disagree", Quiet: true, JSON: true})
+	if err == nil {
+		t.Fatalf("expected unresolved build\nstdout:\n%s\nstderr:\n%s", out, errOut)
+	}
+	decision := readJSONFile(t, filepath.Join(outDir, "judge-disagree", "decision.json"))
+	if decision["decision_kind"] != "tie" || decision["selection_basis"] != "none" || decision["canonical_winner"] != nil {
+		t.Fatalf("decision = %#v", decision)
+	}
+}
+
+func TestRunBuildJudgeFailureDoesNotResolveAsJudgeRun(t *testing.T) {
+	repoDir := initBuildGitRepo(t)
+	root := t.TempDir()
+	workOrderPath := filepath.Join(root, "build.work-order.json")
+	writeBuildWorkOrder(t, workOrderPath, "judge-fails", 100000, []map[string]any{
+		{"id": "readme", "kind": "gate", "argv": []string{"test", "-f", "README.md"}, "wall_clock_seconds": 5, "max_output_bytes": 2000},
+	})
+	t.Setenv("BAKEOFF_FAKE_FAIL_JUDGE", "1")
+	outDir := filepath.Join(root, "runs")
+	out, errOut, err := runBuildTest(t, repoDir, workOrderPath, outDir, BuildOptions{RunID: "judge-fails", Quiet: true, JSON: true})
+	if err == nil {
+		t.Fatalf("expected judge failure\nstdout:\n%s\nstderr:\n%s", out, errOut)
+	}
+	decision := readJSONFile(t, filepath.Join(outDir, "judge-fails", "decision.json"))
+	if decision["judge_ran"] != false || decision["selection_basis"] != "none" {
+		t.Fatalf("decision = %#v", decision)
+	}
+	caveats, _ := decision["caveats"].([]any)
+	if len(caveats) == 0 || !strings.Contains(fmt.Sprint(caveats), "build judge failed") {
+		t.Fatalf("missing judge failure caveat: %#v", decision)
+	}
+}
+
+func TestBuildJudgeTextPreviewReportsErrorsAndSanitizesUTF8(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "patch.diff")
+	if err := os.WriteFile(path, []byte{'h', 'i', ' ', 0xe2, 0x82}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	preview, truncated, err := readTextPreview(path, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !truncated || !strings.Contains(preview, "\uFFFD") || !strings.Contains(preview, "[truncated]") {
+		t.Fatalf("preview=%q truncated=%t", preview, truncated)
+	}
+	if _, _, err := readTextPreview(filepath.Join(dir, "missing"), 4); err == nil {
+		t.Fatal("expected missing file error")
+	}
+}
+
 func TestRunBuildBaselineFailureSkipsProviders(t *testing.T) {
 	repoDir := initBuildGitRepo(t)
 	root := t.TempDir()
@@ -249,6 +407,10 @@ func TestRunBuildCodexMissingWorkspaceWriteRecordsScopeError(t *testing.T) {
 	scopeMetadata, _ := status["scope_enforcement"].(map[string]any)
 	if scopeMetadata["enforcement_level"] != "failed" || !strings.Contains(fmt.Sprint(scopeMetadata["fallback_reason"]), "workspace-write") {
 		t.Fatalf("codex scope metadata = %#v", scopeMetadata)
+	}
+	decision := readJSONFile(t, filepath.Join(outDir, "codex-scope", "decision.json"))
+	if decision["decision_kind"] != "single_provider_only" || decision["selection_basis"] != "gate" || decision["canonical_winner"] != "claude" {
+		t.Fatalf("decision = %#v", decision)
 	}
 }
 
@@ -382,6 +544,19 @@ fi
 	git(t, dir, "add", ".")
 	git(t, dir, "commit", "-m", "initial")
 	return dir
+}
+
+func writeAndCommitFile(t *testing.T, repoDir string, relative string, contents string, mode os.FileMode) {
+	t.Helper()
+	path := filepath.Join(repoDir, relative)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(contents), mode); err != nil {
+		t.Fatal(err)
+	}
+	git(t, repoDir, "add", relative)
+	git(t, repoDir, "commit", "-m", "add "+relative)
 }
 
 func git(t *testing.T, dir string, args ...string) string {

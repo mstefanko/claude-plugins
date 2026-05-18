@@ -18,6 +18,7 @@ import (
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/buildverify"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/buildworkspace"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands"
+	decisionpkg "github.com/mstefanko/claude-plugins/bakeoff/internal/decision"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/ledger"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/manifest"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/prompt"
@@ -146,10 +147,10 @@ func RunBuild(ctx context.Context, f commands.Factory, opts *BuildOptions) error
 		HeartbeatSeconds:      wo.Budgets.HeartbeatSeconds,
 		OutputCapGraceSeconds: wo.Budgets.OutputCapGraceSeconds,
 		MaxOutputOverrunBytes: wo.Budgets.MaxOutputOverrunBytes,
-		ArtifactDir:           filepath.Join(runDir, "verify", "baseline"),
+		ArtifactDir:           filepath.Join(runDir, "baseline", "verify"),
 		OnTick:                makeVerifierTickPrinter(f, effectiveQuiet),
 	})
-	if err := workorder.WriteJSONAtomic(filepath.Join(runDir, "verify", "baseline", "result.json"), baseline); err != nil {
+	if err := workorder.WriteJSONAtomic(filepath.Join(runDir, "baseline", "verify", "result.json"), baseline); err != nil {
 		return &apperror.RuntimeError{Err: err}
 	}
 	baselineCleanup, err := cleanupWorktree(ctx, repo, baselinePath, opts.KeepWorktrees)
@@ -217,8 +218,23 @@ func RunBuild(ctx context.Context, f commands.Factory, opts *BuildOptions) error
 		}
 	}
 	metricComparisons := buildverify.CompareMetrics(wo.Build.Verify, providerIDs, verifyResults)
-	decisionKind, selectionBasis, winner, exitCode, caveats := selectBuildWinner(providerRuns, metricComparisons)
-	decision := buildDecision(wo, workerResults, providerRuns, baseline, metricComparisons, decisionKind, selectionBasis, winner, caveats)
+	judgeResults := map[string]map[string]any{}
+	pass1Order := map[string]string{}
+	pass2Order := map[string]string{}
+	if buildJudgeNeeded(providerRuns, metricComparisons) {
+		if humanOutput {
+			f.Streams().Printf("[judge] verifier evidence inconclusive; running swapped build judge...\n")
+		}
+		var err error
+		judgeResults, pass1Order, pass2Order, err = runBuildJudgePhase(ctx, f, wo, baseline, providerRuns, metricComparisons, runDir, effectiveQuiet, humanOutput)
+		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				return err
+			}
+			return &apperror.RuntimeError{Err: err}
+		}
+	}
+	decision, exitCode := resolveBuildDecision(wo, workerResults, providerRuns, baseline, metricComparisons, judgeResults, pass1Order, pass2Order)
 	if err := finalizeBuildRun(ctx, f, opts, wo, runDir, runID, startedAt, workerResults, decision, baseline, providerRuns, metricComparisons, exitCode, humanOutput); err != nil {
 		return err
 	}
@@ -364,16 +380,16 @@ func runOneBuildProvider(ctx context.Context, f commands.Factory, wo *workorder.
 			HeartbeatSeconds:      wo.Budgets.HeartbeatSeconds,
 			OutputCapGraceSeconds: wo.Budgets.OutputCapGraceSeconds,
 			MaxOutputOverrunBytes: wo.Budgets.MaxOutputOverrunBytes,
-			ArtifactDir:           filepath.Join(providerDir, "verify"),
+			ArtifactDir:           filepath.Join(buildDir, "verify"),
 			OnTick:                makeVerifierTickPrinter(f, quiet),
 		})
 	} else {
 		run.Verify = buildverify.Result{Scope: "provider", ProviderID: participant.ID, GatesPassed: false}
 	}
-	if err := os.MkdirAll(filepath.Join(providerDir, "verify"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(buildDir, "verify"), 0o755); err != nil {
 		return run, err
 	}
-	if err := workorder.WriteJSONAtomic(filepath.Join(providerDir, "verify", "result.json"), run.Verify); err != nil {
+	if err := workorder.WriteJSONAtomic(filepath.Join(buildDir, "verify", "result.json"), run.Verify); err != nil {
 		return run, err
 	}
 	cleanup, err := cleanupWorktree(ctx, repo, worktreePath, keepWorktrees)
@@ -509,18 +525,15 @@ func providerCapabilities(ctx context.Context, f commands.Factory, wo *workorder
 	return out
 }
 
-func selectBuildWinner(runs []providerRun, metrics []buildverify.MetricComparison) (string, string, string, int, []string) {
+func buildJudgeNeeded(runs []providerRun, metrics []buildverify.MetricComparison) bool {
 	gatePassed := []string{}
 	for _, run := range runs {
-		if len(run.IneligibleReasons) == 0 && run.Verify.GatesPassed {
+		if patchState(run) == "patch_captured" && run.Verify.GatesPassed {
 			gatePassed = append(gatePassed, run.ID)
 		}
 	}
-	switch len(gatePassed) {
-	case 0:
-		return "both_failed_verification", "gate", "", 1, []string{"no provider passed required gate verifiers"}
-	case 1:
-		return "single_provider_only", "gate", gatePassed[0], 0, []string{"required gate verifiers selected the only passing provider"}
+	if len(gatePassed) != 2 {
+		return false
 	}
 	metricWinner := ""
 	for _, metric := range metrics {
@@ -532,13 +545,347 @@ func selectBuildWinner(runs []providerRun, metrics []buildverify.MetricCompariso
 			continue
 		}
 		if metricWinner != metric.Winner {
-			return "tie", "none", "", 3, []string{"metric verifiers selected conflicting winners; build judge is not implemented until Phase 5"}
+			return true
 		}
 	}
-	if metricWinner != "" {
-		return "pick_winner", "metric", metricWinner, 0, []string{}
+	return metricWinner == ""
+}
+
+func runBuildJudgePhase(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder, baseline buildverify.Result, runs []providerRun, metrics []buildverify.MetricComparison, runDir string, quiet bool, humanOutput bool) (map[string]map[string]any, map[string]string, map[string]string, error) {
+	providerIDs := []string{wo.Providers[0].ID, wo.Providers[1].ID}
+	byProvider := map[string]providerRun{}
+	for _, run := range runs {
+		byProvider[run.ID] = run
 	}
-	return "tie", "none", "", 3, []string{"both providers passed gates; no metric verifier produced a clear winner; build judge is not implemented until Phase 5"}
+	pass1Order := map[string]string{"A": providerIDs[0], "B": providerIDs[1]}
+	pass2Order := map[string]string{"A": providerIDs[1], "B": providerIDs[0]}
+	pass1, err := runSingleBuildJudge(ctx, f, wo, baseline, byProvider, metrics, pass1Order, runDir, "pass1", quiet, humanOutput)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	pass2, err := runSingleBuildJudge(ctx, f, wo, baseline, byProvider, metrics, pass2Order, runDir, "pass2", quiet, humanOutput)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	judgeResults := map[string]map[string]any{"pass1": finalJSONMap(pass1), "pass2": finalJSONMap(pass2)}
+	if !artifact.ProviderSucceeded(pass1) || !artifact.ProviderSucceeded(pass2) {
+		judgeResults["_failure"] = map[string]any{"pass1_status": pass1["status"], "pass2_status": pass2["status"]}
+	}
+	return judgeResults, pass1Order, pass2Order, nil
+}
+
+func runSingleBuildJudge(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder, baseline buildverify.Result, runs map[string]providerRun, metrics []buildverify.MetricComparison, orderMap map[string]string, runDir string, label string, quiet bool, humanOutput bool) (map[string]any, error) {
+	workerA := buildJudgePayload(runDir, runs[orderMap["A"]], baseline, metrics)
+	workerB := buildJudgePayload(runDir, runs[orderMap["B"]], baseline, metrics)
+	judgePrompt, err := prompt.BuildJudgePrompt(wo, workerA, workerB, "build")
+	if err != nil {
+		return nil, err
+	}
+	judgeDir := filepath.Join(runDir, "judge")
+	if err := os.MkdirAll(judgeDir, 0o755); err != nil {
+		return nil, err
+	}
+	if err := workorder.WriteTextAtomic(filepath.Join(judgeDir, "prompt-"+label+".txt"), judgePrompt); err != nil {
+		return nil, err
+	}
+	lastMessage := ""
+	if wo.Judge.Backend == "codex" {
+		lastMessage = filepath.Join(judgeDir, "last-message-"+label+".txt")
+	}
+	cwd, _ := os.Getwd()
+	argv, err := provider.BuildParticipantArgv(wo.Judge, cwd, nil, lastMessage, commands.CodexOutputLastMessageSupported(ctx, f, wo.Judge))
+	if err != nil {
+		return nil, err
+	}
+	if humanOutput {
+		f.Streams().Printf("[judge:%s] running...\n", label)
+	}
+	result := artifact.ResultMap(runner.RunProviderWithFormatRetry(ctx, runner.Options{
+		Argv:             argv,
+		Prompt:           judgePrompt,
+		Budgets:          commands.RunnerBudgets(wo.Budgets),
+		CWD:              cwd,
+		Env:              buildEnv(os.Environ()),
+		Validator:        workorder.ValidateBuildJudgeResult,
+		OnTick:           commands.MakeTickPrinter(f, "judge:"+label, quiet),
+		FinalMessagePath: lastMessage,
+	}))
+	if err := artifact.WriteJudgeArtifacts(judgeDir, label, result); err != nil {
+		return nil, err
+	}
+	if humanOutput {
+		f.Streams().Printf("[judge:%s] %s %vs\n", label, result["status"], result["wall_seconds"])
+	}
+	return result, nil
+}
+
+func buildJudgePayload(runDir string, run providerRun, baseline buildverify.Result, metrics []buildverify.MetricComparison) map[string]any {
+	payload := map[string]any{
+		"provider_id":        run.ID,
+		"worker_final_json":  finalJSONMap(run.WorkerResult),
+		"runner_status":      artifact.StatusWithoutPayload(run.WorkerResult),
+		"ineligible_reasons": run.IneligibleReasons,
+		"workspace":          run.Workspace,
+		"verify":             run.Verify,
+		"baseline_verify":    baseline,
+		"metric_decisions":   metrics,
+	}
+	if run.Capture != nil {
+		payload["capture"] = run.Capture
+		payload["changed_files"] = run.Capture.ChangedFiles
+		payload["test_files"] = run.Capture.TestFiles
+		payload["benchmark_files"] = run.Capture.BenchmarkFiles
+		if run.Capture.DiffstatPath != "" {
+			if preview, truncated, err := readTextPreview(run.Capture.DiffstatPath, 12000); err == nil {
+				payload["diffstat"] = preview
+				payload["diffstat_truncated"] = truncated
+			} else {
+				payload["diffstat_error"] = err.Error()
+			}
+			if relative, err := relativePath(runDir, run.Capture.DiffstatPath); err == nil {
+				payload["diffstat_path"] = relative
+			} else {
+				payload["diffstat_path"] = run.Capture.DiffstatPath
+				payload["diffstat_path_error"] = err.Error()
+			}
+		}
+		if run.Capture.PatchPath != "" {
+			if relative, err := relativePath(runDir, run.Capture.PatchPath); err == nil {
+				payload["patch_path"] = relative
+			} else {
+				payload["patch_path"] = run.Capture.PatchPath
+				payload["patch_path_error"] = err.Error()
+			}
+			if preview, truncated, err := readTextPreview(run.Capture.PatchPath, 40000); err == nil {
+				payload["patch_excerpt"] = preview
+				payload["patch_excerpt_truncated"] = truncated
+			} else {
+				payload["patch_excerpt_error"] = err.Error()
+			}
+		}
+	}
+	return payload
+}
+
+func resolveBuildDecision(wo *workorder.WorkOrder, workerResults map[string]map[string]any, runs []providerRun, baseline buildverify.Result, metrics []buildverify.MetricComparison, judgeResults map[string]map[string]any, pass1Order map[string]string, pass2Order map[string]string) (map[string]any, int) {
+	judgeFailure := judgeResults["_failure"]
+	judgeResultsForDecision := map[string]map[string]any{}
+	if judgeFailure == nil {
+		for key, value := range judgeResults {
+			judgeResultsForDecision[key] = value
+		}
+	}
+	input := decisionpkg.BuildResolutionInput{
+		WorkOrder:        wo,
+		ProviderIDs:      providerIDs(wo),
+		ProviderStatuses: buildProviderStatuses(wo, workerResults, runs),
+		GateResults:      buildGateResults(runs),
+		MetricResults:    buildMetricResults(runs),
+		MetricDecisions:  metricDecisionMaps(metrics),
+		JudgeResults:     judgeResultsForDecision,
+		Pass1Order:       pass1Order,
+		Pass2Order:       pass2Order,
+		BaselineVerify:   baseline,
+		ProviderBuild:    buildProviderArtifacts(runs),
+	}
+	decision, exitCode := decisionpkg.ResolveBuild(input)
+	if judgeFailure != nil {
+		decision["caveats"] = append(listStrings(decision["caveats"]), fmt.Sprintf("build judge failed: pass1=%v, pass2=%v", judgeFailure["pass1_status"], judgeFailure["pass2_status"]))
+		if exitCode == 3 {
+			exitCode = 1
+		}
+	}
+	return decision, exitCode
+}
+
+func buildProviderStatuses(wo *workorder.WorkOrder, workerResults map[string]map[string]any, runs []providerRun) map[string]map[string]any {
+	statuses := map[string]map[string]any{}
+	byProvider := map[string]providerRun{}
+	for _, run := range runs {
+		byProvider[run.ID] = run
+	}
+	for _, participant := range wo.Providers {
+		result := workerResults[participant.ID]
+		status := artifact.StatusWithoutPayload(result)
+		status["runner_status"] = status["status"]
+		status["stderr_path"] = "providers/" + participant.ID + "/stderr.txt"
+		run, ok := byProvider[participant.ID]
+		if !ok {
+			status["patch_state"] = "provider_failed"
+			status["verify_state"] = "not_run"
+			statuses[participant.ID] = status
+			continue
+		}
+		status["gates_passed"] = run.Verify.GatesPassed
+		status["ineligible_reasons"] = run.IneligibleReasons
+		status["worktree_cleanup"] = run.Cleanup.Status
+		status["verify_result_path"] = "providers/" + participant.ID + "/build/verify/result.json"
+		status["patch_state"] = patchState(run)
+		status["verify_state"] = verifyState(run)
+		status["metric_state"] = metricState(run)
+		if run.Capture != nil {
+			status["patch_bytes"] = run.Capture.PatchBytes
+			status["patch_over_cap"] = run.Capture.PatchOverCap
+			status["gitlink_change_rejected"] = run.Capture.GitlinkChangeRejected
+			status["patch_path"] = "providers/" + participant.ID + "/build/diff.patch"
+			status["diffstat_path"] = "providers/" + participant.ID + "/build/diffstat.txt"
+			status["changed_files_path"] = "providers/" + participant.ID + "/build/changed-files.txt"
+			status["workspace_path"] = "providers/" + participant.ID + "/build/workspace.json"
+			status["changed_files"] = run.Capture.ChangedFiles
+			status["provider_authored_tests"] = len(run.Capture.TestFiles) > 0
+			status["provider_authored_benchmarks"] = len(run.Capture.BenchmarkFiles) > 0
+		}
+		statuses[participant.ID] = status
+	}
+	return statuses
+}
+
+func buildProviderArtifacts(runs []providerRun) map[string]any {
+	out := map[string]any{}
+	for _, run := range runs {
+		entry := map[string]any{
+			"gates_passed":       run.Verify.GatesPassed,
+			"ineligible_reasons": run.IneligibleReasons,
+			"worktree_cleanup":   run.Cleanup.Status,
+		}
+		if run.Capture != nil {
+			entry["patch_bytes"] = run.Capture.PatchBytes
+			entry["patch_over_cap"] = run.Capture.PatchOverCap
+			entry["gitlink_change_rejected"] = run.Capture.GitlinkChangeRejected
+			entry["patch_path"] = "providers/" + run.ID + "/build/diff.patch"
+			entry["changed_files"] = run.Capture.ChangedFiles
+			entry["test_files"] = run.Capture.TestFiles
+			entry["benchmark_files"] = run.Capture.BenchmarkFiles
+		}
+		out[run.ID] = entry
+	}
+	return out
+}
+
+func buildGateResults(runs []providerRun) map[string]map[string]map[string]any {
+	out := map[string]map[string]map[string]any{}
+	for _, run := range runs {
+		out[run.ID] = map[string]map[string]any{}
+		for _, result := range run.Verify.Results {
+			if result.Kind != "gate" {
+				continue
+			}
+			out[run.ID][result.ID] = verifierResultMap(result)
+		}
+	}
+	return out
+}
+
+func buildMetricResults(runs []providerRun) map[string]map[string]map[string]any {
+	out := map[string]map[string]map[string]any{}
+	for _, run := range runs {
+		out[run.ID] = map[string]map[string]any{}
+		for _, result := range run.Verify.Results {
+			if result.Kind != "metric" {
+				continue
+			}
+			entry := verifierResultMap(result)
+			if result.Metric != nil {
+				entry["metric"] = result.Metric
+			}
+			out[run.ID][result.ID] = entry
+		}
+	}
+	return out
+}
+
+func verifierResultMap(result buildverify.VerifierResult) map[string]any {
+	entry := map[string]any{
+		"id":                    result.ID,
+		"kind":                  result.Kind,
+		"status":                result.Status,
+		"exit_code":             result.ExitCode,
+		"wall_seconds":          result.WallSeconds,
+		"stdout_bytes":          result.StdoutBytes,
+		"stderr_bytes":          result.StderrBytes,
+		"stdout_observed_bytes": result.StdoutObservedBytes,
+		"stderr_observed_bytes": result.StderrObservedBytes,
+		"stdout_truncated":      result.StdoutTruncated,
+		"stderr_truncated":      result.StderrTruncated,
+	}
+	if result.StdoutPath != "" {
+		entry["stdout_path"] = result.StdoutPath
+	}
+	if result.StderrPath != "" {
+		entry["stderr_path"] = result.StderrPath
+	}
+	if result.StatusPath != "" {
+		entry["status_path"] = result.StatusPath
+	}
+	if result.MetricPath != "" {
+		entry["metric_path"] = result.MetricPath
+	}
+	return entry
+}
+
+func metricDecisionMaps(metrics []buildverify.MetricComparison) []map[string]any {
+	out := make([]map[string]any, 0, len(metrics))
+	for _, metric := range metrics {
+		entry := map[string]any{
+			"id":                metric.ID,
+			"name":              metric.Name,
+			"direction":         metric.Direction,
+			"delta_percent":     metric.DeltaPercent,
+			"threshold_percent": metric.Threshold,
+			"conclusive":        metric.Conclusive,
+		}
+		if metric.Winner != "" {
+			entry["winner"] = metric.Winner
+		}
+		if metric.Reason != "" {
+			entry["reason"] = metric.Reason
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+func patchState(run providerRun) string {
+	if run.Capture == nil {
+		if len(run.IneligibleReasons) > 0 {
+			return "provider_failed"
+		}
+		return "no_patch"
+	}
+	if run.Capture.PatchOverCap {
+		return "patch_over_cap"
+	}
+	if run.Capture.GitlinkChangeRejected {
+		return "submodule_change_rejected"
+	}
+	return "patch_captured"
+}
+
+func verifyState(run providerRun) string {
+	if patchState(run) != "patch_captured" || len(run.Verify.Results) == 0 {
+		return "not_run"
+	}
+	if run.Verify.GatesPassed {
+		return "gate_passed"
+	}
+	return "gate_failed"
+}
+
+func metricState(run providerRun) string {
+	hasMetric := false
+	for _, result := range run.Verify.Results {
+		if result.Kind != "metric" {
+			continue
+		}
+		hasMetric = true
+		if result.Metric != nil && result.Metric.Conclusive {
+			return "metric_decisive"
+		}
+	}
+	if hasMetric {
+		return "metric_inconclusive"
+	}
+	return "not_run"
 }
 
 func buildDecision(wo *workorder.WorkOrder, workerResults map[string]map[string]any, providerRuns []providerRun, baseline buildverify.Result, metrics []buildverify.MetricComparison, decisionKind string, selectionBasis string, winner string, caveats []string) map[string]any {
@@ -631,11 +978,34 @@ func renderBuildReport(wo *workorder.WorkOrder, runID string, runDir string, dec
 		if run.Capture != nil {
 			lines = append(lines, fmt.Sprintf("- Patch bytes: `%d`", run.Capture.PatchBytes))
 			lines = append(lines, fmt.Sprintf("- Patch: `%s`", filepath.Join("providers", run.ID, "build", "diff.patch")))
+			lines = append(lines, fmt.Sprintf("- Changed files: `%d`", len(run.Capture.ChangedFiles)))
+			if len(run.Capture.TestFiles) > 0 {
+				lines = append(lines, "- Provider-authored tests:")
+				lines = append(lines, changedFileBulletLines(run.Capture.TestFiles)...)
+			}
+			if len(run.Capture.BenchmarkFiles) > 0 {
+				lines = append(lines, "- Provider-authored benchmarks/probes:")
+				lines = append(lines, changedFileBulletLines(run.Capture.BenchmarkFiles)...)
+			}
 		}
 		if len(run.IneligibleReasons) > 0 {
 			lines = append(lines, "- Ineligible reasons:")
 			for _, reason := range run.IneligibleReasons {
 				lines = append(lines, "  - "+reason)
+			}
+		}
+		if final := finalJSONMap(run.WorkerResult); len(final) > 0 {
+			if risks := listValue(final["risks"]); len(risks) > 0 {
+				lines = append(lines, "- Provider risks:")
+				for _, risk := range risks {
+					lines = append(lines, "  - "+fmt.Sprint(risk))
+				}
+			}
+			if checks := listValue(final["manual_checks"]); len(checks) > 0 {
+				lines = append(lines, "- Manual checks:")
+				for _, check := range checks {
+					lines = append(lines, "  - "+fmt.Sprint(check))
+				}
 			}
 		}
 		lines = append(lines, verifierLines(run.Verify.Results)...)
@@ -656,9 +1026,81 @@ func renderBuildReport(wo *workorder.WorkOrder, runID string, runDir string, dec
 		}
 		lines = append(lines, "")
 	}
+	if ran, _ := decision["judge_ran"].(bool); ran {
+		lines = append(lines, "## Judge Audit", "")
+		if maps, ok := decision["order_maps"].(map[string]any); ok {
+			for _, pass := range []string{"pass1", "pass2"} {
+				if raw, ok := maps[pass]; ok {
+					order, _ := raw.(map[string]string)
+					if order == nil {
+						if obj, ok := raw.(map[string]any); ok {
+							order = map[string]string{"A": stringValue(obj["A"]), "B": stringValue(obj["B"])}
+						}
+					}
+					lines = append(lines, fmt.Sprintf("- %s: A=`%s`, B=`%s`", pass, order["A"], order["B"]))
+				}
+			}
+		}
+		if passes, ok := decision["judge_passes"].(map[string]any); ok {
+			for _, pass := range []string{"pass1", "pass2"} {
+				summary, _ := passes[pass].(map[string]any)
+				if summary == nil {
+					continue
+				}
+				winner := stringValue(summary["canonical_winner"])
+				if winner == "" {
+					winner = stringValue(summary["positional_winner"])
+				}
+				if winner == "" {
+					winner = "none"
+				}
+				lines = append(lines, fmt.Sprintf("- %s winner: `%s`", pass, winner))
+			}
+		}
+		for _, rationale := range listValue(decision["judge_rationale"]) {
+			if text := strings.TrimSpace(fmt.Sprint(rationale)); text != "" {
+				lines = append(lines, "- "+text)
+			}
+		}
+		lines = append(lines, "")
+	}
 	if winner, _ := decision["canonical_winner"].(string); winner != "" {
 		patch := filepath.Join(runDir, "providers", winner, "build", "diff.patch")
-		lines = append(lines, "## Winner Handoff", "", "Winner: `"+winner+"`", "", "```text", "git apply --3way --binary "+patch, "```", "")
+		lines = append(lines, "## Winner Handoff", "", "Winner: `"+winner+"`")
+		lines = append(lines, "Selection basis: `"+stringValue(decision["selection_basis"])+"`")
+		if rationale := listValue(decision["judge_rationale"]); len(rationale) > 0 && stringValue(decision["selection_basis"]) == "judge" {
+			lines = append(lines, "Why: "+fmt.Sprint(rationale[0]))
+		}
+		if run := providerRunByID(runs, winner); run != nil {
+			if run.Capture != nil {
+				lines = append(lines, "Patch: `"+filepath.Join("providers", winner, "build", "diff.patch")+"`")
+				lines = append(lines, "Diffstat: `"+filepath.Join("providers", winner, "build", "diffstat.txt")+"`")
+				if len(run.Capture.TestFiles) > 0 {
+					lines = append(lines, fmt.Sprintf("Provider-authored tests: `%d`", len(run.Capture.TestFiles)))
+				}
+				if len(run.Capture.BenchmarkFiles) > 0 {
+					lines = append(lines, fmt.Sprintf("Provider-authored benchmarks/probes: `%d`", len(run.Capture.BenchmarkFiles)))
+				}
+			}
+			if run.Cleanup.Retained {
+				lines = append(lines, "Retained worktree: `"+run.WorktreePath+"`")
+			}
+			if final := finalJSONMap(run.WorkerResult); len(final) > 0 {
+				if risks := listValue(final["risks"]); len(risks) > 0 {
+					lines = append(lines, "Risks:")
+					for _, risk := range risks {
+						lines = append(lines, "- "+fmt.Sprint(risk))
+					}
+				}
+				if checks := listValue(final["manual_checks"]); len(checks) > 0 {
+					lines = append(lines, "Manual checks:")
+					for _, check := range checks {
+						lines = append(lines, "- "+fmt.Sprint(check))
+					}
+				}
+			}
+		}
+		lines = append(lines, "", "```text", "git apply --3way --binary "+patch, "```", "")
 	}
 	if caveats := listValue(decision["caveats"]); len(caveats) > 0 {
 		lines = append(lines, "## Caveats", "")
@@ -688,6 +1130,23 @@ func verifierLines(results []buildverify.VerifierResult) []string {
 	return lines
 }
 
+func changedFileBulletLines(files []buildworkspace.ChangedFile) []string {
+	lines := []string{}
+	for _, file := range files {
+		lines = append(lines, fmt.Sprintf("  - `%s` %s", file.Status, file.Path))
+	}
+	return lines
+}
+
+func providerRunByID(runs []providerRun, id string) *providerRun {
+	for i := range runs {
+		if runs[i].ID == id {
+			return &runs[i]
+		}
+	}
+	return nil
+}
+
 func buildSummary(runDir string, runID string, outDir string, decision map[string]any, baseline buildverify.Result, runs []providerRun, metrics []buildverify.MetricComparison, exitCode int) map[string]any {
 	providers := map[string]any{}
 	for _, run := range runs {
@@ -715,6 +1174,7 @@ func buildSummary(runDir string, runID string, outDir string, decision map[strin
 		"decision_kind":    decision["decision_kind"],
 		"selection_basis":  decision["selection_basis"],
 		"winner":           decision["canonical_winner"],
+		"judge_ran":        decision["judge_ran"],
 		"baseline":         map[string]any{"gates_passed": baseline.GatesPassed, "results": baseline.Results},
 		"providers":        providers,
 		"metric_summaries": metrics,
@@ -932,11 +1392,17 @@ func nilIfEmpty(value string) any {
 }
 
 func listValue(value any) []any {
-	items, _ := value.([]any)
-	if items == nil {
-		return []any{}
+	if items, ok := value.([]any); ok {
+		return items
 	}
-	return items
+	if items, ok := value.([]string); ok {
+		out := make([]any, len(items))
+		for i, item := range items {
+			out[i] = item
+		}
+		return out
+	}
+	return []any{}
 }
 
 func stringValue(value any) string {
@@ -947,6 +1413,49 @@ func stringValue(value any) string {
 		return text
 	}
 	return fmt.Sprint(value)
+}
+
+func listStrings(value any) []string {
+	switch typed := value.(type) {
+	case []string:
+		return append([]string(nil), typed...)
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			out = append(out, fmt.Sprint(item))
+		}
+		return out
+	default:
+		return []string{}
+	}
+}
+
+func readTextPreview(path string, limit int) (string, bool, error) {
+	if path == "" || limit <= 0 {
+		return "", false, fmt.Errorf("path and positive limit are required")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", false, err
+	}
+	truncated := false
+	if len(data) <= limit {
+		return strings.ToValidUTF8(string(data), "\uFFFD"), false, nil
+	}
+	data = data[:limit]
+	truncated = true
+	return strings.ToValidUTF8(string(data), "\uFFFD") + "\n[truncated]\n", truncated, nil
+}
+
+func relativePath(base string, path string) (string, error) {
+	relative, err := filepath.Rel(base, path)
+	if err != nil || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		if err == nil {
+			err = fmt.Errorf("%s is outside %s", path, base)
+		}
+		return "", err
+	}
+	return filepath.ToSlash(relative), nil
 }
 
 func shortCommit(commit string) string {

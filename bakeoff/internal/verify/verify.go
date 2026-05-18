@@ -81,8 +81,13 @@ func Run(runDir string, displayOutDir string) Result {
 		}
 	}
 
+	runType, runTypeErr := manifest.RunTypeForRun(runDir)
+	if runTypeErr != nil {
+		problems = append(problems, runTypeErr.Error())
+	}
+	requiredArtifacts := manifest.RequiredArtifactsForType(runType)
 	missingRequired := []string{}
-	for _, relative := range manifest.RequiredArtifacts {
+	for _, relative := range requiredArtifacts {
 		if !fileExists(filepath.Join(runDir, relative)) {
 			missingRequired = append(missingRequired, relative)
 			problems = append(problems, "missing artifact: "+filepath.Join(runDir, relative))
@@ -143,7 +148,7 @@ func Run(runDir string, displayOutDir string) Result {
 		Manifest:      ManifestStatus{Status: manifestStatus, Path: manifestPath},
 		RequiredArtifacts: RequiredArtifacts{
 			Status:  requiredStatus,
-			Checked: append([]string(nil), manifest.RequiredArtifacts...),
+			Checked: requiredArtifacts,
 			Missing: missingRequired,
 		},
 		Fingerprints: Fingerprints{

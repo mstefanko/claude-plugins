@@ -103,6 +103,7 @@ def main() -> int:
         "deduplication and conflict-flagging judge" in prompt
         or "pairwise judge" in prompt
         or "synthesis judge" in prompt
+        or "build judge" in prompt
     )
     is_triage = "evidence-grounded triage of a Bakeoff report" in prompt
 
@@ -200,6 +201,51 @@ def main() -> int:
                 "spine_rationale": f"{spine_winner} is clearer",
                 "claim_verdicts": [],
                 "additions_from_loser": [],
+            }
+        )
+        return 0
+    if "build judge" in prompt:
+        build_scores_a = {
+            "correctness": 5,
+            "verifier_evidence": 5,
+            "comparative_evidence": 4,
+            "scope_control": 5,
+            "test_quality": 4,
+            "benchmark_quality": 3,
+            "maintainability": 5,
+        }
+        build_scores_b = {
+            "correctness": 4,
+            "verifier_evidence": 5,
+            "comparative_evidence": 3,
+            "scope_control": 4,
+            "test_quality": 3,
+            "benchmark_quality": 3,
+            "maintainability": 4,
+        }
+        worker_a = prompt.split("<worker_a_output>", 1)[1].split("</worker_a_output>", 1)[0]
+        worker_b = prompt.split("<worker_b_output>", 1)[1].split("</worker_b_output>", 1)[0]
+        if judge_mode == "build_tie":
+            winner = "tie"
+        elif judge_mode == "build_always_a":
+            winner = "A"
+        elif judge_mode == "build_always_b":
+            winner = "B"
+        else:
+            # Test fake behavior is provider-targeted so swapped passes can
+            # assert canonical resolution without relying on a real judge.
+            target = "codex" if judge_mode == "build_pick_codex" else "claude"
+            winner = "A" if f'"provider_id": "{target}"' in worker_a else "B"
+            if f'"provider_id": "{target}"' not in worker_a and f'"provider_id": "{target}"' not in worker_b:
+                winner = "tie"
+        emit(
+            {
+                "relation": "compare",
+                "scores_a": build_scores_a,
+                "scores_b": build_scores_b,
+                "winner": winner,
+                "rationale": f"build candidate {winner} has stronger verifier evidence and maintainability",
+                "risks": [],
             }
         )
         return 0

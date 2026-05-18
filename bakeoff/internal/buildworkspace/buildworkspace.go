@@ -105,12 +105,16 @@ type CaptureResult struct {
 	ProviderHeadIsBase       bool          `json:"provider_head_is_base"`
 	ProviderCommittedChanges bool          `json:"provider_committed_changes"`
 	ChangedFiles             []ChangedFile `json:"changed_files"`
+	TestFiles                []ChangedFile `json:"test_files"`
+	BenchmarkFiles           []ChangedFile `json:"benchmark_files"`
 	PatchBytes               int           `json:"patch_bytes"`
 	PatchOverCap             bool          `json:"patch_over_cap"`
 	GitlinkChangeRejected    bool          `json:"gitlink_change_rejected"`
 	PatchPath                string        `json:"patch_path,omitempty"`
 	DiffstatPath             string        `json:"diffstat_path,omitempty"`
 	ChangedFilesPath         string        `json:"changed_files_path,omitempty"`
+	TestFilesPath            string        `json:"test_files_path,omitempty"`
+	BenchmarkFilesPath       string        `json:"benchmark_files_path,omitempty"`
 }
 
 type ChangedFile struct {
@@ -399,14 +403,23 @@ func CaptureChanges(ctx context.Context, opts CaptureOptions) (CaptureResult, er
 		PatchOverCap:             len(patch) > opts.PatchMaxBytes,
 		GitlinkChangeRejected:    HasGitlinkDiff(raw),
 	}
+	result.TestFiles, result.BenchmarkFiles = ClassifyBuildEvidenceFiles(result.ChangedFiles)
 	if opts.OutputDir != "" {
 		if err := os.MkdirAll(opts.OutputDir, 0o755); err != nil {
 			return CaptureResult{}, err
 		}
 		result.ChangedFilesPath = filepath.Join(opts.OutputDir, "changed-files.txt")
+		result.TestFilesPath = filepath.Join(opts.OutputDir, "test-files.json")
+		result.BenchmarkFilesPath = filepath.Join(opts.OutputDir, "benchmark-files.json")
 		result.DiffstatPath = filepath.Join(opts.OutputDir, "diffstat.txt")
 		result.PatchPath = filepath.Join(opts.OutputDir, "diff.patch")
 		if err := workorder.WriteTextAtomic(result.ChangedFilesPath, nameStatus); err != nil {
+			return CaptureResult{}, err
+		}
+		if err := workorder.WriteJSONAtomic(result.TestFilesPath, result.TestFiles); err != nil {
+			return CaptureResult{}, err
+		}
+		if err := workorder.WriteJSONAtomic(result.BenchmarkFilesPath, result.BenchmarkFiles); err != nil {
 			return CaptureResult{}, err
 		}
 		if err := workorder.WriteTextAtomic(result.DiffstatPath, diffstat); err != nil {
@@ -417,6 +430,84 @@ func CaptureChanges(ctx context.Context, opts CaptureOptions) (CaptureResult, er
 		}
 	}
 	return result, nil
+}
+
+func ClassifyBuildEvidenceFiles(changed []ChangedFile) ([]ChangedFile, []ChangedFile) {
+	tests := []ChangedFile{}
+	benchmarks := []ChangedFile{}
+	for _, file := range changed {
+		path := normalizedChangedPath(file.Path)
+		if isBuildTestPath(path) {
+			tests = append(tests, file)
+		}
+		if isBuildBenchmarkPath(path) {
+			benchmarks = append(benchmarks, file)
+		}
+	}
+	return tests, benchmarks
+}
+
+func normalizedChangedPath(path string) string {
+	if strings.Contains(path, " -> ") {
+		parts := strings.Split(path, " -> ")
+		path = parts[len(parts)-1]
+	}
+	return strings.Trim(filepath.ToSlash(path), "/")
+}
+
+func isBuildTestPath(path string) bool {
+	lower := strings.ToLower(path)
+	base := filepath.Base(lower)
+	switch {
+	case strings.HasSuffix(base, "_test.go"):
+		return true
+	case strings.HasPrefix(base, "test_") && strings.HasSuffix(base, ".py"):
+		return true
+	case strings.HasSuffix(base, "_test.py"):
+		return true
+	case strings.Contains(base, ".test."):
+		return true
+	case strings.Contains(base, ".spec."):
+		return true
+	}
+	for _, part := range strings.Split(lower, "/") {
+		switch part {
+		case "__tests__", "tests", "test", "spec":
+			return true
+		}
+	}
+	if strings.Contains(lower, "/fixtures/") || strings.HasPrefix(lower, "fixtures/") {
+		return strings.Contains(lower, "/tests/") || strings.Contains(lower, "/test/") || strings.Contains(lower, "/spec/") || strings.Contains(lower, "__tests__/")
+	}
+	return false
+}
+
+func isBuildBenchmarkPath(path string) bool {
+	lower := strings.ToLower(path)
+	base := filepath.Base(lower)
+	switch {
+	case strings.HasSuffix(base, "_bench_test.go"):
+		return true
+	case strings.HasPrefix(base, "bench") && strings.HasSuffix(base, ".py"):
+		return true
+	case strings.HasPrefix(base, "benchmark") && strings.HasSuffix(base, ".py"):
+		return true
+	}
+	parts := strings.Split(lower, "/")
+	for _, part := range parts {
+		switch part {
+		case "bench", "benchmarks", "perf", "performance", "load", "stress", "probes":
+			return true
+		}
+	}
+	if len(parts) >= 2 && parts[0] == "scripts" {
+		for _, marker := range []string{"bench", "perf", "load", "stress", "probe"} {
+			if strings.Contains(base, marker) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func ParseNameStatus(text string) []ChangedFile {
