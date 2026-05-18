@@ -472,41 +472,26 @@ func CaptureChanges(ctx context.Context, opts CaptureOptions) (CaptureResult, er
 	if opts.PatchMaxBytes <= 0 {
 		return CaptureResult{}, fmt.Errorf("patch max bytes must be positive")
 	}
-	if err := requireWorktreeRoot(ctx, opts.WorktreePath); err != nil {
+	root, head, err := worktreeRootAndHead(ctx, opts.WorktreePath)
+	if err != nil {
+		return CaptureResult{}, err
+	}
+	if err := requireWorktreeRootPath(opts.WorktreePath, root); err != nil {
 		return CaptureResult{}, err
 	}
 	if _, err := gitOutput(ctx, opts.WorktreePath, "add", "-A"); err != nil {
 		return CaptureResult{}, err
 	}
-	head, err := gitOutput(ctx, opts.WorktreePath, "rev-parse", "--verify", "HEAD^{commit}")
+	combinedDiff, err := gitOutputRaw(ctx, opts.WorktreePath, "diff", "--cached", "--patch-with-raw", "--patch-with-stat", "--binary", opts.BaseCommit, "--", ".")
 	if err != nil {
 		return CaptureResult{}, err
 	}
-	ahead, err := gitOutput(ctx, opts.WorktreePath, "rev-list", "--count", opts.BaseCommit+"..HEAD")
-	if err != nil {
-		return CaptureResult{}, err
-	}
-	nameStatus, err := gitOutput(ctx, opts.WorktreePath, "diff", "--cached", "--name-status", opts.BaseCommit, "--", ".")
-	if err != nil {
-		return CaptureResult{}, err
-	}
-	diffstat, err := gitOutput(ctx, opts.WorktreePath, "diff", "--cached", "--stat", opts.BaseCommit, "--", ".")
-	if err != nil {
-		return CaptureResult{}, err
-	}
-	patch, err := gitOutputRaw(ctx, opts.WorktreePath, "diff", "--cached", "--binary", opts.BaseCommit, "--", ".")
-	if err != nil {
-		return CaptureResult{}, err
-	}
-	raw, err := gitOutput(ctx, opts.WorktreePath, "diff", "--cached", "--raw", opts.BaseCommit, "--", ".")
-	if err != nil {
-		return CaptureResult{}, err
-	}
-	aheadCount, _ := strconv.Atoi(strings.TrimSpace(ahead))
+	raw, diffstat, patch := splitCombinedDiff(combinedDiff)
+	nameStatus := nameStatusFromRawDiff(raw)
 	result := CaptureResult{
-		ProviderHead:             strings.TrimSpace(head),
-		ProviderHeadIsBase:       strings.TrimSpace(head) == opts.BaseCommit,
-		ProviderCommittedChanges: aheadCount > 0,
+		ProviderHead:             head,
+		ProviderHeadIsBase:       head == opts.BaseCommit,
+		ProviderCommittedChanges: head != opts.BaseCommit,
 		ChangedFiles:             ParseNameStatus(nameStatus),
 		PatchBytes:               len(patch),
 		PatchOverCap:             len(patch) > opts.PatchMaxBytes,
@@ -539,6 +524,73 @@ func CaptureChanges(ctx context.Context, opts CaptureOptions) (CaptureResult, er
 		}
 	}
 	return result, nil
+}
+
+func splitCombinedDiff(data []byte) (string, string, []byte) {
+	patchStart := combinedDiffPatchStart(data)
+	prefix := data
+	if patchStart >= 0 {
+		prefix = data[:patchStart]
+	}
+	rawEnd := 0
+	for rawEnd < len(prefix) {
+		lineEnd := bytes.IndexByte(prefix[rawEnd:], '\n')
+		if lineEnd < 0 {
+			lineEnd = len(prefix)
+		} else {
+			lineEnd += rawEnd + 1
+		}
+		if prefix[rawEnd] != ':' {
+			break
+		}
+		rawEnd = lineEnd
+	}
+	raw := string(prefix[:rawEnd])
+	diffstat := string(prefix[rawEnd:])
+	if patchStart >= 0 && strings.HasSuffix(diffstat, "\n\n") {
+		diffstat = diffstat[:len(diffstat)-1]
+	}
+	if patchStart < 0 {
+		return raw, diffstat, nil
+	}
+	return raw, diffstat, data[patchStart:]
+}
+
+func combinedDiffPatchStart(data []byte) int {
+	if bytes.HasPrefix(data, []byte("diff --git ")) {
+		return 0
+	}
+	index := bytes.Index(data, []byte("\ndiff --git "))
+	if index < 0 {
+		return -1
+	}
+	return index + 1
+}
+
+func nameStatusFromRawDiff(raw string) string {
+	var builder strings.Builder
+	for _, line := range strings.Split(strings.TrimSpace(raw), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		parts := strings.Split(line, "\t")
+		if len(parts) < 2 {
+			continue
+		}
+		meta := strings.Fields(parts[0])
+		if len(meta) < 5 {
+			continue
+		}
+		builder.WriteString(meta[4])
+		builder.WriteByte('\t')
+		builder.WriteString(parts[1])
+		if len(parts) > 2 {
+			builder.WriteByte('\t')
+			builder.WriteString(parts[2])
+		}
+		builder.WriteByte('\n')
+	}
+	return builder.String()
 }
 
 func ClassifyBuildEvidenceFiles(changed []ChangedFile) ([]ChangedFile, []ChangedFile) {
@@ -885,16 +937,30 @@ func gitOutputRaw(ctx context.Context, dir string, args ...string) ([]byte, erro
 	return stdout.Bytes(), nil
 }
 
-func requireWorktreeRoot(ctx context.Context, path string) error {
-	root, err := gitOutput(ctx, path, "rev-parse", "--show-toplevel")
+func worktreeRootAndHead(ctx context.Context, path string) (string, string, error) {
+	out, err := gitOutput(ctx, path, "rev-parse", "--show-toplevel", "--verify", "HEAD^{commit}")
 	if err != nil {
-		return err
+		return "", "", err
 	}
+	lines := []string{}
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			lines = append(lines, line)
+		}
+	}
+	if len(lines) < 2 {
+		return "", "", fmt.Errorf("git rev-parse did not return worktree root and HEAD")
+	}
+	return lines[0], lines[len(lines)-1], nil
+}
+
+func requireWorktreeRootPath(path string, root string) error {
 	expected, err := canonicalPath(path)
 	if err != nil {
 		return err
 	}
-	actual, err := canonicalPath(strings.TrimSpace(root))
+	actual, err := canonicalPath(root)
 	if err != nil {
 		return err
 	}

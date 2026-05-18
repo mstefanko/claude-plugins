@@ -138,6 +138,9 @@ func TestCreateCaptureAndCleanupDetachedWorktree(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(worktreePath, "script.sh"), []byte("#!/bin/sh\necho ok\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(worktreePath, "asset.bin"), []byte{0x00, 0x01, 0x02, 0x03}, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	captureDir := filepath.Join(repoDir, "runs", "run-1", "providers", "claude", "build")
 	capture, err := CaptureChanges(ctx, CaptureOptions{WorktreePath: worktreePath, BaseCommit: repo.BaseCommit, OutputDir: captureDir, PatchMaxBytes: 100000})
 	if err != nil {
@@ -146,7 +149,7 @@ func TestCreateCaptureAndCleanupDetachedWorktree(t *testing.T) {
 	if !capture.ProviderHeadIsBase || capture.ProviderCommittedChanges || capture.PatchBytes == 0 || capture.PatchOverCap {
 		t.Fatalf("capture metadata = %#v", capture)
 	}
-	if len(capture.ChangedFiles) != 2 {
+	if len(capture.ChangedFiles) != 3 {
 		t.Fatalf("changed files = %#v", capture.ChangedFiles)
 	}
 	patch, err := os.ReadFile(capture.PatchPath)
@@ -155,6 +158,23 @@ func TestCreateCaptureAndCleanupDetachedWorktree(t *testing.T) {
 	}
 	if !strings.Contains(string(patch), "new file mode 100755") {
 		t.Fatalf("patch did not preserve executable mode:\n%s", patch)
+	}
+	if !strings.Contains(string(patch), "GIT binary patch") {
+		t.Fatalf("patch did not preserve binary patch:\n%s", patch)
+	}
+	changedFiles, err := os.ReadFile(capture.ChangedFilesPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(changedFiles), "A\tasset.bin\n") {
+		t.Fatalf("changed-files artifact missing binary addition:\n%s", changedFiles)
+	}
+	diffstat, err := os.ReadFile(capture.DiffstatPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(diffstat), "asset.bin") {
+		t.Fatalf("diffstat artifact missing binary addition:\n%s", diffstat)
 	}
 
 	cleanup := CleanupWorktree(ctx, repo, worktreePath, false)
@@ -364,6 +384,52 @@ func TestCleanupCanRetainWorktree(t *testing.T) {
 	missingResult := CleanupWorktree(ctx, Repository{Root: filepath.Join(repoDir, "missing")}, missing, false)
 	if missingResult.Status != "failed" || missingResult.FilesystemPathRemoved {
 		t.Fatalf("missing cleanup metadata = %#v", missingResult)
+	}
+}
+
+func TestNameStatusFromRawDiff(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+		want []ChangedFile
+	}{
+		{
+			name: "modify and add",
+			raw: ":100644 100644 abc def M\tfile.go\n" +
+				":000000 100644 000 abc A\tnew.go\n",
+			want: []ChangedFile{
+				{Status: "M", Path: "file.go"},
+				{Status: "A", Path: "new.go"},
+			},
+		},
+		{
+			name: "rename",
+			raw:  ":100644 100644 abc def R100\told.go\tnew.go\n",
+			want: []ChangedFile{{Status: "R100", Path: "old.go -> new.go"}},
+		},
+		{
+			name: "delete",
+			raw:  ":100644 000000 abc 000 D\tremoved.go\n",
+			want: []ChangedFile{{Status: "D", Path: "removed.go"}},
+		},
+		{
+			name: "empty",
+			raw:  "",
+			want: []ChangedFile{},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ParseNameStatus(nameStatusFromRawDiff(tc.raw))
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %#v, want %#v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("entry %d: got %#v, want %#v", i, got[i], tc.want[i])
+				}
+			}
+		})
 	}
 }
 

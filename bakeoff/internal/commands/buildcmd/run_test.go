@@ -181,6 +181,20 @@ func TestRunBuildMutatesIsolatedWorktreesAndCapturesPatches(t *testing.T) {
 	if !strings.Contains(out.String(), `"command": "build"`) || !strings.Contains(out.String(), `"winner": "claude"`) {
 		t.Fatalf("summary stdout missing build winner:\n%s", out.String())
 	}
+	report, err := os.ReadFile(filepath.Join(runDir, "report.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reportText := string(report)
+	for _, want := range []string{
+		"Checkpoint: Bakeoff selected this exact provider patch and has not applied it.",
+		"Post-run edits, synthesis, or reimplementation are outside this bakeoff decision.",
+		"Manual apply command for the selected patch:",
+	} {
+		if !strings.Contains(reportText, want) {
+			t.Fatalf("report missing handoff contract %q:\n%s", want, reportText)
+		}
+	}
 }
 
 func TestRunBuildUsesInvocationSubdirectory(t *testing.T) {
@@ -281,6 +295,9 @@ func TestRunBuildBothPassJudgeWinner(t *testing.T) {
 	}
 	if !strings.Contains(string(report), "## Winner Handoff") || !strings.Contains(string(report), "Selection basis: `judge`") {
 		t.Fatalf("report missing judge handoff:\n%s", report)
+	}
+	if !strings.Contains(string(report), "derived patch") {
+		t.Fatalf("report missing derived patch boundary:\n%s", report)
 	}
 }
 

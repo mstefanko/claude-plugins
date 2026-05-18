@@ -138,6 +138,22 @@ Inspect the newest report:
 bakeoff show latest
 ```
 
+Run a competitive build work order:
+
+```bash
+bakeoff init build
+$EDITOR build.work-order.json
+bakeoff validate build.work-order.json
+bakeoff build build.work-order.json
+```
+
+Build mode writes a report, decision JSON, verifier artifacts, and one patch per
+provider. When gates or metrics pick a winner, the report hands off the exact
+selected patch and a manual `git apply --3way --binary` command. Bakeoff does
+not apply the patch. If you edit, combine, or reimplement after reading the
+report, treat that as a derived patch outside the bakeoff decision and rerun
+verification in the follow-up session.
+
 Rerun a previous work order:
 
 ```bash

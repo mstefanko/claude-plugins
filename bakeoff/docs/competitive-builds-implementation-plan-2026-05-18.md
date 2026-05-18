@@ -359,7 +359,11 @@ git worktree add --detach <path> <base_commit>
 
 Detached worktrees avoid branch namespace churn. Provider output is captured as
 patches, not commits. V1 prints a plain `git apply --3way --binary` command for
-the chosen patch; any first-class apply helper is deferred.
+the chosen patch; any first-class apply helper is deferred. The printed command
+is a human checkpoint, not an automatic apply step. Bakeoff selects and explains
+one provider patch. If a human or follow-on agent edits, combines, or
+reimplements after the run, that result is a derived patch outside the bakeoff
+decision and must be verified separately before being cited as ready.
 
 Base ref resolution:
 
@@ -512,6 +516,17 @@ Command policy:
   or non-numeric metric values make that metric inconclusive rather than
   failing the correctness gate
 
+Dogfood probe hygiene:
+
+- One-off metric probes used to answer a single bakeoff question should live in
+  a scratch directory such as `/tmp/<run-purpose>/`, not in the repository.
+- The run ledger records the command output and metric result; it does not make
+  scratch instrumentation durable or supported.
+- If a probe is likely to be reused, first keep it with the dogfood run notes or
+  scratch workspace. Promote it into `scripts/` only after it becomes a durable
+  maintainer check with stable inputs, no source-tree injection, and clear docs.
+- Commit durable checks, not one-off experimental instruments.
+
 Baseline policy:
 
 - If baseline passes, provider verify results are directly comparable.
@@ -580,7 +595,9 @@ ledger and manifest.
 
 Do not add `bakeoff apply` in v1. The report may print a plain
 `git apply --3way --binary` command for the winning patch, but applying remains a
-human-controlled step.
+human-controlled step. The command applies the exact selected provider patch.
+Any edited, combined, or reimplemented result is a derived patch outside the
+run and should rerun verification in a fresh follow-up step.
 
 `bakeoff show`, `bakeoff ls`, and `bakeoff runs verify` should work for build
 runs after manifest/report extensions.
@@ -746,7 +763,7 @@ Provider prompt rules:
 19. Print next command:
    - show report
    - inspect winner patch
-   - apply winner patch with `git apply --3way --binary`
+   - optionally apply the exact selected patch with `git apply --3way --binary`
 
 ## Decision Policy
 
@@ -788,7 +805,10 @@ Decision rules:
 
 Do not let an LLM judge override "one passes, one fails." Do not rank or select
 failed patches in v1. Do not let a performance metric override a failing
-correctness gate.
+correctness gate. Do not synthesize a third patch inside the bakeoff decision
+path. Synthesis or manual tightening can be useful after the report, but it is
+a separate human/agent step and must not be represented as the selected
+provider patch.
 
 ## Build Judge
 
@@ -1097,6 +1117,9 @@ V1 report handoff contract:
   - whether provider-authored tests or benchmarks affected confidence
   - retained worktree path, only when `--keep-worktrees` was used
   - a plain apply command: `git apply --3way --binary <patch>`
+  - explicit wording that Bakeoff has not applied the patch
+  - explicit wording that post-run edits, synthesis, or reimplementation are
+    derived patches outside the bakeoff decision and require fresh verification
 - the handoff section should be concise enough to paste into a new agent
   session for "review and apply this winning patch" without requiring that
   agent to parse the whole ledger first
@@ -1132,7 +1155,9 @@ patch: runs/<run-id>/providers/<winner>/build/diff.patch
 apply: git apply --3way --binary runs/<run-id>/providers/<winner>/build/diff.patch
 ```
 
-Do not auto-apply in v1.
+Do not auto-apply in v1. Do not auto-synthesize in v1. The report hands off
+the selected provider patch and the evidence behind that selection; follow-up
+modification belongs to a new human/agent step.
 
 ## Non-Goals
 
@@ -1344,7 +1369,8 @@ Integration tests with fake providers:
 - `--json` emits summary fields and artifact paths without embedding patches or
   logs
 - `report.md` includes a winner handoff with selection basis, patch path,
-  diffstat, risks, and `git apply --3way --binary`
+  diffstat, risks, checkpoint wording, derived-patch wording, and
+  `git apply --3way --binary`
 - `--keep-worktrees` retains paths and records them
 - same-repo concurrent build attempts serialize or fail clearly on the build
   lock

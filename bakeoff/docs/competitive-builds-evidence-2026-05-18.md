@@ -54,6 +54,7 @@ Takeaway: judge-only selection has a ceiling around 60% pairwise accuracy. Use j
 - **Gate vs metric vs advisory verifiers, thresholded metrics with noise floor** (plan §Comparative verifiers) — directly addresses the SWE-bench plausibility gap and benchmark noise.
 - **Heterogeneous providers (claude + codex)** — closest cheap analogue to AlphaCode's tag/language diversity.
 - **No automatic apply, no PR shepherding, no DAG, no test-writing agent** (plan §Non-Goals) — matches MAST: every extra coordination surface is a new failure mode.
+- **No in-run synthesis** — the report hands off the exact selected provider patch. Any post-run edit, merge, or reimplementation is a derived patch that needs fresh verification.
 - **Provider-authored tests/benchmarks recorded but not decisive** (plan §Test, Benchmark…) — defends against reward hacking / verifier gaming.
 
 ## 3. Where the Plan Disagrees or Lacks Evidence

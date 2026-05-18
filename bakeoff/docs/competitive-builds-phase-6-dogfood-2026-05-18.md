@@ -83,10 +83,21 @@ competitive build dogfood.
 ## Follow-Up Decision
 
 No `bakeoff apply` helper was added. The reports already emit a plain
-`git apply --3way --binary` handoff command, and this dogfood pass did not show
-enough repeated manual-apply friction to justify a v1 helper.
+`git apply --3way --binary` handoff command for the exact selected provider
+patch, and this dogfood pass did not show enough repeated manual-apply friction
+to justify a v1 helper. Applying, editing, combining, or reimplementing after
+the report is intentionally a human checkpoint outside the bakeoff decision.
 
 One harness issue was found and fixed: the fake provider detected any prompt
 containing the words "build judge" as a judge prompt. A worker background used
 that phrase and crashed the fake provider. The fake now detects judge prompts by
 their actual opening line.
+
+## Scratch Probe Hygiene
+
+One-off dogfood metric probes should stay in scratch space unless they become a
+durable maintainer check. The run ledger is the evidence record for the command
+output and parsed metric; it is not a promise that scratch scripts are stable
+product surface. Promote a probe into `scripts/` only when it has stable inputs,
+does not inject temporary source files, and is expected to be rerun by
+maintainers.

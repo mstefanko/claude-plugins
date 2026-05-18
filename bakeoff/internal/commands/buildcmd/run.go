@@ -1488,6 +1488,7 @@ func renderBuildReport(wo *workorder.WorkOrder, runID string, runDir string, dec
 			}
 			lines = append(lines, fmt.Sprintf("- `%s` %s retained %d of %d observed bytes", label, item.Stream, item.RetainedBytes, item.ObservedBytes))
 		}
+		lines = append(lines, "", "Provider and verifier stdout/stderr artifacts are audit logs. Truncation is recorded for review, but it does not by itself change the decision when final JSON, patch capture, and verifier artifacts are available.")
 		lines = append(lines, "")
 	}
 	if len(diagnostics.PatchApplyChecks) > 0 {
@@ -1571,6 +1572,8 @@ func renderBuildReport(wo *workorder.WorkOrder, runID string, runDir string, dec
 		patch := filepath.Join(runDir, "providers", winner, "build", "diff.patch")
 		lines = append(lines, "## Winner Handoff", "", "Winner: `"+winner+"`")
 		lines = append(lines, "Selection basis: `"+stringValue(decision["selection_basis"])+"`")
+		lines = append(lines, "Checkpoint: Bakeoff selected this exact provider patch and has not applied it.")
+		lines = append(lines, "Post-run edits, synthesis, or reimplementation are outside this bakeoff decision. Treat any such result as a derived patch and rerun verification before citing it as ready.")
 		if rationale := listValue(decision["judge_rationale"]); len(rationale) > 0 && stringValue(decision["selection_basis"]) == "judge" {
 			lines = append(lines, "Why: "+fmt.Sprint(rationale[0]))
 		}
@@ -1603,7 +1606,7 @@ func renderBuildReport(wo *workorder.WorkOrder, runID string, runDir string, dec
 				}
 			}
 		}
-		lines = append(lines, "", "```text", "git apply --3way --binary "+patch, "```", "")
+		lines = append(lines, "", "Manual apply command for the selected patch:", "", "```text", "git apply --3way --binary "+patch, "```", "")
 	}
 	if caveats := listValue(decision["caveats"]); len(caveats) > 0 {
 		lines = append(lines, "## Caveats", "")
