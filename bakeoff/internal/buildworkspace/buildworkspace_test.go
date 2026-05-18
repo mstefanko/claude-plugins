@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-func TestResolveRepositoryRejectsDirtyAndSubmoduleSources(t *testing.T) {
+func TestResolveRepositoryRecordsDirtyAndSubmoduleSources(t *testing.T) {
 	ctx := context.Background()
 	repoDir := initGitRepo(t, false)
 
@@ -19,16 +19,19 @@ func TestResolveRepositoryRejectsDirtyAndSubmoduleSources(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if repo.Root != repoDir || repo.BaseCommit == "" || !repo.SourceClean {
+	if repo.Root != repoDir || repo.BaseCommit == "" || !repo.SourceClean || repo.InvocationRelPath != "." {
 		t.Fatalf("repo metadata = %#v", repo)
 	}
 
 	if err := os.WriteFile(filepath.Join(repoDir, "scratch.txt"), []byte("dirty\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, err = ResolveRepository(ctx, repoDir, "HEAD")
-	if err == nil || !strings.Contains(err.Error(), "source checkout is dirty") {
-		t.Fatalf("expected dirty checkout rejection, got %v", err)
+	repo, err = ResolveRepository(ctx, repoDir, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repo.SourceClean || repo.SourceDirtyCount != 1 || len(repo.SourceDirtyEntries) != 1 || repo.SourceDirtyEntries[0].Path != "scratch.txt" {
+		t.Fatalf("expected dirty source metadata, got %#v", repo)
 	}
 	if err := os.Remove(filepath.Join(repoDir, "scratch.txt")); err != nil {
 		t.Fatal(err)
@@ -39,9 +42,14 @@ func TestResolveRepositoryRejectsDirtyAndSubmoduleSources(t *testing.T) {
 	}
 	git(t, repoDir, "add", ".gitmodules")
 	git(t, repoDir, "commit", "-m", "add gitmodules")
-	_, err = ResolveRepository(ctx, repoDir, "HEAD")
-	if err == nil || !strings.Contains(err.Error(), ".gitmodules") {
-		t.Fatalf("expected submodule rejection, got %v", err)
+	git(t, repoDir, "update-index", "--add", "--cacheinfo", "160000,1111111111111111111111111111111111111111,submodules/example")
+	git(t, repoDir, "commit", "-m", "add gitlink")
+	repo, err = ResolveRepository(ctx, repoDir, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !repo.SourceHasGitmodules || repo.SourceGitlinkCount != 1 || len(repo.SourceGitlinkEntries) != 1 || repo.SourceGitlinkEntries[0].Path != "submodules/example" {
+		t.Fatalf("expected submodule source metadata, got %#v", repo)
 	}
 }
 

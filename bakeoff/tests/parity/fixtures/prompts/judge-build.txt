@@ -20,6 +20,10 @@ Verifier commands:
 - latency (metric): ./scripts/bench-json; timeout=300s; max_output=60000 bytes; metric=elapsed_ms direction=lower min_delta=10% noise_floor=5%
 </build_spec>
 
+<shared_build_evidence>
+{}
+</shared_build_evidence>
+
 <facet>
 Facet id: code-review
 Focus: Find actionable defects introduced or exposed by the change.

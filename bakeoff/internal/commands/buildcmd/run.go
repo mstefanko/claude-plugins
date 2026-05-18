@@ -1,12 +1,15 @@
 package buildcmd
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -31,20 +34,94 @@ import (
 
 var buildLockTimeout = 5 * time.Second
 
+const (
+	buildJudgeDiffstatPreviewBytes = 6000
+	buildJudgePatchExcerptBytes    = 12000
+)
+
 type providerRun struct {
 	ID                  string
 	WorktreePath        string
+	ProviderCWD         string
 	WorkerResult        map[string]any
 	Capture             *buildworkspace.CaptureResult
 	Verify              buildverify.Result
 	Cleanup             buildworkspace.CleanupResult
 	ScopeMetadata       map[string]any
+	ScopeDiagnostics    buildScopeDiagnostics
 	IneligibleReasons   []string
 	Workspace           buildworkspace.WorkspaceMetadata
 	ProviderArtifactDir string
+	PhaseTiming         buildPhaseTiming
+}
+
+type buildPhaseTiming struct {
+	Name        string  `json:"name"`
+	ProviderID  string  `json:"provider_id,omitempty"`
+	Label       string  `json:"label,omitempty"`
+	StartedAt   string  `json:"started_at"`
+	FinishedAt  string  `json:"finished_at"`
+	WallSeconds float64 `json:"wall_seconds"`
+}
+
+type buildScopeDiagnostics struct {
+	IntendedPrefix        string                       `json:"intended_prefix"`
+	OutOfInvocationFiles  []buildworkspace.ChangedFile `json:"out_of_invocation_files,omitempty"`
+	AgentInstructionFiles []buildworkspace.ChangedFile `json:"agent_instruction_files,omitempty"`
+	Warnings              []string                     `json:"warnings,omitempty"`
+}
+
+type buildDiagnostics struct {
+	SchemaVersion        int                              `json:"schema_version"`
+	PhaseTimings         []buildPhaseTiming               `json:"phase_timings,omitempty"`
+	PromptSizes          []promptSizeDiagnostic           `json:"prompt_sizes,omitempty"`
+	BaselineMetricDeltas []baselineMetricDelta            `json:"baseline_metric_deltas,omitempty"`
+	OutputTruncation     []outputTruncationRecord         `json:"output_truncation,omitempty"`
+	PatchApplyChecks     []patchApplyCheck                `json:"patch_apply_checks,omitempty"`
+	ScopeDiagnostics     map[string]buildScopeDiagnostics `json:"scope_diagnostics,omitempty"`
+	SourceWarnings       []string                         `json:"source_warnings,omitempty"`
+}
+
+type promptSizeDiagnostic struct {
+	Path       string `json:"path"`
+	Bytes      int64  `json:"bytes"`
+	Kind       string `json:"kind"`
+	ProviderID string `json:"provider_id,omitempty"`
+	Label      string `json:"label,omitempty"`
+}
+
+type baselineMetricDelta struct {
+	ID            string  `json:"id"`
+	Name          string  `json:"name"`
+	ProviderID    string  `json:"provider_id"`
+	Direction     string  `json:"direction"`
+	BaselineValue float64 `json:"baseline_value"`
+	ProviderValue float64 `json:"provider_value"`
+	DeltaPercent  float64 `json:"delta_percent"`
+	Improved      bool    `json:"improved"`
+}
+
+type outputTruncationRecord struct {
+	Scope         string `json:"scope"`
+	ProviderID    string `json:"provider_id,omitempty"`
+	VerifierID    string `json:"verifier_id,omitempty"`
+	Stream        string `json:"stream"`
+	ObservedBytes int    `json:"observed_bytes"`
+	RetainedBytes int    `json:"retained_bytes"`
+}
+
+type patchApplyCheck struct {
+	ProviderID  string `json:"provider_id"`
+	Status      string `json:"status"`
+	PatchPath   string `json:"patch_path"`
+	SourceDirty bool   `json:"source_dirty"`
+	Output      string `json:"output,omitempty"`
+	Error       string `json:"error,omitempty"`
 }
 
 func RunBuild(ctx context.Context, f commands.Factory, opts *BuildOptions) error {
+	overallStarted := time.Now()
+	timings := []buildPhaseTiming{}
 	humanOutput := !opts.JSON
 	effectiveQuiet := opts.Quiet || opts.JSON
 	wo, err := workorder.Load(opts.WorkOrder)
@@ -123,12 +200,20 @@ func RunBuild(ctx context.Context, f commands.Factory, opts *BuildOptions) error
 	contextMetadata := buildworkspace.ContextFrom(repo, runID, parent, providerIDs, verifierMetadata)
 	if humanOutput {
 		printBuildHeader(f, wo, runDir, runID, repo)
+		printSourceStateWarnings(f, repo)
 	}
 
 	baselinePath := filepath.Join(parent.Path, "baseline")
 	contextMetadata.BaselineWorktreePath = baselinePath
+	baselineSetupStarted := time.Now()
 	if err := buildworkspace.CreateDetachedWorktree(ctx, repo, baselinePath); err != nil {
 		return &apperror.RuntimeError{Err: err}
+	}
+	timings = append(timings, finishPhase("baseline_worktree", "", "", baselineSetupStarted))
+	baselineCWD := buildworkspace.WorktreeInvocationPath(repo, baselinePath)
+	if err := ensureDirectoryExists(baselineCWD); err != nil {
+		buildworkspace.CleanupWorktree(ctx, repo, baselinePath, false)
+		return &apperror.ValidationError{Message: err.Error(), Err: err}
 	}
 	// The repo build lock guards git worktree admin mutations and source
 	// preflight. Baseline verification runs outside the lock in an already
@@ -139,8 +224,9 @@ func RunBuild(ctx context.Context, f commands.Factory, opts *BuildOptions) error
 	if humanOutput {
 		f.Streams().Printf("[baseline] verifying...\n")
 	}
+	baselineVerifyStarted := time.Now()
 	baseline := buildverify.Run(ctx, buildverify.Options{
-		CWD:                   baselinePath,
+		CWD:                   baselineCWD,
 		Baseline:              true,
 		Verifiers:             wo.Build.Verify,
 		Env:                   buildEnv(os.Environ()),
@@ -150,13 +236,16 @@ func RunBuild(ctx context.Context, f commands.Factory, opts *BuildOptions) error
 		ArtifactDir:           filepath.Join(runDir, "baseline", "verify"),
 		OnTick:                makeVerifierTickPrinter(f, effectiveQuiet),
 	})
+	timings = append(timings, finishPhase("baseline_verify", "", "", baselineVerifyStarted))
 	if err := workorder.WriteJSONAtomic(filepath.Join(runDir, "baseline", "verify", "result.json"), baseline); err != nil {
 		return &apperror.RuntimeError{Err: err}
 	}
+	baselineCleanupStarted := time.Now()
 	baselineCleanup, err := cleanupWorktree(ctx, repo, baselinePath, opts.KeepWorktrees)
 	if err != nil {
 		return &apperror.RuntimeError{Err: err}
 	}
+	timings = append(timings, finishPhase("baseline_cleanup", "", "", baselineCleanupStarted))
 	contextMetadata.BaselineCleanupStatus = baselineCleanup.Status
 	if err := buildworkspace.WriteContext(runDir, contextMetadata); err != nil {
 		return &apperror.RuntimeError{Err: err}
@@ -169,13 +258,15 @@ func RunBuild(ctx context.Context, f commands.Factory, opts *BuildOptions) error
 		workerResults := emptyWorkerResults(wo)
 		decision := buildDecision(wo, workerResults, nil, baseline, nil, "baseline_failed", "none", "", []string{"baseline gate verifier failed; providers were not launched"})
 		exitCode := 1
-		if err := finalizeBuildRun(ctx, f, opts, wo, runDir, runID, startedAt, workerResults, decision, baseline, nil, nil, exitCode, humanOutput); err != nil {
+		timings = append(timings, finishPhase("build_total", "", "", overallStarted))
+		if err := finalizeBuildRun(ctx, f, opts, wo, repo, runDir, runID, startedAt, workerResults, decision, baseline, nil, nil, timings, exitCode, humanOutput); err != nil {
 			return err
 		}
 		return buildExitError(exitCode, "baseline verification failed")
 	}
 
 	worktreePaths := map[string]string{}
+	providerSetupStarted := time.Now()
 	if err := withRepoLock(ctx, repo, func() error {
 		for _, participant := range wo.Providers {
 			path := filepath.Join(parent.Path, participant.ID)
@@ -183,6 +274,9 @@ func RunBuild(ctx context.Context, f commands.Factory, opts *BuildOptions) error
 				return err
 			}
 			worktreePaths[participant.ID] = path
+			if err := ensureDirectoryExists(buildworkspace.WorktreeInvocationPath(repo, path)); err != nil {
+				return err
+			}
 		}
 		return nil
 	}); err != nil {
@@ -191,6 +285,7 @@ func RunBuild(ctx context.Context, f commands.Factory, opts *BuildOptions) error
 		}
 		return &apperror.RuntimeError{Err: err}
 	}
+	timings = append(timings, finishPhase("provider_worktrees", "", "", providerSetupStarted))
 
 	capabilities := providerCapabilities(ctx, f, wo)
 	if humanOutput {
@@ -213,6 +308,7 @@ func RunBuild(ctx context.Context, f commands.Factory, opts *BuildOptions) error
 	for _, run := range providerRuns {
 		workerResults[run.ID] = run.WorkerResult
 		verifyResults[run.ID] = run.Verify
+		timings = append(timings, run.PhaseTiming)
 		if humanOutput {
 			printBuildProviderResult(f, run)
 		}
@@ -226,16 +322,19 @@ func RunBuild(ctx context.Context, f commands.Factory, opts *BuildOptions) error
 			f.Streams().Printf("[judge] verifier evidence inconclusive; running swapped build judge...\n")
 		}
 		var err error
-		judgeResults, pass1Order, pass2Order, err = runBuildJudgePhase(ctx, f, wo, baseline, providerRuns, metricComparisons, runDir, effectiveQuiet, humanOutput)
+		var judgeTimings []buildPhaseTiming
+		judgeResults, pass1Order, pass2Order, judgeTimings, err = runBuildJudgePhase(ctx, f, wo, baseline, providerRuns, metricComparisons, runDir, effectiveQuiet, humanOutput)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return err
 			}
 			return &apperror.RuntimeError{Err: err}
 		}
+		timings = append(timings, judgeTimings...)
 	}
 	decision, exitCode := resolveBuildDecision(wo, workerResults, providerRuns, baseline, metricComparisons, judgeResults, pass1Order, pass2Order)
-	if err := finalizeBuildRun(ctx, f, opts, wo, runDir, runID, startedAt, workerResults, decision, baseline, providerRuns, metricComparisons, exitCode, humanOutput); err != nil {
+	timings = append(timings, finishPhase("build_total", "", "", overallStarted))
+	if err := finalizeBuildRun(ctx, f, opts, wo, repo, runDir, runID, startedAt, workerResults, decision, baseline, providerRuns, metricComparisons, timings, exitCode, humanOutput); err != nil {
 		return err
 	}
 	return buildExitError(exitCode, "build failed")
@@ -277,13 +376,19 @@ func runBuildProviders(ctx context.Context, f commands.Factory, wo *workorder.Wo
 }
 
 func runOneBuildProvider(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder, participant workorder.Participant, repo buildworkspace.Repository, runDir string, worktreePath string, caps provider.ScopeCapabilities, keepWorktrees bool, quiet bool) (run providerRun, err error) {
+	phaseStarted := time.Now()
 	providerDir := filepath.Join(runDir, "providers", participant.ID)
 	buildDir := filepath.Join(providerDir, "build")
+	providerCWD := buildworkspace.WorktreeInvocationPath(repo, worktreePath)
 	run = providerRun{
 		ID:                  participant.ID,
 		WorktreePath:        worktreePath,
+		ProviderCWD:         providerCWD,
 		ProviderArtifactDir: providerDir,
 	}
+	defer func() {
+		run.PhaseTiming = finishPhase("provider_total", participant.ID, "", phaseStarted)
+	}()
 	cleanupRecorded := false
 	defer func() {
 		if cleanupRecorded || worktreePath == "" {
@@ -315,10 +420,10 @@ func runOneBuildProvider(ctx context.Context, f commands.Factory, wo *workorder.
 	if participant.Backend == "codex" && caps.Supports["output_last_message"] {
 		finalMessagePath = filepath.Join(providerDir, "last-message.txt")
 	}
-	argv, scopeMetadata, err := buildParticipantArgv(participant, wo.ScopePolicy, worktreePath, caps, finalMessagePath)
+	argv, scopeMetadata, err := buildParticipantArgv(participant, wo.ScopePolicy, providerCWD, caps, finalMessagePath)
 	run.ScopeMetadata = scopeMetadata
 	if err != nil {
-		result := scope.ScopeErrorResult(err, participant, wo.ScopePolicy, worktreePath)
+		result := scope.ScopeErrorResult(err, participant, wo.ScopePolicy, providerCWD)
 		result["scope_enforcement"] = scopeMetadata
 		run.WorkerResult = result
 		run.IneligibleReasons = append(run.IneligibleReasons, "scope enforcement failed")
@@ -330,7 +435,7 @@ func runOneBuildProvider(ctx context.Context, f commands.Factory, wo *workorder.
 			Argv:             argv,
 			Prompt:           workerPrompt,
 			Budgets:          commands.RunnerBudgets(wo.Budgets),
-			CWD:              worktreePath,
+			CWD:              providerCWD,
 			Env:              buildEnv(os.Environ()),
 			Validator:        func(data any) (any, error) { return workorder.ValidateWorkerResult(data, wo.Type) },
 			OnTick:           commands.MakeTickPrinter(f, participant.ID, quiet),
@@ -360,7 +465,11 @@ func runOneBuildProvider(ctx context.Context, f commands.Factory, wo *workorder.
 			run.IneligibleReasons = append(run.IneligibleReasons, "patch capture failed: "+captureErr.Error())
 		} else {
 			run.Capture = &capture
+			run.ScopeDiagnostics = diagnoseBuildScope(repo, capture.ChangedFiles)
 			if err := workorder.WriteJSONAtomic(filepath.Join(buildDir, "capture.json"), capture); err != nil {
+				return run, err
+			}
+			if err := workorder.WriteJSONAtomic(filepath.Join(buildDir, "scope.json"), run.ScopeDiagnostics); err != nil {
 				return run, err
 			}
 			if capture.PatchOverCap {
@@ -373,7 +482,7 @@ func runOneBuildProvider(ctx context.Context, f commands.Factory, wo *workorder.
 	}
 	if len(run.IneligibleReasons) == 0 {
 		run.Verify = buildverify.Run(ctx, buildverify.Options{
-			CWD:                   worktreePath,
+			CWD:                   providerCWD,
 			ProviderID:            participant.ID,
 			Verifiers:             wo.Build.Verify,
 			Env:                   buildEnv(os.Environ()),
@@ -399,7 +508,7 @@ func runOneBuildProvider(ctx context.Context, f commands.Factory, wo *workorder.
 		cleanup = buildworkspace.CleanupResult{Path: worktreePath, Status: "failed", Error: err.Error()}
 	}
 	run.Cleanup = cleanup
-	run.Workspace = workspaceMetadata(repo, participant, worktreePath, cleanup, run.Capture)
+	run.Workspace = workspaceMetadata(repo, participant, worktreePath, providerCWD, cleanup, run.Capture)
 	if err := buildworkspace.WriteWorkspace(filepath.Join(buildDir, "workspace.json"), run.Workspace); err != nil {
 		return run, err
 	}
@@ -551,7 +660,7 @@ func buildJudgeNeeded(runs []providerRun, metrics []buildverify.MetricComparison
 	return metricWinner == ""
 }
 
-func runBuildJudgePhase(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder, baseline buildverify.Result, runs []providerRun, metrics []buildverify.MetricComparison, runDir string, quiet bool, humanOutput bool) (map[string]map[string]any, map[string]string, map[string]string, error) {
+func runBuildJudgePhase(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder, baseline buildverify.Result, runs []providerRun, metrics []buildverify.MetricComparison, runDir string, quiet bool, humanOutput bool) (map[string]map[string]any, map[string]string, map[string]string, []buildPhaseTiming, error) {
 	providerIDs := []string{wo.Providers[0].ID, wo.Providers[1].ID}
 	byProvider := map[string]providerRun{}
 	for _, run := range runs {
@@ -559,34 +668,36 @@ func runBuildJudgePhase(ctx context.Context, f commands.Factory, wo *workorder.W
 	}
 	pass1Order := map[string]string{"A": providerIDs[0], "B": providerIDs[1]}
 	pass2Order := map[string]string{"A": providerIDs[1], "B": providerIDs[0]}
-	pass1, err := runSingleBuildJudge(ctx, f, wo, baseline, byProvider, metrics, pass1Order, runDir, "pass1", quiet, humanOutput)
+	pass1, pass1Timing, err := runSingleBuildJudge(ctx, f, wo, baseline, byProvider, metrics, pass1Order, runDir, "pass1", quiet, humanOutput)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
-	pass2, err := runSingleBuildJudge(ctx, f, wo, baseline, byProvider, metrics, pass2Order, runDir, "pass2", quiet, humanOutput)
+	pass2, pass2Timing, err := runSingleBuildJudge(ctx, f, wo, baseline, byProvider, metrics, pass2Order, runDir, "pass2", quiet, humanOutput)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	judgeResults := map[string]map[string]any{"pass1": finalJSONMap(pass1), "pass2": finalJSONMap(pass2)}
 	if !artifact.ProviderSucceeded(pass1) || !artifact.ProviderSucceeded(pass2) {
 		judgeResults["_failure"] = map[string]any{"pass1_status": pass1["status"], "pass2_status": pass2["status"]}
 	}
-	return judgeResults, pass1Order, pass2Order, nil
+	return judgeResults, pass1Order, pass2Order, []buildPhaseTiming{pass1Timing, pass2Timing}, nil
 }
 
-func runSingleBuildJudge(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder, baseline buildverify.Result, runs map[string]providerRun, metrics []buildverify.MetricComparison, orderMap map[string]string, runDir string, label string, quiet bool, humanOutput bool) (map[string]any, error) {
-	workerA := buildJudgePayload(runDir, runs[orderMap["A"]], baseline, metrics)
-	workerB := buildJudgePayload(runDir, runs[orderMap["B"]], baseline, metrics)
-	judgePrompt, err := prompt.BuildJudgePrompt(wo, workerA, workerB, "build")
+func runSingleBuildJudge(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder, baseline buildverify.Result, runs map[string]providerRun, metrics []buildverify.MetricComparison, orderMap map[string]string, runDir string, label string, quiet bool, humanOutput bool) (map[string]any, buildPhaseTiming, error) {
+	phaseStarted := time.Now()
+	sharedEvidence := buildJudgeSharedEvidence(runDir, baseline, metrics)
+	workerA := buildJudgePayload(runDir, runs[orderMap["A"]])
+	workerB := buildJudgePayload(runDir, runs[orderMap["B"]])
+	judgePrompt, err := prompt.BuildJudgePromptWithEvidence(wo, sharedEvidence, workerA, workerB, "build")
 	if err != nil {
-		return nil, err
+		return nil, buildPhaseTiming{}, err
 	}
 	judgeDir := filepath.Join(runDir, "judge")
 	if err := os.MkdirAll(judgeDir, 0o755); err != nil {
-		return nil, err
+		return nil, buildPhaseTiming{}, err
 	}
 	if err := workorder.WriteTextAtomic(filepath.Join(judgeDir, "prompt-"+label+".txt"), judgePrompt); err != nil {
-		return nil, err
+		return nil, buildPhaseTiming{}, err
 	}
 	lastMessage := ""
 	if wo.Judge.Backend == "codex" {
@@ -595,7 +706,7 @@ func runSingleBuildJudge(ctx context.Context, f commands.Factory, wo *workorder.
 	cwd, _ := os.Getwd()
 	argv, err := provider.BuildParticipantArgv(wo.Judge, cwd, nil, lastMessage, commands.CodexOutputLastMessageSupported(ctx, f, wo.Judge))
 	if err != nil {
-		return nil, err
+		return nil, buildPhaseTiming{}, err
 	}
 	if humanOutput {
 		f.Streams().Printf("[judge:%s] running...\n", label)
@@ -611,60 +722,154 @@ func runSingleBuildJudge(ctx context.Context, f commands.Factory, wo *workorder.
 		FinalMessagePath: lastMessage,
 	}))
 	if err := artifact.WriteJudgeArtifacts(judgeDir, label, result); err != nil {
-		return nil, err
+		return nil, buildPhaseTiming{}, err
 	}
 	if humanOutput {
 		f.Streams().Printf("[judge:%s] %s %vs\n", label, result["status"], result["wall_seconds"])
 	}
-	return result, nil
+	return result, finishPhase("judge", "", label, phaseStarted), nil
 }
 
-func buildJudgePayload(runDir string, run providerRun, baseline buildverify.Result, metrics []buildverify.MetricComparison) map[string]any {
+func buildJudgeSharedEvidence(runDir string, baseline buildverify.Result, metrics []buildverify.MetricComparison) map[string]any {
+	return map[string]any{
+		"baseline_verify":  compactVerifyResult(runDir, baseline),
+		"metric_decisions": metricDecisionMaps(metrics),
+	}
+}
+
+func buildJudgePayload(runDir string, run providerRun) map[string]any {
 	payload := map[string]any{
-		"provider_id":        run.ID,
-		"worker_final_json":  finalJSONMap(run.WorkerResult),
-		"runner_status":      artifact.StatusWithoutPayload(run.WorkerResult),
-		"ineligible_reasons": run.IneligibleReasons,
-		"workspace":          run.Workspace,
-		"verify":             run.Verify,
-		"baseline_verify":    baseline,
-		"metric_decisions":   metrics,
+		"provider_id":       run.ID,
+		"worker_final_json": finalJSONMap(run.WorkerResult),
+		"runner_status":     compactRunnerStatus(run.WorkerResult),
+		"workspace":         compactWorkspace(runDir, run),
+		"scope_diagnostics": run.ScopeDiagnostics,
+		"verify":            compactVerifyResult(runDir, run.Verify),
+	}
+	if len(run.IneligibleReasons) > 0 {
+		payload["ineligible_reasons"] = run.IneligibleReasons
 	}
 	if run.Capture != nil {
-		payload["capture"] = run.Capture
-		payload["changed_files"] = run.Capture.ChangedFiles
-		payload["test_files"] = run.Capture.TestFiles
-		payload["benchmark_files"] = run.Capture.BenchmarkFiles
+		patch := map[string]any{
+			"patch_bytes":             run.Capture.PatchBytes,
+			"patch_over_cap":          run.Capture.PatchOverCap,
+			"gitlink_change_rejected": run.Capture.GitlinkChangeRejected,
+			"changed_files":           run.Capture.ChangedFiles,
+			"test_files":              run.Capture.TestFiles,
+			"benchmark_files":         run.Capture.BenchmarkFiles,
+		}
 		if run.Capture.DiffstatPath != "" {
-			if preview, truncated, err := readTextPreview(run.Capture.DiffstatPath, 12000); err == nil {
-				payload["diffstat"] = preview
-				payload["diffstat_truncated"] = truncated
+			if preview, truncated, err := readTextPreview(run.Capture.DiffstatPath, buildJudgeDiffstatPreviewBytes); err == nil {
+				patch["diffstat"] = preview
+				patch["diffstat_truncated"] = truncated
 			} else {
-				payload["diffstat_error"] = err.Error()
+				patch["diffstat_error"] = err.Error()
 			}
 			if relative, err := relativePath(runDir, run.Capture.DiffstatPath); err == nil {
-				payload["diffstat_path"] = relative
+				patch["diffstat_path"] = relative
 			} else {
-				payload["diffstat_path"] = run.Capture.DiffstatPath
-				payload["diffstat_path_error"] = err.Error()
+				patch["diffstat_path"] = run.Capture.DiffstatPath
+				patch["diffstat_path_error"] = err.Error()
 			}
 		}
 		if run.Capture.PatchPath != "" {
 			if relative, err := relativePath(runDir, run.Capture.PatchPath); err == nil {
-				payload["patch_path"] = relative
+				patch["patch_path"] = relative
 			} else {
-				payload["patch_path"] = run.Capture.PatchPath
-				payload["patch_path_error"] = err.Error()
+				patch["patch_path"] = run.Capture.PatchPath
+				patch["patch_path_error"] = err.Error()
 			}
-			if preview, truncated, err := readTextPreview(run.Capture.PatchPath, 40000); err == nil {
-				payload["patch_excerpt"] = preview
-				payload["patch_excerpt_truncated"] = truncated
+			if preview, truncated, err := readTextPreview(run.Capture.PatchPath, buildJudgePatchExcerptBytes); err == nil {
+				patch["patch_excerpt"] = preview
+				patch["patch_excerpt_truncated"] = truncated
 			} else {
-				payload["patch_excerpt_error"] = err.Error()
+				patch["patch_excerpt_error"] = err.Error()
 			}
 		}
+		payload["patch"] = patch
 	}
 	return payload
+}
+
+func compactRunnerStatus(result map[string]any) map[string]any {
+	status := artifact.StatusWithoutPayload(result)
+	delete(status, "io")
+	delete(status, "output_bytes")
+	if scopeMetadata, ok := status["scope_enforcement"].(map[string]any); ok {
+		compactScope := map[string]any{}
+		for _, key := range []string{"requested_scope", "effective_scope", "enforcement_level", "policy", "mechanisms", "fallback_reason", "temporary_cwd", "cwd"} {
+			if value, exists := scopeMetadata[key]; exists {
+				compactScope[key] = value
+			}
+		}
+		status["scope_enforcement"] = compactScope
+	}
+	return status
+}
+
+func compactWorkspace(runDir string, run providerRun) map[string]any {
+	return map[string]any{
+		"base_ref":                   run.Workspace.BaseRef,
+		"base_commit":                shortCommit(run.Workspace.BaseCommit),
+		"cleanup_status":             run.Workspace.CleanupStatus,
+		"provider_cwd":               mustRelative(runDir, run.Workspace.ProviderCWD),
+		"provider_head":              shortCommit(run.Workspace.ProviderHead),
+		"provider_head_is_base":      run.Workspace.ProviderHeadIsBase,
+		"provider_committed_changes": run.Workspace.ProviderCommittedChanges,
+		"worktree_retained":          run.Workspace.WorktreeRetained,
+		"worktree_removed":           run.Workspace.WorktreeRemoved,
+	}
+}
+
+func compactVerifyResult(runDir string, result buildverify.Result) map[string]any {
+	out := map[string]any{
+		"scope":        result.Scope,
+		"gates_passed": result.GatesPassed,
+		"results":      compactVerifierResults(runDir, result.Results),
+	}
+	if result.ProviderID != "" {
+		out["provider_id"] = result.ProviderID
+	}
+	return out
+}
+
+func compactVerifierResults(runDir string, results []buildverify.VerifierResult) []map[string]any {
+	out := make([]map[string]any, 0, len(results))
+	for _, result := range results {
+		entry := map[string]any{
+			"id":                    result.ID,
+			"kind":                  result.Kind,
+			"status":                result.Status,
+			"exit_code":             result.ExitCode,
+			"wall_seconds":          result.WallSeconds,
+			"stdout_bytes":          result.StdoutBytes,
+			"stderr_bytes":          result.StderrBytes,
+			"stdout_observed_bytes": result.StdoutObservedBytes,
+			"stderr_observed_bytes": result.StderrObservedBytes,
+			"stdout_truncated":      result.StdoutTruncated,
+			"stderr_truncated":      result.StderrTruncated,
+		}
+		if result.StdoutPath != "" {
+			entry["stdout_path"] = mustRelative(runDir, result.StdoutPath)
+		}
+		if result.StderrPath != "" {
+			entry["stderr_path"] = mustRelative(runDir, result.StderrPath)
+		}
+		if result.StatusPath != "" {
+			entry["status_path"] = mustRelative(runDir, result.StatusPath)
+		}
+		if result.MetricPath != "" {
+			entry["metric_path"] = mustRelative(runDir, result.MetricPath)
+		}
+		if result.ArtifactError != "" {
+			entry["artifact_error"] = result.ArtifactError
+		}
+		if result.Metric != nil {
+			entry["metric"] = result.Metric
+		}
+		out = append(out, entry)
+	}
+	return out
 }
 
 func resolveBuildDecision(wo *workorder.WorkOrder, workerResults map[string]map[string]any, runs []providerRun, baseline buildverify.Result, metrics []buildverify.MetricComparison, judgeResults map[string]map[string]any, pass1Order map[string]string, pass2Order map[string]string) (map[string]any, int) {
@@ -723,6 +928,7 @@ func buildProviderStatuses(wo *workorder.WorkOrder, workerResults map[string]map
 		status["patch_state"] = patchState(run)
 		status["verify_state"] = verifyState(run)
 		status["metric_state"] = metricState(run)
+		status["scope_diagnostics"] = run.ScopeDiagnostics
 		if run.Capture != nil {
 			status["patch_bytes"] = run.Capture.PatchBytes
 			status["patch_over_cap"] = run.Capture.PatchOverCap
@@ -752,6 +958,7 @@ func buildProviderArtifacts(runs []providerRun) map[string]any {
 			entry["patch_bytes"] = run.Capture.PatchBytes
 			entry["patch_over_cap"] = run.Capture.PatchOverCap
 			entry["gitlink_change_rejected"] = run.Capture.GitlinkChangeRejected
+			entry["scope_diagnostics"] = run.ScopeDiagnostics
 			entry["patch_path"] = "providers/" + run.ID + "/build/diff.patch"
 			entry["changed_files"] = run.Capture.ChangedFiles
 			entry["test_files"] = run.Capture.TestFiles
@@ -907,6 +1114,7 @@ func buildDecision(wo *workorder.WorkOrder, workerResults map[string]map[string]
 			entry["patch_bytes"] = run.Capture.PatchBytes
 			entry["patch_over_cap"] = run.Capture.PatchOverCap
 			entry["gitlink_change_rejected"] = run.Capture.GitlinkChangeRejected
+			entry["scope_diagnostics"] = run.ScopeDiagnostics
 			entry["patch_path"] = "providers/" + run.ID + "/build/diff.patch"
 			entry["changed_files"] = run.Capture.ChangedFiles
 		}
@@ -927,11 +1135,226 @@ func buildDecision(wo *workorder.WorkOrder, workerResults map[string]map[string]
 	}
 }
 
-func finalizeBuildRun(ctx context.Context, f commands.Factory, opts *BuildOptions, wo *workorder.WorkOrder, runDir string, runID string, startedAt string, workerResults map[string]map[string]any, decision map[string]any, baseline buildverify.Result, providerRuns []providerRun, metrics []buildverify.MetricComparison, exitCode int, humanOutput bool) error {
+func collectBuildDiagnostics(ctx context.Context, wo *workorder.WorkOrder, repo buildworkspace.Repository, runDir string, baseline buildverify.Result, runs []providerRun, timings []buildPhaseTiming) buildDiagnostics {
+	diagnostics := buildDiagnostics{
+		SchemaVersion:    1,
+		PhaseTimings:     compactPhaseTimings(timings),
+		PromptSizes:      collectPromptSizes(runDir, runs),
+		OutputTruncation: collectOutputTruncation(baseline, runs),
+		PatchApplyChecks: collectPatchApplyChecks(ctx, repo, runDir, runs),
+		ScopeDiagnostics: map[string]buildScopeDiagnostics{},
+		SourceWarnings:   sourceWarnings(repo),
+	}
+	for _, run := range runs {
+		if len(run.ScopeDiagnostics.OutOfInvocationFiles) > 0 || len(run.ScopeDiagnostics.AgentInstructionFiles) > 0 || len(run.ScopeDiagnostics.Warnings) > 0 {
+			diagnostics.ScopeDiagnostics[run.ID] = run.ScopeDiagnostics
+		}
+	}
+	if len(diagnostics.ScopeDiagnostics) == 0 {
+		diagnostics.ScopeDiagnostics = nil
+	}
+	diagnostics.BaselineMetricDeltas = collectBaselineMetricDeltas(wo, baseline, runs)
+	return diagnostics
+}
+
+func collectPromptSizes(runDir string, runs []providerRun) []promptSizeDiagnostic {
+	var out []promptSizeDiagnostic
+	for _, run := range runs {
+		path := filepath.Join(runDir, "providers", run.ID, "prompt.txt")
+		if size, ok := fileSize(path); ok {
+			out = append(out, promptSizeDiagnostic{Path: mustRelative(runDir, path), Bytes: size, Kind: "worker", ProviderID: run.ID})
+		}
+	}
+	for _, label := range []string{"pass1", "pass2"} {
+		path := filepath.Join(runDir, "judge", "prompt-"+label+".txt")
+		if size, ok := fileSize(path); ok {
+			out = append(out, promptSizeDiagnostic{Path: mustRelative(runDir, path), Bytes: size, Kind: "judge", Label: label})
+		}
+	}
+	return out
+}
+
+func collectBaselineMetricDeltas(wo *workorder.WorkOrder, baseline buildverify.Result, runs []providerRun) []baselineMetricDelta {
+	baselineMetrics := map[string]buildverify.VerifierResult{}
+	for _, result := range baseline.Results {
+		if result.Kind == "metric" && result.Metric != nil && result.Metric.Value != nil {
+			baselineMetrics[result.ID] = result
+		}
+	}
+	directions := map[string]string{}
+	if wo != nil && wo.Build != nil {
+		for _, verifier := range wo.Build.Verify {
+			if verifier.Kind == "metric" && verifier.Metric != nil {
+				directions[verifier.ID] = verifier.Metric.Direction
+			}
+		}
+	}
+	var out []baselineMetricDelta
+	for _, run := range runs {
+		for _, result := range run.Verify.Results {
+			if result.Kind != "metric" || result.Metric == nil || result.Metric.Value == nil {
+				continue
+			}
+			base, ok := baselineMetrics[result.ID]
+			if !ok || base.Metric == nil || base.Metric.Value == nil {
+				continue
+			}
+			baselineValue := *base.Metric.Value
+			providerValue := *result.Metric.Value
+			direction := directions[result.ID]
+			if direction == "" {
+				direction = "lower"
+			}
+			improvement := providerValue - baselineValue
+			if direction == "lower" {
+				improvement = baselineValue - providerValue
+			}
+			denominator := math.Abs(baselineValue)
+			if denominator == 0 {
+				denominator = math.Max(math.Abs(providerValue), 1)
+			}
+			out = append(out, baselineMetricDelta{
+				ID:            result.ID,
+				Name:          result.Metric.Name,
+				ProviderID:    run.ID,
+				Direction:     direction,
+				BaselineValue: baselineValue,
+				ProviderValue: providerValue,
+				DeltaPercent:  round3(math.Abs(improvement) / denominator * 100),
+				Improved:      improvement > 0,
+			})
+		}
+	}
+	return out
+}
+
+func collectOutputTruncation(baseline buildverify.Result, runs []providerRun) []outputTruncationRecord {
+	var out []outputTruncationRecord
+	for _, item := range truncationRecordsFromVerifier("baseline", "", baseline.Results) {
+		out = append(out, item)
+	}
+	for _, run := range runs {
+		out = append(out, truncationRecordsFromRunner("provider", run.ID, "", run.WorkerResult)...)
+		out = append(out, truncationRecordsFromVerifier("verify", run.ID, run.Verify.Results)...)
+	}
+	return out
+}
+
+func truncationRecordsFromVerifier(scope string, providerID string, results []buildverify.VerifierResult) []outputTruncationRecord {
+	var out []outputTruncationRecord
+	for _, result := range results {
+		if result.StdoutTruncated {
+			out = append(out, outputTruncationRecord{Scope: scope, ProviderID: providerID, VerifierID: result.ID, Stream: "stdout", ObservedBytes: result.StdoutObservedBytes, RetainedBytes: result.StdoutBytes})
+		}
+		if result.StderrTruncated {
+			out = append(out, outputTruncationRecord{Scope: scope, ProviderID: providerID, VerifierID: result.ID, Stream: "stderr", ObservedBytes: result.StderrObservedBytes, RetainedBytes: result.StderrBytes})
+		}
+	}
+	return out
+}
+
+func truncationRecordsFromRunner(scope string, providerID string, verifierID string, result map[string]any) []outputTruncationRecord {
+	var out []outputTruncationRecord
+	if boolValue(result["stdout_truncated"]) {
+		out = append(out, outputTruncationRecord{Scope: scope, ProviderID: providerID, VerifierID: verifierID, Stream: "stdout", ObservedBytes: intValue(result["stdout_observed_bytes"]), RetainedBytes: intValue(result["stdout_bytes"])})
+	}
+	if boolValue(result["stderr_truncated"]) {
+		out = append(out, outputTruncationRecord{Scope: scope, ProviderID: providerID, VerifierID: verifierID, Stream: "stderr", ObservedBytes: intValue(result["stderr_observed_bytes"]), RetainedBytes: intValue(result["stderr_bytes"])})
+	}
+	return out
+}
+
+func collectPatchApplyChecks(ctx context.Context, repo buildworkspace.Repository, runDir string, runs []providerRun) []patchApplyCheck {
+	var out []patchApplyCheck
+	for _, run := range runs {
+		if run.Capture == nil || run.Capture.PatchPath == "" {
+			continue
+		}
+		check := patchApplyCheck{ProviderID: run.ID, PatchPath: mustRelative(runDir, run.Capture.PatchPath), SourceDirty: !repo.SourceClean}
+		checkCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+		var stdout, stderr bytes.Buffer
+		cmd := exec.CommandContext(checkCtx, "git", "-C", repo.Root, "apply", "--check", "--3way", "--binary", run.Capture.PatchPath)
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		err := cmd.Run()
+		cancel()
+		output := strings.TrimSpace(stdout.String() + stderr.String())
+		if len(output) > 4000 {
+			output = output[:4000] + "\n[truncated]\n"
+		}
+		check.Output = output
+		if err != nil {
+			check.Status = "failed"
+			check.Error = err.Error()
+		} else {
+			check.Status = "passed"
+		}
+		out = append(out, check)
+	}
+	return out
+}
+
+func diagnoseBuildScope(repo buildworkspace.Repository, changed []buildworkspace.ChangedFile) buildScopeDiagnostics {
+	prefix := strings.Trim(filepath.ToSlash(repo.InvocationRelPath), "/")
+	if prefix == "" {
+		prefix = "."
+	}
+	diagnostics := buildScopeDiagnostics{IntendedPrefix: prefix}
+	for _, file := range changed {
+		path := normalizeChangedPath(file.Path)
+		if prefix != "." && path != prefix && !strings.HasPrefix(path, prefix+"/") {
+			diagnostics.OutOfInvocationFiles = append(diagnostics.OutOfInvocationFiles, file)
+		}
+		if isAgentInstructionPath(path) {
+			diagnostics.AgentInstructionFiles = append(diagnostics.AgentInstructionFiles, file)
+		}
+	}
+	if len(diagnostics.OutOfInvocationFiles) > 0 {
+		diagnostics.Warnings = append(diagnostics.Warnings, "patch changes files outside the invocation directory")
+	}
+	if len(diagnostics.AgentInstructionFiles) > 0 {
+		diagnostics.Warnings = append(diagnostics.Warnings, "patch changes local agent instruction/config files")
+	}
+	return diagnostics
+}
+
+func normalizeChangedPath(path string) string {
+	if strings.Contains(path, " -> ") {
+		parts := strings.Split(path, " -> ")
+		path = parts[len(parts)-1]
+	}
+	return strings.Trim(filepath.ToSlash(path), "/")
+}
+
+func isAgentInstructionPath(path string) bool {
+	path = strings.Trim(filepath.ToSlash(path), "/")
+	base := filepath.Base(path)
+	if base == "CLAUDE.md" || base == "AGENTS.md" {
+		return true
+	}
+	return strings.HasPrefix(path, ".claude/") || strings.HasPrefix(path, ".codex/") || strings.Contains(path, "/.claude/") || strings.Contains(path, "/.codex/")
+}
+
+func compactPhaseTimings(timings []buildPhaseTiming) []buildPhaseTiming {
+	out := make([]buildPhaseTiming, 0, len(timings))
+	for _, timing := range timings {
+		if timing.Name == "" {
+			continue
+		}
+		out = append(out, timing)
+	}
+	return out
+}
+
+func finalizeBuildRun(ctx context.Context, f commands.Factory, opts *BuildOptions, wo *workorder.WorkOrder, repo buildworkspace.Repository, runDir string, runID string, startedAt string, workerResults map[string]map[string]any, decision map[string]any, baseline buildverify.Result, providerRuns []providerRun, metrics []buildverify.MetricComparison, timings []buildPhaseTiming, exitCode int, humanOutput bool) error {
+	diagnostics := collectBuildDiagnostics(ctx, wo, repo, runDir, baseline, providerRuns, timings)
+	if err := workorder.WriteJSONAtomic(filepath.Join(runDir, "diagnostics.json"), diagnostics); err != nil {
+		return &apperror.RuntimeError{Err: err}
+	}
 	if err := workorder.WriteJSONAtomic(filepath.Join(runDir, "decision.json"), decision); err != nil {
 		return &apperror.RuntimeError{Err: err}
 	}
-	reportText := renderBuildReport(wo, runID, runDir, decision, baseline, providerRuns, metrics)
+	reportText := renderBuildReport(wo, runID, runDir, decision, baseline, providerRuns, metrics, diagnostics)
 	if err := workorder.WriteTextAtomic(filepath.Join(runDir, "report.md"), reportText); err != nil {
 		return &apperror.RuntimeError{Err: err}
 	}
@@ -950,25 +1373,28 @@ func finalizeBuildRun(ctx context.Context, f commands.Factory, opts *BuildOption
 		f.Streams().Printf("next:   %s\n", ledger.BakeoffShowCommand(runID, opts.Out, ""))
 	}
 	if opts.JSON {
-		if err := summary.Print(f.Streams().Out, buildSummary(runDir, runID, opts.Out, decision, baseline, providerRuns, metrics, exitCode)); err != nil {
+		if err := summary.Print(f.Streams().Out, buildSummary(repo, runDir, runID, opts.Out, decision, baseline, providerRuns, metrics, diagnostics, exitCode)); err != nil {
 			return &apperror.RuntimeError{Err: err}
 		}
 	}
 	return nil
 }
 
-func renderBuildReport(wo *workorder.WorkOrder, runID string, runDir string, decision map[string]any, baseline buildverify.Result, runs []providerRun, metrics []buildverify.MetricComparison) string {
+func renderBuildReport(wo *workorder.WorkOrder, runID string, runDir string, decision map[string]any, baseline buildverify.Result, runs []providerRun, metrics []buildverify.MetricComparison, diagnostics buildDiagnostics) string {
 	lines := []string{
 		"# Bakeoff Report: " + wo.ID,
 		"",
 		"Mode: `build`",
 		"Decision: `" + stringValue(decision["decision_kind"]) + "`",
 		"Selection basis: `" + stringValue(decision["selection_basis"]) + "`",
-		"",
-		"## Baseline Verification",
-		"",
-		fmt.Sprintf("- Gates passed: `%t`", baseline.GatesPassed),
 	}
+	if len(diagnostics.SourceWarnings) > 0 {
+		lines = append(lines, "", "## Source Context", "")
+		for _, warning := range diagnostics.SourceWarnings {
+			lines = append(lines, "- "+warning)
+		}
+	}
+	lines = append(lines, "", "## Baseline Verification", "", fmt.Sprintf("- Gates passed: `%t`", baseline.GatesPassed))
 	lines = append(lines, verifierLines(baseline.Results)...)
 	lines = append(lines, "", "## Provider Builds", "")
 	for _, run := range runs {
@@ -979,6 +1405,17 @@ func renderBuildReport(wo *workorder.WorkOrder, runID string, runDir string, dec
 			lines = append(lines, fmt.Sprintf("- Patch bytes: `%d`", run.Capture.PatchBytes))
 			lines = append(lines, fmt.Sprintf("- Patch: `%s`", filepath.Join("providers", run.ID, "build", "diff.patch")))
 			lines = append(lines, fmt.Sprintf("- Changed files: `%d`", len(run.Capture.ChangedFiles)))
+			if len(run.ScopeDiagnostics.OutOfInvocationFiles) > 0 || len(run.ScopeDiagnostics.AgentInstructionFiles) > 0 {
+				lines = append(lines, "- Scope diagnostics:")
+				if len(run.ScopeDiagnostics.OutOfInvocationFiles) > 0 {
+					lines = append(lines, "  - Out-of-invocation files:")
+					lines = append(lines, changedFileBulletLines(run.ScopeDiagnostics.OutOfInvocationFiles)...)
+				}
+				if len(run.ScopeDiagnostics.AgentInstructionFiles) > 0 {
+					lines = append(lines, "  - Agent instruction/config files:")
+					lines = append(lines, changedFileBulletLines(run.ScopeDiagnostics.AgentInstructionFiles)...)
+				}
+			}
 			if len(run.Capture.TestFiles) > 0 {
 				lines = append(lines, "- Provider-authored tests:")
 				lines = append(lines, changedFileBulletLines(run.Capture.TestFiles)...)
@@ -1023,6 +1460,72 @@ func renderBuildReport(wo *workorder.WorkOrder, runID string, runDir string, dec
 				reason = "clear thresholded winner"
 			}
 			lines = append(lines, fmt.Sprintf("- `%s`: winner `%s`, delta %.3g%%, threshold %.3g%% (%s)", metric.ID, winner, metric.DeltaPercent, metric.Threshold, reason))
+		}
+		lines = append(lines, "")
+	}
+	if len(diagnostics.BaselineMetricDeltas) > 0 {
+		lines = append(lines, "## Baseline Metric Deltas", "")
+		for _, delta := range diagnostics.BaselineMetricDeltas {
+			direction := "unchanged"
+			if delta.Improved {
+				direction = "improved"
+			} else if delta.DeltaPercent > 0 {
+				direction = "regressed"
+			}
+			lines = append(lines, fmt.Sprintf("- `%s` %s: %s %.3g%% vs baseline (baseline %.6g, provider %.6g)", delta.ID, delta.ProviderID, direction, delta.DeltaPercent, delta.BaselineValue, delta.ProviderValue))
+		}
+		lines = append(lines, "")
+	}
+	if len(diagnostics.OutputTruncation) > 0 {
+		lines = append(lines, "## Output Truncation", "")
+		for _, item := range diagnostics.OutputTruncation {
+			label := item.Scope
+			if item.ProviderID != "" {
+				label += ":" + item.ProviderID
+			}
+			if item.VerifierID != "" {
+				label += ":" + item.VerifierID
+			}
+			lines = append(lines, fmt.Sprintf("- `%s` %s retained %d of %d observed bytes", label, item.Stream, item.RetainedBytes, item.ObservedBytes))
+		}
+		lines = append(lines, "")
+	}
+	if len(diagnostics.PatchApplyChecks) > 0 {
+		lines = append(lines, "## Patch Apply Checks", "")
+		for _, check := range diagnostics.PatchApplyChecks {
+			line := fmt.Sprintf("- `%s`: `%s`", check.ProviderID, check.Status)
+			if check.Error != "" {
+				line += " (" + check.Error + ")"
+			}
+			lines = append(lines, line)
+		}
+		lines = append(lines, "")
+	}
+	if len(diagnostics.PromptSizes) > 0 {
+		lines = append(lines, "## Prompt Sizes", "")
+		for _, size := range diagnostics.PromptSizes {
+			label := size.Kind
+			if size.ProviderID != "" {
+				label += ":" + size.ProviderID
+			}
+			if size.Label != "" {
+				label += ":" + size.Label
+			}
+			lines = append(lines, fmt.Sprintf("- `%s`: `%d` bytes (`%s`)", label, size.Bytes, size.Path))
+		}
+		lines = append(lines, "")
+	}
+	if len(diagnostics.PhaseTimings) > 0 {
+		lines = append(lines, "## Phase Timings", "")
+		for _, timing := range diagnostics.PhaseTimings {
+			label := timing.Name
+			if timing.ProviderID != "" {
+				label += ":" + timing.ProviderID
+			}
+			if timing.Label != "" {
+				label += ":" + timing.Label
+			}
+			lines = append(lines, fmt.Sprintf("- `%s`: %.3gs", label, timing.WallSeconds))
 		}
 		lines = append(lines, "")
 	}
@@ -1147,7 +1650,7 @@ func providerRunByID(runs []providerRun, id string) *providerRun {
 	return nil
 }
 
-func buildSummary(runDir string, runID string, outDir string, decision map[string]any, baseline buildverify.Result, runs []providerRun, metrics []buildverify.MetricComparison, exitCode int) map[string]any {
+func buildSummary(repo buildworkspace.Repository, runDir string, runID string, outDir string, decision map[string]any, baseline buildverify.Result, runs []providerRun, metrics []buildverify.MetricComparison, diagnostics buildDiagnostics, exitCode int) map[string]any {
 	providers := map[string]any{}
 	for _, run := range runs {
 		entry := map[string]any{
@@ -1155,6 +1658,7 @@ func buildSummary(runDir string, runID string, outDir string, decision map[strin
 			"raw_status":         run.WorkerResult["status"],
 			"gates_passed":       run.Verify.GatesPassed,
 			"ineligible_reasons": run.IneligibleReasons,
+			"scope_diagnostics":  run.ScopeDiagnostics,
 		}
 		if run.Capture != nil {
 			entry["patch_bytes"] = run.Capture.PatchBytes
@@ -1167,7 +1671,7 @@ func buildSummary(runDir string, runID string, outDir string, decision map[strin
 		"command":          "build",
 		"status":           buildCommandStatus(exitCode),
 		"exit_code":        exitCode,
-		"warnings":         []string{},
+		"warnings":         sourceWarnings(repo),
 		"run_id":           runID,
 		"mode":             "build",
 		"run_dir":          runDir,
@@ -1178,6 +1682,7 @@ func buildSummary(runDir string, runID string, outDir string, decision map[strin
 		"baseline":         map[string]any{"gates_passed": baseline.GatesPassed, "results": baseline.Results},
 		"providers":        providers,
 		"metric_summaries": metrics,
+		"diagnostics":      diagnostics,
 		"artifacts":        buildArtifactPaths(runDir),
 		"next":             ledger.BakeoffShowCommand(runID, outDir, ""),
 	}
@@ -1198,6 +1703,7 @@ func buildArtifactPaths(runDir string) map[string]any {
 	for key, relative := range map[string]string{
 		"work_order":    "work-order.json",
 		"build_context": "build-context.json",
+		"diagnostics":   "diagnostics.json",
 		"decision":      "decision.json",
 		"meta":          "meta.json",
 		"manifest":      "manifest.json",
@@ -1211,12 +1717,13 @@ func buildArtifactPaths(runDir string) map[string]any {
 	return out
 }
 
-func workspaceMetadata(repo buildworkspace.Repository, participant workorder.Participant, worktreePath string, cleanup buildworkspace.CleanupResult, capture *buildworkspace.CaptureResult) buildworkspace.WorkspaceMetadata {
+func workspaceMetadata(repo buildworkspace.Repository, participant workorder.Participant, worktreePath string, providerCWD string, cleanup buildworkspace.CleanupResult, capture *buildworkspace.CaptureResult) buildworkspace.WorkspaceMetadata {
 	workspace := buildworkspace.WorkspaceMetadata{
 		GitRoot:          repo.Root,
 		BaseRef:          repo.BaseRef,
 		BaseCommit:       repo.BaseCommit,
 		WorktreePath:     worktreePath,
+		ProviderCWD:      providerCWD,
 		WorktreeRetained: cleanup.Retained,
 		WorktreeRemoved:  cleanup.Status == "removed",
 		CleanupStatus:    cleanup.Status,
@@ -1427,6 +1934,94 @@ func listStrings(value any) []string {
 		return out
 	default:
 		return []string{}
+	}
+}
+
+func boolValue(value any) bool {
+	if typed, ok := value.(bool); ok {
+		return typed
+	}
+	return false
+}
+
+func intValue(value any) int {
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case int64:
+		return int(typed)
+	case float64:
+		return int(typed)
+	default:
+		return 0
+	}
+}
+
+func finishPhase(name string, providerID string, label string, started time.Time) buildPhaseTiming {
+	finished := time.Now()
+	return buildPhaseTiming{
+		Name:        name,
+		ProviderID:  providerID,
+		Label:       label,
+		StartedAt:   started.UTC().Format(time.RFC3339Nano),
+		FinishedAt:  finished.UTC().Format(time.RFC3339Nano),
+		WallSeconds: round3(finished.Sub(started).Seconds()),
+	}
+}
+
+func round3(value float64) float64 {
+	return math.Round(value*1000) / 1000
+}
+
+func fileSize(path string) (int64, bool) {
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return 0, false
+	}
+	return info.Size(), true
+}
+
+func mustRelative(base string, path string) string {
+	if relative, err := relativePath(base, path); err == nil {
+		return relative
+	}
+	return path
+}
+
+func ensureDirectoryExists(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("invocation path %q is not present in the selected base_ref worktree; commit that directory or run build from a path present in base_ref", path)
+		}
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("invocation path %q is not a directory in the selected base_ref worktree", path)
+	}
+	return nil
+}
+
+func sourceWarnings(repo buildworkspace.Repository) []string {
+	var warnings []string
+	if !repo.SourceClean {
+		warnings = append(warnings, fmt.Sprintf("source checkout is dirty; providers use committed base %s and ignore %d uncommitted source change(s)", shortCommit(repo.BaseCommit), repo.SourceDirtyCount))
+	}
+	if repo.SourceHasGitmodules {
+		warnings = append(warnings, "source checkout contains .gitmodules; build worktrees do not initialize submodules automatically")
+	}
+	if repo.SourceGitlinkCount > 0 {
+		warnings = append(warnings, fmt.Sprintf("source checkout contains %d gitlink/submodule entries; provider patches that modify gitlinks are still rejected", repo.SourceGitlinkCount))
+	}
+	return warnings
+}
+
+func printSourceStateWarnings(f commands.Factory, repo buildworkspace.Repository) {
+	for _, warning := range sourceWarnings(repo) {
+		f.Streams().Printf("  warning:        %s\n", warning)
+	}
+	if repo.InvocationRelPath != "" && repo.InvocationRelPath != "." {
+		f.Streams().Printf("  invocation cwd: %s\n", repo.InvocationRelPath)
 	}
 }
 

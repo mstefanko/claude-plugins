@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/buildinfo"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/buildverify"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/buildworkspace"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/output"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/provider"
@@ -158,11 +159,76 @@ func TestRunBuildMutatesIsolatedWorktreesAndCapturesPatches(t *testing.T) {
 			t.Fatalf("%s workspace cleanup = %#v", providerID, workspace)
 		}
 	}
+	diagnostics := readJSONFile(t, filepath.Join(runDir, "diagnostics.json"))
+	if diagnostics["schema_version"] != float64(1) {
+		t.Fatalf("diagnostics missing schema version: %#v", diagnostics)
+	}
+	if _, ok := diagnostics["prompt_sizes"].([]any); !ok {
+		t.Fatalf("diagnostics missing prompt sizes: %#v", diagnostics)
+	}
+	if _, ok := diagnostics["phase_timings"].([]any); !ok {
+		t.Fatalf("diagnostics missing phase timings: %#v", diagnostics)
+	}
+	if _, ok := diagnostics["baseline_metric_deltas"].([]any); !ok {
+		t.Fatalf("diagnostics missing baseline metric deltas: %#v", diagnostics)
+	}
+	if _, ok := diagnostics["patch_apply_checks"].([]any); !ok {
+		t.Fatalf("diagnostics missing patch apply checks: %#v", diagnostics)
+	}
 	if _, err := os.Stat(filepath.Join(runDir, "worktrees", "claude")); !os.IsNotExist(err) {
 		t.Fatalf("provider worktree should have been removed, stat err=%v", err)
 	}
 	if !strings.Contains(out.String(), `"command": "build"`) || !strings.Contains(out.String(), `"winner": "claude"`) {
 		t.Fatalf("summary stdout missing build winner:\n%s", out.String())
+	}
+}
+
+func TestRunBuildUsesInvocationSubdirectory(t *testing.T) {
+	repoDir := initBuildGitRepo(t)
+	writeAndCommitFile(t, repoDir, "app/README.md", "app\n", 0o644)
+	writeAndCommitFile(t, repoDir, "app/metric.sh", `#!/bin/sh
+if [ -f claude-build.txt ]; then
+  printf '{"score":1}\n'
+else
+  printf '{"score":2}\n'
+fi
+`, 0o755)
+	root := t.TempDir()
+	workOrderPath := filepath.Join(root, "build.work-order.json")
+	writeBuildWorkOrder(t, workOrderPath, "subdir-cwd", 100000, nil)
+	outDir := filepath.Join(root, "runs")
+	if out, errOut, err := runBuildTestFromCWD(t, filepath.Join(repoDir, "app"), workOrderPath, outDir, BuildOptions{RunID: "subdir-cwd", Quiet: true, JSON: true}); err != nil {
+		t.Fatalf("build failed: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
+	}
+	runDir := filepath.Join(outDir, "subdir-cwd")
+	context := readJSONFile(t, filepath.Join(runDir, "build-context.json"))
+	if context["source_invocation_relative_path"] != "app" {
+		t.Fatalf("context invocation path = %#v", context)
+	}
+	workspace := readJSONFile(t, filepath.Join(runDir, "providers", "claude", "build", "workspace.json"))
+	if !strings.HasSuffix(fmt.Sprint(workspace["provider_cwd"]), "/app") {
+		t.Fatalf("workspace provider cwd = %#v", workspace)
+	}
+	capture := readJSONFile(t, filepath.Join(runDir, "providers", "claude", "build", "capture.json"))
+	changed, _ := capture["changed_files"].([]any)
+	if len(changed) == 0 || !strings.Contains(fmt.Sprint(changed), "app/claude-build.txt") {
+		t.Fatalf("captured changes should be rooted under app: %#v", capture)
+	}
+	scope := readJSONFile(t, filepath.Join(runDir, "providers", "claude", "build", "scope.json"))
+	if _, ok := scope["out_of_invocation_files"]; ok {
+		t.Fatalf("subdir-local edits should not be scope drift: %#v", scope)
+	}
+}
+
+func TestDiagnoseBuildScopeFlagsInstructionAndOutOfInvocationFiles(t *testing.T) {
+	repo := buildworkspace.Repository{InvocationRelPath: "bakeoff"}
+	diagnostics := diagnoseBuildScope(repo, []buildworkspace.ChangedFile{
+		{Status: "A", Path: "CLAUDE.md"},
+		{Status: "M", Path: "bakeoff/internal/prompt/prompt.go"},
+		{Status: "M", Path: "docs/notes.md"},
+	})
+	if len(diagnostics.OutOfInvocationFiles) != 2 || len(diagnostics.AgentInstructionFiles) != 1 {
+		t.Fatalf("scope diagnostics = %#v", diagnostics)
 	}
 }
 
@@ -321,6 +387,84 @@ func TestBuildJudgeTextPreviewReportsErrorsAndSanitizesUTF8(t *testing.T) {
 	}
 	if _, _, err := readTextPreview(filepath.Join(dir, "missing"), 4); err == nil {
 		t.Fatal("expected missing file error")
+	}
+}
+
+func TestBuildJudgePayloadCompactsSharedEvidenceAndPatchExcerpt(t *testing.T) {
+	runDir := t.TempDir()
+	providerDir := filepath.Join(runDir, "providers", "claude", "build")
+	if err := os.MkdirAll(providerDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	diffstatPath := filepath.Join(providerDir, "diffstat.txt")
+	patchPath := filepath.Join(providerDir, "diff.patch")
+	if err := os.WriteFile(diffstatPath, []byte(" main.go | 1 +\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(patchPath, []byte(strings.Repeat("x", buildJudgePatchExcerptBytes+20)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	exitCode := 0
+	verify := buildverify.Result{
+		Scope:       "provider",
+		ProviderID:  "claude",
+		GatesPassed: true,
+		Results: []buildverify.VerifierResult{{
+			ID:         "unit",
+			Kind:       "gate",
+			Status:     buildverify.StatusPassed,
+			ExitCode:   &exitCode,
+			StatusPath: filepath.Join(providerDir, "verify", "unit", "status.json"),
+		}},
+	}
+	run := providerRun{
+		ID:           "claude",
+		WorkerResult: map[string]any{"status": "ok", "payload": map[string]any{"status": "complete"}},
+		Capture: &buildworkspace.CaptureResult{
+			ChangedFiles: []buildworkspace.ChangedFile{{Status: "M", Path: "main.go"}},
+			PatchBytes:   buildJudgePatchExcerptBytes + 20,
+			PatchPath:    patchPath,
+			DiffstatPath: diffstatPath,
+		},
+		Verify: verify,
+		Workspace: buildworkspace.WorkspaceMetadata{
+			BaseRef:                  "HEAD",
+			BaseCommit:               "1234567890abcdef",
+			ProviderCWD:              filepath.Join(runDir, "worktrees", "claude"),
+			CleanupStatus:            "removed",
+			ProviderHead:             "abcdef1234567890",
+			ProviderHeadIsBase:       false,
+			ProviderCommittedChanges: true,
+			WorktreeRemoved:          true,
+		},
+	}
+	shared := buildJudgeSharedEvidence(runDir, verify, []buildverify.MetricComparison{{ID: "score", Name: "score", Direction: "lower", Winner: "claude", Conclusive: true}})
+	payload := buildJudgePayload(runDir, run)
+
+	if _, ok := payload["baseline_verify"]; ok {
+		t.Fatal("candidate payload should not duplicate shared baseline verification")
+	}
+	if _, ok := payload["metric_decisions"]; ok {
+		t.Fatal("candidate payload should not duplicate shared metric decisions")
+	}
+	if shared["baseline_verify"] == nil || shared["metric_decisions"] == nil {
+		t.Fatalf("shared evidence missing verifier context: %#v", shared)
+	}
+	if _, ok := payload["capture"]; ok {
+		t.Fatal("candidate payload should not include full capture metadata")
+	}
+	patch := payload["patch"].(map[string]any)
+	if got := patch["patch_path"]; got != "providers/claude/build/diff.patch" {
+		t.Fatalf("patch_path = %#v", got)
+	}
+	excerpt, _ := patch["patch_excerpt"].(string)
+	if !patch["patch_excerpt_truncated"].(bool) || !strings.Contains(excerpt, "[truncated]") {
+		t.Fatalf("expected truncated patch excerpt, patch=%#v", patch)
+	}
+	verifyPayload := payload["verify"].(map[string]any)
+	resultPayload := verifyPayload["results"].([]map[string]any)[0]
+	if got := resultPayload["status_path"]; got != "providers/claude/build/verify/unit/status.json" {
+		t.Fatalf("status_path = %#v", got)
 	}
 }
 
@@ -494,6 +638,11 @@ func writeBuildWorkOrder(t *testing.T, path string, id string, patchMaxBytes int
 
 func runBuildTest(t *testing.T, repoDir string, workOrderPath string, outDir string, opts BuildOptions) (string, string, error) {
 	t.Helper()
+	return runBuildTestFromCWD(t, repoDir, workOrderPath, outDir, opts)
+}
+
+func runBuildTestFromCWD(t *testing.T, cwd string, workOrderPath string, outDir string, opts BuildOptions) (string, string, error) {
+	t.Helper()
 	var out, errOut bytes.Buffer
 	fakeBin := filepath.Join(moduleRoot(t), "tests", "parity", "fakes")
 	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -504,7 +653,7 @@ func runBuildTest(t *testing.T, repoDir string, workOrderPath string, outDir str
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chdir(repoDir); err != nil {
+	if err := os.Chdir(cwd); err != nil {
 		t.Fatal(err)
 	}
 	defer os.Chdir(oldWD)

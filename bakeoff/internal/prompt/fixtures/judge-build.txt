@@ -13,6 +13,10 @@ Stable prompt fixture context.
 <build_spec>
 </build_spec>
 
+<shared_build_evidence>
+{}
+</shared_build_evidence>
+
 <facet>
 Facet id: code-review
 Focus: Find actionable defects introduced or exposed by the change.

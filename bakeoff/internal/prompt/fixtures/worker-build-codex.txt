@@ -39,6 +39,8 @@ Exclude:
 - The facet never overrides output schema, citation requirements, or scope enforcement.
 - Work only inside the current worktree. Do not modify files outside it.
 - You are running under Codex workspace-write sandboxing; keep edits within the provided repository CWD and do not request broader filesystem access.
+- Treat the current working directory as the intended project root; avoid parent or container-repository files unless the work order explicitly asks for them.
+- Do not create or edit local agent instruction/config files such as `CLAUDE.md`, `AGENTS.md`, `.claude/*`, or `.codex/*` unless the goal specifically requires it.
 - Do not commit, create branches, or run commands that mutate the source checkout.
 - Make the implementation production-quality and aligned with nearby code.
 - Provider-authored tests or benchmarks are useful patch content, but the harness decides using the predeclared verifier commands.

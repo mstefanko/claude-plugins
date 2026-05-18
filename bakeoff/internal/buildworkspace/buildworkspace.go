@@ -17,20 +17,38 @@ import (
 )
 
 const (
-	ContextSchemaVersion = 1
-	lockFileName         = "bakeoff-build.lock"
-	lockStaleAfter       = 6 * time.Hour
+	ContextSchemaVersion  = 1
+	lockFileName          = "bakeoff-build.lock"
+	lockStaleAfter        = 6 * time.Hour
+	maxSourceStateEntries = 50
 )
 
 type Repository struct {
-	Root                   string `json:"source_git_root"`
-	CommonDir              string `json:"git_common_dir"`
-	SourceIsLinkedWorktree bool   `json:"source_is_linked_worktree"`
-	Branch                 string `json:"source_branch"`
-	HeadCommit             string `json:"source_head_commit"`
-	SourceClean            bool   `json:"source_clean"`
-	BaseRef                string `json:"base_ref"`
-	BaseCommit             string `json:"base_commit"`
+	Root                   string              `json:"source_git_root"`
+	CommonDir              string              `json:"git_common_dir"`
+	SourceIsLinkedWorktree bool                `json:"source_is_linked_worktree"`
+	Branch                 string              `json:"source_branch"`
+	HeadCommit             string              `json:"source_head_commit"`
+	InvocationPath         string              `json:"source_invocation_path"`
+	InvocationRelPath      string              `json:"source_invocation_relative_path"`
+	SourceClean            bool                `json:"source_clean"`
+	SourceDirtyCount       int                 `json:"source_dirty_count,omitempty"`
+	SourceDirtyEntries     []SourceStatusEntry `json:"source_dirty_entries,omitempty"`
+	SourceHasGitmodules    bool                `json:"source_has_gitmodules,omitempty"`
+	SourceGitlinkCount     int                 `json:"source_gitlink_count,omitempty"`
+	SourceGitlinkEntries   []GitlinkEntry      `json:"source_gitlink_entries,omitempty"`
+	BaseRef                string              `json:"base_ref"`
+	BaseCommit             string              `json:"base_commit"`
+}
+
+type SourceStatusEntry struct {
+	Code string `json:"code"`
+	Path string `json:"path"`
+}
+
+type GitlinkEntry struct {
+	Path   string `json:"path"`
+	Commit string `json:"commit"`
 }
 
 type WorktreeParent struct {
@@ -41,25 +59,32 @@ type WorktreeParent struct {
 }
 
 type ContextMetadata struct {
-	SchemaVersion                     int                `json:"schema_version"`
-	RunID                             string             `json:"run_id"`
-	SourceGitRoot                     string             `json:"source_git_root"`
-	GitCommonDir                      string             `json:"git_common_dir"`
-	SourceIsLinkedWorktree            bool               `json:"source_is_linked_worktree"`
-	SourceBranch                      string             `json:"source_branch"`
-	SourceHeadCommit                  string             `json:"source_head_commit"`
-	SourceClean                       bool               `json:"source_clean"`
-	BaseRef                           string             `json:"base_ref"`
-	BaseCommit                        string             `json:"base_commit"`
-	WorktreeParentPath                string             `json:"worktree_parent_path"`
-	WorktreeParentInsideSource        bool               `json:"worktree_parent_inside_source"`
-	WorktreeParentInsideIgnoredSource bool               `json:"worktree_parent_inside_ignored_source"`
-	WorktreeParentFallbackUsed        bool               `json:"worktree_parent_fallback_used"`
-	BaselineWorktreePath              string             `json:"baseline_worktree_path,omitempty"`
-	BaselineCleanupStatus             string             `json:"baseline_cleanup_status,omitempty"`
-	ProviderIDs                       []string           `json:"provider_ids"`
-	Verifiers                         []VerifierMetadata `json:"verifiers"`
-	CreatedAt                         string             `json:"created_at"`
+	SchemaVersion                     int                 `json:"schema_version"`
+	RunID                             string              `json:"run_id"`
+	SourceGitRoot                     string              `json:"source_git_root"`
+	GitCommonDir                      string              `json:"git_common_dir"`
+	SourceIsLinkedWorktree            bool                `json:"source_is_linked_worktree"`
+	SourceBranch                      string              `json:"source_branch"`
+	SourceHeadCommit                  string              `json:"source_head_commit"`
+	SourceInvocationPath              string              `json:"source_invocation_path"`
+	SourceInvocationRelPath           string              `json:"source_invocation_relative_path"`
+	SourceClean                       bool                `json:"source_clean"`
+	SourceDirtyCount                  int                 `json:"source_dirty_count,omitempty"`
+	SourceDirtyEntries                []SourceStatusEntry `json:"source_dirty_entries,omitempty"`
+	SourceHasGitmodules               bool                `json:"source_has_gitmodules,omitempty"`
+	SourceGitlinkCount                int                 `json:"source_gitlink_count,omitempty"`
+	SourceGitlinkEntries              []GitlinkEntry      `json:"source_gitlink_entries,omitempty"`
+	BaseRef                           string              `json:"base_ref"`
+	BaseCommit                        string              `json:"base_commit"`
+	WorktreeParentPath                string              `json:"worktree_parent_path"`
+	WorktreeParentInsideSource        bool                `json:"worktree_parent_inside_source"`
+	WorktreeParentInsideIgnoredSource bool                `json:"worktree_parent_inside_ignored_source"`
+	WorktreeParentFallbackUsed        bool                `json:"worktree_parent_fallback_used"`
+	BaselineWorktreePath              string              `json:"baseline_worktree_path,omitempty"`
+	BaselineCleanupStatus             string              `json:"baseline_cleanup_status,omitempty"`
+	ProviderIDs                       []string            `json:"provider_ids"`
+	Verifiers                         []VerifierMetadata  `json:"verifiers"`
+	CreatedAt                         string              `json:"created_at"`
 }
 
 type VerifierMetadata struct {
@@ -72,6 +97,7 @@ type WorkspaceMetadata struct {
 	BaseRef                  string `json:"base_ref"`
 	BaseCommit               string `json:"base_commit"`
 	WorktreePath             string `json:"worktree_path"`
+	ProviderCWD              string `json:"provider_cwd"`
 	WorktreeRetained         bool   `json:"worktree_retained"`
 	WorktreeRemoved          bool   `json:"worktree_removed"`
 	CleanupStatus            string `json:"cleanup_status"`
@@ -159,6 +185,20 @@ func ResolveRepository(ctx context.Context, cwd string, baseRef string) (Reposit
 		return Repository{}, err
 	}
 	gitDir = absGitPath(root, gitDir)
+	invocationPath, err := filepath.Abs(cwd)
+	if err != nil {
+		return Repository{}, err
+	}
+	invocationRel, err := filepath.Rel(root, invocationPath)
+	if err != nil {
+		return Repository{}, err
+	}
+	invocationRel = filepath.Clean(invocationRel)
+	if invocationRel == "" || invocationRel == "." {
+		invocationRel = "."
+	} else if strings.HasPrefix(invocationRel, ".."+string(filepath.Separator)) || invocationRel == ".." || filepath.IsAbs(invocationRel) {
+		return Repository{}, fmt.Errorf("current working directory %q is outside git root %q", invocationPath, root)
+	}
 	branch, err := gitOutput(ctx, root, "branch", "--show-current")
 	if err != nil {
 		return Repository{}, err
@@ -171,10 +211,8 @@ func ResolveRepository(ctx context.Context, cwd string, baseRef string) (Reposit
 	if err != nil {
 		return Repository{}, fmt.Errorf("resolve base_ref %q: %w", baseRef, err)
 	}
-	if err := RequireCleanSource(ctx, root); err != nil {
-		return Repository{}, err
-	}
-	if err := RejectSubmodules(ctx, root); err != nil {
+	sourceState, err := InspectSourceState(ctx, root)
+	if err != nil {
 		return Repository{}, err
 	}
 	return Repository{
@@ -183,10 +221,73 @@ func ResolveRepository(ctx context.Context, cwd string, baseRef string) (Reposit
 		SourceIsLinkedWorktree: filepath.Clean(gitDir) != filepath.Clean(commonDir),
 		Branch:                 strings.TrimSpace(branch),
 		HeadCommit:             strings.TrimSpace(head),
-		SourceClean:            true,
+		InvocationPath:         invocationPath,
+		InvocationRelPath:      filepath.ToSlash(invocationRel),
+		SourceClean:            sourceState.Clean,
+		SourceDirtyCount:       sourceState.DirtyCount,
+		SourceDirtyEntries:     sourceState.DirtyEntries,
+		SourceHasGitmodules:    sourceState.HasGitmodules,
+		SourceGitlinkCount:     sourceState.GitlinkCount,
+		SourceGitlinkEntries:   sourceState.GitlinkEntries,
 		BaseRef:                baseRef,
 		BaseCommit:             strings.TrimSpace(baseCommit),
 	}, nil
+}
+
+type SourceState struct {
+	Clean          bool
+	DirtyCount     int
+	DirtyEntries   []SourceStatusEntry
+	HasGitmodules  bool
+	GitlinkCount   int
+	GitlinkEntries []GitlinkEntry
+}
+
+func InspectSourceState(ctx context.Context, root string) (SourceState, error) {
+	status, err := gitOutput(ctx, root, "status", "--porcelain=v1", "--untracked-files=all")
+	if err != nil {
+		return SourceState{}, err
+	}
+	state := SourceState{Clean: strings.TrimSpace(status) == ""}
+	for _, line := range strings.Split(strings.TrimSpace(status), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		state.DirtyCount++
+		if len(state.DirtyEntries) >= maxSourceStateEntries {
+			continue
+		}
+		code := strings.TrimSpace(line[:min(2, len(line))])
+		path := ""
+		if len(line) > 3 {
+			path = strings.TrimSpace(line[3:])
+		}
+		state.DirtyEntries = append(state.DirtyEntries, SourceStatusEntry{Code: code, Path: path})
+	}
+	if info, err := os.Stat(filepath.Join(root, ".gitmodules")); err == nil && !info.IsDir() {
+		state.HasGitmodules = true
+	} else if err != nil && !os.IsNotExist(err) {
+		return SourceState{}, err
+	}
+	entries, err := gitOutput(ctx, root, "ls-files", "-s")
+	if err != nil {
+		return SourceState{}, err
+	}
+	for _, line := range strings.Split(entries, "\n") {
+		if !strings.HasPrefix(line, "160000 ") {
+			continue
+		}
+		state.GitlinkCount++
+		if len(state.GitlinkEntries) >= maxSourceStateEntries {
+			continue
+		}
+		meta, path, ok := strings.Cut(line, "\t")
+		fields := strings.Fields(meta)
+		if ok && len(fields) >= 2 {
+			state.GitlinkEntries = append(state.GitlinkEntries, GitlinkEntry{Commit: fields[1], Path: path})
+		}
+	}
+	return state, nil
 }
 
 func ResolveCommonDir(ctx context.Context, cwd string) (string, error) {
@@ -310,6 +411,14 @@ func CreateDetachedWorktree(ctx context.Context, repo Repository, path string) e
 	}
 	_, err := gitOutput(ctx, repo.Root, "worktree", "add", "--detach", path, repo.BaseCommit)
 	return err
+}
+
+func WorktreeInvocationPath(repo Repository, worktreePath string) string {
+	rel := strings.TrimSpace(repo.InvocationRelPath)
+	if rel == "" || rel == "." {
+		return worktreePath
+	}
+	return filepath.Join(worktreePath, filepath.FromSlash(rel))
 }
 
 // CleanupWorktree forcibly removes a provider worktree. The force is intentional
@@ -735,7 +844,14 @@ func ContextFrom(repo Repository, runID string, parent WorktreeParent, providerI
 		SourceIsLinkedWorktree:            repo.SourceIsLinkedWorktree,
 		SourceBranch:                      repo.Branch,
 		SourceHeadCommit:                  repo.HeadCommit,
+		SourceInvocationPath:              repo.InvocationPath,
+		SourceInvocationRelPath:           repo.InvocationRelPath,
 		SourceClean:                       repo.SourceClean,
+		SourceDirtyCount:                  repo.SourceDirtyCount,
+		SourceDirtyEntries:                append([]SourceStatusEntry(nil), repo.SourceDirtyEntries...),
+		SourceHasGitmodules:               repo.SourceHasGitmodules,
+		SourceGitlinkCount:                repo.SourceGitlinkCount,
+		SourceGitlinkEntries:              append([]GitlinkEntry(nil), repo.SourceGitlinkEntries...),
 		BaseRef:                           repo.BaseRef,
 		BaseCommit:                        repo.BaseCommit,
 		WorktreeParentPath:                parent.Path,

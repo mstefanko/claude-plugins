@@ -45,6 +45,10 @@ func BuildWorkerPrompt(wo *workorder.WorkOrder, provider workorder.Participant) 
 }
 
 func BuildJudgePrompt(wo *workorder.WorkOrder, workerA any, workerB any, mode string) (string, error) {
+	return BuildJudgePromptWithEvidence(wo, nil, workerA, workerB, mode)
+}
+
+func BuildJudgePromptWithEvidence(wo *workorder.WorkOrder, sharedEvidence any, workerA any, workerB any, mode string) (string, error) {
 	actualMode := mode
 	if actualMode == "" {
 		actualMode = wo.Type
@@ -61,12 +65,20 @@ func BuildJudgePrompt(wo *workorder.WorkOrder, workerA any, workerB any, mode st
 	if err != nil {
 		return "", err
 	}
+	sharedPayload := "{}"
+	if sharedEvidence != nil {
+		sharedPayload, err = sortedJSON(sharedEvidence)
+		if err != nil {
+			return "", err
+		}
+	}
 	text := base
 	text = replaceBlock(text, fixtureFacetBlock(), RenderFacetBlock(wo.Facet))
 	text = strings.Replace(text, fixtureJudgeFacetRules(actualMode), RenderJudgeFacetRules(wo.Facet, actualMode), 1)
 	text = replaceTagInner(text, "goal", wo.Goal)
 	text = replaceTagInner(text, "background", wo.Background)
 	text = replaceBlock(text, fixtureBuildSpecBlock(), RenderBuildSpecBlock(wo.Build))
+	text = replaceTagInner(text, "shared_build_evidence", sharedPayload)
 	text = replaceTagInner(text, judgeATag(actualMode), payloadA)
 	text = replaceTagInner(text, judgeBTag(actualMode), payloadB)
 	text = replaceBlock(text, fixtureRuntimeBudgetBlock(), RenderRuntimeBudgetBlock(wo.Budgets, "judge"))
