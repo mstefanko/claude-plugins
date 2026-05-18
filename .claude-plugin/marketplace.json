@@ -20,7 +20,7 @@
     {
       "name": "bakeoff",
       "source": "./bakeoff",
-      "description": "Tiny CLI harness for two-provider research bakeoffs, with a future Claude Code launcher wrapper.",
+      "description": "Run two-provider research and competitive build bakeoffs with replayable ledgers and artifact-only judging.",
       "category": "orchestration"
     },
     {

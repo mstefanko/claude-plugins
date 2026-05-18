@@ -1,6 +1,8 @@
 {
   "name": "bakeoff",
-  "description": "Tiny CLI harness for running two-provider research bakeoffs with artifact-only judging.",
+  "version": "0.0.0",
+  "description": "Run two-provider research and competitive build bakeoffs with replayable ledgers and artifact-only judging.",
   "author": { "name": "mstefanko" },
-  "keywords": ["bakeoff", "research", "judge", "claude", "codex", "multi-agent"]
+  "license": "MIT",
+  "keywords": ["bakeoff", "research", "build", "competitive", "judge", "claude", "codex", "multi-agent"]
 }

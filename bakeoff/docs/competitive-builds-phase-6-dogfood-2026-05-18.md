@@ -82,11 +82,12 @@ competitive build dogfood.
 
 ## Follow-Up Decision
 
-No `bakeoff apply` helper was added. The reports already emit a plain
-`git apply --3way --binary` handoff command for the exact selected provider
-patch, and this dogfood pass did not show enough repeated manual-apply friction
-to justify a v1 helper. Applying, editing, combining, or reimplementing after
-the report is intentionally a human checkpoint outside the bakeoff decision.
+No `bakeoff apply` helper was added. Current reports hand off the exact
+selected provider patch artifact and intentionally do not emit apply commands.
+The desired competitive-build output is the report plus the selected patch
+artifact. Applying, editing, combining, synthesizing, or reimplementing after
+the report is intentionally a separate implementation step outside the bakeoff
+decision and must be verified again before it is treated as ready.
 
 One harness issue was found and fixed: the fake provider detected any prompt
 containing the words "build judge" as a judge prompt. A worker background used

@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+usage: scripts/bakeoff-ensure-cli [--check]
+
+Ensures a runnable Bakeoff CLI is available.
+
+  --check  only check BAKEOFF_GO_BINARY or dist/bakeoff; never build
+EOF
+}
+
+check_only=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --check)
+      check_only=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      usage
+      echo "error: unknown flag: $1" >&2
+      exit 2
+      ;;
+  esac
+done
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+root="${BAKEOFF_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:-$(cd "$script_dir/.." && pwd)}}}"
+
+version_probe() {
+  local binary="$1"
+  local label="$2"
+  local version
+  if ! version="$("$binary" --version 2>&1)"; then
+    echo "error: $label exists but failed version probe: $version" >&2
+    exit 1
+  fi
+  echo "bakeoff cli: using $label ($binary): $version"
+}
+
+if [[ -n "${BAKEOFF_GO_BINARY:-}" ]]; then
+  if [[ ! -x "$BAKEOFF_GO_BINARY" ]]; then
+    echo "error: BAKEOFF_GO_BINARY is set but is not executable: $BAKEOFF_GO_BINARY" >&2
+    exit 2
+  fi
+  version_probe "$BAKEOFF_GO_BINARY" "BAKEOFF_GO_BINARY"
+  exit 0
+fi
+
+dist_binary="$root/dist/bakeoff"
+if [[ -x "$dist_binary" ]]; then
+  version_probe "$dist_binary" "dist/bakeoff"
+  exit 0
+fi
+
+if [[ "$check_only" -eq 1 ]]; then
+  if [[ -e "$dist_binary" ]]; then
+    echo "error: dist/bakeoff exists but is not executable: $dist_binary" >&2
+  else
+    echo "error: no provisioned Bakeoff CLI found; dist/bakeoff is missing and BAKEOFF_GO_BINARY is not set" >&2
+  fi
+  exit 2
+fi
+
+if ! command -v go >/dev/null 2>&1; then
+  cat >&2 <<EOF
+error: no runnable Bakeoff CLI is available.
+
+Install Go so this source install can build dist/bakeoff, install a plugin
+package that includes dist/bakeoff, or set BAKEOFF_GO_BINARY to a compatible
+executable Bakeoff binary.
+EOF
+  exit 2
+fi
+
+if ! mkdir -p "$root/dist"; then
+  echo "error: failed to create $root/dist" >&2
+  exit 1
+fi
+
+if ! (cd "$root" && GOCACHE="${GOCACHE:-/tmp/bakeoff-go-cache}" go build -o "$root/dist/bakeoff" ./cmd/bakeoff); then
+  echo "error: failed to build Bakeoff CLI into $root/dist/bakeoff" >&2
+  exit 1
+fi
+
+version_probe "$dist_binary" "built dist/bakeoff"

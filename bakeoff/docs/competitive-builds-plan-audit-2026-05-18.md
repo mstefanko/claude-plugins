@@ -30,7 +30,7 @@ Note on codebase fit: the plan correctly targets the Go `bakeoff/` subproject (`
 
 9. **`build-context.json` schema version and manifest registration missing.** Plan describes the content (lines 845–860) but not the JSON schema version field, location of the writer function, or whether `runs verify` checks it. Add to required-artifact list explicitly and define schema_version handling.
 
-10. **Patch capture binary-file behavior unspecified.** Plan (line 382) uses `git diff --cached --binary`. Behavior for: very large binary blobs vs `patch_max_bytes`, symlinks, executable-bit-only changes, file-mode-only changes, and submodule add attempts are all undefined. At minimum, write the test matrix expected. The `apply: git apply --3way` printed command will fail on binary patches without `--binary`; either document the limitation or print the right command.
+10. **Patch capture binary-file behavior unspecified.** Plan (line 382) uses `git diff --cached --binary`. Behavior for: very large binary blobs vs `patch_max_bytes`, symlinks, executable-bit-only changes, file-mode-only changes, and submodule add attempts are all undefined. At minimum, write the test matrix expected. Earlier apply-command wording is superseded by the current contract: reports hand off patch artifacts and intentionally do not print apply commands.
 
 ## Open Questions (decide before writers start)
 

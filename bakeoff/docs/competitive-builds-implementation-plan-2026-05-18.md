@@ -6,6 +6,12 @@ Scope: an experimental `build` mode for running two isolated implementation
 candidates, verifying them with deterministic commands, judging only when the
 gate and metric verifiers cannot decide, and writing a replayable ledger.
 
+Current implementation note: build reports hand off the selected provider patch
+artifact and intentionally do not print apply commands. Applying, combining,
+synthesizing, or reimplementing after the report is outside the Bakeoff
+decision and requires a separate explicit implementation step plus fresh
+verification.
+
 ## Decision
 
 Add a small competitive-build path, but keep the center of gravity the same as
@@ -358,12 +364,11 @@ git worktree add --detach <path> <base_commit>
 ```
 
 Detached worktrees avoid branch namespace churn. Provider output is captured as
-patches, not commits. V1 prints a plain `git apply --3way --binary` command for
-the chosen patch; any first-class apply helper is deferred. The printed command
-is a human checkpoint, not an automatic apply step. Bakeoff selects and explains
-one provider patch. If a human or follow-on agent edits, combines, or
-reimplements after the run, that result is a derived patch outside the bakeoff
-decision and must be verified separately before being cited as ready.
+patches, not commits. Bakeoff selects and explains one provider patch, but the
+report is a handoff checkpoint rather than an apply step. If a human or
+follow-on agent edits, combines, synthesizes, or reimplements after the run,
+that result is a derived patch outside the bakeoff decision and must be
+verified separately before being cited as ready.
 
 Base ref resolution:
 
@@ -593,11 +598,10 @@ artifact paths. `selection_basis` is one of `gate`, `metric`, `judge`, or
 stdout/stderr, patches, judge prompts, or judge responses; those stay in the
 ledger and manifest.
 
-Do not add `bakeoff apply` in v1. The report may print a plain
-`git apply --3way --binary` command for the winning patch, but applying remains a
-human-controlled step. The command applies the exact selected provider patch.
-Any edited, combined, or reimplemented result is a derived patch outside the
-run and should rerun verification in a fresh follow-up step.
+Do not add `bakeoff apply` in v1. The report names the exact selected patch
+artifact, but applying remains a separate human-controlled implementation step.
+Any edited, combined, synthesized, or reimplemented result is a derived patch
+outside the run and should rerun verification in a fresh follow-up step.
 
 `bakeoff show`, `bakeoff ls`, and `bakeoff runs verify` should work for build
 runs after manifest/report extensions.
@@ -763,7 +767,7 @@ Provider prompt rules:
 19. Print next command:
    - show report
    - inspect winner patch
-   - optionally apply the exact selected patch with `git apply --3way --binary`
+   - hand off the selected patch artifact without applying it
 
 ## Decision Policy
 
@@ -1066,13 +1070,14 @@ Options considered:
 
 2. Add `bakeoff apply <run-id> <provider>`.
    - UX: better than copying a patch path by hand.
-   - Value: real if dogfood shows repeated manual apply friction.
+   - Value: only real if dogfood shows repeated explicit apply-step friction.
    - Complexity: medium. It still needs clean-target checks, winner/provider
      validation, base compatibility, conflict reporting, optional post-apply
      verifier execution, and careful exit codes.
    - Cleanup: independent of provider worktrees because it applies the captured
      patch from the ledger.
-   - V1 decision: defer. It deserves a separate plan after build mode is useful.
+   - V1 decision: defer. It deserves a separate plan after build mode is useful,
+     and must never be invoked automatically by the Claude plugin.
 
 3. Keep the winning worktree and tell the user to continue there.
    - UX: appealing for inspection, but surprising as a default because Bakeoff
@@ -1116,13 +1121,12 @@ V1 report handoff contract:
   - provider risks/manual checks
   - whether provider-authored tests or benchmarks affected confidence
   - retained worktree path, only when `--keep-worktrees` was used
-  - a plain apply command: `git apply --3way --binary <patch>`
   - explicit wording that Bakeoff has not applied the patch
   - explicit wording that post-run edits, synthesis, or reimplementation are
     derived patches outside the bakeoff decision and require fresh verification
 - the handoff section should be concise enough to paste into a new agent
-  session for "review and apply this winning patch" without requiring that
-  agent to parse the whole ledger first
+  session for "review this winning patch" without requiring that agent to parse
+  the whole ledger first
 - no separate `handoff.md` artifact in v1; keep the handoff inside `report.md`
   to avoid another durable file and manifest surface
 
@@ -1152,12 +1156,11 @@ Example next commands:
 ```text
 next: bakeoff show <run-id>
 patch: runs/<run-id>/providers/<winner>/build/diff.patch
-apply: git apply --3way --binary runs/<run-id>/providers/<winner>/build/diff.patch
 ```
 
 Do not auto-apply in v1. Do not auto-synthesize in v1. The report hands off
-the selected provider patch and the evidence behind that selection; follow-up
-modification belongs to a new human/agent step.
+the selected provider patch artifact and the evidence behind that selection;
+follow-up modification belongs to a new human/agent step.
 
 ## Non-Goals
 
@@ -1369,8 +1372,8 @@ Integration tests with fake providers:
 - `--json` emits summary fields and artifact paths without embedding patches or
   logs
 - `report.md` includes a winner handoff with selection basis, patch path,
-  diffstat, risks, checkpoint wording, derived-patch wording, and
-  `git apply --3way --binary`
+  diffstat, risks, checkpoint wording, derived-patch wording, and no apply
+  command
 - `--keep-worktrees` retains paths and records them
 - same-repo concurrent build attempts serialize or fail clearly on the build
   lock
@@ -1424,7 +1427,8 @@ These are intentionally not part of v1:
 - judge-only build runs
 - advisory verifier kind
 - advisory ranking of failed patches
-- `bakeoff apply <run-id> <provider>`
+- `bakeoff apply <run-id> <provider>` as a separate explicit future plan, never
+  automatic plugin behavior
 - first-class parsers for ecosystem benchmark formats such as `go test -bench`
 - submodule-aware worktree and diff capture
 

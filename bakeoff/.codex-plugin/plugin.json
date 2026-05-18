@@ -1,21 +1,21 @@
 {
   "name": "bakeoff",
   "version": "0.0.0",
-  "description": "Tiny CLI harness for two-provider research bakeoffs with replayable ledgers and artifact-only judging.",
+  "description": "Run two-provider research and competitive build bakeoffs with replayable ledgers and artifact-only judging.",
   "author": {
     "name": "mstefanko"
   },
   "license": "MIT",
-  "keywords": ["bakeoff", "research", "judge", "claude", "codex", "cli"],
+  "keywords": ["bakeoff", "research", "build", "competitive", "judge", "claude", "codex", "cli"],
   "interface": {
     "displayName": "Bakeoff",
-    "shortDescription": "Run two-provider research bakeoffs from Codex.",
-    "longDescription": "Bakeoff is a small CLI-first harness for running the same research task through two provider CLIs, judging artifact outputs, and writing replayable run ledgers.",
+    "shortDescription": "Run two-provider research and build bakeoffs from Codex.",
+    "longDescription": "Bakeoff is a small CLI-first harness for running the same research or build task through two provider CLIs, judging artifact outputs, and writing replayable run ledgers.",
     "developerName": "mstefanko",
     "category": "Productivity",
     "capabilities": ["CLI"],
     "defaultPrompt": [
-      "Create a Bakeoff work order for this review.",
+      "Create a Bakeoff work order for this review or build.",
       "Run bakeoff doctor and summarize readiness.",
       "Inspect the latest Bakeoff report."
     ]

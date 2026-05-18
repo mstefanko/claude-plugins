@@ -1,0 +1,259 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+usage: scripts/bakeoff-uninstall [--force]
+
+Removes Bakeoff-owned plugin state and cache. Provider CLIs, provider auth,
+git branches, commits, and development binaries are left alone.
+EOF
+}
+
+force=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --force)
+      force=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      usage
+      echo "error: unknown flag: $1" >&2
+      exit 2
+      ;;
+  esac
+done
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+root="${CLAUDE_PLUGIN_ROOT:-${BAKEOFF_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:-$(cd "$script_dir/.." && pwd)}}}"
+cwd="$(pwd)"
+
+removed=()
+left=()
+
+note_removed() {
+  removed+=("$1")
+  printf 'removed: %s\n' "$1"
+}
+
+note_left() {
+  left+=("$1")
+  printf 'left: %s\n' "$1"
+}
+
+remove_file() {
+  local path="$1"
+  if [[ -e "$path" || -L "$path" ]]; then
+    rm -f "$path"
+    note_removed "$path"
+  fi
+}
+
+remove_dir() {
+  local path="$1"
+  if [[ -d "$path" && ! -L "$path" ]]; then
+    rm -rf "$path"
+    note_removed "$path"
+  elif [[ -L "$path" ]]; then
+    rm -f "$path"
+    note_removed "$path"
+  fi
+}
+
+json_string_value() {
+  local file="$1"
+  local key="$2"
+  sed -nE 's/^[[:space:]]*"'"$key"'"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p' "$file" | head -n 1
+}
+
+is_child_path() {
+  local child="$1"
+  local parent="$2"
+  [[ -n "$child" && -n "$parent" ]] || return 1
+  [[ -d "$child" && -d "$parent" ]] || return 1
+  local child_abs parent_abs
+  child_abs="$(cd "$child" && pwd -P)"
+  parent_abs="$(cd "$parent" && pwd -P)"
+  [[ "$child_abs" == "$parent_abs" ]] && return 1
+  case "$child_abs/" in
+    "$parent_abs"/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+is_bakeoff_run_dir() {
+  local dir="$1"
+  [[ -f "$dir/manifest.json" && -f "$dir/work-order.json" && -f "$dir/decision.json" && -f "$dir/report.md" ]]
+}
+
+is_bakeoff_work_order_file() {
+  local path="$1"
+  {
+    grep -Eq '"schema_version"[[:space:]]*:[[:space:]]*1' "$path" &&
+    grep -Eq '"type"[[:space:]]*:[[:space:]]*"(gather|compare|analyze|build)"' "$path" &&
+    grep -Eq '"providers"[[:space:]]*:' "$path" &&
+    grep -Eq '"judge"[[:space:]]*:' "$path" &&
+    grep -Eq '"budgets"[[:space:]]*:' "$path"
+  } || grep -Eiq 'bakeoff (gather|compare|analyze|review|build) (work order|recipe)|bakeoff (validate|research|build)' "$path"
+}
+
+is_bakeoff_plugin_data_dir() {
+  local path="$1"
+  [[ -n "$path" && -d "$path" ]] || return 1
+
+  local path_abs root_abs home_abs data_root cache_root
+  path_abs="$(cd "$path" && pwd -P)"
+  root_abs="$(cd "$root" && pwd -P)"
+  home_abs="$(cd "$HOME" && pwd -P)"
+  data_root="$home_abs/.claude/plugins/data"
+  cache_root="$home_abs/.claude/plugins/cache/mstefanko-plugins/bakeoff"
+
+  case "$path_abs/" in
+    "$root_abs"|"$root_abs"/*) return 1 ;;
+  esac
+
+  case "$path_abs" in
+    "$data_root/bakeoff" | \
+    "$data_root/bakeoff@mstefanko-plugins" | \
+    "$data_root/mstefanko-plugins/bakeoff" | \
+    "$cache_root/data" | \
+    "$cache_root/.data")
+      return 0
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+cleanup_retained_worktrees() {
+  local run_dir="$1"
+  local context="$run_dir/build-context.json"
+  [[ -f "$context" ]] || return 0
+
+  local parent source_root
+  parent="$(json_string_value "$context" "worktree_parent_path")"
+  source_root="$(json_string_value "$context" "source_git_root")"
+  if [[ -z "$parent" || ! -d "$parent" ]]; then
+    note_left "$run_dir retained worktrees (missing recorded parent path)"
+    return 0
+  fi
+
+  local workspace worktree
+  while IFS= read -r -d '' workspace; do
+    worktree="$(json_string_value "$workspace" "worktree_path")"
+    [[ -n "$worktree" ]] || continue
+    if ! is_child_path "$worktree" "$parent"; then
+      note_left "$worktree (not a child of recorded Bakeoff worktree parent)"
+      continue
+    fi
+    if [[ -n "$source_root" && -d "$source_root/.git" ]] && command -v git >/dev/null 2>&1; then
+      git -C "$source_root" worktree remove --force "$worktree" >/dev/null 2>&1 || true
+    fi
+    if [[ -e "$worktree" || -L "$worktree" ]]; then
+      rm -rf "$worktree"
+      note_removed "$worktree"
+    fi
+  done < <(find "$run_dir/providers" -path '*/build/workspace.json' -type f -print0 2>/dev/null || true)
+}
+
+cleanup_current_cwd() {
+  if [[ -d "$cwd/runs" ]]; then
+    while IFS= read -r -d '' run_dir; do
+      if is_bakeoff_run_dir "$run_dir"; then
+        cleanup_retained_worktrees "$run_dir"
+        remove_dir "$run_dir"
+      else
+        note_left "$run_dir (not a complete Bakeoff run ledger)"
+      fi
+    done < <(find "$cwd/runs" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null || true)
+
+    if [[ -L "$cwd/runs/latest" ]]; then
+      remove_file "$cwd/runs/latest"
+    fi
+    rmdir "$cwd/runs" 2>/dev/null || true
+  fi
+
+  while IFS= read -r -d '' path; do
+    if is_bakeoff_work_order_file "$path"; then
+      remove_file "$path"
+    else
+      note_left "$path (not recognized as a Bakeoff work order)"
+    fi
+  done < <(find "$cwd" -maxdepth 1 -type f -name '*.work-order.json' -print0 2>/dev/null || true)
+
+  if [[ -f "$cwd/review-context.md" ]]; then
+    if grep -Eq '# Generated Review Context|<generated_review_context>|Generated by bakeoff research' "$cwd/review-context.md"; then
+      remove_file "$cwd/review-context.md"
+    else
+      note_left "$cwd/review-context.md (not recognized as Bakeoff-generated)"
+    fi
+  fi
+
+  if [[ -f "$cwd/review-context.json" ]]; then
+    if grep -Eq '"schema_version"[[:space:]]*:[[:space:]]*1' "$cwd/review-context.json" &&
+       grep -Eq '"generated_at"[[:space:]]*:' "$cwd/review-context.json" &&
+       grep -Eq '"base_ref"[[:space:]]*:' "$cwd/review-context.json" &&
+       grep -Eq '"head_commit"[[:space:]]*:' "$cwd/review-context.json"; then
+      remove_file "$cwd/review-context.json"
+    else
+      note_left "$cwd/review-context.json (not recognized as Bakeoff-generated)"
+    fi
+  fi
+
+  if [[ -f "$cwd/report.md" ]]; then
+    if grep -Eq '^# Bakeoff Report:|Next: `bakeoff show ' "$cwd/report.md"; then
+      remove_file "$cwd/report.md"
+    else
+      note_left "$cwd/report.md (not recognized as Bakeoff-generated)"
+    fi
+  fi
+}
+
+if [[ "$force" -ne 1 ]]; then
+  cat <<EOF
+Bakeoff uninstall cleanup will remove Bakeoff-owned plugin state:
+
+- $root/dist/bakeoff and an empty $root/dist directory
+- $HOME/.claude/plugins/cache/mstefanko-plugins/bakeoff
+- CLAUDE_PLUGIN_DATA when it is Bakeoff-owned
+- Bakeoff-generated run ledgers and work-order/context/report files in:
+  $cwd
+
+It will not remove provider CLIs, auth/session files, git branches, user
+commits, non-Bakeoff run content, ./bakeoff, or ./bakeoff-go.
+EOF
+  printf 'Continue? [y/N] '
+  read -r reply || exit 0
+  case "$reply" in
+    y|Y|yes|YES) ;;
+    *) echo "cancelled"; exit 0 ;;
+  esac
+fi
+
+remove_file "$root/dist/bakeoff"
+rmdir "$root/dist" 2>/dev/null || true
+
+remove_dir "$HOME/.claude/plugins/cache/mstefanko-plugins/bakeoff"
+
+if [[ -n "${CLAUDE_PLUGIN_DATA:-}" && -d "$CLAUDE_PLUGIN_DATA" ]]; then
+  if is_bakeoff_plugin_data_dir "$CLAUDE_PLUGIN_DATA"; then
+    remove_dir "$CLAUDE_PLUGIN_DATA"
+  else
+    note_left "$CLAUDE_PLUGIN_DATA (CLAUDE_PLUGIN_DATA is not Bakeoff-owned by path)"
+  fi
+fi
+
+cleanup_current_cwd
+
+note_left "provider CLIs and provider auth/session files"
+note_left "git branches, commits, and pull requests"
+note_left "non-Bakeoff content under runs/"
+note_left "$cwd/bakeoff and $cwd/bakeoff-go development binaries"
+
+if [[ "${#removed[@]}" -eq 0 ]]; then
+  echo "No Bakeoff-owned state found."
+fi
