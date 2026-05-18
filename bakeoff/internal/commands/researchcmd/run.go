@@ -38,6 +38,9 @@ func RunResearch(ctx context.Context, f commands.Factory, opts *ResearchOptions)
 	if err != nil {
 		return commands.WrapValidation(err)
 	}
+	if wo.Type == "build" {
+		return &apperror.ValidationError{Message: `type "build" work orders must be run with bakeoff build`}
+	}
 	sourceText, err := os.ReadFile(opts.WorkOrder)
 	if err != nil {
 		return &apperror.RuntimeError{Err: err}
@@ -446,6 +449,8 @@ func judgeValidator(mode string) func(any) (any, error) {
 		return workorder.ValidateGatherJudgeResult
 	case "compare":
 		return workorder.ValidateCompareJudgeResult
+	case "build":
+		return workorder.ValidateBuildJudgeResult
 	default:
 		return workorder.ValidateAnalyzeJudgeResult
 	}

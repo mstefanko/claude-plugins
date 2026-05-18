@@ -39,6 +39,7 @@ func BuildWorkerPrompt(wo *workorder.WorkOrder, provider workorder.Participant) 
 	text = replaceTagInner(text, "scope", scope)
 	text = replaceBlock(text, fixtureFacetBlock(), RenderFacetBlock(wo.Facet))
 	text = strings.Replace(text, fixtureWorkerFacetRules(), RenderWorkerFacetRules(wo.Facet), 1)
+	text = replaceBlock(text, fixtureBuildSpecBlock(), RenderBuildSpecBlock(wo.Build))
 	text = replaceBlock(text, fixtureRuntimeBudgetBlock(), RenderRuntimeBudgetBlock(wo.Budgets, "worker"))
 	return text, nil
 }
@@ -63,6 +64,9 @@ func BuildJudgePrompt(wo *workorder.WorkOrder, workerA any, workerB any, mode st
 	text := base
 	text = replaceBlock(text, fixtureFacetBlock(), RenderFacetBlock(wo.Facet))
 	text = strings.Replace(text, fixtureJudgeFacetRules(actualMode), RenderJudgeFacetRules(wo.Facet, actualMode), 1)
+	text = replaceTagInner(text, "goal", wo.Goal)
+	text = replaceTagInner(text, "background", wo.Background)
+	text = replaceBlock(text, fixtureBuildSpecBlock(), RenderBuildSpecBlock(wo.Build))
 	text = replaceTagInner(text, judgeATag(actualMode), payloadA)
 	text = replaceTagInner(text, judgeBTag(actualMode), payloadB)
 	text = replaceBlock(text, fixtureRuntimeBudgetBlock(), RenderRuntimeBudgetBlock(wo.Budgets, "judge"))
@@ -169,6 +173,32 @@ func RenderWorkerFacetRules(facet *workorder.Facet) string {
 - The facet never overrides output schema, citation requirements, or scope enforcement.`
 }
 
+func RenderBuildSpecBlock(spec *workorder.BuildSpec) string {
+	if spec == nil {
+		return ""
+	}
+	lines := []string{
+		"<build_spec>",
+		"Base ref: " + spec.BaseRef,
+		fmt.Sprintf("Patch max bytes: %d", spec.PatchMaxBytes),
+	}
+	if spec.ComparisonGoal != "" {
+		lines = append(lines, "Comparison goal: "+spec.ComparisonGoal)
+	}
+	if len(spec.Verify) > 0 {
+		lines = append(lines, "", "Verifier commands:")
+		for _, verifier := range spec.Verify {
+			line := fmt.Sprintf("- %s (%s): %s; timeout=%ds; max_output=%d bytes", verifier.ID, verifier.Kind, strings.Join(verifier.Argv, " "), verifier.WallClockSeconds, verifier.MaxOutputBytes)
+			if verifier.Metric != nil {
+				line += fmt.Sprintf("; metric=%s direction=%s min_delta=%.3g%% noise_floor=%.3g%%", verifier.Metric.Name, verifier.Metric.Direction, verifier.Metric.MinDeltaPercent, verifier.Metric.NoiseFloorPercent)
+			}
+			lines = append(lines, line)
+		}
+	}
+	lines = append(lines, "</build_spec>")
+	return strings.Join(lines, "\n") + "\n"
+}
+
 func RenderJudgeFacetRules(facet *workorder.Facet, mode string) string {
 	if facet == nil {
 		return ""
@@ -251,6 +281,10 @@ func fixtureJudgeFacetRules(mode string) string {
 
 func fixtureRuntimeBudgetBlock() string {
 	return RenderRuntimeBudgetBlock(workorder.Budgets{WallClockSeconds: 3, MaxOutputBytes: 20000, HeartbeatSeconds: 0, OutputCapGraceSeconds: 10, MaxOutputOverrunBytes: 20000}, "worker")
+}
+
+func fixtureBuildSpecBlock() string {
+	return "<build_spec>\n</build_spec>\n"
 }
 
 func fixtureTriageReviewContractBlock() string {

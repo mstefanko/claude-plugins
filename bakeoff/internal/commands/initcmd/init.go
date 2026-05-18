@@ -19,14 +19,14 @@ type InitOptions struct {
 func NewCmdInit(f commands.Factory, runF func(context.Context, *InitOptions) error) *cobra.Command {
 	opts := &InitOptions{}
 	cmd := &cobra.Command{
-		Use:           "init {gather|compare|analyze|review}",
+		Use:           "init {gather|compare|analyze|review|build}",
 		Short:         "write an example work order",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Args:          commands.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.Type = args[0]
-			if err := commands.OneOf("type", "gather", "compare", "analyze", "review")(opts.Type); err != nil {
+			if err := commands.OneOf("type", "gather", "compare", "analyze", "review", "build")(opts.Type); err != nil {
 				return err
 			}
 			if runF == nil {

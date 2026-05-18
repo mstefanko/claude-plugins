@@ -1,0 +1,11 @@
+{
+  "exit_code": 0,
+  "stderr": "",
+  "stdout": "wrote build.work-order.json\neffort defaults: workers=high, judge=xhigh\n",
+  "workspace": {
+    "build.work-order.json": {
+      "type": "text",
+      "value": "// bakeoff build work order - edit `id`, `goal`, `background`, verifiers, then run:\n//   bakeoff validate <this-file>\n//   bakeoff build <this-file>\n{\n  \"schema_version\": 1,\n  \"id\": \"TODO-rename-this\",\n  \"type\": \"build\",\n  \"goal\": \"ONE SENTENCE: what code change should be implemented?\",\n  \"background\": \"MULTI-LINE: acceptance criteria, target files, constraints, and known risks.\",\n  \"providers\": [\n    { \"id\": \"claude\", \"backend\": \"claude\", \"model\": \"claude-sonnet-4-6\", \"effort\": \"high\", \"scope\": \"codebase\" },\n    { \"id\": \"codex\",  \"backend\": \"codex\",  \"model\": \"gpt-5.5\",           \"effort\": \"high\", \"scope\": \"codebase\" }\n  ],\n  \"scope_policy\": { \"enforcement\": \"best_effort\" },\n  \"judge\": { \"backend\": \"claude\", \"model\": \"claude-opus-4-7\", \"effort\": \"xhigh\" },\n  \"build\": {\n    \"base_ref\": \"HEAD\",\n    \"comparison_goal\": \"Prefer the patch that satisfies the acceptance criteria with the smallest maintainable change.\",\n    \"patch_max_bytes\": 100000,\n    \"verify\": [\n      {\n        \"id\": \"tests\",\n        \"kind\": \"gate\",\n        \"argv\": [\"go\", \"test\", \"./...\"],\n        \"wall_clock_seconds\": 300,\n        \"max_output_bytes\": 60000\n      }\n    ]\n  },\n  \"budgets\": {\n    \"wall_clock_seconds\": 1200,\n    \"max_output_bytes\": 80000,\n    \"heartbeat_seconds\": 60,\n    \"output_cap_grace_seconds\": 10,\n    \"max_output_overrun_bytes\": 80000\n  }\n}\n"
+    }
+  }
+}

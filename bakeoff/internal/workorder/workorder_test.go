@@ -97,7 +97,7 @@ func TestFacetValidationNormalizesAndRejectsUnsafeText(t *testing.T) {
 }
 
 func TestInitTemplatesMatchFrozenShape(t *testing.T) {
-	for _, mode := range []string{"gather", "compare", "analyze", "review"} {
+	for _, mode := range []string{"gather", "compare", "analyze", "review", "build"} {
 		text, err := InitTemplate(mode)
 		if err != nil {
 			t.Fatal(err)
@@ -108,6 +108,120 @@ func TestInitTemplatesMatchFrozenShape(t *testing.T) {
 		if !strings.HasSuffix(text, "\n") {
 			t.Fatalf("%s template must end in newline", mode)
 		}
+	}
+}
+
+func TestBuildWorkOrderValidation(t *testing.T) {
+	data := validBuildWorkOrder()
+	wo, err := Validate(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wo.Type != "build" || wo.Build == nil {
+		t.Fatalf("build spec missing: %#v", wo)
+	}
+	if wo.Build.BaseRef != "HEAD" {
+		t.Fatalf("base ref = %q", wo.Build.BaseRef)
+	}
+	if wo.Build.PatchMaxBytes != 100000 {
+		t.Fatalf("patch max = %d", wo.Build.PatchMaxBytes)
+	}
+	if got := wo.Build.Verify[0].Kind; got != "gate" {
+		t.Fatalf("default verifier kind = %q", got)
+	}
+	if got := wo.Build.Verify[1].Metric.Name; got != "elapsed_ms" {
+		t.Fatalf("metric name = %q", got)
+	}
+}
+
+func TestBuildValidationRejectsWebScopeAndMissingGate(t *testing.T) {
+	data := validBuildWorkOrder()
+	providers := data["providers"].([]any)
+	providers[1].(map[string]any)["scope"] = "web"
+	_, err := Validate(data)
+	if err == nil || !strings.Contains(err.Error(), `scope "web" is not supported`) {
+		t.Fatalf("expected web scope rejection, got %v", err)
+	}
+
+	data = validBuildWorkOrder()
+	build := data["build"].(map[string]any)
+	build["verify"] = []any{
+		map[string]any{
+			"id":                 "metric-only",
+			"kind":               "metric",
+			"argv":               []any{"./bench"},
+			"wall_clock_seconds": 10,
+			"max_output_bytes":   1000,
+			"metric": map[string]any{
+				"name":              "elapsed_ms",
+				"direction":         "lower",
+				"min_delta_percent": 5,
+			},
+		},
+	}
+	_, err = Validate(data)
+	if err == nil || !strings.Contains(err.Error(), "at least one gate") {
+		t.Fatalf("expected missing gate rejection, got %v", err)
+	}
+}
+
+func TestBuildValidationRejectsAmbiguousVerifierArgv(t *testing.T) {
+	data := validBuildWorkOrder()
+	verify := data["build"].(map[string]any)["verify"].([]any)
+	verify[0].(map[string]any)["argv"] = []any{"go test", "./..."}
+	_, err := Validate(data)
+	if err == nil || !strings.Contains(err.Error(), "command path without whitespace") {
+		t.Fatalf("expected argv[0] whitespace rejection, got %v", err)
+	}
+
+	data = validBuildWorkOrder()
+	verify = data["build"].(map[string]any)["verify"].([]any)
+	verify[0].(map[string]any)["argv"] = []any{"go", "test\x00./..."}
+	_, err = Validate(data)
+	if err == nil || !strings.Contains(err.Error(), "control characters") {
+		t.Fatalf("expected argv control character rejection, got %v", err)
+	}
+}
+
+func TestBuildResultValidators(t *testing.T) {
+	worker := map[string]any{
+		"status":                 "complete",
+		"summary":                "Implemented the change.",
+		"files_touched":          []any{"main.go"},
+		"tests_added_or_changed": []any{"main_test.go"},
+		"risks":                  []any{},
+		"manual_checks":          []any{"go test ./..."},
+	}
+	if _, err := ValidateBuildWorkerResult(worker); err != nil {
+		t.Fatal(err)
+	}
+
+	judge := map[string]any{
+		"relation": "compare",
+		"scores_a": map[string]any{
+			"correctness":          4,
+			"verifier_evidence":    5,
+			"comparative_evidence": 3,
+			"scope_control":        4,
+			"test_quality":         4,
+			"benchmark_quality":    3,
+			"maintainability":      4,
+		},
+		"scores_b": map[string]any{
+			"correctness":          3,
+			"verifier_evidence":    5,
+			"comparative_evidence": 3,
+			"scope_control":        3,
+			"test_quality":         3,
+			"benchmark_quality":    3,
+			"maintainability":      3,
+		},
+		"winner":    "A",
+		"rationale": "A has a cleaner patch.",
+		"risks":     []any{},
+	}
+	if _, err := ValidateBuildJudgeResult(judge); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -167,5 +281,45 @@ func validWorkOrder() map[string]any {
 		},
 		"judge":   map[string]any{"backend": "claude", "model": "judge"},
 		"budgets": map[string]any{"wall_clock_seconds": 3, "max_output_bytes": 2000},
+	}
+}
+
+func validBuildWorkOrder() map[string]any {
+	return map[string]any{
+		"schema_version": 1,
+		"id":             "build-routing",
+		"type":           "build",
+		"goal":           "Implement routing.",
+		"background":     "Acceptance criteria.",
+		"providers": []any{
+			map[string]any{"id": "claude", "backend": "claude", "model": "same", "scope": "codebase"},
+			map[string]any{"id": "codex", "backend": "codex", "model": "other", "scope": "mixed"},
+		},
+		"judge":   map[string]any{"backend": "claude", "model": "judge"},
+		"budgets": map[string]any{"wall_clock_seconds": 3, "max_output_bytes": 2000},
+		"build": map[string]any{
+			"comparison_goal": "Prefer fewer moving parts.",
+			"verify": []any{
+				map[string]any{
+					"id":                 "unit",
+					"argv":               []any{"go", "test", "./..."},
+					"wall_clock_seconds": 300,
+					"max_output_bytes":   60000,
+				},
+				map[string]any{
+					"id":                 "latency",
+					"kind":               "metric",
+					"argv":               []any{"./bench"},
+					"wall_clock_seconds": 300,
+					"max_output_bytes":   60000,
+					"metric": map[string]any{
+						"name":                "elapsed_ms",
+						"direction":           "lower",
+						"min_delta_percent":   10,
+						"noise_floor_percent": 5,
+					},
+				},
+			},
+		},
 	}
 }

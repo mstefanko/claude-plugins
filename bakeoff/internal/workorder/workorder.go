@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -22,24 +23,28 @@ var (
 	//go:embed templates/*.work-order.json
 	templateFS embed.FS
 
-	modes             = []string{"gather", "compare", "analyze"}
-	initKinds         = []string{"gather", "compare", "analyze", "review"}
-	scopeEnforcements = []string{"advisory", "best_effort", "required"}
-	backends          = []string{"claude", "codex"}
-	scopes            = []string{"codebase", "web", "mixed"}
-	efforts           = []string{"low", "medium", "high", "xhigh"}
-	workerStatuses    = []string{"complete", "complete_with_concerns", "needs_context", "blocked"}
-	confidences       = []string{"high", "medium", "low"}
-	compareScores     = []string{"evidence", "coherence", "tradeoff_honesty", "rebuttals"}
-	analyzeScores     = []string{"step_atomicity", "citation_grounding", "assumption_transparency", "coherence"}
-	loserPositions    = []string{"agrees", "disagrees", "not_covered", "adds"}
-	followupKinds     = []string{"bug", "risk", "doc_drift", "test_gap", "follow_up"}
-	triageClasses     = []string{"real_issue", "false_positive", "plan_doc_drift", "product_decision", "needs_repro", "already_fixed", "evidence_gap"}
-	triageActions     = []string{"fix_now", "document", "defer", "ignore", "reproduce"}
-	triageSeverities  = []string{"high", "medium", "low", "none"}
-	slugRE            = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
-	todoIDRE          = regexp.MustCompile(`(?i)^TODO[-_]`)
-	facetControlRE    = regexp.MustCompile(`[\x00-\x1f\x7f]`)
+	modes               = []string{"gather", "compare", "analyze", "build"}
+	initKinds           = []string{"gather", "compare", "analyze", "review", "build"}
+	scopeEnforcements   = []string{"advisory", "best_effort", "required"}
+	backends            = []string{"claude", "codex"}
+	scopes              = []string{"codebase", "web", "mixed"}
+	efforts             = []string{"low", "medium", "high", "xhigh"}
+	workerStatuses      = []string{"complete", "complete_with_concerns", "needs_context", "blocked"}
+	buildWorkerStatuses = []string{"complete", "blocked"}
+	confidences         = []string{"high", "medium", "low"}
+	compareScores       = []string{"evidence", "coherence", "tradeoff_honesty", "rebuttals"}
+	analyzeScores       = []string{"step_atomicity", "citation_grounding", "assumption_transparency", "coherence"}
+	buildScores         = []string{"correctness", "verifier_evidence", "comparative_evidence", "scope_control", "test_quality", "benchmark_quality", "maintainability"}
+	verifierKinds       = []string{"gate", "metric"}
+	metricDirections    = []string{"lower", "higher"}
+	loserPositions      = []string{"agrees", "disagrees", "not_covered", "adds"}
+	followupKinds       = []string{"bug", "risk", "doc_drift", "test_gap", "follow_up"}
+	triageClasses       = []string{"real_issue", "false_positive", "plan_doc_drift", "product_decision", "needs_repro", "already_fixed", "evidence_gap"}
+	triageActions       = []string{"fix_now", "document", "defer", "ignore", "reproduce"}
+	triageSeverities    = []string{"high", "medium", "low", "none"}
+	slugRE              = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+	todoIDRE            = regexp.MustCompile(`(?i)^TODO[-_]`)
+	facetControlRE      = regexp.MustCompile(`[\x00-\x1f\x7f]`)
 )
 
 var facetKeys = map[string]bool{
@@ -103,6 +108,32 @@ type ScopePolicy struct {
 	Enforcement string `json:"enforcement"`
 }
 
+type BuildSpec struct {
+	BaseRef        string         `json:"base_ref"`
+	ComparisonGoal string         `json:"comparison_goal,omitempty"`
+	PatchMaxBytes  int            `json:"patch_max_bytes"`
+	Verify         []VerifierSpec `json:"verify"`
+	Raw            map[string]any `json:"-"`
+}
+
+type VerifierSpec struct {
+	ID               string         `json:"id"`
+	Kind             string         `json:"kind"`
+	Argv             []string       `json:"argv"`
+	Metric           *MetricSpec    `json:"metric,omitempty"`
+	WallClockSeconds int            `json:"wall_clock_seconds"`
+	MaxOutputBytes   int            `json:"max_output_bytes"`
+	Raw              map[string]any `json:"-"`
+}
+
+type MetricSpec struct {
+	Name              string         `json:"name"`
+	Direction         string         `json:"direction"`
+	MinDeltaPercent   float64        `json:"min_delta_percent"`
+	NoiseFloorPercent float64        `json:"noise_floor_percent,omitempty"`
+	Raw               map[string]any `json:"-"`
+}
+
 type WorkOrder struct {
 	SchemaVersion int            `json:"schema_version"`
 	ID            string         `json:"id"`
@@ -114,6 +145,7 @@ type WorkOrder struct {
 	Judge         Participant    `json:"judge"`
 	Budgets       Budgets        `json:"budgets"`
 	ScopePolicy   ScopePolicy    `json:"scope_policy"`
+	Build         *BuildSpec     `json:"build,omitempty"`
 	Raw           map[string]any `json:"-"`
 }
 
@@ -244,6 +276,11 @@ func Validate(data map[string]any) (*WorkOrder, error) {
 	if err != nil {
 		return nil, err
 	}
+	for i, provider := range providers {
+		if mode == "build" && provider.Scope == "web" {
+			return nil, Validationf(`providers[%d].scope "web" is not supported for type "build"`, i)
+		}
+	}
 	providerIDs := make(map[string]bool, len(providers))
 	for _, provider := range providers {
 		providerIDs[provider.ID] = true
@@ -264,6 +301,13 @@ func Validate(data map[string]any) (*WorkOrder, error) {
 	if err != nil {
 		return nil, err
 	}
+	var build *BuildSpec
+	if mode == "build" {
+		build, err = validateBuildSpec(data["build"])
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	return &WorkOrder{
 		SchemaVersion: schemaVersion,
@@ -276,6 +320,7 @@ func Validate(data map[string]any) (*WorkOrder, error) {
 		Judge:         judge,
 		Budgets:       budgets,
 		ScopePolicy:   scopePolicy,
+		Build:         build,
 		Raw:           data,
 	}, nil
 }
@@ -553,7 +598,190 @@ func validateScopePolicy(value any) (ScopePolicy, error) {
 	return ScopePolicy{Enforcement: enforcement}, nil
 }
 
+func validateBuildSpec(value any) (*BuildSpec, error) {
+	obj, ok := value.(map[string]any)
+	if !ok {
+		return nil, Validationf(`build is required when type is "build"`)
+	}
+	baseRef := "HEAD"
+	if raw, ok := obj["base_ref"]; ok {
+		value, ok := raw.(string)
+		if !ok || strings.TrimSpace(value) == "" {
+			return nil, Validationf("build.base_ref must be a non-empty string")
+		}
+		baseRef = strings.TrimSpace(value)
+	}
+	comparisonGoal := ""
+	if raw, ok := obj["comparison_goal"]; ok {
+		value, ok := raw.(string)
+		if !ok {
+			return nil, Validationf("build.comparison_goal must be a string")
+		}
+		comparisonGoal = strings.TrimSpace(value)
+	}
+	patchMaxBytes := 100000
+	if raw, ok := obj["patch_max_bytes"]; ok {
+		value, ok := asInt(raw)
+		if !ok || value <= 0 || value > 5000000 {
+			return nil, Validationf("build.patch_max_bytes must be a positive integer no greater than 5000000")
+		}
+		patchMaxBytes = value
+	}
+	verify, err := validateVerifierSpecs(obj["verify"])
+	if err != nil {
+		return nil, err
+	}
+	return &BuildSpec{
+		BaseRef:        baseRef,
+		ComparisonGoal: comparisonGoal,
+		PatchMaxBytes:  patchMaxBytes,
+		Verify:         verify,
+		Raw:            obj,
+	}, nil
+}
+
+func validateVerifierSpecs(value any) ([]VerifierSpec, error) {
+	items, ok := value.([]any)
+	if !ok || len(items) == 0 {
+		return nil, Validationf("build.verify must be a non-empty array")
+	}
+	seenIDs := map[string]bool{}
+	hasGate := false
+	out := make([]VerifierSpec, 0, len(items))
+	for i, item := range items {
+		obj, ok := item.(map[string]any)
+		if !ok {
+			return nil, Validationf("build.verify[%d] must be an object", i)
+		}
+		verifier, err := validateVerifierSpec(obj, i)
+		if err != nil {
+			return nil, err
+		}
+		if seenIDs[verifier.ID] {
+			return nil, Validationf("build.verify[%d].id must be unique (duplicate %s)", i, pyRepr(verifier.ID))
+		}
+		seenIDs[verifier.ID] = true
+		if verifier.Kind == "gate" {
+			hasGate = true
+		}
+		out = append(out, verifier)
+	}
+	if !hasGate {
+		return nil, Validationf("build.verify must include at least one gate verifier")
+	}
+	return out, nil
+}
+
+func validateVerifierSpec(obj map[string]any, index int) (VerifierSpec, error) {
+	label := fmt.Sprintf("build.verify[%d]", index)
+	id, ok := obj["id"].(string)
+	if !ok || strings.TrimSpace(id) == "" {
+		return VerifierSpec{}, Validationf("%s.id must be a non-empty slug", label)
+	}
+	id = strings.TrimSpace(id)
+	if !slugRE.MatchString(id) {
+		return VerifierSpec{}, Validationf("%s.id must be a slug matching ^[A-Za-z0-9][A-Za-z0-9._-]*$", label)
+	}
+	kind := "gate"
+	if raw, ok := obj["kind"]; ok {
+		value, ok := raw.(string)
+		if !ok || !contains(verifierKinds, value) {
+			return VerifierSpec{}, Validationf("%s.kind must be one of: %s", label, strings.Join(verifierKinds, ", "))
+		}
+		kind = value
+	}
+	argv, err := validateVerifierArgv(obj["argv"], label+".argv")
+	if err != nil {
+		return VerifierSpec{}, err
+	}
+	wall, err := requiredPositiveInt(obj, label+".wall_clock_seconds", "wall_clock_seconds")
+	if err != nil {
+		return VerifierSpec{}, err
+	}
+	maxOutput, err := requiredPositiveInt(obj, label+".max_output_bytes", "max_output_bytes")
+	if err != nil {
+		return VerifierSpec{}, err
+	}
+	var metric *MetricSpec
+	if kind == "metric" {
+		metric, err = validateMetricSpec(obj["metric"], label+".metric")
+		if err != nil {
+			return VerifierSpec{}, err
+		}
+	} else if _, ok := obj["metric"]; ok {
+		return VerifierSpec{}, Validationf("%s.metric is only valid when kind is metric", label)
+	}
+	return VerifierSpec{
+		ID:               id,
+		Kind:             kind,
+		Argv:             argv,
+		Metric:           metric,
+		WallClockSeconds: wall,
+		MaxOutputBytes:   maxOutput,
+		Raw:              obj,
+	}, nil
+}
+
+func validateVerifierArgv(value any, label string) ([]string, error) {
+	items, ok := value.([]any)
+	if !ok || len(items) == 0 {
+		return nil, Validationf("%s must be a non-empty array of strings", label)
+	}
+	out := make([]string, 0, len(items))
+	for i, item := range items {
+		text, ok := item.(string)
+		if !ok || text == "" {
+			return nil, Validationf("%s[%d] must be a non-empty string", label, i)
+		}
+		if strings.ContainsRune(text, '\x00') || strings.ContainsAny(text, "\r\n") {
+			return nil, Validationf("%s[%d] must not contain control characters", label, i)
+		}
+		if i == 0 && strings.ContainsAny(text, " \t") {
+			return nil, Validationf("%s[0] must be a command path without whitespace; pass command arguments as separate argv entries", label)
+		}
+		out = append(out, text)
+	}
+	return out, nil
+}
+
+func validateMetricSpec(value any, label string) (*MetricSpec, error) {
+	obj, ok := value.(map[string]any)
+	if !ok {
+		return nil, Validationf("%s is required for metric verifiers", label)
+	}
+	name, ok := obj["name"].(string)
+	if !ok || strings.TrimSpace(name) == "" {
+		return nil, Validationf("%s.name must be a non-empty string", label)
+	}
+	direction, ok := obj["direction"].(string)
+	if !ok || !contains(metricDirections, direction) {
+		return nil, Validationf("%s.direction must be one of: %s", label, strings.Join(metricDirections, ", "))
+	}
+	minDelta, err := requiredPositiveFloat(obj, label+".min_delta_percent", "min_delta_percent")
+	if err != nil {
+		return nil, err
+	}
+	noiseFloor := 0.0
+	if raw, ok := obj["noise_floor_percent"]; ok {
+		value, ok := asFloat(raw)
+		if !ok || value < 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+			return nil, Validationf("%s.noise_floor_percent must be a non-negative finite number", label)
+		}
+		noiseFloor = value
+	}
+	return &MetricSpec{
+		Name:              strings.TrimSpace(name),
+		Direction:         direction,
+		MinDeltaPercent:   minDelta,
+		NoiseFloorPercent: noiseFloor,
+		Raw:               obj,
+	}, nil
+}
+
 func ValidateWorkerResult(data any, mode string) (any, error) {
+	if mode == "build" {
+		return ValidateBuildWorkerResult(data)
+	}
 	obj, ok := data.(map[string]any)
 	if !ok {
 		return nil, Validationf("worker final_json must be an object")
@@ -711,6 +939,63 @@ func ValidateAnalyzeJudgeResult(data any) (any, error) {
 	return data, nil
 }
 
+func ValidateBuildWorkerResult(data any) (any, error) {
+	obj, ok := data.(map[string]any)
+	if !ok {
+		return nil, Validationf("build worker final_json must be an object")
+	}
+	for _, field := range []string{"status", "summary", "files_touched", "tests_added_or_changed", "risks", "manual_checks"} {
+		if _, ok := obj[field]; !ok {
+			return nil, Validationf("build worker final_json.%s is required", field)
+		}
+	}
+	if status, _ := obj["status"].(string); !contains(buildWorkerStatuses, status) {
+		return nil, Validationf("build worker final_json.status must be one of: %s", strings.Join(buildWorkerStatuses, ", "))
+	}
+	if summary, ok := obj["summary"].(string); !ok || strings.TrimSpace(summary) == "" {
+		return nil, Validationf("build worker final_json.summary must be a non-empty string")
+	}
+	for _, field := range []string{"files_touched", "tests_added_or_changed", "risks", "manual_checks"} {
+		if err := validateStringList(obj[field], "build worker final_json."+field); err != nil {
+			return nil, err
+		}
+	}
+	return data, nil
+}
+
+func ValidateBuildJudgeResult(data any) (any, error) {
+	obj, ok := data.(map[string]any)
+	if !ok {
+		return nil, Validationf("build judge final_json must be an object")
+	}
+	for _, field := range []string{"relation", "scores_a", "scores_b", "winner", "rationale", "risks"} {
+		if _, ok := obj[field]; !ok {
+			return nil, Validationf("build judge final_json.%s is required", field)
+		}
+	}
+	if relation, _ := obj["relation"].(string); relation != "compare" {
+		return nil, Validationf(`build judge final_json.relation must equal "compare"`)
+	}
+	if winner := obj["winner"]; winner != nil {
+		if s, ok := winner.(string); !ok || (s != "A" && s != "B" && s != "tie") {
+			return nil, Validationf(`build judge final_json.winner must be one of: "A", "B", "tie", null`)
+		}
+	}
+	if err := validateScoreMap(obj["scores_a"], "build judge final_json.scores_a", buildScores); err != nil {
+		return nil, err
+	}
+	if err := validateScoreMap(obj["scores_b"], "build judge final_json.scores_b", buildScores); err != nil {
+		return nil, err
+	}
+	if err := validateStringOrList(obj["rationale"], "build judge final_json.rationale"); err != nil {
+		return nil, err
+	}
+	if err := validateStringList(obj["risks"], "build judge final_json.risks"); err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
 func ValidateTriageResult(data any) (any, error) {
 	obj, ok := data.(map[string]any)
 	if !ok {
@@ -771,6 +1056,18 @@ func requiredPositiveInt(obj map[string]any, label string, field string) (int, e
 	return value, nil
 }
 
+func requiredPositiveFloat(obj map[string]any, label string, field string) (float64, error) {
+	raw, ok := obj[field]
+	if !ok {
+		return 0, Validationf("%s is required", label)
+	}
+	value, ok := asFloat(raw)
+	if !ok || value <= 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+		return 0, Validationf("%s must be a positive finite number", label)
+	}
+	return value, nil
+}
+
 func asInt(value any) (int, bool) {
 	switch typed := value.(type) {
 	case json.Number:
@@ -787,6 +1084,24 @@ func asInt(value any) (int, bool) {
 		if typed == float64(int(typed)) {
 			return int(typed), true
 		}
+	}
+	return 0, false
+}
+
+func asFloat(value any) (float64, bool) {
+	switch typed := value.(type) {
+	case json.Number:
+		f, err := typed.Float64()
+		if err != nil {
+			return 0, false
+		}
+		return f, true
+	case int:
+		return float64(typed), true
+	case int64:
+		return float64(typed), true
+	case float64:
+		return typed, true
 	}
 	return 0, false
 }

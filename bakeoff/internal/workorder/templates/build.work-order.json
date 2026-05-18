@@ -1,0 +1,37 @@
+// bakeoff build work order - edit `id`, `goal`, `background`, verifiers, then run:
+//   bakeoff validate <this-file>
+//   bakeoff build <this-file>
+{
+  "schema_version": 1,
+  "id": "TODO-rename-this",
+  "type": "build",
+  "goal": "ONE SENTENCE: what code change should be implemented?",
+  "background": "MULTI-LINE: acceptance criteria, target files, constraints, and known risks.",
+  "providers": [
+    { "id": "claude", "backend": "claude", "model": "claude-sonnet-4-6", "effort": "high", "scope": "codebase" },
+    { "id": "codex",  "backend": "codex",  "model": "gpt-5.5",           "effort": "high", "scope": "codebase" }
+  ],
+  "scope_policy": { "enforcement": "best_effort" },
+  "judge": { "backend": "claude", "model": "claude-opus-4-7", "effort": "xhigh" },
+  "build": {
+    "base_ref": "HEAD",
+    "comparison_goal": "Prefer the patch that satisfies the acceptance criteria with the smallest maintainable change.",
+    "patch_max_bytes": 100000,
+    "verify": [
+      {
+        "id": "tests",
+        "kind": "gate",
+        "argv": ["go", "test", "./..."],
+        "wall_clock_seconds": 300,
+        "max_output_bytes": 60000
+      }
+    ]
+  },
+  "budgets": {
+    "wall_clock_seconds": 1200,
+    "max_output_bytes": 80000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 80000
+  }
+}

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -11,7 +12,7 @@ import (
 )
 
 func TestPromptFixturesMatchFrozenPythonOracle(t *testing.T) {
-	for _, mode := range []string{"gather", "compare", "analyze"} {
+	for _, mode := range []string{"gather", "compare", "analyze", "build"} {
 		wo := fixtureWorkOrder(t, mode)
 		for _, provider := range wo.Providers {
 			got, err := BuildWorkerPrompt(wo, provider)
@@ -79,6 +80,8 @@ func fixtureWorkOrder(t *testing.T, mode string) *workorder.WorkOrder {
 	secondScope := "mixed"
 	if mode == "gather" {
 		secondScope = "web"
+	} else if mode == "build" {
+		secondScope = "codebase"
 	}
 	data := map[string]any{
 		"schema_version": 1,
@@ -99,6 +102,35 @@ func fixtureWorkOrder(t *testing.T, mode string) *workorder.WorkOrder {
 			"include": []any{"correctness bugs and edge cases"},
 			"exclude": []any{"style-only preferences"},
 		},
+	}
+	if mode == "build" {
+		data["build"] = map[string]any{
+			"base_ref":        "HEAD",
+			"comparison_goal": "Prefer the clearer patch with stronger test coverage.",
+			"patch_max_bytes": 100000,
+			"verify": []any{
+				map[string]any{
+					"id":                 "unit",
+					"kind":               "gate",
+					"argv":               []any{"go", "test", "./..."},
+					"wall_clock_seconds": 300,
+					"max_output_bytes":   60000,
+				},
+				map[string]any{
+					"id":                 "latency",
+					"kind":               "metric",
+					"argv":               []any{"./scripts/bench-json"},
+					"wall_clock_seconds": 300,
+					"max_output_bytes":   60000,
+					"metric": map[string]any{
+						"name":                "elapsed_ms",
+						"direction":           "lower",
+						"min_delta_percent":   10,
+						"noise_floor_percent": 5,
+					},
+				},
+			},
+		}
 	}
 	wo, err := workorder.Validate(data)
 	if err != nil {
@@ -131,6 +163,22 @@ func assertFixture(t *testing.T, relative string, got string) {
 		t.Fatal(err)
 	}
 	if got != string(expected) {
-		t.Fatalf("%s drifted\nlen got=%d want=%d", relative, len(got), len(expected))
+		t.Fatalf("%s drifted\nlen got=%d want=%d\n%s", relative, len(got), len(expected), firstDiff(got, string(expected)))
 	}
+}
+
+func firstDiff(got string, want string) string {
+	limit := len(got)
+	if len(want) < limit {
+		limit = len(want)
+	}
+	for i := 0; i < limit; i++ {
+		if got[i] != want[i] {
+			start := max(0, i-40)
+			endGot := min(len(got), i+80)
+			endWant := min(len(want), i+80)
+			return "first diff near byte " + strconv.Itoa(i) + "\ngot:  " + got[start:endGot] + "\nwant: " + want[start:endWant]
+		}
+	}
+	return "common prefix; one value has extra trailing content"
 }

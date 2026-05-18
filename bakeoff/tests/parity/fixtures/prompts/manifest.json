@@ -4,6 +4,10 @@
       "sha256": "9820ad12348b87a3105f91e7e32a8e147a65bb0ffaff66e3f8c346ad42fc2ddf",
       "size_bytes": 4868
     },
+    "judge-build.txt": {
+      "sha256": "fc57ef223869e98437a941348310e469395bd1f188fc9f21491ecb89f05a3680",
+      "size_bytes": 4497
+    },
     "judge-compare.txt": {
       "sha256": "3c7077f4e6e6eee75fa869e044c1af7a6446ca123103c7bcdbf46200b173db68",
       "size_bytes": 4786
@@ -13,8 +17,8 @@
       "size_bytes": 4067
     },
     "triage.txt": {
-      "sha256": "60ee3daca345db8fb58536b44a59213ed64e1b0f718b5c88dbd04d90287f3050",
-      "size_bytes": 4215
+      "sha256": "2a4746b61f35d77dfbca34d8a2afbf137ce823a3cb02a14485710dc0428739cf",
+      "size_bytes": 4686
     },
     "worker-analyze-claude.txt": {
       "sha256": "6ff374d12602f5ef339cc59d4acf2810b0311ef16456c7540b9faee07a7a7574",
@@ -23,6 +27,14 @@
     "worker-analyze-codex.txt": {
       "sha256": "9f4e197a5b125a4e8a0b398c03811289cf4426ad686ba849e5781ec321146f2b",
       "size_bytes": 4631
+    },
+    "worker-build-claude.txt": {
+      "sha256": "d65eacbaab07f50dd7b88522646cf4f83a956031fd512828ccd5c0f53116586c",
+      "size_bytes": 4011
+    },
+    "worker-build-codex.txt": {
+      "sha256": "3d2dbba49fd532864b58348d5eda752c91a22412805ba32fddda5d157c7636ca",
+      "size_bytes": 4161
     },
     "worker-compare-claude.txt": {
       "sha256": "ce9a11f73a2ab53d0dc14cea146198ac15e9ba4bd63afeeaa19a8bb93f641074",

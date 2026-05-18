@@ -186,6 +186,7 @@ def cases() -> list[Case]:
         Case("init_compare", ["init", "compare"]),
         Case("init_analyze", ["init", "analyze"]),
         Case("init_review", ["init", "review"]),
+        Case("init_build", ["init", "build"]),
         Case("validate_success", ["validate", "gather.json"], work_orders=gather),
         Case("validate_jsonc_edge", ["validate", "jsonc.work-order.json"], jsonc_work_orders={"jsonc.work-order.json": jsonc_text}),
         Case("validate_failure", ["validate", "missing.json"], expect={2}),
