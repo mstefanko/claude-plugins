@@ -182,6 +182,19 @@ func TestRunProviderReportsStderrTruncationWithoutFailingSuccess(t *testing.T) {
 	if result.StderrBytes > 100 {
 		t.Fatalf("stderr_bytes = %d", result.StderrBytes)
 	}
+
+	headTail := RunProvider(context.Background(), helperOptions("stderr-head-tail", Budgets{WallClockSeconds: 3, MaxOutputBytes: 100}))
+	if headTail.Status != StatusOK {
+		t.Fatalf("head/tail status = %s stderr=%q", headTail.Status, headTail.Stderr)
+	}
+	for _, want := range []string{"stderr-head-", "[STDERR TAIL]", "-stderr-tail"} {
+		if !strings.Contains(headTail.Stderr, want) {
+			t.Fatalf("stderr head/tail output missing %q: %q", want, headTail.Stderr)
+		}
+	}
+	if headTail.StderrBytes > 100 || headTail.StderrObservedBytes <= headTail.StderrBytes {
+		t.Fatalf("unexpected head/tail byte counts: %#v", headTail)
+	}
 }
 
 func TestRunProviderReportsClosedStdinDiagnostic(t *testing.T) {
@@ -401,6 +414,9 @@ func TestHelperProcess(t *testing.T) {
 		time.Sleep(5 * time.Second)
 	case "stderr-trunc":
 		fmt.Fprint(os.Stderr, strings.Repeat("e", 5000))
+		fmt.Print(`<final_json>{"ok": true}</final_json>`)
+	case "stderr-head-tail":
+		fmt.Fprint(os.Stderr, "stderr-head-"+strings.Repeat("m", 5000)+"-stderr-tail")
 		fmt.Print(`<final_json>{"ok": true}</final_json>`)
 	case "close-stdin":
 		_ = os.Stdin.Close()

@@ -56,7 +56,7 @@ func Run(runDir string, displayOutDir string) Result {
 	manifestPath := filepath.Join(runDir, "manifest.json")
 	problems := []string{}
 	warnings := []string{}
-	var loadedManifest map[string]any
+	var loadedManifest *manifestDocument
 	manifestStatus := "ok"
 	if !fileExists(manifestPath) {
 		manifestStatus = "failed"
@@ -66,17 +66,26 @@ func Run(runDir string, displayOutDir string) Result {
 		if err != nil {
 			manifestStatus = "failed"
 			problems = append(problems, "invalid manifest: "+err.Error())
-		} else if err := json.Unmarshal(data, &loadedManifest); err != nil {
-			manifestStatus = "failed"
-			problems = append(problems, "invalid manifest: "+err.Error())
 		} else {
-			if intValue(loadedManifest["schema_version"]) != manifest.SchemaVersion {
+			var parsed manifestDocument
+			err := json.Unmarshal(data, &parsed)
+			if err != nil {
 				manifestStatus = "failed"
-				problems = append(problems, fmt.Sprintf("invalid manifest schema_version: %v", loadedManifest["schema_version"]))
+				problems = append(problems, "invalid manifest: "+err.Error())
+			} else {
+				loadedManifest = &parsed
 			}
-			if loadedManifest["run_id"] != filepath.Base(runDir) {
+		}
+		if loadedManifest == nil {
+			// Error already recorded above.
+		} else {
+			if loadedManifest.SchemaVersion != manifest.SchemaVersion {
 				manifestStatus = "failed"
-				problems = append(problems, fmt.Sprintf("manifest run_id %q does not match %q", loadedManifest["run_id"], filepath.Base(runDir)))
+				problems = append(problems, fmt.Sprintf("invalid manifest schema_version: %v", loadedManifest.SchemaVersion))
+			}
+			if loadedManifest.RunID != filepath.Base(runDir) {
+				manifestStatus = "failed"
+				problems = append(problems, fmt.Sprintf("manifest run_id %q does not match %q", loadedManifest.RunID, filepath.Base(runDir)))
 			}
 		}
 	}
@@ -103,14 +112,14 @@ func Run(runDir string, displayOutDir string) Result {
 	checkedCount := 0
 	fingerprintStatus := "ok"
 	if loadedManifest != nil {
-		fingerprints, ok := loadedManifest["artifact_fingerprints"].(map[string]any)
+		fingerprints, ok := parseFingerprintEntries(loadedManifest.ArtifactFingerprints)
 		if !ok {
 			fingerprintStatus = "failed"
 			problems = append(problems, "invalid manifest: artifact_fingerprints must be an object")
 		} else {
 			for relative, expected := range fingerprints {
 				checkedCount++
-				if reason := VerifyFingerprintEntry(runDir, relative, expected); reason != "" {
+				if reason := verifyFingerprintEntry(runDir, relative, expected); reason != "" {
 					fingerprintStatus = "failed"
 					fingerprintMismatches = append(fingerprintMismatches, map[string]string{"path": relative, "reason": reason})
 					if reason == "missing" {
@@ -120,8 +129,10 @@ func Run(runDir string, displayOutDir string) Result {
 					}
 				}
 			}
-			if legacyMissing := legacyMissingStableFingerprints(runDir, fingerprints); len(legacyMissing) > 0 {
-				warnings = append(warnings, "manifest was written before stable provider/judge evidence fingerprinting: "+strings.Join(legacyMissing, ", "))
+			if shouldCheckLegacyStableFingerprints(fingerprints) {
+				if legacyMissing := legacyMissingStableFingerprints(runDir, fingerprints); len(legacyMissing) > 0 {
+					warnings = append(warnings, "manifest was written before stable provider/judge evidence fingerprinting: "+strings.Join(legacyMissing, ", "))
+				}
 			}
 		}
 	} else if manifestStatus == "failed" {
@@ -162,7 +173,38 @@ func Run(runDir string, displayOutDir string) Result {
 	}
 }
 
-func legacyMissingStableFingerprints(runDir string, fingerprints map[string]any) []string {
+type manifestDocument struct {
+	SchemaVersion        int                         `json:"schema_version"`
+	RunID                string                      `json:"run_id"`
+	ArtifactFingerprints map[string]fingerprintEntry `json:"artifact_fingerprints"`
+}
+
+type fingerprintEntry struct {
+	SHA256    string `json:"sha256"`
+	SizeBytes int64  `json:"size_bytes"`
+}
+
+func parseFingerprintEntries(fingerprints map[string]fingerprintEntry) (map[string]fingerprintEntry, bool) {
+	if fingerprints == nil {
+		return nil, false
+	}
+	return fingerprints, true
+}
+
+func verifyFingerprintEntry(runDir string, relative string, entry fingerprintEntry) string {
+	return verifyFingerprintValues(runDir, relative, entry.SizeBytes, entry.SHA256)
+}
+
+func shouldCheckLegacyStableFingerprints(fingerprints map[string]fingerprintEntry) bool {
+	for relative := range fingerprints {
+		if isStableEvidenceArtifact(relative) {
+			return false
+		}
+	}
+	return true
+}
+
+func legacyMissingStableFingerprints(runDir string, fingerprints map[string]fingerprintEntry) []string {
 	missing := []string{}
 	for _, relative := range manifest.FingerprintArtifactPaths(runDir) {
 		if !isStableEvidenceArtifact(relative) {
@@ -177,6 +219,21 @@ func legacyMissingStableFingerprints(runDir string, fingerprints map[string]any)
 
 func isStableEvidenceArtifact(relative string) bool {
 	return strings.HasPrefix(relative, "providers/") || strings.HasPrefix(relative, "judge/")
+}
+
+func verifyFingerprintValues(runDir string, relative string, expectedSize int64, expectedSHA string) string {
+	if relative == "" {
+		return "invalid"
+	}
+	path := filepath.Join(runDir, relative)
+	size, sha, err := workorder.FileFingerprint(path)
+	if err != nil {
+		return "missing"
+	}
+	if expectedSize != size || expectedSHA != sha {
+		return "sha256_or_size"
+	}
+	return ""
 }
 
 func reviewContextSetStatus(runDir string) (bool, []string) {
@@ -203,18 +260,7 @@ func VerifyFingerprintEntry(runDir string, relative string, expected any) string
 	if !ok || relative == "" {
 		return "invalid"
 	}
-	path := filepath.Join(runDir, relative)
-	if !fileExists(path) {
-		return "missing"
-	}
-	size, sha, err := workorder.FileFingerprint(path)
-	if err != nil {
-		return "missing"
-	}
-	if int64Value(obj["size_bytes"]) != size || stringValue(obj["sha256"]) != sha {
-		return "sha256_or_size"
-	}
-	return ""
+	return verifyFingerprintValues(runDir, relative, int64Value(obj["size_bytes"]), stringValue(obj["sha256"]))
 }
 
 func Next(runDir string, outDir string, exitCode int, triageState string) string {
@@ -237,17 +283,6 @@ func Next(runDir string, outDir string, exitCode int, triageState string) string
 func fileExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
-}
-
-func intValue(value any) int {
-	switch typed := value.(type) {
-	case int:
-		return typed
-	case float64:
-		return int(typed)
-	default:
-		return 0
-	}
 }
 
 func int64Value(value any) int64 {

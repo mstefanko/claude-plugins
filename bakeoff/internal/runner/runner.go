@@ -166,7 +166,8 @@ type captureState struct {
 	quietThresholdSeconds int
 	stdoutHead            []byte
 	stdoutTail            []byte
-	stderrChunks          [][]byte
+	stderrHead            []byte
+	stderrTail            []byte
 	stdoutBytes           int
 	stderrBytes           int
 	stdoutObservedBytes   int
@@ -593,24 +594,60 @@ func (s *captureState) appendStderr(chunk []byte) {
 	now := time.Now()
 	s.stderrObservedBytes += len(chunk)
 	if s.stderrCapHit {
+		s.appendStderrTailLocked(chunk)
 		s.lastStderrAt = &now
 		return
 	}
-	if s.stderrBytes+len(chunk) > s.maxOutputBytes {
-		keep := max(0, s.maxOutputBytes-s.stderrBytes)
+	if len(s.stderrHead)+len(chunk) > s.maxOutputBytes {
+		keep := max(0, s.maxOutputBytes-len(s.stderrHead))
 		if keep > 0 {
-			s.stderrChunks = append(s.stderrChunks, append([]byte(nil), chunk[:keep]...))
-			s.stderrBytes += keep
+			s.stderrHead = append(s.stderrHead, chunk[:keep]...)
 		}
-		marker := []byte(fmt.Sprintf("\n[STDERR TRUNCATED at %d bytes]\n", s.maxOutputBytes))
-		s.stderrChunks = append(s.stderrChunks, marker)
 		s.stderrCapHit = true
+		s.splitStderrHeadTailLocked()
+		s.appendStderrTailLocked(chunk[keep:])
 		s.lastStderrAt = &now
 		return
 	}
-	s.stderrChunks = append(s.stderrChunks, append([]byte(nil), chunk...))
-	s.stderrBytes += len(chunk)
+	s.stderrHead = append(s.stderrHead, chunk...)
+	s.stderrBytes = len(s.stderrHead) + len(s.stderrTail)
 	s.lastStderrAt = &now
+}
+
+func (s *captureState) splitStderrHeadTailLocked() {
+	headLimit := s.stderrHeadLimitLocked()
+	tailLimit := s.stderrTailLimitLocked()
+	captured := s.stderrHead
+	s.stderrHead = append([]byte(nil), captured[:min(len(captured), headLimit)]...)
+	if tailLimit > 0 {
+		tailStart := max(0, len(captured)-tailLimit)
+		s.stderrTail = append([]byte(nil), captured[tailStart:]...)
+	}
+	s.stderrBytes = len(s.stderrHead) + len(s.stderrTail)
+}
+
+func (s *captureState) appendStderrTailLocked(chunk []byte) {
+	tailLimit := s.stderrTailLimitLocked()
+	if len(chunk) == 0 || tailLimit <= 0 {
+		s.stderrBytes = len(s.stderrHead) + len(s.stderrTail)
+		return
+	}
+	s.stderrTail = append(s.stderrTail, chunk...)
+	if excess := len(s.stderrTail) - tailLimit; excess > 0 {
+		s.stderrTail = s.stderrTail[excess:]
+	}
+	s.stderrBytes = len(s.stderrHead) + len(s.stderrTail)
+}
+
+func (s *captureState) stderrHeadLimitLocked() int {
+	if s.maxOutputBytes <= 1 {
+		return max(0, s.maxOutputBytes)
+	}
+	return s.maxOutputBytes / 2
+}
+
+func (s *captureState) stderrTailLimitLocked() int {
+	return max(0, s.maxOutputBytes-s.stderrHeadLimitLocked())
 }
 
 func (s *captureState) waitAfterOutputCap(ctx context.Context, cmd *exec.Cmd, waitDone <-chan error, wallTimer *time.Timer) (error, bool, bool) {
@@ -750,7 +787,14 @@ func (s *captureState) stdoutForArtifact() string {
 func (s *captureState) stderrText() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return string(bytes.Join(s.stderrChunks, nil))
+	if !s.stderrCapHit {
+		return string(s.stderrHead)
+	}
+	var buf bytes.Buffer
+	buf.Write(s.stderrHead)
+	fmt.Fprintf(&buf, "\n[STDERR TRUNCATED at %d bytes]\n[STDERR TAIL]\n", s.maxOutputBytes)
+	buf.Write(s.stderrTail)
+	return buf.String()
 }
 
 func (s *captureState) setStdinError(message string) {

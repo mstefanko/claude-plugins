@@ -4,7 +4,9 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
+	"sync"
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/apperror"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands"
@@ -66,8 +68,7 @@ func runLs(_ context.Context, f commands.Factory, opts *LsOptions) error {
 	}
 	sort.Sort(sort.Reverse(sort.StringSlice(runDirs)))
 	rows := []map[string]any{}
-	for _, runDir := range runDirs {
-		row := manifest.RowForLS(runDir)
+	for _, row := range rowsForLS(runDirs) {
 		if opts.Facet != "" && row["facet_id"] != opts.Facet {
 			continue
 		}
@@ -95,6 +96,38 @@ func runLs(_ context.Context, f commands.Factory, opts *LsOptions) error {
 		f.Streams().Printf("%s\t%s\t%s\t%s\ttriage:%s\t%s\n", stringValue(row["run_id"]), defaultString(row["type"], "?"), facet, defaultString(row["decision_kind"], "?"), defaultString(row["triage_state"], "no"), defaultString(row["finished_at"], "-"))
 	}
 	return nil
+}
+
+func rowsForLS(runDirs []string) []map[string]any {
+	rows := make([]map[string]any, len(runDirs))
+	workers := runtime.GOMAXPROCS(0)
+	if workers > 16 {
+		workers = 16
+	}
+	if workers < 2 || len(runDirs) < 2 {
+		for i, runDir := range runDirs {
+			rows[i] = manifest.RowForLS(runDir)
+		}
+		return rows
+	}
+
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for index := range jobs {
+				rows[index] = manifest.RowForLS(runDirs[index])
+			}
+		}()
+	}
+	for i := range runDirs {
+		jobs <- i
+	}
+	close(jobs)
+	wg.Wait()
+	return rows
 }
 
 func stringValue(value any) string {

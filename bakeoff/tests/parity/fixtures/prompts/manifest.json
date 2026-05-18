@@ -29,12 +29,12 @@
       "size_bytes": 4631
     },
     "worker-build-claude.txt": {
-      "sha256": "d65eacbaab07f50dd7b88522646cf4f83a956031fd512828ccd5c0f53116586c",
-      "size_bytes": 4011
+      "sha256": "b0a34bafe499184e7bc46ef3ccfd279ad98cd682cd2c0e1f1f3714e06aa684af",
+      "size_bytes": 4676
     },
     "worker-build-codex.txt": {
-      "sha256": "3d2dbba49fd532864b58348d5eda752c91a22412805ba32fddda5d157c7636ca",
-      "size_bytes": 4161
+      "sha256": "4ef06fc0060ae138ee6ff3cf385ef73801944cd21e95278071b40630a6726728",
+      "size_bytes": 4826
     },
     "worker-compare-claude.txt": {
       "sha256": "ce9a11f73a2ab53d0dc14cea146198ac15e9ba4bd63afeeaa19a8bb93f641074",

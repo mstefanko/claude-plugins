@@ -172,8 +172,15 @@ func TestRunBuildMutatesIsolatedWorktreesAndCapturesPatches(t *testing.T) {
 	if _, ok := diagnostics["baseline_metric_deltas"].([]any); !ok {
 		t.Fatalf("diagnostics missing baseline metric deltas: %#v", diagnostics)
 	}
-	if _, ok := diagnostics["patch_apply_checks"].([]any); !ok {
-		t.Fatalf("diagnostics missing patch apply checks: %#v", diagnostics)
+	if checks, ok := diagnostics["patch_integrity_checks"].([]any); !ok {
+		t.Fatalf("diagnostics missing patch integrity checks: %#v", diagnostics)
+	} else {
+		for _, raw := range checks {
+			check, _ := raw.(map[string]any)
+			if check["status"] != "passed" || check["check_base"] != "base_commit_worktree" {
+				t.Fatalf("unexpected patch integrity check: %#v", check)
+			}
+		}
 	}
 	if _, err := os.Stat(filepath.Join(runDir, "worktrees", "claude")); !os.IsNotExist(err) {
 		t.Fatalf("provider worktree should have been removed, stat err=%v", err)
@@ -188,12 +195,62 @@ func TestRunBuildMutatesIsolatedWorktreesAndCapturesPatches(t *testing.T) {
 	reportText := string(report)
 	for _, want := range []string{
 		"Checkpoint: Bakeoff selected this exact provider patch and has not applied it.",
+		"Use this report and the selected patch artifact as handoff material for a fresh session",
 		"Post-run edits, synthesis, or reimplementation are outside this bakeoff decision.",
-		"Manual apply command for the selected patch:",
+		"Patch artifact: `providers/claude/build/diff.patch`",
 	} {
 		if !strings.Contains(reportText, want) {
 			t.Fatalf("report missing handoff contract %q:\n%s", want, reportText)
 		}
+	}
+	for _, forbidden := range []string{"Manual apply command", "git apply"} {
+		if strings.Contains(reportText, forbidden) {
+			t.Fatalf("report should not include apply instructions %q:\n%s", forbidden, reportText)
+		}
+	}
+}
+
+func TestPatchIntegrityChecksUseBaseCommitWorktree(t *testing.T) {
+	ctx := context.Background()
+	repoDir := initBuildGitRepo(t)
+	repo, err := buildworkspace.ResolveRepository(ctx, repoDir, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runDir := t.TempDir()
+	worktreePath := filepath.Join(t.TempDir(), "provider")
+	if err := buildworkspace.CreateDetachedWorktree(ctx, repo, worktreePath); err != nil {
+		t.Fatal(err)
+	}
+	defer buildworkspace.CleanupWorktree(ctx, repo, worktreePath, false)
+
+	if err := os.WriteFile(filepath.Join(worktreePath, "README.md"), []byte("provider patch\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	captureDir := filepath.Join(runDir, "providers", "claude", "build")
+	capture, err := buildworkspace.CaptureChanges(ctx, buildworkspace.CaptureOptions{
+		WorktreePath:  worktreePath,
+		BaseCommit:    repo.BaseCommit,
+		OutputDir:     captureDir,
+		PatchMaxBytes: 100000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("dirty source checkout\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	checks := collectPatchIntegrityChecks(ctx, repo, runDir, []providerRun{{
+		ID:      "claude",
+		Capture: &capture,
+	}})
+	if len(checks) != 1 {
+		t.Fatalf("checks = %#v", checks)
+	}
+	check := checks[0]
+	if check.Status != "passed" || check.CheckBase != "base_commit_worktree" || check.BaseCommit != repo.BaseCommit {
+		t.Fatalf("check = %#v", check)
 	}
 }
 

@@ -1,8 +1,11 @@
 package manifest
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -59,7 +62,8 @@ func BuildRunManifest(runDir string) (map[string]any, error) {
 	}
 	state, staleInputs := triage.StateDetail(runDir)
 	triageSummary := triageSummary(runDir, state, staleInputs)
-	artifacts, err := artifactPaths(runDir)
+	runType := runTypeFromWorkOrder(workOrder)
+	artifacts, err := artifactPathsForType(runDir, runType)
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +84,7 @@ func BuildRunManifest(runDir string) (map[string]any, error) {
 		"judge":                 judgeSummary(meta),
 		"review_context":        reviewContextSummary(runDir),
 		"artifacts":             artifacts,
-		"artifact_fingerprints": artifactFingerprints(runDir),
+		"artifact_fingerprints": artifactFingerprintsForType(runDir, runType),
 	}, nil
 }
 
@@ -94,41 +98,84 @@ func WriteRunManifest(runDir string) (map[string]any, error) {
 
 func RowForLS(runDir string) map[string]any {
 	manifestPath := filepath.Join(runDir, "manifest.json")
-	if _, err := os.Stat(manifestPath); err != nil {
+	loaded, err := readLSManifest(manifestPath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			row := legacyLSRow(runDir, "invalid")
+			row["manifest_path"] = manifestPath
+			row["manifest_error"] = shortError(err)
+			return row
+		}
 		return legacyLSRow(runDir, "missing")
 	}
-	loaded, err := readRequiredJSON(manifestPath)
-	if err != nil || intValue(loaded["schema_version"]) != SchemaVersion || loaded["run_id"] != filepath.Base(runDir) {
+	if loaded.SchemaVersion != SchemaVersion || loaded.RunID != filepath.Base(runDir) {
 		row := legacyLSRow(runDir, "invalid")
 		row["manifest_path"] = manifestPath
-		if err != nil {
-			row["manifest_error"] = shortError(err)
-		} else {
-			row["manifest_error"] = "invalid manifest"
-		}
+		row["manifest_error"] = "invalid manifest"
 		return row
 	}
-	artifacts, _ := loaded["artifacts"].(map[string]any)
-	state, _ := triage.StateDetail(runDir)
-	if state == "" {
-		state = manifestTriageState(loaded)
-	}
+	state := triageStateForLS(runDir, loaded.Triage.State)
 	row := map[string]any{
 		"run_id":         filepath.Base(runDir),
 		"manifest_state": "present",
-		"type":           loaded["type"],
-		"facet_id":       loaded["facet_id"],
-		"decision_kind":  loaded["decision_kind"],
+		"type":           loaded.Type,
+		"facet_id":       nilIfEmpty(stringPtrValue(loaded.FacetID)),
+		"decision_kind":  loaded.DecisionKind,
 		"triage_state":   state,
-		"finished_at":    loaded["finished_at"],
+		"finished_at":    loaded.FinishedAt,
 		"manifest_path":  manifestPath,
 	}
-	if report, ok := stringFromMap(artifacts, "report"); ok {
+	if report := loaded.Artifacts["report"]; report != "" {
 		row["report_path"] = filepath.Join(runDir, report)
 	} else if fileExists(filepath.Join(runDir, "report.md")) {
 		row["report_path"] = filepath.Join(runDir, "report.md")
 	}
 	return row
+}
+
+type lsManifest struct {
+	SchemaVersion int               `json:"schema_version"`
+	RunID         string            `json:"run_id"`
+	Type          string            `json:"type"`
+	FacetID       *string           `json:"facet_id"`
+	DecisionKind  string            `json:"decision_kind"`
+	FinishedAt    string            `json:"finished_at"`
+	Artifacts     map[string]string `json:"artifacts"`
+	Triage        struct {
+		State string `json:"state"`
+	} `json:"triage"`
+}
+
+func readLSManifest(path string) (lsManifest, error) {
+	var out lsManifest
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return out, err
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return out, err
+	}
+	if out.Artifacts == nil {
+		out.Artifacts = map[string]string{}
+	}
+	return out, nil
+}
+
+func triageStateForLS(runDir string, manifestState string) string {
+	if manifestState == "" {
+		manifestState = "no"
+	}
+	if manifestState == "no" {
+		info, err := os.Stat(filepath.Join(runDir, "triage"))
+		if err != nil || !info.IsDir() {
+			return manifestState
+		}
+	}
+	state, _ := triage.StateDetail(runDir)
+	if state != "" {
+		return state
+	}
+	return manifestState
 }
 
 func triageSummary(runDir string, state string, staleInputs []string) map[string]any {
@@ -217,8 +264,7 @@ func reviewContextSummary(runDir string) map[string]any {
 	return map[string]any{"present": false}
 }
 
-func artifactPaths(runDir string) (map[string]any, error) {
-	runType := runType(runDir)
+func artifactPathsForType(runDir string, runType string) (map[string]any, error) {
 	for _, relative := range RequiredArtifactsForType(runType) {
 		if err := requireFile(filepath.Join(runDir, relative)); err != nil {
 			return nil, err
@@ -266,7 +312,10 @@ func RequiredArtifactsForType(runType string) []string {
 }
 
 func FingerprintArtifactPaths(runDir string) []string {
-	runType := runType(runDir)
+	return fingerprintArtifactPathsForType(runDir, runType(runDir))
+}
+
+func fingerprintArtifactPathsForType(runDir string, runType string) []string {
 	seen := map[string]bool{}
 	paths := []string{}
 	add := func(relative string) {
@@ -279,80 +328,159 @@ func FingerprintArtifactPaths(runDir string) []string {
 		seen[relative] = true
 		paths = append(paths, relative)
 	}
+	addFound := func(relative string) {
+		if relative == "" || seen[relative] {
+			return
+		}
+		seen[relative] = true
+		paths = append(paths, relative)
+	}
 	for _, relative := range CoreFingerprintArtifacts {
 		add(relative)
 	}
 	if runType == "build" {
 		add("build-context.json")
 	}
-	for _, pattern := range []string{
-		"providers/*/prompt.txt",
-		"providers/*/status.json",
-		"providers/*/final.json",
-		"providers/*/last-message.txt",
-		"judge/prompt*.txt",
-		"judge/status*.json",
-		"judge/result*.json",
-		"judge/last-message*.txt",
-	} {
-		matches, _ := filepath.Glob(filepath.Join(runDir, pattern))
-		sort.Strings(matches)
-		for _, path := range matches {
-			relative, err := filepath.Rel(runDir, path)
-			if err == nil {
-				add(relative)
-			}
-		}
-	}
+	addProviderEvidencePaths(runDir, addFound)
+	addJudgeEvidencePaths(runDir, addFound)
 	if runType == "build" {
-		for _, pattern := range []string{
-			"baseline/verify/*/status.json",
-			"baseline/verify/*/stdout.txt",
-			"baseline/verify/*/stderr.txt",
-			"baseline/verify/*/metric.json",
-			"providers/*/build/workspace.json",
-			"providers/*/build/capture.json",
-			"providers/*/build/ineligible.json",
-			"providers/*/build/changed-files.txt",
-			"providers/*/build/diff.patch",
-			"providers/*/build/diffstat.txt",
-			"providers/*/build/test-files.json",
-			"providers/*/build/benchmark-files.json",
-			"providers/*/build/verify/*/status.json",
-			"providers/*/build/verify/*/stdout.txt",
-			"providers/*/build/verify/*/stderr.txt",
-			"providers/*/build/verify/*/metric.json",
-		} {
-			matches, _ := filepath.Glob(filepath.Join(runDir, pattern))
-			sort.Strings(matches)
-			for _, path := range matches {
-				relative, err := filepath.Rel(runDir, path)
-				if err == nil {
-					add(relative)
-				}
-			}
-		}
+		addVerifyEvidencePaths(runDir, filepath.Join("baseline", "verify"), addFound)
+		addBuildProviderEvidencePaths(runDir, addFound)
 	}
 	sort.Strings(paths)
 	return paths
 }
 
-func artifactFingerprints(runDir string) map[string]any {
+func artifactFingerprintsForType(runDir string, runType string) map[string]any {
 	out := map[string]any{}
-	for _, relative := range FingerprintArtifactPaths(runDir) {
+	for _, relative := range fingerprintArtifactPathsForType(runDir, runType) {
 		path := filepath.Join(runDir, relative)
-		size, sha, err := workorder.FileFingerprint(path)
+		size, sha, mtime, err := fingerprintFile(path)
 		if err != nil {
 			continue
-		}
-		info, _ := os.Stat(path)
-		mtime := int64(0)
-		if info != nil {
-			mtime = info.ModTime().UnixNano()
 		}
 		out[relative] = map[string]any{"sha256": sha, "size_bytes": size, "mtime_ns": mtime}
 	}
 	return out
+}
+
+var providerEvidenceArtifactNames = []string{"prompt.txt", "status.json", "final.json", "last-message.txt"}
+var buildProviderArtifactNames = []string{"workspace.json", "capture.json", "ineligible.json", "changed-files.txt", "diff.patch", "diffstat.txt", "test-files.json", "benchmark-files.json"}
+var verifyArtifactNames = []string{"status.json", "stdout.txt", "stderr.txt", "metric.json"}
+
+func addProviderEvidencePaths(runDir string, add func(string)) {
+	providers, err := os.ReadDir(filepath.Join(runDir, "providers"))
+	if err != nil {
+		return
+	}
+	for _, provider := range providers {
+		if !provider.IsDir() {
+			continue
+		}
+		providerRel := filepath.Join("providers", provider.Name())
+		addNamedFiles(runDir, providerRel, providerEvidenceArtifactNames, add)
+	}
+}
+
+func addJudgeEvidencePaths(runDir string, add func(string)) {
+	entries, err := os.ReadDir(filepath.Join(runDir, "judge"))
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if matchesAny(name, "prompt*.txt", "status*.json", "result*.json", "last-message*.txt") {
+			addDirEntryFile(runDir, "judge", entry, add)
+		}
+	}
+}
+
+func addBuildProviderEvidencePaths(runDir string, add func(string)) {
+	providers, err := os.ReadDir(filepath.Join(runDir, "providers"))
+	if err != nil {
+		return
+	}
+	for _, provider := range providers {
+		if !provider.IsDir() {
+			continue
+		}
+		buildRel := filepath.Join("providers", provider.Name(), "build")
+		addNamedFiles(runDir, buildRel, buildProviderArtifactNames, add)
+		addVerifyEvidencePaths(runDir, filepath.Join(buildRel, "verify"), add)
+	}
+}
+
+func addVerifyEvidencePaths(runDir string, verifyRel string, add func(string)) {
+	verifiers, err := os.ReadDir(filepath.Join(runDir, verifyRel))
+	if err != nil {
+		return
+	}
+	for _, verifier := range verifiers {
+		if !verifier.IsDir() {
+			continue
+		}
+		addNamedFiles(runDir, filepath.Join(verifyRel, verifier.Name()), verifyArtifactNames, add)
+	}
+}
+
+func addNamedFiles(runDir string, dirRel string, names []string, add func(string)) {
+	entries, err := os.ReadDir(filepath.Join(runDir, dirRel))
+	if err != nil {
+		return
+	}
+	byName := map[string]os.DirEntry{}
+	for _, entry := range entries {
+		byName[entry.Name()] = entry
+	}
+	for _, name := range names {
+		if entry, ok := byName[name]; ok && !entry.IsDir() {
+			addDirEntryFile(runDir, dirRel, entry, add)
+		}
+	}
+}
+
+func addDirEntryFile(runDir string, dirRel string, entry os.DirEntry, add func(string)) {
+	relative := filepath.Join(dirRel, entry.Name())
+	if entry.Type()&os.ModeSymlink != 0 {
+		if fileExists(filepath.Join(runDir, relative)) {
+			add(relative)
+		}
+		return
+	}
+	add(relative)
+}
+
+func matchesAny(name string, patterns ...string) bool {
+	for _, pattern := range patterns {
+		if ok, _ := filepath.Match(pattern, name); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func fingerprintFile(path string) (int64, string, int64, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return 0, "", 0, err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return 0, "", 0, err
+	}
+	if info.IsDir() {
+		return 0, "", 0, fmt.Errorf("%s is a directory", path)
+	}
+	hash := sha256.New()
+	size, err := io.Copy(hash, file)
+	if err != nil {
+		return 0, "", 0, err
+	}
+	return size, hex.EncodeToString(hash.Sum(nil)), info.ModTime().UnixNano(), nil
 }
 
 func reviewContextSetStatus(runDir string) (bool, []string) {
@@ -438,18 +566,16 @@ func highestSeverity(items []any) any {
 	return nil
 }
 
-func manifestTriageState(manifest map[string]any) string {
-	triageObj, ok := manifest["triage"].(map[string]any)
-	if !ok {
-		return ""
-	}
-	state, _ := triageObj["state"].(string)
-	return state
-}
-
 func runType(runDir string) string {
 	runType, _ := RunTypeForRun(runDir)
 	return runType
+}
+
+func runTypeFromWorkOrder(workOrder map[string]any) string {
+	if _, ok := workOrder["type"]; !ok {
+		return ""
+	}
+	return stringValue(workOrder["type"])
 }
 
 func RunTypeForRun(runDir string) (string, error) {
@@ -546,23 +672,16 @@ func sortedKeys(values map[string]bool) []string {
 	return keys
 }
 
-func stringFromMap(obj map[string]any, key string) (string, bool) {
-	if obj == nil {
-		return "", false
-	}
-	value, ok := obj[key].(string)
-	return value, ok
+func stringValue(value any) string {
+	text, _ := value.(string)
+	return text
 }
 
-func intValue(value any) int {
-	switch typed := value.(type) {
-	case int:
-		return typed
-	case float64:
-		return int(typed)
-	default:
-		return 0
+func stringPtrValue(value *string) string {
+	if value == nil {
+		return ""
 	}
+	return *value
 }
 
 func truthy(value any) bool {

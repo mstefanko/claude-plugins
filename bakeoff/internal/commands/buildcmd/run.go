@@ -77,7 +77,7 @@ type buildDiagnostics struct {
 	PromptSizes          []promptSizeDiagnostic           `json:"prompt_sizes,omitempty"`
 	BaselineMetricDeltas []baselineMetricDelta            `json:"baseline_metric_deltas,omitempty"`
 	OutputTruncation     []outputTruncationRecord         `json:"output_truncation,omitempty"`
-	PatchApplyChecks     []patchApplyCheck                `json:"patch_apply_checks,omitempty"`
+	PatchIntegrityChecks []patchIntegrityCheck            `json:"patch_integrity_checks,omitempty"`
 	ScopeDiagnostics     map[string]buildScopeDiagnostics `json:"scope_diagnostics,omitempty"`
 	SourceWarnings       []string                         `json:"source_warnings,omitempty"`
 }
@@ -110,13 +110,14 @@ type outputTruncationRecord struct {
 	RetainedBytes int    `json:"retained_bytes"`
 }
 
-type patchApplyCheck struct {
-	ProviderID  string `json:"provider_id"`
-	Status      string `json:"status"`
-	PatchPath   string `json:"patch_path"`
-	SourceDirty bool   `json:"source_dirty"`
-	Output      string `json:"output,omitempty"`
-	Error       string `json:"error,omitempty"`
+type patchIntegrityCheck struct {
+	ProviderID string `json:"provider_id"`
+	Status     string `json:"status"`
+	PatchPath  string `json:"patch_path"`
+	CheckBase  string `json:"check_base"`
+	BaseCommit string `json:"base_commit,omitempty"`
+	Output     string `json:"output,omitempty"`
+	Error      string `json:"error,omitempty"`
 }
 
 func RunBuild(ctx context.Context, f commands.Factory, opts *BuildOptions) error {
@@ -1137,13 +1138,13 @@ func buildDecision(wo *workorder.WorkOrder, workerResults map[string]map[string]
 
 func collectBuildDiagnostics(ctx context.Context, wo *workorder.WorkOrder, repo buildworkspace.Repository, runDir string, baseline buildverify.Result, runs []providerRun, timings []buildPhaseTiming) buildDiagnostics {
 	diagnostics := buildDiagnostics{
-		SchemaVersion:    1,
-		PhaseTimings:     compactPhaseTimings(timings),
-		PromptSizes:      collectPromptSizes(runDir, runs),
-		OutputTruncation: collectOutputTruncation(baseline, runs),
-		PatchApplyChecks: collectPatchApplyChecks(ctx, repo, runDir, runs),
-		ScopeDiagnostics: map[string]buildScopeDiagnostics{},
-		SourceWarnings:   sourceWarnings(repo),
+		SchemaVersion:        1,
+		PhaseTimings:         compactPhaseTimings(timings),
+		PromptSizes:          collectPromptSizes(runDir, runs),
+		OutputTruncation:     collectOutputTruncation(baseline, runs),
+		PatchIntegrityChecks: collectPatchIntegrityChecks(ctx, repo, runDir, runs),
+		ScopeDiagnostics:     map[string]buildScopeDiagnostics{},
+		SourceWarnings:       sourceWarnings(repo),
 	}
 	for _, run := range runs {
 		if len(run.ScopeDiagnostics.OutOfInvocationFiles) > 0 || len(run.ScopeDiagnostics.AgentInstructionFiles) > 0 || len(run.ScopeDiagnostics.Warnings) > 0 {
@@ -1264,19 +1265,61 @@ func truncationRecordsFromRunner(scope string, providerID string, verifierID str
 	return out
 }
 
-func collectPatchApplyChecks(ctx context.Context, repo buildworkspace.Repository, runDir string, runs []providerRun) []patchApplyCheck {
-	var out []patchApplyCheck
+func collectPatchIntegrityChecks(ctx context.Context, repo buildworkspace.Repository, runDir string, runs []providerRun) []patchIntegrityCheck {
+	var out []patchIntegrityCheck
 	for _, run := range runs {
 		if run.Capture == nil || run.Capture.PatchPath == "" {
 			continue
 		}
-		check := patchApplyCheck{ProviderID: run.ID, PatchPath: mustRelative(runDir, run.Capture.PatchPath), SourceDirty: !repo.SourceClean}
+		check := patchIntegrityCheck{
+			ProviderID: run.ID,
+			PatchPath:  mustRelative(runDir, run.Capture.PatchPath),
+			CheckBase:  "base_commit_worktree",
+			BaseCommit: repo.BaseCommit,
+		}
+		out = append(out, check)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+
+	checkRoot, err := os.MkdirTemp("", "bakeoff-patch-integrity-")
+	if err != nil {
+		return patchIntegrityNotChecked(out, err)
+	}
+	if err := os.RemoveAll(checkRoot); err != nil {
+		return patchIntegrityNotChecked(out, err)
+	}
+	created := false
+	createCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	err = withRepoLock(createCtx, repo, func() error {
+		if err := buildworkspace.CreateDetachedWorktree(createCtx, repo, checkRoot); err != nil {
+			return err
+		}
+		created = true
+		return nil
+	})
+	cancel()
+	if err != nil {
+		_ = os.RemoveAll(checkRoot)
+		return patchIntegrityNotChecked(out, err)
+	}
+	defer cleanupPatchIntegrityWorktree(ctx, repo, checkRoot, created)
+
+	for i := range out {
+		check := &out[i]
+		patchArg, err := filepath.Abs(filepath.Join(runDir, check.PatchPath))
+		if err != nil {
+			check.Status = "not_checked"
+			check.Error = err.Error()
+			continue
+		}
 		checkCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 		var stdout, stderr bytes.Buffer
-		cmd := exec.CommandContext(checkCtx, "git", "-C", repo.Root, "apply", "--check", "--3way", "--binary", run.Capture.PatchPath)
+		cmd := exec.CommandContext(checkCtx, "git", "-C", checkRoot, "apply", "--check", "--3way", "--binary", patchArg)
 		cmd.Stdout = &stdout
 		cmd.Stderr = &stderr
-		err := cmd.Run()
+		err = cmd.Run()
 		cancel()
 		output := strings.TrimSpace(stdout.String() + stderr.String())
 		if len(output) > 4000 {
@@ -1289,9 +1332,32 @@ func collectPatchApplyChecks(ctx context.Context, repo buildworkspace.Repository
 		} else {
 			check.Status = "passed"
 		}
-		out = append(out, check)
 	}
 	return out
+}
+
+func patchIntegrityNotChecked(checks []patchIntegrityCheck, err error) []patchIntegrityCheck {
+	for i := range checks {
+		checks[i].Status = "not_checked"
+		checks[i].Error = err.Error()
+	}
+	return checks
+}
+
+func cleanupPatchIntegrityWorktree(ctx context.Context, repo buildworkspace.Repository, path string, created bool) {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	if created {
+		_ = withRepoLock(cleanupCtx, repo, func() error {
+			result := buildworkspace.CleanupWorktree(cleanupCtx, repo, path, false)
+			if result.Error != "" {
+				return errors.New(result.Error)
+			}
+			return nil
+		})
+		return
+	}
+	_ = os.RemoveAll(path)
 }
 
 func diagnoseBuildScope(repo buildworkspace.Repository, changed []buildworkspace.ChangedFile) buildScopeDiagnostics {
@@ -1368,7 +1434,7 @@ func finalizeBuildRun(ctx context.Context, f commands.Factory, opts *BuildOption
 		f.Streams().Printf("manifest: %s\n", filepath.Join(runDir, "manifest.json"))
 		f.Streams().Printf("report: %s\n", filepath.Join(runDir, "report.md"))
 		if winner, _ := decision["canonical_winner"].(string); winner != "" {
-			f.Streams().Printf("patch:  %s\n", filepath.Join(runDir, "providers", winner, "build", "diff.patch"))
+			f.Streams().Printf("winner patch artifact: %s\n", filepath.Join(runDir, "providers", winner, "build", "diff.patch"))
 		}
 		f.Streams().Printf("next:   %s\n", ledger.BakeoffShowCommand(runID, opts.Out, ""))
 	}
@@ -1491,9 +1557,9 @@ func renderBuildReport(wo *workorder.WorkOrder, runID string, runDir string, dec
 		lines = append(lines, "", "Provider and verifier stdout/stderr artifacts are audit logs. Truncation is recorded for review, but it does not by itself change the decision when final JSON, patch capture, and verifier artifacts are available.")
 		lines = append(lines, "")
 	}
-	if len(diagnostics.PatchApplyChecks) > 0 {
-		lines = append(lines, "## Patch Apply Checks", "")
-		for _, check := range diagnostics.PatchApplyChecks {
+	if len(diagnostics.PatchIntegrityChecks) > 0 {
+		lines = append(lines, "## Patch Integrity Checks", "")
+		for _, check := range diagnostics.PatchIntegrityChecks {
 			line := fmt.Sprintf("- `%s`: `%s`", check.ProviderID, check.Status)
 			if check.Error != "" {
 				line += " (" + check.Error + ")"
@@ -1569,18 +1635,18 @@ func renderBuildReport(wo *workorder.WorkOrder, runID string, runDir string, dec
 		lines = append(lines, "")
 	}
 	if winner, _ := decision["canonical_winner"].(string); winner != "" {
-		patch := filepath.Join(runDir, "providers", winner, "build", "diff.patch")
 		lines = append(lines, "## Winner Handoff", "", "Winner: `"+winner+"`")
 		lines = append(lines, "Selection basis: `"+stringValue(decision["selection_basis"])+"`")
 		lines = append(lines, "Checkpoint: Bakeoff selected this exact provider patch and has not applied it.")
+		lines = append(lines, "Use this report and the selected patch artifact as handoff material for a fresh session before any repository changes.")
 		lines = append(lines, "Post-run edits, synthesis, or reimplementation are outside this bakeoff decision. Treat any such result as a derived patch and rerun verification before citing it as ready.")
 		if rationale := listValue(decision["judge_rationale"]); len(rationale) > 0 && stringValue(decision["selection_basis"]) == "judge" {
 			lines = append(lines, "Why: "+fmt.Sprint(rationale[0]))
 		}
 		if run := providerRunByID(runs, winner); run != nil {
 			if run.Capture != nil {
-				lines = append(lines, "Patch: `"+filepath.Join("providers", winner, "build", "diff.patch")+"`")
-				lines = append(lines, "Diffstat: `"+filepath.Join("providers", winner, "build", "diffstat.txt")+"`")
+				lines = append(lines, "Patch artifact: `"+filepath.Join("providers", winner, "build", "diff.patch")+"`")
+				lines = append(lines, "Diffstat artifact: `"+filepath.Join("providers", winner, "build", "diffstat.txt")+"`")
 				if len(run.Capture.TestFiles) > 0 {
 					lines = append(lines, fmt.Sprintf("Provider-authored tests: `%d`", len(run.Capture.TestFiles)))
 				}
@@ -1606,7 +1672,7 @@ func renderBuildReport(wo *workorder.WorkOrder, runID string, runDir string, dec
 				}
 			}
 		}
-		lines = append(lines, "", "Manual apply command for the selected patch:", "", "```text", "git apply --3way --binary "+patch, "```", "")
+		lines = append(lines, "")
 	}
 	if caveats := listValue(decision["caveats"]); len(caveats) > 0 {
 		lines = append(lines, "## Caveats", "")

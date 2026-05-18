@@ -164,6 +164,37 @@ func TestBuildManifestRequiresBuildContext(t *testing.T) {
 	}
 }
 
+func TestFingerprintArtifactPathsMatchesBuildEvidenceSet(t *testing.T) {
+	runDir := filepath.Join(t.TempDir(), "runs", "build1")
+	writeMinimalBuildRun(t, runDir, true)
+	writeJSON(t, filepath.Join(runDir, "baseline", "verify", "unit", "metric.json"), map[string]any{"value": 1})
+	writeText(t, filepath.Join(runDir, "judge", "prompt-pass1.txt"), "judge\n")
+	writeJSON(t, filepath.Join(runDir, "judge", "result-pass1.json"), map[string]any{"winner": "claude"})
+	writeJSON(t, filepath.Join(runDir, "providers", "claude", "build", "scope.json"), map[string]any{"ignored": true})
+	writeJSON(t, filepath.Join(runDir, "providers", "claude", "build", "verify", "unit", "metric.json"), map[string]any{"value": 2})
+	writeJSON(t, filepath.Join(runDir, "providers", "claude", "build", "verify", "unit", "result.json"), map[string]any{"ignored": true})
+
+	paths := manifest.FingerprintArtifactPaths(runDir)
+	for _, want := range []string{
+		"baseline/verify/unit/metric.json",
+		"judge/prompt-pass1.txt",
+		"judge/result-pass1.json",
+		"providers/claude/build/verify/unit/metric.json",
+	} {
+		if !contains(paths, want) {
+			t.Fatalf("missing %s in %#v", want, paths)
+		}
+	}
+	for _, excluded := range []string{
+		"providers/claude/build/scope.json",
+		"providers/claude/build/verify/unit/result.json",
+	} {
+		if contains(paths, excluded) {
+			t.Fatalf("unexpected %s in %#v", excluded, paths)
+		}
+	}
+}
+
 func TestVerifyFailsOnMalformedRunTypeSource(t *testing.T) {
 	runDir := filepath.Join(t.TempDir(), "runs", "bad-type")
 	writeText(t, filepath.Join(runDir, "work-order.json"), "{not json\n")

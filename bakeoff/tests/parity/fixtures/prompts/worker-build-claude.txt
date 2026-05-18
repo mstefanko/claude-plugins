@@ -50,6 +50,8 @@ Exclude:
 - Do not commit, create branches, or run commands that mutate the source checkout.
 - Make the implementation production-quality and aligned with nearby code.
 - Provider-authored tests or benchmarks are useful patch content, but the harness decides using the predeclared verifier commands.
+- Do not emit apply, merge, commit, or continuation instructions. The harness records the patch artifact for a separate handoff session.
+- Do not run declared metric verifier commands manually unless you are debugging a specific verifier failure. Prefer focused local checks; the harness runs the declared verifier suite after patch capture.
 - If you cannot implement the change, emit `status: "blocked"` and explain why in `summary` and `risks`.
 </rules>
 
