@@ -1,2 +1,0 @@
-#!/usr/bin/env sh
-BAKEOFF_FAKE_PROVIDER_NAME=claude exec /opt/homebrew/opt/python@3.14/bin/python3.14 /Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/bakeoff/pytest-of-mstefanko/pytest-0/test_single_provider_only_mode0/fake_provider.py "$@"

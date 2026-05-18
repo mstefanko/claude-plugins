@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"context"
 	"errors"
 	"time"
 
@@ -18,6 +19,14 @@ type Factory interface {
 	Now() time.Time
 	LookupProvider(string) (string, error)
 	Capabilities() *provider.CapabilityRegistry
+}
+
+func CodexOutputLastMessageSupported(ctx context.Context, f Factory, participant workorder.Participant) bool {
+	if participant.Backend != "codex" {
+		return false
+	}
+	caps := f.Capabilities().DetectScopeCapabilities(ctx, participant.Backend)
+	return caps.Supports["output_last_message"]
 }
 
 func WrapValidation(err error) error {

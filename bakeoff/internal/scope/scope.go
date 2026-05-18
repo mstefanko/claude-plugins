@@ -8,8 +8,11 @@ import (
 	"regexp"
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/provider"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/runstatus"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
 )
+
+const StatusScopeError = runstatus.ScopeError
 
 type EnforcementError struct {
 	Message string
@@ -42,7 +45,7 @@ func BuildExecution(ctx context.Context, registry *provider.CapabilityRegistry, 
 	cleanupPaths := []string{}
 
 	if enforcement == "advisory" {
-		return execution(ctx, registry, participant, executionCWD, extraArgs, cleanupPaths, finalMessagePath, enforcement, requestedScope, "advisory", "advisory", mechanisms, fallbackReasons)
+		return execution(ctx, registry, participant, executionCWD, extraArgs, cleanupPaths, finalMessagePath, enforcement, requestedScope, "advisory", "advisory", mechanisms, fallbackReasons, codexLastMessageSupport(ctx, registry, participant, nil))
 	}
 
 	actualCaps := provider.ScopeCapabilities{Backend: participant.Backend, Available: false, Supports: map[string]bool{}}
@@ -55,6 +58,7 @@ func BuildExecution(ctx context.Context, registry *provider.CapabilityRegistry, 
 	if supports == nil {
 		supports = map[string]bool{}
 	}
+	codexLastMessage := codexLastMessageSupport(ctx, registry, participant, supports)
 
 	needsIsolatedCWD := requestedScope == "web"
 	if requestedScope == "web" {
@@ -121,14 +125,10 @@ func BuildExecution(ctx context.Context, registry *provider.CapabilityRegistry, 
 	if enforcementLevel == "advisory" {
 		effectiveScope = "advisory"
 	}
-	return execution(ctx, registry, participant, executionCWD, extraArgs, cleanupPaths, finalMessagePath, enforcement, requestedScope, effectiveScope, enforcementLevel, mechanisms, fallbackReasons)
+	return execution(ctx, registry, participant, executionCWD, extraArgs, cleanupPaths, finalMessagePath, enforcement, requestedScope, effectiveScope, enforcementLevel, mechanisms, fallbackReasons, codexLastMessage)
 }
 
-func execution(ctx context.Context, registry *provider.CapabilityRegistry, participant workorder.Participant, executionCWD string, extraArgs []string, cleanupPaths []string, finalMessagePath string, policy string, requestedScope string, effectiveScope string, enforcementLevel string, mechanisms []string, fallbackReasons []string) (Execution, error) {
-	codexLastMessage := false
-	if participant.Backend == "codex" && registry != nil {
-		codexLastMessage = registry.CodexExecSupportsOutputLastMessage(ctx)
-	}
+func execution(_ context.Context, _ *provider.CapabilityRegistry, participant workorder.Participant, executionCWD string, extraArgs []string, cleanupPaths []string, finalMessagePath string, policy string, requestedScope string, effectiveScope string, enforcementLevel string, mechanisms []string, fallbackReasons []string, codexLastMessage bool) (Execution, error) {
 	argv, err := provider.BuildParticipantArgv(participant, executionCWD, extraArgs, finalMessagePath, codexLastMessage)
 	if err != nil {
 		return Execution{}, err
@@ -154,29 +154,52 @@ func ScopeErrorResult(err error, provider workorder.Participant, policy workorde
 	if requestedScope == "" {
 		requestedScope = "mixed"
 	}
+	enforcement := policy.Enforcement
+	if enforcement == "" {
+		enforcement = "best_effort"
+	}
 	message := err.Error()
+	stderrBytes := len([]byte(message))
 	return map[string]any{
-		"status":           "scope_error",
-		"exit_code":        nil,
-		"wall_seconds":     0,
-		"output_bytes":     0,
-		"stdout_bytes":     0,
-		"stderr_bytes":     len([]byte(message)),
-		"stdout_truncated": false,
-		"stderr_truncated": false,
-		"stdout":           "",
-		"stderr":           message,
-		"final_json":       nil,
+		"status":                StatusScopeError,
+		"exit_code":             nil,
+		"wall_seconds":          0,
+		"output_bytes":          0,
+		"stdout_bytes":          0,
+		"stderr_bytes":          stderrBytes,
+		"stdout_observed_bytes": 0,
+		"stderr_observed_bytes": stderrBytes,
+		"stdout_truncated":      false,
+		"stderr_truncated":      false,
+		"io":                    map[string]any{"stdout_bytes": 0, "stderr_bytes": stderrBytes, "stdout_observed_bytes": 0, "stderr_observed_bytes": stderrBytes, "total_observed_bytes": stderrBytes},
+		"stdout":                "",
+		"stderr":                message,
+		"final_json":            nil,
 		"scope_enforcement": map[string]any{
 			"requested_scope":   requestedScope,
-			"policy":            policy.Enforcement,
+			"policy":            enforcement,
 			"effective_scope":   "advisory",
 			"enforcement_level": "failed",
 			"mechanisms":        []string{},
 			"fallback_reason":   message,
 			"cwd":               cwd,
+			"temporary_cwd":     false,
 		},
 	}
+}
+
+func codexLastMessageSupport(ctx context.Context, registry *provider.CapabilityRegistry, participant workorder.Participant, supports map[string]bool) bool {
+	if participant.Backend != "codex" {
+		return false
+	}
+	if supports != nil {
+		return supports["output_last_message"]
+	}
+	if registry == nil {
+		return false
+	}
+	caps := registry.DetectScopeCapabilities(ctx, participant.Backend)
+	return caps.Supports["output_last_message"]
 }
 
 func Cleanup(paths []string) {

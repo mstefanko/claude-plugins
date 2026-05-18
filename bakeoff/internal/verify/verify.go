@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/ledger"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/manifest"
@@ -54,6 +55,7 @@ type TriageStatus struct {
 func Run(runDir string, displayOutDir string) Result {
 	manifestPath := filepath.Join(runDir, "manifest.json")
 	problems := []string{}
+	warnings := []string{}
 	var loadedManifest map[string]any
 	manifestStatus := "ok"
 	if !fileExists(manifestPath) {
@@ -86,6 +88,11 @@ func Run(runDir string, displayOutDir string) Result {
 			problems = append(problems, "missing artifact: "+filepath.Join(runDir, relative))
 		}
 	}
+	if reviewPresent, missing := reviewContextSetStatus(runDir); reviewPresent && len(missing) > 0 {
+		for _, relative := range missing {
+			problems = append(problems, "missing review context artifact: "+filepath.Join(runDir, relative))
+		}
+	}
 
 	fingerprintMismatches := []map[string]string{}
 	checkedCount := 0
@@ -108,6 +115,9 @@ func Run(runDir string, displayOutDir string) Result {
 					}
 				}
 			}
+			if legacyMissing := legacyMissingStableFingerprints(runDir, fingerprints); len(legacyMissing) > 0 {
+				warnings = append(warnings, "manifest was written before stable provider/judge evidence fingerprinting: "+strings.Join(legacyMissing, ", "))
+			}
 		}
 	} else if manifestStatus == "failed" {
 		fingerprintStatus = "failed"
@@ -127,7 +137,7 @@ func Run(runDir string, displayOutDir string) Result {
 		Command:       "runs verify",
 		Status:        summary.CommandStatus(exitCode),
 		ExitCode:      exitCode,
-		Warnings:      []string{},
+		Warnings:      warnings,
 		RunID:         filepath.Base(runDir),
 		RunDir:        runDir,
 		Manifest:      ManifestStatus{Status: manifestStatus, Path: manifestPath},
@@ -145,6 +155,42 @@ func Run(runDir string, displayOutDir string) Result {
 		Problems: problems,
 		Next:     Next(runDir, displayOutDir, exitCode, state),
 	}
+}
+
+func legacyMissingStableFingerprints(runDir string, fingerprints map[string]any) []string {
+	missing := []string{}
+	for _, relative := range manifest.FingerprintArtifactPaths(runDir) {
+		if !isStableEvidenceArtifact(relative) {
+			continue
+		}
+		if _, ok := fingerprints[relative]; !ok {
+			missing = append(missing, relative)
+		}
+	}
+	return missing
+}
+
+func isStableEvidenceArtifact(relative string) bool {
+	return strings.HasPrefix(relative, "providers/") || strings.HasPrefix(relative, "judge/")
+}
+
+func reviewContextSetStatus(runDir string) (bool, []string) {
+	presentCount := 0
+	missing := []string{}
+	for _, relative := range manifest.ReviewContextArtifacts {
+		if fileExists(filepath.Join(runDir, relative)) {
+			presentCount++
+		} else {
+			missing = append(missing, relative)
+		}
+	}
+	if presentCount == 0 {
+		return false, nil
+	}
+	if presentCount == len(manifest.ReviewContextArtifacts) {
+		return true, nil
+	}
+	return true, missing
 }
 
 func VerifyFingerprintEntry(runDir string, relative string, expected any) string {

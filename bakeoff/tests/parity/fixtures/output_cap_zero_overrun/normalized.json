@@ -162,6 +162,26 @@
             "sha256": "<SHA256>",
             "size_bytes": 0
           },
+          "providers/claude/prompt.txt": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "providers/claude/status.json": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "providers/codex/prompt.txt": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "providers/codex/status.json": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
           "report.md": {
             "mtime_ns": 0,
             "sha256": "<SHA256>",

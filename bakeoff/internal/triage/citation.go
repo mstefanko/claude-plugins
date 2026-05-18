@@ -96,6 +96,22 @@ func CheckCitations(citations []string, cwd string) map[string]any {
 	return map[string]any{"schema_version": 1, "cwd": cwd, "checks": checks}
 }
 
+func CitationCheckIDs(citationChecks map[string]any) map[string]bool {
+	out := map[string]bool{}
+	checks, _ := citationChecks["checks"].([]any)
+	for _, check := range checks {
+		obj, ok := check.(map[string]any)
+		if !ok {
+			continue
+		}
+		id, _ := obj["id"].(string)
+		if id != "" {
+			out[id] = true
+		}
+	}
+	return out
+}
+
 func CheckCitation(citation string, cwd string) map[string]any {
 	cwd, _ = realAbs(cwd)
 	rawPath, lineStart, lineEnd, ok := ParseCitation(citation)

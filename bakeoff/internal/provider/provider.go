@@ -111,19 +111,6 @@ func (r *CapabilityRegistry) DetectScopeCapabilities(ctx context.Context, backen
 	return caps
 }
 
-func (r *CapabilityRegistry) CodexExecSupportsOutputLastMessage(ctx context.Context) bool {
-	key := "codex-output-last-message"
-	value := r.getOrProbe(key, func() any {
-		helpText, err := r.runProbe(ctx, []string{"codex", "exec", "--help"}, 10*time.Second)
-		if err != nil {
-			return false
-		}
-		return CodexExecSupportsOutputLastMessageFromHelp(helpText)
-	})
-	ok, _ := value.(bool)
-	return ok
-}
-
 func (r *CapabilityRegistry) getOrProbe(key string, probe func() any) any {
 	r.mu.Lock()
 	if entry, ok := r.cache[key]; ok {
@@ -224,8 +211,4 @@ func HasHelpOption(options map[string]bool, names ...string) bool {
 		}
 	}
 	return false
-}
-
-func CodexExecSupportsOutputLastMessageFromHelp(helpText string) bool {
-	return HasHelpOption(HelpOptionTokens(helpText), "--output-last-message")
 }

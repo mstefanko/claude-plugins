@@ -36,11 +36,35 @@ func ComputeInputHashes(runDir string) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]string{
+	out := map[string]string{
 		"decision_sha256":   decision,
 		"report_sha256":     report,
 		"work_order_sha256": workOrder,
-	}, nil
+	}
+	reviewArtifacts := map[string]string{
+		"source_work_order_sha256":   "source-work-order.json",
+		"review_context_md_sha256":   "review-context.md",
+		"review_context_json_sha256": "review-context.json",
+	}
+	present := 0
+	for _, relative := range reviewArtifacts {
+		if fileExists(filepath.Join(runDir, relative)) {
+			present++
+		}
+	}
+	if present > 0 {
+		if present != len(reviewArtifacts) {
+			return nil, fmt.Errorf("review context artifacts must be all-or-none")
+		}
+		for key, relative := range reviewArtifacts {
+			sha, err := sha256File(filepath.Join(runDir, relative))
+			if err != nil {
+				return nil, err
+			}
+			out[key] = sha
+		}
+	}
+	return out, nil
 }
 
 func State(runDir string) string {
@@ -78,6 +102,15 @@ func StateDetail(runDir string) (string, []string) {
 	}
 	if _, ok := hashes["work_order_sha256"]; ok && stringValue(hashes["work_order_sha256"]) != current["work_order_sha256"] {
 		changed = append(changed, "work-order.json")
+	}
+	for key, relative := range map[string]string{
+		"source_work_order_sha256":   "source-work-order.json",
+		"review_context_md_sha256":   "review-context.md",
+		"review_context_json_sha256": "review-context.json",
+	} {
+		if _, ok := hashes[key]; ok && stringValue(hashes[key]) != current[key] {
+			changed = append(changed, relative)
+		}
 	}
 	if len(changed) > 0 {
 		return "stale", changed

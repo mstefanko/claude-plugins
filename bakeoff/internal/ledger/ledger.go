@@ -28,6 +28,13 @@ func ValidateRunID(runID string) error {
 	return nil
 }
 
+func ValidateLookupRunID(runID string) error {
+	if runID == "latest" {
+		return nil
+	}
+	return ValidateRunID(runID)
+}
+
 func ValidateVerifyRunID(runID string) error {
 	if runID == "latest" {
 		return nil
@@ -69,14 +76,18 @@ func ResolveRunDir(outDir string, runID string) (string, error) {
 	if runID == "latest" {
 		latest := filepath.Join(outDir, "latest")
 		if target, err := os.Readlink(latest); err == nil {
-			if filepath.IsAbs(target) {
-				return target, nil
+			target = strings.TrimSpace(target)
+			if err := ValidateRunID(target); err != nil {
+				return "", fmt.Errorf("latest points to invalid run-id: %s", target)
 			}
-			return filepath.Abs(filepath.Join(outDir, target))
+			return ResolveRunDir(outDir, target)
 		}
 		if data, err := os.ReadFile(latest); err == nil {
 			target := strings.TrimSpace(string(data))
 			if target != "" {
+				if err := ValidateRunID(target); err != nil {
+					return "", fmt.Errorf("latest points to invalid run-id: %s", target)
+				}
 				resolved, err := ResolveRunDir(outDir, target)
 				if err != nil {
 					return "", err
@@ -87,6 +98,9 @@ func ResolveRunDir(outDir string, runID string) (string, error) {
 	}
 	candidate := filepath.Join(outDir, runID)
 	if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+		if err := EnsureChildPath(outDir, candidate); err != nil {
+			return "", err
+		}
 		return candidate, nil
 	}
 	if IsPathLikeRunID(runID) {
@@ -98,38 +112,22 @@ func ResolveRunDir(outDir string, runID string) (string, error) {
 }
 
 func EnsureChildPath(parent string, child string) error {
-	parentResolved, err := filepath.Abs(parent)
+	inside, err := pathInside(parent, child)
 	if err != nil {
 		return err
 	}
-	childResolved, err := filepath.Abs(child)
-	if err != nil {
-		return err
-	}
-	rel, err := filepath.Rel(parentResolved, childResolved)
-	if err != nil {
-		return err
-	}
-	if rel == "." || (!strings.HasPrefix(rel, ".."+string(os.PathSeparator)) && rel != "..") {
+	if inside {
 		return nil
 	}
 	return fmt.Errorf("refusing to remove run directory outside %s", parent)
 }
 
 func EnsureVerifyPathInsideOut(outDir string, runDir string) error {
-	outResolved, err := filepath.Abs(outDir)
+	inside, err := pathInside(outDir, runDir)
 	if err != nil {
 		return err
 	}
-	runResolved, err := filepath.Abs(runDir)
-	if err != nil {
-		return err
-	}
-	rel, err := filepath.Rel(outResolved, runResolved)
-	if err != nil {
-		return err
-	}
-	if rel == "." || (!strings.HasPrefix(rel, ".."+string(os.PathSeparator)) && rel != "..") {
+	if inside {
 		return nil
 	}
 	return fmt.Errorf("run-id path must stay inside --out")
@@ -183,6 +181,34 @@ func samePath(left string, right string) bool {
 	leftAbs, leftErr := filepath.Abs(left)
 	rightAbs, rightErr := filepath.Abs(right)
 	return leftErr == nil && rightErr == nil && leftAbs == rightAbs
+}
+
+func pathInside(parent string, child string) (bool, error) {
+	parentResolved, err := realOrAbs(parent)
+	if err != nil {
+		return false, err
+	}
+	childResolved, err := realOrAbs(child)
+	if err != nil {
+		return false, err
+	}
+	rel, err := filepath.Rel(parentResolved, childResolved)
+	if err != nil {
+		return false, err
+	}
+	return rel == "." || (!strings.HasPrefix(rel, ".."+string(os.PathSeparator)) && rel != ".."), nil
+}
+
+func realOrAbs(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	real, err := filepath.EvalSymlinks(abs)
+	if err == nil {
+		return real, nil
+	}
+	return abs, nil
 }
 
 func splitPath(path string) []string {

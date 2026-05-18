@@ -46,6 +46,9 @@ func NewCmdRerun(f commands.Factory, runF func(context.Context, *RerunOptions) e
 }
 
 func runRerun(ctx context.Context, f commands.Factory, opts *RerunOptions) error {
+	if err := ledger.ValidateLookupRunID(opts.SourceRunID); err != nil {
+		return &apperror.ValidationError{Message: err.Error(), Err: err}
+	}
 	sourceRun, err := ledger.ResolveRunDir(opts.Out, opts.SourceRunID)
 	if err != nil {
 		return &apperror.ValidationError{Message: err.Error(), Err: err}

@@ -301,7 +301,67 @@
             "sha256": "<SHA256>",
             "size_bytes": 0
           },
+          "judge/prompt-pass1.txt": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "judge/prompt-pass2.txt": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "judge/result-pass1.json": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "judge/result-pass2.json": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "judge/status-pass1.json": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "judge/status-pass2.json": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
           "meta.json": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "providers/claude/final.json": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "providers/claude/prompt.txt": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "providers/claude/status.json": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "providers/codex/final.json": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "providers/codex/prompt.txt": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "providers/codex/status.json": {
             "mtime_ns": 0,
             "sha256": "<SHA256>",
             "size_bytes": 0

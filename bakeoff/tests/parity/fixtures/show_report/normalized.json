@@ -210,7 +210,52 @@
             "sha256": "<SHA256>",
             "size_bytes": 0
           },
+          "judge/prompt.txt": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "judge/result.json": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "judge/status.json": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
           "meta.json": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "providers/claude/final.json": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "providers/claude/prompt.txt": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "providers/claude/status.json": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "providers/codex/final.json": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "providers/codex/prompt.txt": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "providers/codex/status.json": {
             "mtime_ns": 0,
             "sha256": "<SHA256>",
             "size_bytes": 0

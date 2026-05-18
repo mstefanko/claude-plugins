@@ -22,6 +22,17 @@ func TestMakeRunIDAndValidateRunID(t *testing.T) {
 	}
 }
 
+func TestValidateLookupRunIDAllowsLatestOnlyAsLookupAlias(t *testing.T) {
+	if err := ValidateLookupRunID("latest"); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"../escape", "/tmp/run", "nested/run"} {
+		if err := ValidateLookupRunID(id); err == nil {
+			t.Fatalf("ValidateLookupRunID(%q) unexpectedly succeeded", id)
+		}
+	}
+}
+
 func TestResolveLatestFromFile(t *testing.T) {
 	out := t.TempDir()
 	runDir := filepath.Join(out, "run-1")
@@ -40,9 +51,59 @@ func TestResolveLatestFromFile(t *testing.T) {
 	}
 }
 
+func TestResolveLatestRejectsPathTarget(t *testing.T) {
+	out := t.TempDir()
+	if err := os.WriteFile(filepath.Join(out, "latest"), []byte("../escape\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ResolveRunDir(out, "latest"); err == nil {
+		t.Fatal("expected latest path target to be rejected")
+	}
+}
+
+func TestResolveLatestRejectsAbsoluteSymlinkTarget(t *testing.T) {
+	out := t.TempDir()
+	target := filepath.Join(t.TempDir(), "run-1")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(out, "latest")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ResolveRunDir(out, "latest"); err == nil {
+		t.Fatal("expected latest absolute symlink target to be rejected")
+	}
+}
+
+func TestResolveRunDirRejectsSymlinkEscape(t *testing.T) {
+	out := t.TempDir()
+	target := filepath.Join(t.TempDir(), "run-1")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(out, "run-1")); err != nil {
+		t.Skipf("symlink not available: %v", err)
+	}
+	if _, err := ResolveRunDir(out, "run-1"); err == nil {
+		t.Fatal("expected symlinked run directory outside --out to be rejected")
+	}
+}
+
 func TestEnsureChildPathRejectsEscape(t *testing.T) {
 	parent := filepath.Join(t.TempDir(), "runs")
 	if err := EnsureChildPath(parent, filepath.Dir(parent)); err == nil {
 		t.Fatal("expected escape to be rejected")
+	}
+}
+
+func TestEnsureChildPathRejectsSymlinkEscape(t *testing.T) {
+	parent := t.TempDir()
+	target := t.TempDir()
+	link := filepath.Join(parent, "run-1")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink not available: %v", err)
+	}
+	if err := EnsureChildPath(parent, link); err == nil {
+		t.Fatal("expected symlink escape to be rejected")
 	}
 }

@@ -1,7 +1,7 @@
 {
   "exit_code": 0,
   "stderr": "",
-  "stdout": "{\n  \"schema_version\": 1,\n  \"command\": \"runs verify\",\n  \"status\": \"ok\",\n  \"exit_code\": 0,\n  \"warnings\": [],\n  \"run_id\": \"verify-source\",\n  \"run_dir\": \"/private<WORKDIR>/runs/verify-source\",\n  \"manifest\": {\n    \"status\": \"ok\",\n    \"path\": \"/private<WORKDIR>/runs/verify-source/manifest.json\"\n  },\n  \"required_artifacts\": {\n    \"status\": \"ok\",\n    \"checked\": [\n      \"work-order.json\",\n      \"decision.json\",\n      \"meta.json\",\n      \"report.md\"\n    ],\n    \"missing\": []\n  },\n  \"fingerprints\": {\n    \"status\": \"ok\",\n    \"checked_count\": 4,\n    \"mismatches\": []\n  },\n  \"triage\": {\n    \"state\": \"no\",\n    \"stale_inputs\": []\n  },\n  \"problems\": [],\n  \"next\": \"bakeoff show verify-source\"\n}\n",
+  "stdout": "{\n  \"schema_version\": 1,\n  \"command\": \"runs verify\",\n  \"status\": \"ok\",\n  \"exit_code\": 0,\n  \"warnings\": [],\n  \"run_id\": \"verify-source\",\n  \"run_dir\": \"runs/verify-source\",\n  \"manifest\": {\n    \"status\": \"ok\",\n    \"path\": \"runs/verify-source/manifest.json\"\n  },\n  \"required_artifacts\": {\n    \"status\": \"ok\",\n    \"checked\": [\n      \"work-order.json\",\n      \"decision.json\",\n      \"meta.json\",\n      \"report.md\"\n    ],\n    \"missing\": []\n  },\n  \"fingerprints\": {\n    \"status\": \"ok\",\n    \"checked_count\": 13,\n    \"mismatches\": []\n  },\n  \"triage\": {\n    \"state\": \"no\",\n    \"stale_inputs\": []\n  },\n  \"problems\": [],\n  \"next\": \"bakeoff show verify-source\"\n}\n",
   "workspace": {
     "gather.json": {
       "type": "json",
@@ -210,7 +210,52 @@
             "sha256": "<SHA256>",
             "size_bytes": 0
           },
+          "judge/prompt.txt": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "judge/result.json": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "judge/status.json": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
           "meta.json": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "providers/claude/final.json": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "providers/claude/prompt.txt": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "providers/claude/status.json": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "providers/codex/final.json": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "providers/codex/prompt.txt": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "providers/codex/status.json": {
             "mtime_ns": 0,
             "sha256": "<SHA256>",
             "size_bytes": 0

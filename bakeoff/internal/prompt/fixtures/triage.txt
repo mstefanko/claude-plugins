@@ -4,7 +4,7 @@ Your job is not to improve the report prose.
 Your job is to classify only the provided actionable-looking source_findings.
 
 <rules>
-- Classify each entry in triage_payload.source_findings by source_finding_id.
+- Classify each entry in triage_payload.source_findings; result items must echo the entry id as source_finding_id.
 - Do not create items for findings that are only present in report_md and absent from source_findings.
 - If source_findings is empty, emit an empty items[] array and explain that no actionable-looking findings were selected.
 - Check supporting citations when possible using the provided citation_checks data.
@@ -18,6 +18,9 @@ Your job is to classify only the provided actionable-looking source_findings.
 - Keep summary consistent with item classifications and rationales; do not assign blame or correctness in the summary unless the items say the same thing.
 - Do not mutate the original decision or report.
 </rules>
+
+<review_contract_rules>
+</review_contract_rules>
 
 <runtime_budget>
 The harness will stop this provider after 3 seconds.

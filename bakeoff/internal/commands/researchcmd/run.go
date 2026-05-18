@@ -50,6 +50,7 @@ func RunResearch(ctx context.Context, f commands.Factory, opts *ResearchOptions)
 		return &apperror.ValidationError{Message: err.Error(), Err: err}
 	}
 	runDir := ledger.RunDir(opts.Out, runID)
+	replaceRunDir := false
 	if _, err := os.Stat(runDir); err == nil {
 		if !opts.Force {
 			return &apperror.ValidationError{Message: fmt.Sprintf("%s already exists; use --force to replace", runDir)}
@@ -57,9 +58,7 @@ func RunResearch(ctx context.Context, f commands.Factory, opts *ResearchOptions)
 		if err := ledger.EnsureChildPath(opts.Out, runDir); err != nil {
 			return &apperror.ValidationError{Message: err.Error(), Err: err}
 		}
-		if err := os.RemoveAll(runDir); err != nil {
-			return &apperror.RuntimeError{Err: err}
-		}
+		replaceRunDir = true
 	}
 	startedAt := artifact.UTCNow()
 	var reviewContext *reviewcontext.Context
@@ -78,6 +77,11 @@ func RunResearch(ctx context.Context, f commands.Factory, opts *ResearchOptions)
 		wo, err = reviewcontext.Apply(wo, reviewContext)
 		if err != nil {
 			return commands.WrapValidation(err)
+		}
+	}
+	if replaceRunDir {
+		if err := os.RemoveAll(runDir); err != nil {
+			return &apperror.RuntimeError{Err: err}
 		}
 	}
 	if err := os.MkdirAll(runDir, 0o755); err != nil {
@@ -247,11 +251,16 @@ func runWorkers(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder
 		result map[string]any
 	}
 	pairs := make([]pair, len(wo.Providers))
+	if humanOutput {
+		for _, participant := range wo.Providers {
+			f.Streams().Printf("[%s] launching...\n", participant.ID)
+		}
+	}
 	for index, providerParticipant := range wo.Providers {
 		index := index
 		participant := providerParticipant
 		group.Go(func() error {
-			result, err := runOneWorker(groupCtx, f, wo, participant, runDir, cwd, capabilities, quiet, humanOutput)
+			result, err := runOneWorker(groupCtx, f, wo, participant, runDir, cwd, capabilities, quiet)
 			if err != nil {
 				if errors.Is(err, context.Canceled) {
 					return err
@@ -275,10 +284,15 @@ func runWorkers(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder
 	for _, item := range pairs {
 		results[item.id] = item.result
 	}
+	if humanOutput {
+		for _, item := range pairs {
+			printWorkerResult(f, item.id, item.result)
+		}
+	}
 	return results, nil
 }
 
-func runOneWorker(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder, participant workorder.Participant, runDir string, cwd string, capabilities map[string]provider.ScopeCapabilities, quiet bool, humanOutput bool) (map[string]any, error) {
+func runOneWorker(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder, participant workorder.Participant, runDir string, cwd string, capabilities map[string]provider.ScopeCapabilities, quiet bool) (map[string]any, error) {
 	providerDir := filepath.Join(runDir, "providers", participant.ID)
 	if err := os.MkdirAll(providerDir, 0o755); err != nil {
 		return nil, err
@@ -304,15 +318,9 @@ func runOneWorker(ctx context.Context, f commands.Factory, wo *workorder.WorkOrd
 		if writeErr := artifact.WriteProviderArtifacts(providerDir, result); writeErr != nil {
 			return nil, writeErr
 		}
-		if humanOutput {
-			f.Streams().Printf("[%s] %s %vs %v bytes\n", participant.ID, result["status"], result["wall_seconds"], result["output_bytes"])
-		}
 		return result, nil
 	}
 	defer scope.Cleanup(scopeExecution.CleanupPaths)
-	if humanOutput {
-		f.Streams().Printf("[%s] launching...\n", participant.ID)
-	}
 	result := artifact.ResultMap(runner.RunProviderWithFormatRetry(ctx, runner.Options{
 		Argv:             scopeExecution.Argv,
 		Prompt:           workerPrompt,
@@ -327,10 +335,11 @@ func runOneWorker(ctx context.Context, f commands.Factory, wo *workorder.WorkOrd
 	if err := artifact.WriteProviderArtifacts(providerDir, result); err != nil {
 		return nil, err
 	}
-	if humanOutput {
-		f.Streams().Printf("[%s] %s %vs %v bytes\n", participant.ID, result["status"], result["wall_seconds"], result["output_bytes"])
-	}
 	return result, nil
+}
+
+func printWorkerResult(f commands.Factory, providerID string, result map[string]any) {
+	f.Streams().Printf("[%s] %s %vs %v bytes\n", providerID, result["status"], result["wall_seconds"], result["output_bytes"])
 }
 
 func runJudgePhase(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder, workerResults map[string]map[string]any, runDir string, quiet bool, humanOutput bool) (map[string]any, map[string]map[string]any, int, error) {
@@ -405,7 +414,7 @@ func runSingleJudge(ctx context.Context, f commands.Factory, wo *workorder.WorkO
 		lastMessage = filepath.Join(judgeDir, name)
 	}
 	cwd, _ := os.Getwd()
-	argv, err := provider.BuildParticipantArgv(wo.Judge, cwd, nil, lastMessage, f.Capabilities().CodexExecSupportsOutputLastMessage(ctx))
+	argv, err := provider.BuildParticipantArgv(wo.Judge, cwd, nil, lastMessage, commands.CodexOutputLastMessageSupported(ctx, f, wo.Judge))
 	if err != nil {
 		return nil, err
 	}
@@ -468,14 +477,23 @@ func finalJSONMap(result map[string]any) map[string]any {
 }
 
 func internalErrorResult(err error) map[string]any {
+	message := fmt.Sprintf("internal provider task error: %T: %v", err, err)
+	stderrBytes := len([]byte(message))
 	return map[string]any{
-		"status":       runner.StatusExitError,
-		"exit_code":    nil,
-		"wall_seconds": 0,
-		"output_bytes": 0,
-		"stdout":       "",
-		"stderr":       fmt.Sprintf("internal provider task error: %T: %v", err, err),
-		"final_json":   nil,
+		"status":                runner.StatusExitError,
+		"exit_code":             nil,
+		"wall_seconds":          0,
+		"output_bytes":          0,
+		"stdout_bytes":          0,
+		"stderr_bytes":          stderrBytes,
+		"stdout_observed_bytes": 0,
+		"stderr_observed_bytes": stderrBytes,
+		"stdout_truncated":      false,
+		"stderr_truncated":      false,
+		"io":                    map[string]any{"stdout_bytes": 0, "stderr_bytes": stderrBytes, "stdout_observed_bytes": 0, "stderr_observed_bytes": stderrBytes, "total_observed_bytes": stderrBytes},
+		"stdout":                "",
+		"stderr":                message,
+		"final_json":            nil,
 	}
 }
 
@@ -513,13 +531,31 @@ func reviewOptions(opts *ResearchOptions) reviewcontext.Options {
 }
 
 func copyReplayContextArtifacts(sourceRunDir string, runDir string) error {
-	for _, name := range []string{"source-work-order.json", "review-context.md", "review-context.json"} {
+	names := []string{"source-work-order.json", "review-context.md", "review-context.json"}
+	present := []string{}
+	missing := []string{}
+	for _, name := range names {
+		source := filepath.Join(sourceRunDir, name)
+		info, err := os.Stat(source)
+		if err != nil || info.IsDir() {
+			if err != nil && !os.IsNotExist(err) {
+				return err
+			}
+			missing = append(missing, name)
+			continue
+		}
+		present = append(present, name)
+	}
+	if len(present) == 0 {
+		return nil
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("source run has partial review-context artifact set; missing: %s", strings.Join(missing, ", "))
+	}
+	for _, name := range names {
 		source := filepath.Join(sourceRunDir, name)
 		data, err := os.ReadFile(source)
 		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
 			return err
 		}
 		if err := workorder.WriteTextAtomic(filepath.Join(runDir, name), string(data)); err != nil {

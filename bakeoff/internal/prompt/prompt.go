@@ -80,8 +80,25 @@ func BuildTriagePrompt(payload any, budgets workorder.Budgets) (string, error) {
 	}
 	text := base
 	text = replaceBlock(text, fixtureRuntimeBudgetBlock(), RenderRuntimeBudgetBlock(budgets, "triage"))
+	text = replaceBlock(text, fixtureTriageReviewContractBlock(), RenderTriageReviewContractRules(payload))
 	text = replaceTagInner(text, "triage_payload", payloadJSON)
 	return text, nil
+}
+
+func RenderTriageReviewContractRules(payload any) string {
+	obj, _ := payload.(map[string]any)
+	facet, _ := obj["facet"].(map[string]any)
+	id, _ := facet["id"].(string)
+	if id != "code-review" {
+		return ""
+	}
+	return `<review_contract_rules>
+For code-review facets:
+- Verify each selected finding against the work-order goal/background, generated review context, acceptance criteria when present, and changed behavior.
+- Require file:line evidence for actionable defects.
+- Use classification, severity, confidence, and recommended_action to distinguish real defects from warnings, product decisions, evidence gaps, and style-only findings.
+</review_contract_rules>
+`
 }
 
 func RenderRuntimeBudgetBlock(b workorder.Budgets, role string) string {
@@ -234,6 +251,10 @@ func fixtureJudgeFacetRules(mode string) string {
 
 func fixtureRuntimeBudgetBlock() string {
 	return RenderRuntimeBudgetBlock(workorder.Budgets{WallClockSeconds: 3, MaxOutputBytes: 20000, HeartbeatSeconds: 0, OutputCapGraceSeconds: 10, MaxOutputOverrunBytes: 20000}, "worker")
+}
+
+func fixtureTriageReviewContractBlock() string {
+	return "<review_contract_rules>\n</review_contract_rules>\n"
 }
 
 func fixtureFacet() *workorder.Facet {

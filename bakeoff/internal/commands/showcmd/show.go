@@ -50,6 +50,9 @@ func runShow(_ context.Context, f commands.Factory, opts *ShowOptions) error {
 	if boolCount(opts.Judge, opts.JudgePrompt, opts.Triage) > 1 {
 		return &apperror.ValidationError{Message: "show artifact flags are mutually exclusive: --judge, --judge-prompt, --triage"}
 	}
+	if err := ledger.ValidateLookupRunID(opts.RunID); err != nil {
+		return &apperror.ValidationError{Message: err.Error(), Err: err}
+	}
 	runDir, err := ledger.ResolveRunDir(opts.Out, opts.RunID)
 	if err != nil {
 		return &apperror.ValidationError{Message: err.Error(), Err: err}

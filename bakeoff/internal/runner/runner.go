@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/runstatus"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
 	"golang.org/x/sync/errgroup"
 )
@@ -30,14 +31,14 @@ const (
 	DefaultMaxOutputBytes      = 60000
 	DefaultHeartbeatSeconds    = 60
 	DefaultKillGrace           = time.Second
-	StatusOK                   = "ok"
-	StatusOKAfterFormatRetry   = "ok_after_format_retry"
-	StatusTimeout              = "timeout"
-	StatusOutputCap            = "output_cap"
-	StatusMissingProvider      = "missing_provider"
-	StatusExitError            = "exit_error"
-	StatusSchemaError          = "schema_error"
-	StatusCancelled            = "cancelled"
+	StatusOK                   = runstatus.OK
+	StatusOKAfterFormatRetry   = runstatus.OKAfterFormatRetry
+	StatusTimeout              = runstatus.Timeout
+	StatusOutputCap            = runstatus.OutputCap
+	StatusMissingProvider      = runstatus.MissingProvider
+	StatusExitError            = runstatus.ExitError
+	StatusSchemaError          = runstatus.SchemaError
+	StatusCancelled            = runstatus.Cancelled
 	OutputCapCaptureLimit      = "stdout_capture_limit"
 	OutputCapGraceTimeout      = "stdout_grace_timeout"
 	OutputCapOverrunLimit      = "stdout_overrun_limit"

@@ -6,3 +6,23 @@ runs/
 dist/
 /bakeoff
 /bakeoff-go
+
+# Local/editor state
+.DS_Store
+*.log
+*.tmp
+.claude/settings.local.json
+.codex/settings.local.json
+
+# Local secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Generated test output
+pytest-of-*/
+pytest-current

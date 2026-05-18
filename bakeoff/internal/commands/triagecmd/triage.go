@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/apperror"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/artifact"
@@ -75,6 +76,9 @@ func Run(ctx context.Context, f commands.Factory, opts *TriageOptions) (int, err
 	runDir := opts.RunDir
 	var err error
 	if runDir == "" {
+		if err := ledger.ValidateLookupRunID(opts.RunID); err != nil {
+			return 0, &apperror.ValidationError{Message: err.Error(), Err: err}
+		}
 		runDir, err = ledger.ResolveRunDir(opts.Out, opts.RunID)
 		if err != nil {
 			return 0, &apperror.ValidationError{Message: err.Error(), Err: err}
@@ -116,17 +120,26 @@ func Run(ctx context.Context, f commands.Factory, opts *TriageOptions) (int, err
 		return 0, commands.WrapValidation(&workorder.ValidationError{Message: err.Error(), Err: err})
 	}
 	citationCWD, caveats := triage.ResolveCitationCWD(meta)
-	triageDir := filepath.Join(runDir, "triage")
-	if _, err := os.Stat(triageDir); err == nil {
+	targetTriageDir := filepath.Join(runDir, "triage")
+	triageDir := targetTriageDir
+	stagedTriageDir := ""
+	if _, err := os.Stat(targetTriageDir); err == nil {
 		if !opts.Force {
-			return 0, &apperror.ValidationError{Message: fmt.Sprintf("%s already exists; run %s to replace", triageDir, ledger.BakeoffTriageCommand(commandRunID, displayOutDir, true))}
+			return 0, &apperror.ValidationError{Message: fmt.Sprintf("%s already exists; run %s to replace", targetTriageDir, ledger.BakeoffTriageCommand(commandRunID, displayOutDir, true))}
 		}
-		if err := ledger.EnsureChildPath(runDir, triageDir); err != nil {
+		if err := ledger.EnsureChildPath(runDir, targetTriageDir); err != nil {
 			return 0, &apperror.ValidationError{Message: err.Error(), Err: err}
 		}
-		if err := os.RemoveAll(triageDir); err != nil {
+		stagedTriageDir, err = os.MkdirTemp(runDir, ".triage-")
+		if err != nil {
 			return 0, &apperror.RuntimeError{Err: err}
 		}
+		triageDir = stagedTriageDir
+		defer func() {
+			if stagedTriageDir != "" {
+				_ = os.RemoveAll(stagedTriageDir)
+			}
+		}()
 	}
 	if err := os.MkdirAll(triageDir, 0o755); err != nil {
 		return 0, &apperror.RuntimeError{Err: err}
@@ -184,7 +197,7 @@ func Run(ctx context.Context, f commands.Factory, opts *TriageOptions) (int, err
 		f.Streams().Printf("triage participant: %s %s (effort %s)\n", wo.Judge.Backend, wo.Judge.Model, wo.Judge.Effort)
 		f.Streams().Errorf("note: triage invokes one provider call; use --dry-run to inspect inputs only\n")
 		f.Streams().Printf("source findings: selected %d; skipped %d non-actionable; skipped %d out-of-facet\n", sourceFindingFilter["included"], sourceFindingFilter["skipped_non_actionable"], sourceFindingFilter["skipped_out_of_facet"])
-		f.Streams().Printf("source filter: %s\n", filepath.Join(triageDir, "source_finding_filter.json"))
+		f.Streams().Printf("source filter: %s\n", filepath.Join(targetTriageDir, "source_finding_filter.json"))
 	}
 	if opts.DryRun {
 		if err := workorder.WriteJSONAtomic(filepath.Join(triageDir, "status.json"), map[string]any{
@@ -195,12 +208,18 @@ func Run(ctx context.Context, f commands.Factory, opts *TriageOptions) (int, err
 		}); err != nil {
 			return 0, &apperror.RuntimeError{Err: err}
 		}
+		if stagedTriageDir != "" {
+			if err := replaceDirAtomically(targetTriageDir, stagedTriageDir); err != nil {
+				return 0, &apperror.RuntimeError{Err: err}
+			}
+			stagedTriageDir = ""
+		}
 		if _, err := manifest.WriteRunManifest(runDir); err != nil {
 			return 0, &apperror.RuntimeError{Err: err}
 		}
 		if humanOutput {
-			f.Streams().Printf("triage dry run: %s\n", filepath.Join(triageDir, "prompt.txt"))
-			f.Streams().Printf("triage status:  %s\n", filepath.Join(triageDir, "status.json"))
+			f.Streams().Printf("triage dry run: %s\n", filepath.Join(targetTriageDir, "prompt.txt"))
+			f.Streams().Printf("triage status:  %s\n", filepath.Join(targetTriageDir, "status.json"))
 			f.Streams().Printf("next:           %s\n", ledger.BakeoffTriageCommand(commandRunID, displayOutDir, true))
 		}
 		if opts.JSON {
@@ -215,11 +234,12 @@ func Run(ctx context.Context, f commands.Factory, opts *TriageOptions) (int, err
 	for _, finding := range sourceFindings {
 		selectedSourceIDs[finding["id"]] = true
 	}
+	citationCheckIDs := triage.CitationCheckIDs(citationChecks)
 	finalMessagePath := ""
 	if wo.Judge.Backend == "codex" {
 		finalMessagePath = filepath.Join(triageDir, "last-message.txt")
 	}
-	argv, err := provider.BuildParticipantArgv(wo.Judge, citationCWD, nil, finalMessagePath, f.Capabilities().CodexExecSupportsOutputLastMessage(ctx))
+	argv, err := provider.BuildParticipantArgv(wo.Judge, citationCWD, nil, finalMessagePath, commands.CodexOutputLastMessageSupported(ctx, f, wo.Judge))
 	if err != nil {
 		return 0, &apperror.RuntimeError{Err: err}
 	}
@@ -229,7 +249,7 @@ func Run(ctx context.Context, f commands.Factory, opts *TriageOptions) (int, err
 		Budgets:          commands.RunnerBudgets(wo.Budgets),
 		CWD:              citationCWD,
 		Env:              os.Environ(),
-		Validator:        triageValidator(selectedSourceIDs, filepath.Base(runDir), inputHashes, participant, sourceFindingFilter),
+		Validator:        triageValidator(selectedSourceIDs, citationCheckIDs, filepath.Base(runDir), inputHashes, participant, sourceFindingFilter),
 		OnTick:           commands.MakeTickPrinter(f, "triage", effectiveQuiet),
 		FinalMessagePath: finalMessagePath,
 	}))
@@ -240,12 +260,17 @@ func Run(ctx context.Context, f commands.Factory, opts *TriageOptions) (int, err
 		return 0, &apperror.RuntimeError{Err: err}
 	}
 	if !artifact.ProviderSucceeded(result) {
-		if _, err := manifest.WriteRunManifest(runDir); err != nil {
-			return 0, &apperror.RuntimeError{Err: err}
+		if stagedTriageDir == "" {
+			if _, err := manifest.WriteRunManifest(runDir); err != nil {
+				return 0, &apperror.RuntimeError{Err: err}
+			}
 		}
 		if humanOutput {
 			status, _ := result["status"].(string)
 			f.Streams().Printf("triage failed: %s\n", status)
+			if stagedTriageDir != "" {
+				f.Streams().Printf("previous triage preserved: %s\n", targetTriageDir)
+			}
 			f.Streams().Printf("retry:  %s\n", ledger.BakeoffTriageCommand(commandRunID, displayOutDir, true))
 		}
 		if opts.JSON {
@@ -262,11 +287,17 @@ func Run(ctx context.Context, f commands.Factory, opts *TriageOptions) (int, err
 	if err := workorder.WriteTextAtomic(filepath.Join(triageDir, "triage.md"), triage.RenderTriageMarkdown(finalJSON, caveats)); err != nil {
 		return 0, &apperror.RuntimeError{Err: err}
 	}
+	if stagedTriageDir != "" {
+		if err := replaceDirAtomically(targetTriageDir, stagedTriageDir); err != nil {
+			return 0, &apperror.RuntimeError{Err: err}
+		}
+		stagedTriageDir = ""
+	}
 	if _, err := manifest.WriteRunManifest(runDir); err != nil {
 		return 0, &apperror.RuntimeError{Err: err}
 	}
 	if humanOutput {
-		f.Streams().Printf("triage: %s\n", filepath.Join(triageDir, "triage.md"))
+		f.Streams().Printf("triage: %s\n", filepath.Join(targetTriageDir, "triage.md"))
 		f.Streams().Printf("next:   %s\n", ledger.BakeoffShowCommand(commandRunID, displayOutDir, "--triage"))
 	}
 	if opts.JSON {
@@ -277,7 +308,7 @@ func Run(ctx context.Context, f commands.Factory, opts *TriageOptions) (int, err
 	return 0, nil
 }
 
-func triageValidator(selectedSourceIDs map[string]bool, runID string, inputHashes map[string]string, participant map[string]any, sourceFindingFilter map[string]int) func(any) (any, error) {
+func triageValidator(selectedSourceIDs map[string]bool, citationCheckIDs map[string]bool, runID string, inputHashes map[string]string, participant map[string]any, sourceFindingFilter map[string]int) func(any) (any, error) {
 	return func(data any) (any, error) {
 		validated, err := workorder.ValidateTriageResult(data)
 		if err != nil {
@@ -288,6 +319,7 @@ func triageValidator(selectedSourceIDs map[string]bool, runID string, inputHashe
 			return nil, workorder.Validationf("triage final_json must be an object")
 		}
 		unknownIDs := []string{}
+		unknownCitationIDs := []string{}
 		items, _ := final["items"].([]any)
 		for _, item := range items {
 			obj, ok := item.(map[string]any)
@@ -298,10 +330,19 @@ func triageValidator(selectedSourceIDs map[string]bool, runID string, inputHashe
 			if !selectedSourceIDs[sourceID] {
 				unknownIDs = append(unknownIDs, sourceID)
 			}
+			for _, citationID := range stringList(obj["citation_check_ids"]) {
+				if !citationCheckIDs[citationID] {
+					unknownCitationIDs = append(unknownCitationIDs, citationID)
+				}
+			}
 		}
 		sort.Strings(unknownIDs)
 		if len(unknownIDs) > 0 {
-			return nil, workorder.Validationf("triage final_json.items source_finding_id must reference selected source_findings (unknown: %s)", stringsJoin(unknownIDs, ", "))
+			return nil, workorder.Validationf("triage final_json.items source_finding_id must reference selected source_findings (unknown: %s)", strings.Join(unknownIDs, ", "))
+		}
+		sort.Strings(unknownCitationIDs)
+		if len(unknownCitationIDs) > 0 {
+			return nil, workorder.Validationf("triage final_json.items citation_check_ids must reference citation_checks (unknown: %s)", strings.Join(unknownCitationIDs, ", "))
 		}
 		final["run_id"] = runID
 		final["input_hashes"] = inputHashes
@@ -341,13 +382,37 @@ func stringValue(value any) string {
 	return text
 }
 
-func stringsJoin(items []string, sep string) string {
-	out := ""
-	for i, item := range items {
-		if i > 0 {
-			out += sep
+func stringList(value any) []string {
+	items, _ := value.([]any)
+	out := []string{}
+	for _, item := range items {
+		if text, ok := item.(string); ok {
+			out = append(out, text)
 		}
-		out += item
 	}
 	return out
+}
+
+func replaceDirAtomically(target string, replacement string) error {
+	if _, err := os.Stat(target); err != nil {
+		if os.IsNotExist(err) {
+			return os.Rename(replacement, target)
+		}
+		return err
+	}
+	backup, err := os.MkdirTemp(filepath.Dir(target), ".triage-backup-")
+	if err != nil {
+		return err
+	}
+	if err := os.RemoveAll(backup); err != nil {
+		return err
+	}
+	if err := os.Rename(target, backup); err != nil {
+		return err
+	}
+	if err := os.Rename(replacement, target); err != nil {
+		_ = os.Rename(backup, target)
+		return err
+	}
+	return os.RemoveAll(backup)
 }

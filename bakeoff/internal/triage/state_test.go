@@ -86,3 +86,75 @@ func TestRenderTriageMarkdownIncludesTypedSourceFilter(t *testing.T) {
 		t.Fatalf("item rendered wrong number of times:\n%s", markdown)
 	}
 }
+
+func TestComputeInputHashesIncludesCompleteReviewContextSet(t *testing.T) {
+	runDir := t.TempDir()
+	for name, text := range map[string]string{
+		"decision.json":          "{}\n",
+		"report.md":              "# report\n",
+		"work-order.json":        "{}\n",
+		"source-work-order.json": "{}\n",
+		"review-context.md":      "context\n",
+		"review-context.json":    "{}\n",
+	} {
+		if err := os.WriteFile(filepath.Join(runDir, name), []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hashes, err := ComputeInputHashes(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"source_work_order_sha256", "review_context_md_sha256", "review_context_json_sha256"} {
+		if hashes[key] == "" {
+			t.Fatalf("missing %s in %#v", key, hashes)
+		}
+	}
+}
+
+func TestStateDetailMarksReviewContextHashChangesStale(t *testing.T) {
+	runDir := t.TempDir()
+	for name, text := range map[string]string{
+		"decision.json":          "{}\n",
+		"report.md":              "# report\n",
+		"work-order.json":        "{}\n",
+		"source-work-order.json": "{}\n",
+		"review-context.md":      "context\n",
+		"review-context.json":    "{}\n",
+	} {
+		if err := os.WriteFile(filepath.Join(runDir, name), []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hashes, err := ComputeInputHashes(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	triageDir := filepath.Join(runDir, "triage")
+	if err := os.MkdirAll(triageDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	final := `{"input_hashes":{"decision_sha256":"` + hashes["decision_sha256"] + `","report_sha256":"` + hashes["report_sha256"] + `","work_order_sha256":"` + hashes["work_order_sha256"] + `","source_work_order_sha256":"` + hashes["source_work_order_sha256"] + `","review_context_md_sha256":"` + hashes["review_context_md_sha256"] + `","review_context_json_sha256":"` + hashes["review_context_json_sha256"] + `"}}`
+	if err := os.WriteFile(filepath.Join(triageDir, "final.json"), []byte(final), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(triageDir, "triage.md"), []byte("# triage\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "review-context.md"), []byte("changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	state, stale := StateDetail(runDir)
+	if state != "stale" || !contains(stale, "review-context.md") {
+		t.Fatalf("state=%s stale=%#v", state, stale)
+	}
+}
+
+func contains(items []string, value string) bool {
+	for _, item := range items {
+		if item == value {
+			return true
+		}
+	}
+	return false
+}

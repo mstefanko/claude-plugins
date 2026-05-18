@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/buildinfo"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/triage"
@@ -14,7 +15,7 @@ import (
 
 const SchemaVersion = 1
 
-var FingerprintArtifacts = []string{
+var CoreFingerprintArtifacts = []string{
 	"work-order.json",
 	"source-work-order.json",
 	"review-context.md",
@@ -28,6 +29,7 @@ var FingerprintArtifacts = []string{
 }
 
 var RequiredArtifacts = []string{"work-order.json", "decision.json", "meta.json", "report.md"}
+var ReviewContextArtifacts = []string{"source-work-order.json", "review-context.md", "review-context.json"}
 
 func BuildRunManifest(runDir string) (map[string]any, error) {
 	workOrder, err := readRequiredJSON(filepath.Join(runDir, "work-order.json"))
@@ -227,11 +229,16 @@ func artifactPaths(runDir string) (map[string]any, error) {
 		"report":     "report.md",
 		"meta":       "meta.json",
 	}
+	if reviewPresent, missing := reviewContextSetStatus(runDir); reviewPresent {
+		if len(missing) > 0 {
+			return nil, fmt.Errorf("review context artifacts must be all-or-none; missing: %s", strings.Join(missing, ", "))
+		}
+		artifacts["source_work_order"] = "source-work-order.json"
+		artifacts["review_context_md"] = "review-context.md"
+		artifacts["review_context_json"] = "review-context.json"
+	}
 	optional := map[string]string{
-		"source_work_order":   "source-work-order.json",
-		"review_context_md":   "review-context.md",
-		"review_context_json": "review-context.json",
-		"triage":              "triage/triage.md",
+		"triage": "triage/triage.md",
 	}
 	for key, relative := range optional {
 		if fileExists(filepath.Join(runDir, relative)) {
@@ -241,13 +248,49 @@ func artifactPaths(runDir string) (map[string]any, error) {
 	return artifacts, nil
 }
 
+func FingerprintArtifactPaths(runDir string) []string {
+	seen := map[string]bool{}
+	paths := []string{}
+	add := func(relative string) {
+		if relative == "" || seen[relative] {
+			return
+		}
+		if !fileExists(filepath.Join(runDir, relative)) {
+			return
+		}
+		seen[relative] = true
+		paths = append(paths, relative)
+	}
+	for _, relative := range CoreFingerprintArtifacts {
+		add(relative)
+	}
+	for _, pattern := range []string{
+		"providers/*/prompt.txt",
+		"providers/*/status.json",
+		"providers/*/final.json",
+		"providers/*/last-message.txt",
+		"judge/prompt*.txt",
+		"judge/status*.json",
+		"judge/result*.json",
+		"judge/last-message*.txt",
+	} {
+		matches, _ := filepath.Glob(filepath.Join(runDir, pattern))
+		sort.Strings(matches)
+		for _, path := range matches {
+			relative, err := filepath.Rel(runDir, path)
+			if err == nil {
+				add(relative)
+			}
+		}
+	}
+	sort.Strings(paths)
+	return paths
+}
+
 func artifactFingerprints(runDir string) map[string]any {
 	out := map[string]any{}
-	for _, relative := range FingerprintArtifacts {
+	for _, relative := range FingerprintArtifactPaths(runDir) {
 		path := filepath.Join(runDir, relative)
-		if !fileExists(path) {
-			continue
-		}
 		size, sha, err := workorder.FileFingerprint(path)
 		if err != nil {
 			continue
@@ -260,6 +303,25 @@ func artifactFingerprints(runDir string) map[string]any {
 		out[relative] = map[string]any{"sha256": sha, "size_bytes": size, "mtime_ns": mtime}
 	}
 	return out
+}
+
+func reviewContextSetStatus(runDir string) (bool, []string) {
+	presentCount := 0
+	missing := []string{}
+	for _, relative := range ReviewContextArtifacts {
+		if fileExists(filepath.Join(runDir, relative)) {
+			presentCount++
+		} else {
+			missing = append(missing, relative)
+		}
+	}
+	if presentCount == 0 {
+		return false, nil
+	}
+	if presentCount == len(ReviewContextArtifacts) {
+		return true, nil
+	}
+	return true, missing
 }
 
 func legacyLSRow(runDir string, manifestState string) map[string]any {

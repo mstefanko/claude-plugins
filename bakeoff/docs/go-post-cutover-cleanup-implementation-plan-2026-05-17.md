@@ -1,7 +1,7 @@
 # Go Post-Cutover Cleanup Implementation Plan
 
 Date: 2026-05-17
-Status: post-cutover cleanup queue
+Status: Phase 1 post-cutover hardening implemented; follow-up cleanup queue remains
 Scope: Go-only cleanup items discovered while dogfooding the Go CLI; defer
 behavior-changing cleanup until follow-up commits unless a finding blocks safe
 operation.
@@ -12,6 +12,11 @@ The Go port has moved to the public launcher path, and the legacy Python CLI
 has been removed. This file now tracks Go-only cleanup for follow-up commits:
 ledger contracts, manifest coverage, JSON summary surfaces, and internal
 duplication.
+
+Phase 1 implemented the stable ledger-evidence fingerprints, review-context
+replay invariants, scope/status shape hardening, triage safety checks, and
+focused regression coverage. The remaining sections preserve the original
+dogfood findings as a follow-up queue rather than declaring cleanup complete.
 
 ## Findings Collected
 

@@ -225,6 +225,33 @@ func TestRunProviderHeartbeatTicksForQuietProcess(t *testing.T) {
 	}
 }
 
+func TestRunProviderReportsCancelledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+	result := RunProvider(ctx, helperOptions("quiet", Budgets{WallClockSeconds: 5, MaxOutputBytes: 2000}))
+	if result.Status != StatusCancelled {
+		t.Fatalf("status = %s stderr=%q", result.Status, result.Stderr)
+	}
+}
+
+func TestRunProviderPrefersOutputCapWhenTimeoutAlsoFires(t *testing.T) {
+	result := RunProvider(context.Background(), helperOptions("ignore-term-output", Budgets{
+		WallClockSeconds:      1,
+		MaxOutputBytes:        100,
+		MaxOutputOverrunBytes: 10000,
+		OutputCapGraceSeconds: 5,
+	}))
+	if result.Status != StatusOutputCap {
+		t.Fatalf("status = %s output_cap=%#v", result.Status, result.OutputCap)
+	}
+	if result.OutputCap == nil {
+		t.Fatalf("missing output cap metadata: %#v", result)
+	}
+}
+
 func TestRunProviderKillsProcessGroup(t *testing.T) {
 	pidfile := filepath.Join(t.TempDir(), "child.pid")
 	result := RunProvider(context.Background(), helperOptionsWithArgs(Budgets{WallClockSeconds: 1, MaxOutputBytes: 2000}, "spawn-child", pidfile))

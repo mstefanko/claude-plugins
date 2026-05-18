@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
@@ -39,10 +40,10 @@ func TestPromptFixturesMatchFrozenPythonOracle(t *testing.T) {
 		"budgets": map[string]any{"wall_clock_seconds": 3, "max_output_bytes": 20000, "heartbeat_seconds": 0},
 		"source_findings": []any{
 			map[string]any{
-				"source_finding_id": "F-001",
-				"source":            "report",
-				"text":              "Fake merged claim",
-				"citations":         []any{"src/fake.py:1"},
+				"id":        "F-001",
+				"source":    "report",
+				"text":      "Fake merged claim",
+				"citations": []any{"src/fake.py:1"},
 			},
 		},
 		"citation_checks": []any{},
@@ -54,6 +55,23 @@ func TestPromptFixturesMatchFrozenPythonOracle(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertFixture(t, filepath.Join("prompts", "triage.txt"), triage)
+}
+
+func TestTriageReviewContractRulesOnlyForCodeReviewFacet(t *testing.T) {
+	codeReview, err := BuildTriagePrompt(map[string]any{"facet": map[string]any{"id": "code-review"}}, workorder.Budgets{WallClockSeconds: 3, MaxOutputBytes: 20000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(codeReview, "For code-review facets:") {
+		t.Fatalf("missing code-review triage rules:\n%s", codeReview)
+	}
+	generic, err := BuildTriagePrompt(map[string]any{"facet": map[string]any{"id": "docs"}}, workorder.Budgets{WallClockSeconds: 3, MaxOutputBytes: 20000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(generic, "For code-review facets:") || strings.Contains(generic, "<review_contract_rules>") {
+		t.Fatalf("unexpected code-review triage rules:\n%s", generic)
+	}
 }
 
 func fixtureWorkOrder(t *testing.T, mode string) *workorder.WorkOrder {

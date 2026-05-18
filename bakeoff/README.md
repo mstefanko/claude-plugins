@@ -4,16 +4,17 @@
 heterogeneous providers, judging their artifact outputs, and writing a
 replayable report.
 
-The project is CLI-first. The Claude Code plugin wrapper exists only as a future
-launcher surface: it may draft or approve work orders and shell out to the CLI,
-but orchestration, validation, provider execution, and reports belong in the
-Go CLI.
+The project is CLI-first. Claude Code and Codex plugin wrappers are launcher and
+packaging surfaces: they may draft or approve work orders and shell out to the
+CLI, but orchestration, validation, provider execution, and reports belong in
+the Go CLI.
 
 ## Layout
 
 ```text
 bakeoff/
   .claude-plugin/plugin.json
+  .codex-plugin/plugin.json
   bin/bakeoff
   go.mod
   cmd/bakeoff/
@@ -52,6 +53,67 @@ For plugin dogfood, use the wrapper directly:
 
 Rollback after this cleanup means reverting the cutover commit or restoring the
 legacy Python implementation from git history.
+
+## Plugin Wrappers And Install
+
+Bakeoff ships one implementation and two thin plugin manifests:
+
+- `.claude-plugin/plugin.json` exposes the plugin to Claude Code marketplaces.
+- `.codex-plugin/plugin.json` exposes the same plugin root to Codex plugin
+  marketplaces.
+- `bin/bakeoff` is the shared launcher used from either side.
+
+The wrappers must stay thin. Do not duplicate command behavior, provider
+execution, validation, judging, or report generation in plugin-specific code.
+Any Claude- or Codex-specific affordance should create or inspect work orders,
+then invoke `bin/bakeoff`.
+
+`bin/bakeoff` resolves the plugin root in this order:
+
+1. `BAKEOFF_PLUGIN_ROOT`
+2. `CODEX_PLUGIN_ROOT`
+3. `CLAUDE_PLUGIN_ROOT`
+4. the parent directory of `bin/bakeoff`
+
+It then runs `BAKEOFF_GO_BINARY` when set, `dist/bakeoff` when present, or
+`go run ./cmd/bakeoff` as a checkout fallback.
+
+For Claude Code, add the marketplace containing this plugin and install
+`bakeoff`. For Codex, add a Codex marketplace entry that points at the same
+plugin root and install `bakeoff` from that marketplace. The Codex marketplace
+entry should be local, should use `policy.installation: "AVAILABLE"`, and should
+not claim separate authentication.
+
+For a local Codex install, prefer a symlink to the same checkout instead of a
+second copy. For example, with `~/plugins/bakeoff` pointing at this directory,
+`~/.agents/plugins/marketplace.json` can include:
+
+```json
+{
+  "name": "personal",
+  "interface": { "displayName": "Personal" },
+  "plugins": [
+    {
+      "name": "bakeoff",
+      "source": { "source": "local", "path": "./plugins/bakeoff" },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
+```
+
+Bakeoff does not own provider API keys. Auth stays with the underlying provider
+CLIs (`claude`, `codex`, and `git` for local review context). `bakeoff doctor`
+checks that those CLIs are present and can optionally run auth probes; use
+`--skip-auth-probe` when you only want local readiness checks. Do not put API
+keys, session tokens, or secrets in work orders, backgrounds, generated review
+context, or provider output. Bakeoff records prompts, stdout/stderr, status
+JSON, reports, and manifests in the run ledger, so any secret printed by a
+provider can become part of `runs/<run-id>/`.
 
 ## Common Workflows
 

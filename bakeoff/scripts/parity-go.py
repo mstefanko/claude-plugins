@@ -594,7 +594,6 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Bakeoff Go parity harness.")
     parser.add_argument("cases", nargs="*", help="optional fixture case names")
     parser.add_argument("--go-only", action="store_true", help="run a temporary compiled Go binary directly")
-    parser.add_argument("--public", action="store_true", help="run bin/bakeoff, the default cutover launcher")
     parser.add_argument("--list", action="store_true", help="list fixture case names")
     args = parser.parse_args()
 
@@ -603,13 +602,7 @@ def main() -> int:
             print(case.name)
         return 0
 
-    selected_targets = [args.go_only, args.public]
-    if sum(1 for selected in selected_targets if selected) > 1:
-        parser.error("--go-only and --public are mutually exclusive")
-
-    target = "public"
-    if args.go_only:
-        target = "go"
+    target = "go" if args.go_only else "public"
     failures: list[str] = []
     go_temp = tempfile.TemporaryDirectory(prefix="bakeoff-bin-")
     go_binary = build_go_binary(Path(go_temp.name))

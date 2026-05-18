@@ -53,6 +53,13 @@
         "provider_statuses": {
           "claude": {
             "exit_code": null,
+            "io": {
+              "stderr_bytes": 46,
+              "stderr_observed_bytes": 46,
+              "stdout_bytes": 0,
+              "stdout_observed_bytes": 0,
+              "total_observed_bytes": 46
+            },
             "output_bytes": 0,
             "scope_enforcement": {
               "cwd": "<CWD>",
@@ -61,18 +68,28 @@
               "fallback_reason": "claude CLI did not advertise --disallowedTools",
               "mechanisms": [],
               "policy": "required",
-              "requested_scope": "codebase"
+              "requested_scope": "codebase",
+              "temporary_cwd": false
             },
             "status": "scope_error",
             "stderr_bytes": 46,
+            "stderr_observed_bytes": 46,
             "stderr_path": "providers/claude/stderr.txt",
             "stderr_truncated": false,
             "stdout_bytes": 0,
+            "stdout_observed_bytes": 0,
             "stdout_truncated": false,
             "wall_seconds": 0
           },
           "codex": {
             "exit_code": null,
+            "io": {
+              "stderr_bytes": 37,
+              "stderr_observed_bytes": 37,
+              "stdout_bytes": 0,
+              "stdout_observed_bytes": 0,
+              "total_observed_bytes": 37
+            },
             "output_bytes": 0,
             "scope_enforcement": {
               "cwd": "<CWD>",
@@ -81,13 +98,16 @@
               "fallback_reason": "codex CLI did not advertise --sandbox",
               "mechanisms": [],
               "policy": "required",
-              "requested_scope": "web"
+              "requested_scope": "web",
+              "temporary_cwd": false
             },
             "status": "scope_error",
             "stderr_bytes": 37,
+            "stderr_observed_bytes": 37,
             "stderr_path": "providers/codex/stderr.txt",
             "stderr_truncated": false,
             "stdout_bytes": 0,
+            "stdout_observed_bytes": 0,
             "stdout_truncated": false,
             "wall_seconds": 0
           }
@@ -104,6 +124,26 @@
             "size_bytes": 0
           },
           "meta.json": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "providers/claude/prompt.txt": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "providers/claude/status.json": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "providers/codex/prompt.txt": {
+            "mtime_ns": 0,
+            "sha256": "<SHA256>",
+            "size_bytes": 0
+          },
+          "providers/codex/status.json": {
             "mtime_ns": 0,
             "sha256": "<SHA256>",
             "size_bytes": 0
@@ -208,7 +248,8 @@
                 "fallback_reason": "claude CLI did not advertise --disallowedTools",
                 "mechanisms": [],
                 "policy": "required",
-                "requested_scope": "codebase"
+                "requested_scope": "codebase",
+                "temporary_cwd": false
               }
             },
             "codex": {
@@ -223,7 +264,8 @@
                 "fallback_reason": "codex CLI did not advertise --sandbox",
                 "mechanisms": [],
                 "policy": "required",
-                "requested_scope": "web"
+                "requested_scope": "web",
+                "temporary_cwd": false
               }
             }
           }
@@ -244,6 +286,13 @@
       "type": "json",
       "value": {
         "exit_code": null,
+        "io": {
+          "stderr_bytes": 46,
+          "stderr_observed_bytes": 46,
+          "stdout_bytes": 0,
+          "stdout_observed_bytes": 0,
+          "total_observed_bytes": 46
+        },
         "output_bytes": 0,
         "scope_enforcement": {
           "cwd": "<CWD>",
@@ -252,12 +301,15 @@
           "fallback_reason": "claude CLI did not advertise --disallowedTools",
           "mechanisms": [],
           "policy": "required",
-          "requested_scope": "codebase"
+          "requested_scope": "codebase",
+          "temporary_cwd": false
         },
         "status": "scope_error",
         "stderr_bytes": 46,
+        "stderr_observed_bytes": 46,
         "stderr_truncated": false,
         "stdout_bytes": 0,
+        "stdout_observed_bytes": 0,
         "stdout_truncated": false,
         "wall_seconds": 0
       }
@@ -278,6 +330,13 @@
       "type": "json",
       "value": {
         "exit_code": null,
+        "io": {
+          "stderr_bytes": 37,
+          "stderr_observed_bytes": 37,
+          "stdout_bytes": 0,
+          "stdout_observed_bytes": 0,
+          "total_observed_bytes": 37
+        },
         "output_bytes": 0,
         "scope_enforcement": {
           "cwd": "<CWD>",
@@ -286,12 +345,15 @@
           "fallback_reason": "codex CLI did not advertise --sandbox",
           "mechanisms": [],
           "policy": "required",
-          "requested_scope": "web"
+          "requested_scope": "web",
+          "temporary_cwd": false
         },
         "status": "scope_error",
         "stderr_bytes": 37,
+        "stderr_observed_bytes": 37,
         "stderr_truncated": false,
         "stdout_bytes": 0,
+        "stdout_observed_bytes": 0,
         "stdout_truncated": false,
         "wall_seconds": 0
       }
