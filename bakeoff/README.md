@@ -16,13 +16,7 @@ Bakeoff is a thin launcher and Go CLI. It runs providers, captures artifacts, ve
 
 ```mermaid
 flowchart LR
-    REQ[Request] --> RESEARCH[Research or decision]
-    REQ --> CODE[Code change work]
-    RESEARCH --> GATHER[gather<br/>facts and inventory]
-    RESEARCH --> COMPARE[compare<br/>choose an option]
-    RESEARCH --> ANALYZE[analyze<br/>explain or synthesize]
-    CODE --> REVIEW[review<br/>audit a change]
-    CODE --> BUILD[build<br/>competing patches]
+    GATHER[gather<br/>facts] -- or --> COMPARE[compare<br/>options] -- or --> ANALYZE[analyze<br/>why] -- or --> REVIEW[review<br/>audit] -- or --> BUILD[build<br/>patches]
 ```
 
 ## The Pipeline
@@ -33,15 +27,8 @@ Every Bakeoff run has the same shape. The mode determines what the judge does an
 flowchart LR
     REQ[Request] --> WO[Work order<br/>draft or validate]
     WO --> RUN[Claude + Codex<br/>same task]
-    RUN --> SELECT[Mode selector]
-    SELECT --> GATHER[gather<br/>merge claims]
-    SELECT --> JUDGE[compare / analyze<br/>swapped judge]
-    SELECT --> REVIEW[review<br/>merge + triage]
-    SELECT --> BUILD[build<br/>gates, metrics, judge if tied]
-    GATHER --> OUT[Report + decision<br/>ledger]
-    JUDGE --> OUT
-    REVIEW --> OUT
-    BUILD --> OUT
+    RUN --> SELECT[Mode selector<br/>merge, judge, triage, or gates]
+    SELECT --> OUT[Report + decision<br/>ledger]
 ```
 
 ## Quick Start
@@ -72,6 +59,8 @@ Natural-language requests draft a work order, show the full JSON, and wait for e
 ## Research
 
 `gather`, `compare`, and `analyze` use the same pipeline; only the judge differs. Gather dedupes claims and preserves citations. Compare and analyze use swapped A/B and B/A judging to pick a winner, consensus, or tie.
+
+Simple rule: use `gather` when you want breadth and citations, like "find every place this happens." Use `compare` when you can name the options and criteria. Use `analyze` when you need an evidence-backed reasoning spine, such as root cause, architecture tradeoffs, or "why did this happen?"
 
 ```text
 /bakeoff:run research how auth retry behavior works and cite the files involved
@@ -135,18 +124,11 @@ Minimum build work order: `type: "build"`, two `codebase` providers, and at leas
 
 ```mermaid
 flowchart LR
-    BL[Baseline gates] -->|fail| BF[Stop<br/>baseline failed]
-    BL -->|pass| CAP[Capture eligible patches]
-    CAP -->|none| NONE[No winner<br/>both failed]
-    CAP -->|one + gates pass| ONE[Single patch wins]
-    CAP -->|two| GATE[Provider gates]
-    GATE -->|one passes| GW[Gate winner]
-    GATE -->|none pass| VF[No winner<br/>verification failed]
-    GATE -->|both pass| METRIC[Metrics]
-    METRIC -->|conclusive| MW[Metric winner]
-    METRIC -->|tie or split| JUDGE[Swapped judge]
-    JUDGE -->|A/B and B/A agree| JW[Judge winner]
-    JUDGE -->|disagree| UN[Exit 3<br/>unresolved]
+    BL[Baseline gates<br/>fail = stop] --> CAP[Eligible patches<br/>0 fail, 1 can win]
+    CAP --> GATE[Provider gates<br/>one pass = winner]
+    GATE --> METRIC[Metrics<br/>conclusive = winner]
+    METRIC --> JUDGE[Swapped judge<br/>only if tied]
+    JUDGE --> OUT[Handoff<br/>winner or exit 3]
 ```
 
 If there's a canonical winner, the handoff patch is `runs/<run-id>/providers/<winner>/build/diff.patch`. Bakeoff does not apply it for you.

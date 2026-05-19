@@ -1,5 +1,12 @@
 # Bakeoff — Competitive Landscape and Evidence Base
 
+> Historical note: this memo predates the current Bakeoff design. It describes
+> an older, heavier orchestration direction with beads, multi-phase pipelines,
+> and synthesis roles. The current checkout is intentionally thinner: two
+> providers, one judge or verifier path, replayable artifacts, and no automatic
+> patch synthesis. Use [research-basis.md](research-basis.md) and the README as
+> the current source of truth.
+
 Research support for the user-friendly README rewrite. Drop-in citation lines live in the last section.
 
 ---

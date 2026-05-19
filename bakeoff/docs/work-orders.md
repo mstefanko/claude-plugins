@@ -124,6 +124,19 @@ Metric verifier specs require `name`, `direction` (`lower` or `higher`), and
 print a JSON object as the last non-empty stdout line with the metric name as a
 finite numeric field.
 
+Verifier commands are the shared measuring stick. Bakeoff runs the same
+predeclared verifier specs against the baseline and each provider candidate, so
+the work order should define the official gates and metrics before providers
+start editing. Provider-authored tests, probes, or benchmarks can be useful
+patch evidence, but they are not decisive unless a human promotes them into the
+shared verifier list for a later run.
+
+For performance metrics, prefer a verifier that already handles noise and emits
+one final JSON line. In Go projects, that often means repeated benchmark runs
+and a statistical comparison such as
+[`benchstat`](https://pkg.go.dev/golang.org/x/perf/cmd/benchstat), then a JSON
+summary with the configured metric name.
+
 Minimal build shape:
 
 ```json
