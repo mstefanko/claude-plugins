@@ -1,7 +1,7 @@
 ---
 description: Draft, validate, and run Bakeoff work orders
 argument-hint: "<work-order-path | request> [--run-id ID] [--out runs] [--quiet] [--keep-worktrees] [--no-triage]"
-allowed-tools: Read, Write, Edit, Glob, Grep, Bash(${CLAUDE_PLUGIN_ROOT}/scripts/bakeoff-ensure-cli:*), Bash(${CLAUDE_PLUGIN_ROOT}/bin/bakeoff validate:*), Bash(${CLAUDE_PLUGIN_ROOT}/bin/bakeoff research:*), Bash(${CLAUDE_PLUGIN_ROOT}/bin/bakeoff build:*), Bash(bakeoff validate:*), Bash(bakeoff research:*), Bash(bakeoff build:*), Bash(git status:*), Bash(git diff:*), Bash(git rev-parse:*)
+allowed-tools: Read, Write, Edit, Glob, Grep, Bash(${CLAUDE_PLUGIN_ROOT}/scripts/bakeoff-ensure-cli:*), Bash(${CLAUDE_PLUGIN_ROOT}/bin/bakeoff validate:*), Bash(${CLAUDE_PLUGIN_ROOT}/bin/bakeoff research:*), Bash(${CLAUDE_PLUGIN_ROOT}/bin/bakeoff build:*), Bash(${CLAUDE_PLUGIN_ROOT}/bin/bakeoff rerun:*), Bash(bakeoff validate:*), Bash(bakeoff research:*), Bash(bakeoff build:*), Bash(bakeoff rerun:*), Bash(git status:*), Bash(git diff:*), Bash(git rev-parse:*)
 ---
 
 # /bakeoff:run
@@ -264,8 +264,20 @@ with the same rules, and revalidate only after approval.
 Default interactive runs keep CLI heartbeats. Use `--json --quiet` only when
 the user asks for quiet or machine-readable output.
 
-On exit `0` or `3`, read the run artifacts and summarize. Exit `3` means a
-completed run with unresolved disagreement, not a launcher failure.
+On exit `0`, `3`, or `4`, read the run artifacts and summarize. Exit `3` means
+a completed run with unresolved disagreement, not a launcher failure. Exit `4`
+means the decision is incomplete because the judge failed or did not converge;
+provider artifacts are durable.
+
+When exit `4` is paired with all providers reporting `ok` or
+`ok_after_format_retry` and a failed judge status, make the first recommended
+next action:
+
+```bash
+bakeoff rerun <run-id> --judge-only
+```
+
+Mention a normal full `bakeoff rerun <run-id>` only as a secondary option.
 
 The final response must include:
 

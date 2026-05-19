@@ -9,12 +9,12 @@ import (
 )
 
 const (
-	ExitSuccess           = 0
-	ExitRuntimeFailure    = 1
-	ExitUsage             = 2
-	ExitJudgeDisagreement = 3
+	ExitSuccess            = 0
+	ExitRuntimeFailure     = 1
+	ExitUsage              = 2
+	ExitJudgeDisagreement  = 3
 	ExitDecisionIncomplete = 4
-	ExitInterrupted       = 130
+	ExitInterrupted        = 130
 )
 
 func ExitCode(err error, rootSignalCanceled bool) int {

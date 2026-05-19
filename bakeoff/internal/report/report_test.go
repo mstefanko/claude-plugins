@@ -166,3 +166,82 @@ func TestRenderProviderStatusShowsStderrKind(t *testing.T) {
 		t.Fatalf("report missing stderr kind:\n%s", text)
 	}
 }
+
+func TestRenderFailedJudgeShowsStatusAndProviderClaims(t *testing.T) {
+	text := Render(
+		&workorder.WorkOrder{
+			ID:   "sample",
+			Type: "gather",
+			Providers: []workorder.Participant{
+				{ID: "claude"},
+				{ID: "codex"},
+			},
+		},
+		map[string]any{
+			"mode":              "gather",
+			"decision_kind":     "provider_union_only",
+			"judge_ran":         true,
+			"judge_attempted":   true,
+			"judge_completed":   false,
+			"judge_error_kind":  "api_transient",
+			"provider_statuses": map[string]any{},
+			"caveats":           []any{"gather judge failed with exit_error"},
+		},
+		map[string]map[string]any{
+			"claude": {"final_json": map[string]any{"claims": []any{map[string]any{"claim": "Claude claim", "confidence": "high"}}, "unknowns": []any{"claude unknown"}}},
+			"codex":  {"final_json": map[string]any{"claims": []any{map[string]any{"claim": "Codex claim", "confidence": "medium"}}, "unknowns": []any{"codex unknown"}}},
+		},
+		map[string]map[string]any{"pass1": {}},
+		RenderOptions{RunID: "run-1", OutDir: "runs"},
+	)
+	for _, want := range []string{
+		"## Status",
+		"Action: judge failed; provider claims below; consider `bakeoff rerun run-1 --judge-only`.",
+		"### claude",
+		"Claude claim",
+		"### codex",
+		"Codex claim",
+		"Judge error kind: `api_transient`",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("report missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Index(text, "## Status") > strings.Index(text, "## Outcome") {
+		t.Fatalf("Status should precede Outcome:\n%s", text)
+	}
+	if strings.Contains(text, "## Conflicts") {
+		t.Fatalf("failed judge report should not render judge conflicts:\n%s", text)
+	}
+}
+
+func TestRenderProviderStatusInlinesObservedBytesWhenTruncated(t *testing.T) {
+	text := Render(
+		&workorder.WorkOrder{ID: "sample", Type: "gather"},
+		map[string]any{
+			"mode":          "gather",
+			"decision_kind": "both_failed",
+			"judge_ran":     false,
+			"provider_statuses": map[string]any{
+				"claude": map[string]any{
+					"status":                "exit_error",
+					"stdout_bytes":          4096,
+					"stdout_observed_bytes": 18637,
+					"stdout_truncated":      true,
+					"stderr_bytes":          4096,
+					"stderr_observed_bytes": 18637,
+					"stderr_truncated":      true,
+				},
+			},
+		},
+		map[string]map[string]any{},
+		map[string]map[string]any{},
+		RenderOptions{},
+	)
+	if !strings.Contains(text, "4.0 KB (obs 18.2 KB)") {
+		t.Fatalf("report missing observed byte cell:\n%s", text)
+	}
+	if strings.Contains(text, "stdout observed") || strings.Contains(text, "stderr observed") {
+		t.Fatalf("observed bytes duplicated in notes:\n%s", text)
+	}
+}

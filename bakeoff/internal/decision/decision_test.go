@@ -27,6 +27,42 @@ func TestSingleProviderOnlyHandlesUnexpectedSurvivor(t *testing.T) {
 	}
 }
 
+func TestGatherStructuredUnionClassifiesFailedJudgeAsProviderUnionOnly(t *testing.T) {
+	wo := &workorder.WorkOrder{
+		Type: "gather",
+		Providers: []workorder.Participant{
+			{ID: "claude"},
+			{ID: "codex"},
+		},
+	}
+	decision, _, exitCode := GatherStructuredUnion(wo, map[string]map[string]any{
+		"claude": {"status": "ok"},
+		"codex":  {"status": "ok"},
+	}, map[string]any{"status": "exit_error", "judge_error_kind": "api_transient"})
+
+	if exitCode != 4 || decision["decision_kind"] != "provider_union_only" || decision["judge_completed"] != false || decision["judge_error_kind"] != "api_transient" {
+		t.Fatalf("decision=%#v exit=%d", decision, exitCode)
+	}
+}
+
+func TestGatherStructuredUnionMarksSuccessfulJudgeComplete(t *testing.T) {
+	wo := &workorder.WorkOrder{
+		Type: "gather",
+		Providers: []workorder.Participant{
+			{ID: "claude"},
+			{ID: "codex"},
+		},
+	}
+	decision, _, exitCode := GatherStructuredUnion(wo, map[string]map[string]any{
+		"claude": {"status": "ok"},
+		"codex":  {"status": "ok"},
+	}, map[string]any{"status": "ok", "final_json": map[string]any{"merged_claims": []any{}, "conflicts": []any{}, "unknowns_union": []any{}}})
+
+	if exitCode != 0 || decision["decision_kind"] != "structured_union" || decision["judge_completed"] != true {
+		t.Fatalf("decision=%#v exit=%d", decision, exitCode)
+	}
+}
+
 func TestResolveBuildSelectsGateWinner(t *testing.T) {
 	decision, exitCode := ResolveBuild(BuildResolutionInput{
 		ProviderIDs: []string{"claude", "codex"},

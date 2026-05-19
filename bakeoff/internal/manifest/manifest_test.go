@@ -101,6 +101,48 @@ func TestWriteRunManifestFingerprintsProviderAndJudgeEvidence(t *testing.T) {
 	}
 }
 
+func TestWriteRunManifestProviderSummaryKeepsRawAndAddsCompactStatus(t *testing.T) {
+	runDir := filepath.Join(t.TempDir(), "runs", "r1")
+	writeMinimalRun(t, runDir)
+	status := map[string]any{
+		"status":                "schema_error",
+		"exit_code":             1,
+		"output_bytes":          2048,
+		"stdout_bytes":          1024,
+		"stderr_bytes":          512,
+		"stdout_truncated":      true,
+		"stderr_truncated":      true,
+		"stdout_observed_bytes": 4096,
+		"stderr_observed_bytes": 8192,
+		"scope_enforcement":     map[string]any{"requested_scope": "codebase", "effective_scope": "codebase"},
+		"stderr_path":           "providers/claude/stderr.txt",
+	}
+	writeJSON(t, filepath.Join(runDir, "decision.json"), map[string]any{
+		"decision_kind":     "provider_union_only",
+		"judge_ran":         true,
+		"judge_attempted":   true,
+		"judge_completed":   false,
+		"provider_statuses": map[string]any{"claude": status},
+	})
+	value, err := manifest.WriteRunManifest(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	providers := value["providers"].(map[string]any)
+	claude := providers["claude"].(map[string]any)
+	if claude["status"] != "schema_error" || claude["compact_status"] != "failed" {
+		t.Fatalf("provider summary status = %#v", claude)
+	}
+	for _, key := range []string{"exit_code", "output_bytes", "stderr_truncated", "stdout_truncated", "stdout_observed_bytes", "stderr_observed_bytes", "scope_enforcement", "stderr_path"} {
+		if _, ok := claude[key]; !ok {
+			t.Fatalf("missing passthrough %s in %#v", key, claude)
+		}
+	}
+	if value["judge_attempted"] != true || value["judge_completed"] != false {
+		t.Fatalf("judge fields = %#v", value)
+	}
+}
+
 func TestWriteRunManifestRejectsPartialReviewContextArtifacts(t *testing.T) {
 	runDir := filepath.Join(t.TempDir(), "runs", "r1")
 	writeMinimalRun(t, runDir)

@@ -3,6 +3,7 @@ package researchcmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -187,6 +188,154 @@ exit 2
 	}
 }
 
+func TestRunResearchJudgeOnlySucceedsWithCopiedProviderArtifacts(t *testing.T) {
+	root := t.TempDir()
+	fakeBin := filepath.Join(root, "bin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeExecutable(t, filepath.Join(fakeBin, "claude"), `#!/bin/sh
+if [ "$1" = "--version" ]; then
+  printf 'claude fake\n'
+  exit 0
+fi
+cat >/dev/null
+cat <<'JSON'
+<final_json>{"merged_claims":[{"claim":"Merged claim","sources":["A","B"],"evidence":["judge:1"],"confidence":"high"}],"conflicts":[],"unknowns_union":[]}</final_json>
+JSON
+`)
+	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	outDir := filepath.Join(root, "runs")
+	sourceRun := filepath.Join(outDir, "source")
+	writeJudgeOnlySourceRun(t, sourceRun, "gather", "exit_error")
+	before := mustReadFile(t, filepath.Join(sourceRun, "judge", "status.json"))
+
+	var out, errOut bytes.Buffer
+	factory := researchTestFactory{streams: output.NewStreams(&out, &errOut)}
+	err := RunResearchJudgeOnly(context.Background(), factory, &ResearchJudgeOnlyOptions{
+		SourceRunDir: sourceRun,
+		SourceRunID:  "source",
+		Out:          outDir,
+		RunID:        "retry",
+		Quiet:        true,
+		NoTriage:     true,
+	})
+	if err != nil {
+		t.Fatalf("RunResearchJudgeOnly returned error: %v\nstdout:\n%s\nstderr:\n%s", err, out.String(), errOut.String())
+	}
+	runDir := filepath.Join(outDir, "retry")
+	decision := readTestJSON(t, filepath.Join(runDir, "decision.json"))
+	if decision["decision_kind"] != "structured_union" || decision["judge_completed"] != true {
+		t.Fatalf("decision = %#v", decision)
+	}
+	meta := readTestJSON(t, filepath.Join(runDir, "meta.json"))
+	if meta["source_run_id"] != "source" || meta["source_run_dir"] != sourceRun || meta["rerun_mode"] != "judge_only" {
+		t.Fatalf("meta = %#v", meta)
+	}
+	if _, err := os.Stat(filepath.Join(runDir, "providers", "claude", "final.json")); err != nil {
+		t.Fatalf("copied provider final missing: %v", err)
+	}
+	manifest := readTestJSON(t, filepath.Join(runDir, "manifest.json"))
+	fingerprints := manifest["artifact_fingerprints"].(map[string]any)
+	for _, relative := range []string{"providers/claude/status.json", "providers/codex/final.json", "judge/status.json", "judge/result.json"} {
+		if _, ok := fingerprints[relative]; !ok {
+			t.Fatalf("missing fingerprint for %s in %#v", relative, fingerprints)
+		}
+	}
+	if got := mustReadFile(t, filepath.Join(sourceRun, "judge", "status.json")); !bytes.Equal(got, before) {
+		t.Fatalf("source run judge status changed")
+	}
+	latest, err := os.Readlink(filepath.Join(outDir, "latest"))
+	if err == nil && latest != "retry" {
+		t.Fatalf("latest symlink = %q", latest)
+	}
+	if err != nil {
+		if data := strings.TrimSpace(string(mustReadFile(t, filepath.Join(outDir, "latest")))); data != "retry" {
+			t.Fatalf("latest file = %q", data)
+		}
+	}
+	if !strings.Contains(out.String(), "judge-only rerun reuses provider artifacts from source") {
+		t.Fatalf("missing reuse note:\n%s", out.String())
+	}
+}
+
+func TestLoadResearchWorkerResultsFromArtifactsValidation(t *testing.T) {
+	cases := []struct {
+		name     string
+		mutate   func(string)
+		wantText string
+	}{
+		{
+			name: "missing final",
+			mutate: func(runDir string) {
+				if err := os.Remove(filepath.Join(runDir, "providers", "codex", "final.json")); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantText: "final.json",
+		},
+		{
+			name: "malformed final",
+			mutate: func(runDir string) {
+				if err := workorder.WriteJSONAtomic(filepath.Join(runDir, "providers", "codex", "final.json"), map[string]any{"status": "complete"}); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantText: "claims is required",
+		},
+		{
+			name: "failed status",
+			mutate: func(runDir string) {
+				if err := workorder.WriteJSONAtomic(filepath.Join(runDir, "providers", "codex", "status.json"), map[string]any{"status": "exit_error"}); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantText: "not successful",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runDir := filepath.Join(t.TempDir(), "run")
+			wo := writeJudgeOnlySourceRun(t, runDir, "gather", "exit_error")
+			tc.mutate(runDir)
+			_, err := loadResearchWorkerResultsFromArtifacts(wo, runDir)
+			if err == nil || !strings.Contains(err.Error(), tc.wantText) {
+				t.Fatalf("expected %q error, got %v", tc.wantText, err)
+			}
+		})
+	}
+}
+
+func TestRunResearchJudgeOnlyRejectsNoFailedJudgeAttempt(t *testing.T) {
+	root := t.TempDir()
+	outDir := filepath.Join(root, "runs")
+	sourceRun := filepath.Join(outDir, "source")
+	writeJudgeOnlySourceRun(t, sourceRun, "gather", "ok")
+	if err := workorder.WriteJSONAtomic(filepath.Join(sourceRun, "decision.json"), map[string]any{
+		"mode":            "gather",
+		"decision_kind":   "structured_union",
+		"judge_ran":       true,
+		"judge_attempted": true,
+		"judge_completed": true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	factory := researchTestFactory{streams: output.NewStreams(&bytes.Buffer{}, &bytes.Buffer{})}
+	err := RunResearchJudgeOnly(context.Background(), factory, &ResearchJudgeOnlyOptions{
+		SourceRunDir: sourceRun,
+		SourceRunID:  "source",
+		Out:          outDir,
+		RunID:        "retry",
+		Quiet:        true,
+		NoTriage:     true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "judge already completed") {
+		t.Fatalf("expected successful judge rejection, got %v", err)
+	}
+}
+
 func TestResearchResultLineSummarizesGatherAndWinnerModes(t *testing.T) {
 	gather := researchResultLine(&workorder.WorkOrder{Type: "gather"}, map[string]any{
 		"mode":          "gather",
@@ -201,7 +350,7 @@ func TestResearchResultLineSummarizesGatherAndWinnerModes(t *testing.T) {
 		"canonical_winner": "claude",
 		"spine_tiebreak":   "most_corroborated",
 	}, "")
-	if compare != "winner=claude, basis=most_corroborated" {
+	if compare != "winner=claude, spine_tiebreak=most_corroborated" {
 		t.Fatalf("compare result line = %q", compare)
 	}
 	consensus := researchResultLine(&workorder.WorkOrder{Type: "compare"}, map[string]any{
@@ -215,9 +364,96 @@ func TestResearchResultLineSummarizesGatherAndWinnerModes(t *testing.T) {
 		"decision_kind": "tie",
 		"judge_ran":     true,
 	}, "")
-	if unresolved != "no winner (unresolved disagreement, basis=judge)" {
+	if unresolved != "no winner (unresolved disagreement, spine_tiebreak=judge)" {
 		t.Fatalf("unresolved result line = %q", unresolved)
 	}
+}
+
+func writeJudgeOnlySourceRun(t *testing.T, runDir string, mode string, judgeStatus string) *workorder.WorkOrder {
+	t.Helper()
+	workOrder := map[string]any{
+		"schema_version": 1,
+		"id":             "judge-only-source",
+		"type":           mode,
+		"goal":           "Gather facts.",
+		"background":     "Judge-only retry test.",
+		"providers": []map[string]any{
+			{"id": "claude", "backend": "claude", "model": "claude-test", "scope": "codebase"},
+			{"id": "codex", "backend": "codex", "model": "codex-test", "scope": "web"},
+		},
+		"scope_policy": map[string]any{"enforcement": "best_effort"},
+		"judge":        map[string]any{"backend": "claude", "model": "judge-test"},
+		"budgets":      map[string]any{"wall_clock_seconds": 3, "max_output_bytes": 20000, "heartbeat_seconds": 0},
+	}
+	if err := workorder.WriteJSONAtomic(filepath.Join(runDir, "work-order.json"), workOrder); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"claude", "codex"} {
+		if err := workorder.WriteJSONAtomic(filepath.Join(runDir, "providers", id, "status.json"), map[string]any{
+			"status":            "ok",
+			"wall_seconds":      1.0,
+			"output_bytes":      120,
+			"final_json_source": "stdout",
+			"scope_enforcement": map[string]any{"requested_scope": "codebase", "effective_scope": "codebase", "enforcement_level": "best_effort"},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := workorder.WriteJSONAtomic(filepath.Join(runDir, "providers", id, "final.json"), map[string]any{
+			"status": "complete",
+			"claims": []any{
+				map[string]any{"id": "C-001", "claim": id + " claim", "evidence": []any{"evidence:1"}, "confidence": "high"},
+			},
+			"conflicts":               []any{},
+			"unknowns":                []any{id + " unknown"},
+			"recommended_next_checks": []any{},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := workorder.WriteTextAtomic(filepath.Join(runDir, "providers", id, "stdout.txt"), "stdout\n"); err != nil {
+			t.Fatal(err)
+		}
+		if err := workorder.WriteTextAtomic(filepath.Join(runDir, "providers", id, "stderr.txt"), "stderr\n"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := workorder.WriteJSONAtomic(filepath.Join(runDir, "decision.json"), map[string]any{
+		"mode":              mode,
+		"decision_kind":     "provider_union_only",
+		"judge_ran":         true,
+		"judge_attempted":   true,
+		"judge_completed":   false,
+		"provider_statuses": map[string]any{},
+		"caveats":           []any{"gather judge failed with exit_error"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := workorder.WriteJSONAtomic(filepath.Join(runDir, "judge", "status.json"), map[string]any{"status": judgeStatus, "exit_code": 1}); err != nil {
+		t.Fatal(err)
+	}
+	wo, err := workorder.Load(filepath.Join(runDir, "work-order.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return wo
+}
+
+func readTestJSON(t *testing.T, path string) map[string]any {
+	t.Helper()
+	data := mustReadFile(t, path)
+	var obj map[string]any
+	if err := json.Unmarshal(data, &obj); err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return obj
+}
+
+func mustReadFile(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }
 
 func writeExecutable(t *testing.T, path string, text string) {

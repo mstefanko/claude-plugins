@@ -14,6 +14,7 @@ import (
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/buildinfo"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/fsutil"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/jsonutil"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/summary"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/triage"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
 )
@@ -53,6 +54,8 @@ func BuildRunManifest(runDir string) (map[string]any, error) {
 		return nil, err
 	}
 
+	// facet_id is the hoisted meta.facet.id/work-order facet.id for list views;
+	// meta.facet remains the full facet object.
 	facetID := ""
 	if facet, ok := meta["facet"].(map[string]any); ok {
 		facetID, _ = facet["id"].(string)
@@ -81,6 +84,8 @@ func BuildRunManifest(runDir string) (map[string]any, error) {
 		"decision_kind":         decision["decision_kind"],
 		"canonical_winner":      decision["canonical_winner"],
 		"judge_ran":             truthy(decision["judge_ran"]),
+		"judge_attempted":       truthy(decision["judge_attempted"]),
+		"judge_completed":       truthy(decision["judge_completed"]),
 		"triage":                triageSummary,
 		"providers":             providerSummaries(meta, decision),
 		"judge":                 judgeSummary(meta),
@@ -223,20 +228,26 @@ func providerSummaries(meta map[string]any, decision map[string]any) map[string]
 	for _, id := range keys {
 		modelInfo, _ := resolvedProviders[id].(map[string]any)
 		statusInfo, _ := statuses[id].(map[string]any)
-		summary := map[string]any{
-			"backend":      modelInfo["backend"],
-			"model":        modelInfo["model"],
-			"scope":        modelInfo["scope"],
-			"effort":       modelInfo["effort"],
-			"status":       statusInfo["status"],
-			"wall_seconds": statusInfo["wall_seconds"],
-			"stdout_bytes": jsonutil.FirstNonNil(statusInfo["stdout_bytes"], statusInfo["output_bytes"]),
-			"stderr_bytes": statusInfo["stderr_bytes"],
+		entry := map[string]any{
+			"backend":        modelInfo["backend"],
+			"model":          modelInfo["model"],
+			"scope":          modelInfo["scope"],
+			"effort":         modelInfo["effort"],
+			"status":         statusInfo["status"],
+			"compact_status": summary.CompactStatus(statusInfo["status"]),
+			"wall_seconds":   statusInfo["wall_seconds"],
+			"stdout_bytes":   jsonutil.FirstNonNil(statusInfo["stdout_bytes"], statusInfo["output_bytes"]),
+			"stderr_bytes":   statusInfo["stderr_bytes"],
 		}
 		if value, ok := statusInfo["final_json_source"]; ok {
-			summary["final_json_source"] = value
+			entry["final_json_source"] = value
 		}
-		out[id] = compactNilMap(summary)
+		for _, key := range []string{"exit_code", "output_bytes", "stderr_truncated", "stdout_truncated", "stdout_observed_bytes", "stderr_observed_bytes", "scope_enforcement", "stderr_path"} {
+			if value, ok := statusInfo[key]; ok {
+				entry[key] = value
+			}
+		}
+		out[id] = compactNilMap(entry)
 	}
 	return out
 }

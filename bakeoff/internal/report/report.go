@@ -381,6 +381,45 @@ func renderGather(wo *workorder.WorkOrder, decision map[string]any, workerResult
 	return lines
 }
 
+func renderPerProviderResearch(wo *workorder.WorkOrder, workerResults map[string]map[string]any, heading string) []string {
+	lines := []string{heading, ""}
+	for _, providerID := range orderedProviderIDs(wo, workerResults) {
+		worker := jsonutil.FinalJSONMap(workerResults[providerID])
+		lines = append(lines, "### "+providerID)
+		lines = append(lines, claimLines(jsonutil.ListValue(worker["claims"]), providerID, false)...)
+		lines = append(lines, "")
+	}
+	lines = append(lines, "## Unknowns", "")
+	for _, providerID := range orderedProviderIDs(wo, workerResults) {
+		worker := jsonutil.FinalJSONMap(workerResults[providerID])
+		lines = append(lines, "### "+providerID)
+		items := jsonutil.ListValue(worker["unknowns"])
+		if len(items) == 0 {
+			lines = append(lines, "- None reported.")
+		} else {
+			for _, item := range items {
+				lines = append(lines, "- "+fmt.Sprint(item))
+			}
+		}
+		lines = append(lines, "")
+	}
+	return lines
+}
+
+func renderPerProviderComparison(workerResults map[string]map[string]any, heading string) []string {
+	lines := []string{heading, "", "Judge failed; surfacing each provider result without selecting a winner.", ""}
+	for _, providerID := range sortedProviderIDs(workerResults) {
+		worker := jsonutil.FinalJSONMap(workerResults[providerID])
+		lines = append(lines, "### "+providerID)
+		if position := jsonutil.StringValue(worker["position"]); position != "" {
+			lines = append(lines, "Position: "+position, "")
+		}
+		lines = append(lines, claimLines(jsonutil.ListValue(worker["claims"]), providerID, false)...)
+		lines = append(lines, "")
+	}
+	return lines
+}
+
 func renderCompare(decision map[string]any, workerResults map[string]map[string]any) []string {
 	lines := []string{"## Comparison", ""}
 	kind := jsonutil.StringValue(decision["decision_kind"])
@@ -644,6 +683,34 @@ func sortedGroupKeys(m map[string][]any) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+func orderedProviderIDs(wo *workorder.WorkOrder, results map[string]map[string]any) []string {
+	seen := map[string]bool{}
+	ids := []string{}
+	if wo != nil {
+		for _, participant := range wo.Providers {
+			if participant.ID != "" {
+				ids = append(ids, participant.ID)
+				seen[participant.ID] = true
+			}
+		}
+	}
+	for _, id := range sortedProviderIDs(results) {
+		if !seen[id] {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+func sortedProviderIDs(results map[string]map[string]any) []string {
+	ids := make([]string, 0, len(results))
+	for id := range results {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 func cloneMap(in map[string]any) map[string]any {

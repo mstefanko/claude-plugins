@@ -199,6 +199,9 @@ func RunResearchJudgeOnly(ctx context.Context, f commands.Factory, opts *Researc
 	if err := validateFailedJudgeAttempt(wo, opts.SourceRunDir); err != nil {
 		return err
 	}
+	if _, err := loadResearchWorkerResultsFromArtifacts(wo, opts.SourceRunDir); err != nil {
+		return commands.WrapValidation(err)
+	}
 	runID := opts.RunID
 	if runID == "" {
 		runID = ledger.MakeRunID(f.Now(), fsutil.RandomSuffix())
@@ -232,11 +235,15 @@ func RunResearchJudgeOnly(ctx context.Context, f commands.Factory, opts *Researc
 	if err != nil {
 		return commands.WrapValidation(err)
 	}
+	sourceRunID := opts.SourceRunID
+	if sourceRunID == "" || sourceRunID == "latest" {
+		sourceRunID = filepath.Base(opts.SourceRunDir)
+	}
 	humanOutput := true
 	effectiveQuiet := opts.Quiet
 	if humanOutput {
 		printRunHeader(f, wo, runDir, runID)
-		f.Streams().Printf("note: judge-only rerun reuses provider artifacts from %s\n", opts.SourceRunID)
+		f.Streams().Printf("note: judge-only rerun reuses provider artifacts from %s\n", sourceRunID)
 		if fsutil.FileExists(filepath.Join(runDir, "review-context.md")) {
 			f.Streams().Printf("review context: replayed from %s\n", opts.SourceRunDir)
 		}
@@ -250,10 +257,6 @@ func RunResearchJudgeOnly(ctx context.Context, f commands.Factory, opts *Researc
 	}
 	if ctx.Err() != nil {
 		return ctx.Err()
-	}
-	sourceRunID := opts.SourceRunID
-	if sourceRunID == "" || sourceRunID == "latest" {
-		sourceRunID = filepath.Base(opts.SourceRunDir)
 	}
 	return finalizeResearchRun(ctx, f, researchFinalizeOptions{
 		WorkOrder:      wo,
@@ -678,11 +681,11 @@ func researchResultLine(wo *workorder.WorkOrder, decisionDoc map[string]any, rep
 		}
 		if winner == "" {
 			if ran, _ := decisionDoc["judge_ran"].(bool); ran {
-				return fmt.Sprintf("no winner (unresolved disagreement, basis=%s)", basis)
+				return fmt.Sprintf("no winner (unresolved disagreement, spine_tiebreak=%s)", basis)
 			}
 			winner = "none"
 		}
-		return fmt.Sprintf("winner=%s, basis=%s", winner, basis)
+		return fmt.Sprintf("winner=%s, spine_tiebreak=%s", winner, basis)
 	}
 }
 
@@ -801,6 +804,13 @@ func copyProviderArtifactDirs(wo *workorder.WorkOrder, sourceRunDir string, runD
 }
 
 func requireProviderReplayArtifacts(providerDir string, providerID string) error {
+	linkInfo, err := os.Lstat(providerDir)
+	if err != nil {
+		return fmt.Errorf("provider %s artifact directory is required: %w", providerID, err)
+	}
+	if linkInfo.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("provider %s artifact directory must not be a symlink", providerID)
+	}
 	info, err := os.Stat(providerDir)
 	if err != nil {
 		return fmt.Errorf("provider %s artifact directory is required: %w", providerID, err)

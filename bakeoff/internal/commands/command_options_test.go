@@ -148,10 +148,10 @@ func TestCommandOptions(t *testing.T) {
 			got = &copy
 			return nil
 		})
-		if err := execute(cmd, "source", "--out", "ledger", "--run-id", "next", "--quiet", "--no-triage"); err != nil {
+		if err := execute(cmd, "source", "--out", "ledger", "--run-id", "next", "--quiet", "--no-triage", "--judge-only"); err != nil {
 			t.Fatal(err)
 		}
-		want := &reruncmd.RerunOptions{SourceRunID: "source", Out: "ledger", NewRunID: "next", Quiet: true, NoTriage: true}
+		want := &reruncmd.RerunOptions{SourceRunID: "source", Out: "ledger", NewRunID: "next", Quiet: true, NoTriage: true, JudgeOnly: true}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("got %#v, want %#v", got, want)
 		}

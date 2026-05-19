@@ -51,10 +51,11 @@ func TestRunRerunDispatchesBuildWorkOrder(t *testing.T) {
 	}
 	writeRerunBuildWorkOrder(t, filepath.Join(sourceRun, "work-order.json"))
 
-	oldRunBuild, oldRunResearch := runBuild, runResearch
+	oldRunBuild, oldRunResearch, oldRunResearchJudgeOnly := runBuild, runResearch, runResearchJudgeOnly
 	defer func() {
 		runBuild = oldRunBuild
 		runResearch = oldRunResearch
+		runResearchJudgeOnly = oldRunResearchJudgeOnly
 	}()
 	var got buildcmd.BuildOptions
 	runBuild = func(_ context.Context, _ commands.Factory, opts *buildcmd.BuildOptions) error {
@@ -88,10 +89,11 @@ func TestRunRerunDispatchesResearchWorkOrder(t *testing.T) {
 	}
 	writeRerunResearchWorkOrder(t, filepath.Join(sourceRun, "work-order.json"))
 
-	oldRunBuild, oldRunResearch := runBuild, runResearch
+	oldRunBuild, oldRunResearch, oldRunResearchJudgeOnly := runBuild, runResearch, runResearchJudgeOnly
 	defer func() {
 		runBuild = oldRunBuild
 		runResearch = oldRunResearch
+		runResearchJudgeOnly = oldRunResearchJudgeOnly
 	}()
 	runBuild = func(_ context.Context, _ commands.Factory, _ *buildcmd.BuildOptions) error {
 		t.Fatal("build runner should not be called for research work orders")
@@ -110,6 +112,59 @@ func TestRunRerunDispatchesResearchWorkOrder(t *testing.T) {
 	}
 	if got.WorkOrder != filepath.Join(sourceRun, "work-order.json") || got.Out != outDir || got.RunID != "research-copy" || !got.Quiet || !got.NoTriage || got.ReplaySourceRunDir != sourceRun {
 		t.Fatalf("research options = %#v", got)
+	}
+}
+
+func TestRunRerunJudgeOnlyDispatchesResearchJudgeOnly(t *testing.T) {
+	outDir := filepath.Join(t.TempDir(), "runs")
+	sourceRun := filepath.Join(outDir, "research-source")
+	if err := os.MkdirAll(sourceRun, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeRerunResearchWorkOrder(t, filepath.Join(sourceRun, "work-order.json"))
+
+	oldRunBuild, oldRunResearch, oldRunResearchJudgeOnly := runBuild, runResearch, runResearchJudgeOnly
+	defer func() {
+		runBuild = oldRunBuild
+		runResearch = oldRunResearch
+		runResearchJudgeOnly = oldRunResearchJudgeOnly
+	}()
+	runBuild = func(_ context.Context, _ commands.Factory, _ *buildcmd.BuildOptions) error {
+		t.Fatal("build runner should not be called for research work orders")
+		return nil
+	}
+	runResearch = func(_ context.Context, _ commands.Factory, _ *researchcmd.ResearchOptions) error {
+		t.Fatal("full research runner should not be called for judge-only reruns")
+		return nil
+	}
+	var got researchcmd.ResearchJudgeOnlyOptions
+	runResearchJudgeOnly = func(_ context.Context, _ commands.Factory, opts *researchcmd.ResearchJudgeOnlyOptions) error {
+		got = *opts
+		return nil
+	}
+
+	f := rerunTestFactory{streams: output.NewStreams(&bytes.Buffer{}, &bytes.Buffer{})}
+	err := runRerun(context.Background(), f, &RerunOptions{SourceRunID: "research-source", Out: outDir, NewRunID: "judge-copy", Quiet: true, NoTriage: true, JudgeOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SourceRunDir != sourceRun || got.SourceRunID != "research-source" || got.Out != outDir || got.RunID != "judge-copy" || !got.Quiet || !got.NoTriage {
+		t.Fatalf("judge-only options = %#v", got)
+	}
+}
+
+func TestRunRerunJudgeOnlyRejectsBuildWorkOrder(t *testing.T) {
+	outDir := filepath.Join(t.TempDir(), "runs")
+	sourceRun := filepath.Join(outDir, "build-source")
+	if err := os.MkdirAll(sourceRun, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeRerunBuildWorkOrder(t, filepath.Join(sourceRun, "work-order.json"))
+
+	f := rerunTestFactory{streams: output.NewStreams(&bytes.Buffer{}, &bytes.Buffer{})}
+	err := runRerun(context.Background(), f, &RerunOptions{SourceRunID: "build-source", Out: outDir, JudgeOnly: true})
+	if err == nil || !strings.Contains(err.Error(), "supported only for research runs") {
+		t.Fatalf("expected build judge-only rejection, got %v", err)
 	}
 }
 

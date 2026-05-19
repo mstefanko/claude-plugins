@@ -310,7 +310,7 @@ ready.
 
 ## Artifact Summary Contract
 
-For every completed run, summarize:
+For every completed or decision-incomplete run, summarize:
 
 - run id;
 - command and exit-code meaning;
@@ -325,6 +325,12 @@ patch artifact path only when there is a canonical winner.
 
 Exit code `3` means a completed run with unresolved disagreement. Treat it as a
 completed Bakeoff handoff, not as a launcher failure.
+
+Exit code `4` means the decision is incomplete because the judge failed or did
+not converge, while provider artifacts are durable. When all providers are
+`ok` or `ok_after_format_retry` and the judge status failed, recommend
+`bakeoff rerun <run-id> --judge-only` first. A full
+`bakeoff rerun <run-id>` is secondary.
 
 ## Permission Semantics
 

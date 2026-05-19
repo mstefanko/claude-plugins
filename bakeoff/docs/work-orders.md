@@ -77,6 +77,10 @@ what evidence to prioritize.
 | `exclude` | no | Zero to eight strings. |
 | `notes` | no | Optional project constraints. |
 
+Run ledgers keep the full facet object in `meta.facet`. Manifests also expose
+`manifest.facet_id`, which is only the hoisted `meta.facet.id` used by list and
+filter views.
+
 The `code-review` facet is the standard review shape:
 
 ```json

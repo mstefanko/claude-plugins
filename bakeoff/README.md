@@ -213,9 +213,10 @@ runs/<run-id>/
 | `1` | Runtime, provider, verifier, or build failure. |
 | `2` | Usage, config, validation, or missing-input error. |
 | `3` | Completed run with unresolved judge disagreement. |
+| `4` | Decision incomplete: judge failed or did not converge; provider artifacts are durable. |
 | `130` | Interrupted. |
 
-Exit `3` is a completed handoff with no canonical winner — not a launcher failure. See [docs/artifacts-and-ledger.md](docs/artifacts-and-ledger.md).
+Exit `3` is a completed handoff with no canonical winner — not a launcher failure. Exit `4` means retrying the judge with `bakeoff rerun <run-id> --judge-only` is usually the right next step when both providers succeeded. See [docs/artifacts-and-ledger.md](docs/artifacts-and-ledger.md).
 
 ## Commands
 
@@ -228,7 +229,7 @@ Slash commands:
 - `/bakeoff:doctor [--skip-auth-probe] [--build] [--quiet]` — readiness check. `--build` runs live edit probes.
 - `/bakeoff:uninstall` — remove plugin state, then guide manual plugin uninstall.
 
-Core CLI: `bakeoff validate`, `bakeoff research`, `bakeoff build`, `bakeoff show`, `bakeoff triage`, `bakeoff doctor`. Full reference in [docs/cli-reference.md](docs/cli-reference.md).
+Core CLI: `bakeoff validate`, `bakeoff research`, `bakeoff build`, `bakeoff rerun`, `bakeoff show`, `bakeoff triage`, `bakeoff doctor`. Full reference in [docs/cli-reference.md](docs/cli-reference.md).
 
 ## Configuration
 

@@ -183,6 +183,12 @@ Flags:
 | `--run-id <id>` | Explicit new run id. |
 | `--quiet` | Suppress provider heartbeat lines. |
 | `--no-triage` | Skip automatic triage for code-review research reruns. |
+| `--judge-only` | Retry only a failed research judge using durable provider artifacts from the source run. |
+
+`--judge-only` is only for research runs whose providers completed and whose
+judge has durable failed-attempt evidence in `decision.json` or
+`judge/status*.json`. It creates a fresh run directory, copies provider
+artifacts, updates `latest`, and leaves the source run unchanged.
 
 ## `bakeoff show`
 
@@ -297,6 +303,7 @@ JSON mode also implies quieter operation for run-style commands.
 | `1` | Runtime, provider, verifier, or build failure. |
 | `2` | Usage, config, validation, or missing-input error. |
 | `3` | Completed run with unresolved judge disagreement. |
+| `4` | Decision incomplete: judge failed or did not converge; provider artifacts are durable and `bakeoff rerun <run-id> --judge-only` is recommended when providers succeeded. |
 | `130` | Interrupted. |
 
 Exit code `3` is a completed Bakeoff handoff. Inspect `decision.json` and
