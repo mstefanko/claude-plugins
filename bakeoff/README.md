@@ -62,9 +62,17 @@ Generated work orders use Claude model aliases (`sonnet`, `opus`) so defaults st
 
 ## Research
 
-`gather`, `compare`, and `analyze` use the same pipeline; only the judge differs. Gather dedupes claims and preserves citations. Compare and analyze use swapped A/B and B/A judging to pick a winner, consensus, or tie.
+Think of research as:
 
-Simple rule: use `gather` when you want breadth and citations, like "find every place this happens." Use `compare` when you can name the options and criteria. Use `analyze` when you need an evidence-backed reasoning spine, such as root cause, architecture tradeoffs, or "why did this happen?"
+**same task -> two independent answers -> mode-specific judge -> report**
+
+`gather`, `compare`, and `analyze` use the same basic pipeline. Claude and Codex each work from the same request, then Bakeoff judges the results differently depending on the mode:
+
+- `gather`: combines overlapping claims into one cited list
+- `compare`: judges named options and returns a winner, consensus, or tie
+- `analyze`: judges explanation spines and keeps the strongest evidence-backed reasoning
+
+Simple rule: use `gather` when you want breadth and citations, like "find every place this happens." Use `compare` when you can name the options and criteria. Use `analyze` when you need root cause, architecture tradeoffs, or a clear answer to "why did this happen?"
 
 ```text
 /bakeoff:run research how auth retry behavior works and cite the files involved
@@ -77,9 +85,11 @@ After a run: `bakeoff show <run-id>`.
 <details open>
 <summary>Research and evidence behind this design</summary>
 
-Sampling multiple independent reasoning paths and aggregating them beats single-shot generation on robustness ([Self-Consistency](https://arxiv.org/abs/2203.11171)). So Bakeoff asks Claude and Codex for independent artifacts instead of chaining one off the other. Parallel breadth helps on open-ended research, but coordination and token cost grow superlinearly with agent count ([Anthropic multi-agent research](https://www.anthropic.com/engineering/multi-agent-research-system)). That cost curve is why Bakeoff stays strictly pairwise — two providers, one judge — and does not spawn a swarm.
+The evidence says independent attempts are stronger than one single answer. So Bakeoff asks Claude and Codex to work separately, then combines or judges their outputs ([Self-Consistency](https://arxiv.org/abs/2203.11171)).
 
-LLM judges show measurable order bias: the candidate placed first wins more often than chance ([FairEval](https://arxiv.org/abs/2305.17926)). So `compare` and `analyze` both judge A/B and B/A, and a winner or spine only sticks if it survives the swap.
+The evidence also says more agents are not automatically better. Parallel research can help, but coordination and token cost climb quickly ([Anthropic multi-agent research](https://www.anthropic.com/engineering/multi-agent-research-system)). That is why Bakeoff stays small: two providers, one judge, replayable artifacts.
+
+For `compare` and `analyze`, Bakeoff also protects against judge order bias. The judge reads A/B and B/A, and a winner or reasoning spine only sticks if it survives the swap ([FairEval](https://arxiv.org/abs/2305.17926)).
 
 More: [docs/research-basis.md](docs/research-basis.md).
 
