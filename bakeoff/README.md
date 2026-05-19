@@ -15,16 +15,14 @@ Bakeoff is a thin launcher and Go CLI. It runs providers, captures artifacts, ve
 | Build | `type: "build"` | Competing implementations with verifiers as the selector. | `/bakeoff:run build competing fixes for the failing test` |
 
 ```mermaid
-flowchart TD
-    Q[What do you need?] --> R{Code edits?}
-    R -->|competing patches| BUILD[build]
-    R -->|no| S{Reviewing a change?}
-    S -->|yes| REVIEW[gather + code-review facet]
-    S -->|no| T{Picking between options?}
-    T -->|yes| COMPARE[compare]
-    T -->|no| U{Root cause or explanation?}
-    U -->|yes| ANALYZE[analyze]
-    U -->|no| GATHER[gather]
+flowchart LR
+    REQ[Request] --> RESEARCH[Research or decision]
+    REQ --> CODE[Code change work]
+    RESEARCH --> GATHER[gather<br/>facts and inventory]
+    RESEARCH --> COMPARE[compare<br/>choose an option]
+    RESEARCH --> ANALYZE[analyze<br/>explain or synthesize]
+    CODE --> REVIEW[review<br/>audit a change]
+    CODE --> BUILD[build<br/>competing patches]
 ```
 
 ## The Pipeline
@@ -32,21 +30,18 @@ flowchart TD
 Every Bakeoff run has the same shape. The mode determines what the judge does and whether verifiers or triage run.
 
 ```mermaid
-flowchart TD
-    A[Your request] --> B{Work order}
-    B -->|natural language| C[Draft JSON<br/>show and wait for approval]
-    B -->|existing file| D[Validate]
-    C --> D
-    D --> E[Run Claude and Codex<br/>on the same task]
-    E --> F{Mode}
-    F -->|gather| G[Merge claims, keep citations]
-    F -->|compare / analyze| H[Swapped A/B judge]
-    F -->|review| I[Merge findings → triage pass]
-    F -->|build| J[Gates → metrics<br/>swapped judge only on tie]
-    G --> K[report.md + decision.json + ledger]
-    H --> K
-    I --> K
-    J --> K
+flowchart LR
+    REQ[Request] --> WO[Work order<br/>draft or validate]
+    WO --> RUN[Claude + Codex<br/>same task]
+    RUN --> SELECT[Mode selector]
+    SELECT --> GATHER[gather<br/>merge claims]
+    SELECT --> JUDGE[compare / analyze<br/>swapped judge]
+    SELECT --> REVIEW[review<br/>merge + triage]
+    SELECT --> BUILD[build<br/>gates, metrics, judge if tied]
+    GATHER --> OUT[Report + decision<br/>ledger]
+    JUDGE --> OUT
+    REVIEW --> OUT
+    BUILD --> OUT
 ```
 
 ## Quick Start
@@ -139,18 +134,19 @@ Use it when verification is meaningful: performance, robustness, dependency migr
 Minimum build work order: `type: "build"`, two `codebase` providers, and at least one `kind: "gate"` verifier. See [examples/build.work-order.json](examples/build.work-order.json) for the full shape and [docs/work-orders.md](docs/work-orders.md) for field reference.
 
 ```mermaid
-flowchart TD
-    BL{Baseline gate passes?} -->|no| EX1[Stop: baseline failed]
-    BL -->|yes| PAT{Eligible patches captured}
-    PAT -->|zero| EX2[Both failed]
-    PAT -->|one| GA1[That provider wins by gate]
-    PAT -->|two| GA{Both pass gates?}
-    GA -->|one passes| GA2[Gate winner]
-    GA -->|both pass| ME{Metrics conclusive?}
-    ME -->|yes| ME1[Metric winner]
-    ME -->|inconclusive or split| JU[Swapped LLM judge]
-    JU -->|A/B and B/A agree| JU1[Judge winner]
-    JU -->|disagree| JU2[Exit 3: unresolved]
+flowchart LR
+    BL[Baseline gates] -->|fail| BF[Stop<br/>baseline failed]
+    BL -->|pass| CAP[Capture eligible patches]
+    CAP -->|none| NONE[No winner<br/>both failed]
+    CAP -->|one + gates pass| ONE[Single patch wins]
+    CAP -->|two| GATE[Provider gates]
+    GATE -->|one passes| GW[Gate winner]
+    GATE -->|none pass| VF[No winner<br/>verification failed]
+    GATE -->|both pass| METRIC[Metrics]
+    METRIC -->|conclusive| MW[Metric winner]
+    METRIC -->|tie or split| JUDGE[Swapped judge]
+    JUDGE -->|A/B and B/A agree| JW[Judge winner]
+    JUDGE -->|disagree| UN[Exit 3<br/>unresolved]
 ```
 
 If there's a canonical winner, the handoff patch is `runs/<run-id>/providers/<winner>/build/diff.patch`. Bakeoff does not apply it for you.
