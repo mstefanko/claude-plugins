@@ -1,5 +1,9 @@
 # Bakeoff
 
+<p align="center">
+  <img src="assets/bakeoff-logo.png" alt="Bakeoff logo: two cake slices labeled A and B on a cake stand next to the Bakeoff wordmark" width="720">
+</p>
+
 Bakeoff turns agent comparison into a repeatable workflow. Give Claude and Codex the same research, review, or build task; Bakeoff runs them in parallel, collects their work, judges the outputs, and returns a report with replayable artifacts.
 
 The tool is deliberately small and transparent. It launches providers, records artifacts, runs verification or judging, and writes a ledger, while leaving your checkout untouched. No surprise patches, no automatic PRs, no hidden state. Just parallel agent work with enough evidence to audit, reproduce, and trust the result.
