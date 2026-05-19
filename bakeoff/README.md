@@ -136,9 +136,15 @@ More: [docs/research-basis.md](docs/research-basis.md).
 
 ## Build
 
-Build mode runs two providers in isolated worktrees, captures each candidate patch, runs predeclared verifier commands, and selects a winner only when the evidence is conclusive. Bakeoff stops at the handoff — it does not apply, merge, commit, push, open a PR, or synthesize a third patch.
+Think of `build` as:
 
-Use it when verification is meaningful: performance, robustness, dependency migrations, refactors, tricky bugs, partial-test UX changes. Skip it for mechanical edits, formatter-only work, or one-clear-path fixes.
+**same task -> two isolated patches -> gates and metrics -> handoff patch**
+
+Build mode asks two providers to implement the same request in separate worktrees. Bakeoff captures each patch, runs the verifier commands you declared, and selects a winner only when the evidence is conclusive.
+
+Bakeoff stops at the handoff. It does not apply, merge, commit, push, open a PR, or synthesize a third patch.
+
+Use `build` when verification can actually help: performance work, robustness fixes, dependency migrations, refactors, tricky bugs, or partial-test UX changes. Skip it for mechanical edits, formatter-only work, or one-clear-path fixes.
 
 ```text
 /bakeoff:run build competing fixes for the failing cache invalidation test
@@ -146,27 +152,20 @@ Use it when verification is meaningful: performance, robustness, dependency migr
 /bakeoff:run build a safer parser for work-order JSONC with tests as the gate
 ```
 
-Minimum build work order: `type: "build"`, two `codebase` providers, and at least one `kind: "gate"` verifier. If metric verifier scripts or fixtures should not be edited by providers, list them in `build.protected_paths`; patches that touch protected paths become ineligible. See [examples/build.work-order.json](examples/build.work-order.json) for the full shape and [docs/work-orders.md](docs/work-orders.md) for field reference.
+Minimum build work order: `type: "build"`, two `codebase` providers, and at least one `kind: "gate"` verifier. If verifier scripts or fixtures must not be edited, list them in `build.protected_paths`; patches that touch protected paths become ineligible.
 
-```mermaid
-flowchart LR
-    BL[Baseline gates<br/>fail = stop] --> CAP[Eligible patches<br/>0 fail, 1 can win]
-    CAP --> GATE[Provider gates<br/>one pass = winner]
-    GATE --> METRIC[Metrics<br/>conclusive = winner]
-    METRIC --> JUDGE[Swapped judge<br/>only if tied]
-    JUDGE --> OUT[Handoff<br/>winner or exit 3]
-```
+See [examples/build.work-order.json](examples/build.work-order.json) for the full shape and [docs/work-orders.md](docs/work-orders.md) for field reference.
 
-If there's a canonical winner, the handoff patch is `runs/<run-id>/providers/<winner>/build/diff.patch`. Bakeoff does not apply it for you.
+If there is a canonical winner, the handoff patch is `runs/<run-id>/providers/<winner>/build/diff.patch`.
 
 <details open>
 <summary>Research and evidence behind this design</summary>
 
-Sampling many candidates raises the ceiling on code-generation quality, but only if the selector is strong — pass@N grows fast while pass@1 stays flat ([AlphaCode](https://arxiv.org/abs/2203.07814), [Large Language Monkeys](https://arxiv.org/abs/2407.21787)). So build mode generates two independent patches and treats selection as the hard part, not generation.
+The evidence says multiple code candidates can improve quality, but only when the selector is strong. So Build mode treats selection as the hard part, not generation ([AlphaCode](https://arxiv.org/abs/2203.07814), [Large Language Monkeys](https://arxiv.org/abs/2407.21787)).
 
-Execution-based selectors — tests, generated checks, MBR over executed outputs — beat text-only judgment whenever they're available ([CodeT](https://arxiv.org/abs/2207.10397), [MBR-EXEC](https://arxiv.org/abs/2204.11454), [DOCE](https://arxiv.org/abs/2408.13745)). So Bakeoff requires a gate verifier, runs it before the judge sees anything, and only consults metrics or the LLM judge after gates pass. Green gates are still imperfect: tests can pass on incorrect patches ([SWE-bench correctness audit](https://arxiv.org/abs/2503.15223)), so the report records caveats.
+The evidence also says executed checks beat text-only judgment when they are available. So Bakeoff requires a gate verifier, runs gates before judging, and only uses metrics or an LLM judge after the verifier evidence is in ([CodeT](https://arxiv.org/abs/2207.10397), [MBR-EXEC](https://arxiv.org/abs/2204.11454), [DOCE](https://arxiv.org/abs/2408.13745)).
 
-The swapped build judge fires only when gates and metrics tie, because LLM judges show position and verbosity bias ([FairEval](https://arxiv.org/abs/2305.17926)). If A/B and B/A disagree, Bakeoff exits `3` (unresolved) rather than pick. And it stops at the selected patch — no synthesis of a third — because that's the boundary the evidence supports.
+Green tests are still not proof, and LLM judges can be biased by order or verbosity. So Bakeoff records caveats, uses swapped judging only when gates and metrics cannot decide, and exits `3` instead of guessing when the judge disagrees ([SWE-bench correctness audit](https://arxiv.org/abs/2503.15223), [FairEval](https://arxiv.org/abs/2305.17926)).
 
 More: [docs/competitive-builds-evidence-2026-05-18.md](docs/competitive-builds-evidence-2026-05-18.md).
 
