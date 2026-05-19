@@ -48,6 +48,21 @@ defaults to `mixed` when omitted. Valid backends are `claude` and `codex`.
 Valid scopes are `codebase`, `web`, and `mixed`. Build providers cannot use
 `web` scope.
 
+## Model Names
+
+Bakeoff passes `model` through to the selected backend CLI. Claude defaults use
+tier aliases such as `sonnet` and `opus`, which follow Claude Code's current
+alias behavior. Use a full provider model id when a run should be pinned to a
+specific version.
+
+Claude alias resolution may depend on operator/provider configuration such as
+`ANTHROPIC_DEFAULT_SONNET_MODEL` or `ANTHROPIC_DEFAULT_OPUS_MODEL`. Use full ids
+when exact replay matters.
+
+The requested model strings are recorded in `meta.json` under
+`resolved_models`. Bakeoff does not currently record the provider-resolved dated
+id behind a Claude alias.
+
 ## Facets
 
 A facet is a task filter, not a persona. It tells both providers and the judge
@@ -186,11 +201,11 @@ Minimal build shape:
   "goal": "Implement the requested change.",
   "background": "Acceptance criteria and constraints go here.",
   "providers": [
-    { "id": "claude", "backend": "claude", "model": "claude-sonnet-4-6", "scope": "codebase", "effort": "high" },
+    { "id": "claude", "backend": "claude", "model": "sonnet", "scope": "codebase", "effort": "high" },
     { "id": "codex", "backend": "codex", "model": "gpt-5.5", "scope": "codebase", "effort": "high" }
   ],
   "scope_policy": { "enforcement": "best_effort" },
-  "judge": { "backend": "claude", "model": "claude-opus-4-7", "effort": "xhigh" },
+  "judge": { "backend": "claude", "model": "opus", "effort": "xhigh" },
   "build": {
     "base_ref": "HEAD",
     "verify": [

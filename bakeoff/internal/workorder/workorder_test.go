@@ -2,11 +2,14 @@ package workorder
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/modeldefaults"
 )
 
 func TestStripJSONCCommentsPreservesMarkersInStrings(t *testing.T) {
@@ -32,19 +35,19 @@ func TestStripJSONCCommentsPreservesMarkersInStrings(t *testing.T) {
 
 func TestLoadWorkOrderDefaultsAndSummary(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "wo.jsonc")
-	err := os.WriteFile(path, []byte(`{
+	err := os.WriteFile(path, []byte(fmt.Sprintf(`{
 	  "schema_version": 1,
 	  "id": "routing",
 	  "type": "gather",
 	  "goal": "Find routing facts.",
 	  "background": "Use https://example.com/docs.",
 	  "providers": [
-	    { "id": "claude", "backend": "claude", "model": "claude-sonnet-4-6", "scope": "codebase" },
-	    { "id": "codex", "backend": "codex", "model": "gpt-5.5", "scope": "web" }
+	    { "id": "claude", "backend": "claude", "model": "%s", "scope": "codebase" },
+	    { "id": "codex", "backend": "codex", "model": "%s", "scope": "web" }
 	  ],
-	  "judge": { "backend": "claude", "model": "claude-opus-4-7" },
+	  "judge": { "backend": "claude", "model": "%s" },
 	  "budgets": { "wall_clock_seconds": 3, "max_output_bytes": 2000 }
-	}`), 0o644)
+	}`, modeldefaults.ClaudeSonnet, modeldefaults.CodexDefault, modeldefaults.ClaudeOpus)), 0o644)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,6 +111,41 @@ func TestInitTemplatesMatchFrozenShape(t *testing.T) {
 		if !strings.HasSuffix(text, "\n") {
 			t.Fatalf("%s template must end in newline", mode)
 		}
+	}
+}
+
+func TestInitTemplatesUseModelDefaults(t *testing.T) {
+	for _, kind := range []string{"gather", "compare", "analyze", "review", "build"} {
+		t.Run(kind, func(t *testing.T) {
+			text, err := InitTemplate(kind)
+			if err != nil {
+				t.Fatal(err)
+			}
+			obj := decodeWorkOrderObject(t, text)
+			assertWorkOrderModelDefaults(t, obj)
+			if kind == "review" && obj["type"] != "gather" {
+				t.Fatalf("review template type = %#v, want gather", obj["type"])
+			}
+		})
+	}
+}
+
+func TestPublicExamplesUseModelDefaults(t *testing.T) {
+	paths, err := filepath.Glob(filepath.Join("..", "..", "examples", "*.work-order.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) == 0 {
+		t.Fatal("no public work-order examples found")
+	}
+	for _, path := range paths {
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertWorkOrderModelDefaults(t, decodeWorkOrderObject(t, string(data)))
+		})
 	}
 }
 
@@ -384,6 +422,60 @@ func TestWriteTextAtomicCleansTempFileWhenRenameFails(t *testing.T) {
 	}
 	if len(matches) != 0 {
 		t.Fatalf("temporary files were not cleaned up: %#v", matches)
+	}
+}
+
+func decodeWorkOrderObject(t *testing.T, text string) map[string]any {
+	t.Helper()
+	value, err := decodeJSON([]byte(StripJSONCComments(text)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	obj, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("work order decoded as %T, want object", value)
+	}
+	return obj
+}
+
+func assertWorkOrderModelDefaults(t *testing.T, obj map[string]any) {
+	t.Helper()
+	providers, ok := obj["providers"].([]any)
+	if !ok {
+		t.Fatalf("providers = %#v, want array", obj["providers"])
+	}
+	seen := map[string]bool{}
+	for _, item := range providers {
+		provider, ok := item.(map[string]any)
+		if !ok {
+			t.Fatalf("provider = %#v, want object", item)
+		}
+		backend, _ := provider["backend"].(string)
+		switch backend {
+		case "claude":
+			if provider["model"] != modeldefaults.ClaudeSonnet {
+				t.Fatalf("claude provider model = %#v, want %q", provider["model"], modeldefaults.ClaudeSonnet)
+			}
+		case "codex":
+			if provider["model"] != modeldefaults.CodexDefault {
+				t.Fatalf("codex provider model = %#v, want %q", provider["model"], modeldefaults.CodexDefault)
+			}
+		default:
+			t.Fatalf("provider backend = %#v, want claude or codex", provider["backend"])
+		}
+		seen[backend] = true
+	}
+	for _, backend := range []string{"claude", "codex"} {
+		if !seen[backend] {
+			t.Fatalf("providers missing %s backend: %#v", backend, providers)
+		}
+	}
+	judge, ok := obj["judge"].(map[string]any)
+	if !ok {
+		t.Fatalf("judge = %#v, want object", obj["judge"])
+	}
+	if judge["model"] != modeldefaults.ClaudeOpus {
+		t.Fatalf("judge model = %#v, want %q", judge["model"], modeldefaults.ClaudeOpus)
 	}
 }
 

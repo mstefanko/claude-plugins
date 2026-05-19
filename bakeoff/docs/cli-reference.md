@@ -9,7 +9,8 @@ place.
 
 | Command | Purpose |
 | --- | --- |
-| `/bakeoff:quickstart` | Build or locate the CLI, then run `doctor --skip-auth-probe --json`. |
+| `/bakeoff:setup [--version vX.Y.Z] [--yes]` | Install or update the released CLI binary in persistent plugin data. |
+| `/bakeoff:quickstart` | Check the CLI, then run `doctor --skip-auth-probe --json`. |
 | `/bakeoff:run <path or request> [flags]` | Validate and run an existing work order, or draft one from natural language. |
 | `/bakeoff:inspect [latest or run-id] [flags]` | Read ledgers, reports, decisions, triage, and build handoff artifacts. |
 | `/bakeoff:doctor [flags]` | Run readiness diagnostics through the CLI. |
@@ -40,13 +41,29 @@ Both plugin surfaces use the same launcher contract:
 
 ```text
 BAKEOFF_GO_BINARY
-  -> dist/bakeoff
+  -> ${BAKEOFF_PLUGIN_DATA}/bin/bakeoff
+  -> ${CLAUDE_PLUGIN_DATA}/bin/bakeoff
+  -> ${CLAUDE_PLUGIN_ROOT}/dist/bakeoff
   -> go run ./cmd/bakeoff
 ```
 
-`/bakeoff:quickstart` and `scripts/bakeoff-ensure-cli` can build
-`dist/bakeoff` from source when Go is available. `--check` only checks an
-already provisioned `BAKEOFF_GO_BINARY` or `dist/bakeoff`; it does not build.
+`/bakeoff:setup` installs `${CLAUDE_PLUGIN_DATA}/bin/bakeoff` from a release
+asset and verifies `checksums.txt` first. `scripts/bakeoff-ensure-cli --check`
+only checks configured, setup-installed, or packaged binaries; it does not
+build. Running `scripts/bakeoff-ensure-cli` without `--check` may build
+`dist/bakeoff` from source when Go is available.
+
+Release setup defaults to:
+
+```text
+https://github.com/mstefanko/claude-plugins/releases/download/<tag>
+```
+
+`BAKEOFF_RELEASE_REPOSITORY` can override the owner/repo portion of that URL.
+`BAKEOFF_RELEASE_BASE_URL` can point at a mirror or `file://` test release.
+Codex installs do not use `CODEX_PLUGIN_DATA` in v1; use `BAKEOFF_GO_BINARY`,
+`dist/bakeoff`, or a source build there until a persistent Codex data path is
+documented.
 
 ## Root Command
 

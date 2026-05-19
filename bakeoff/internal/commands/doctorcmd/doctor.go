@@ -10,6 +10,7 @@ import (
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/artifact"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/jsonutil"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/modeldefaults"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/provider"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/runner"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/runnerenv"
@@ -50,17 +51,12 @@ func NewCmdDoctor(f commands.Factory, runF func(context.Context, *DoctorOptions)
 
 func runDoctor(ctx context.Context, f commands.Factory, opts *DoctorOptions) error {
 	failed := false
+	defaults := modeldefaults.DoctorModelIDs()
 	report := map[string]any{
-		"command": "doctor",
-		"status":  "ok",
-		"tools":   map[string]any{},
-		"defaults": map[string]any{
-			"claude_haiku":  provider.DefaultModelIDs["claude_haiku"],
-			"claude_opus":   provider.DefaultModelIDs["claude_opus"],
-			"claude_sonnet": provider.DefaultModelIDs["claude_sonnet"],
-			"codex":         provider.DefaultModelIDs["codex"],
-			"codex_gpt5":    provider.DefaultModelIDs["codex_gpt5"],
-		},
+		"command":  "doctor",
+		"status":   "ok",
+		"tools":    map[string]any{},
+		"defaults": defaults,
 		"scope_policy": map[string]any{
 			"default_enforcement": "best_effort",
 			"status_artifacts":    []string{"provider status.json", "meta.json"},
@@ -119,7 +115,7 @@ func runDoctor(ctx context.Context, f commands.Factory, opts *DoctorOptions) err
 		}
 		streams.Printf("- defaults:\n")
 		for _, key := range []string{"claude_sonnet", "claude_opus", "claude_haiku", "codex", "codex_gpt5"} {
-			streams.Printf("  %s: %s\n", key, provider.DefaultModelIDs[key])
+			streams.Printf("  %s: %s\n", key, defaults[key])
 		}
 		streams.Printf("- scope policy: best_effort by default; provider status records enforcement and advisory fallback.\n")
 		streams.Printf("- scope capabilities:\n")
@@ -190,8 +186,8 @@ func runAuthProbes(ctx context.Context, f commands.Factory, opts *DoctorOptions,
 	prompt := `Auth probe. Reply exactly with <final_json>{"status":"complete","claims":[],"conflicts":[],"unknowns":[],"recommended_next_checks":[]}</final_json>`
 	cwd, _ := os.Getwd()
 	participants := []workorder.Participant{
-		{Backend: "claude", Model: provider.DefaultModelIDs["claude_sonnet"], Effort: "low"},
-		{Backend: "codex", Model: provider.DefaultModelIDs["codex"], Effort: "low"},
+		{Backend: "claude", Model: modeldefaults.ClaudeSonnet, Effort: "low"},
+		{Backend: "codex", Model: modeldefaults.CodexDefault, Effort: "low"},
 	}
 	for _, participant := range participants {
 		argv, err := provider.BuildParticipantArgv(participant, cwd, nil, "", false)
@@ -366,9 +362,9 @@ func runBuildProviderPreflight(ctx context.Context, f commands.Factory, opts *Do
 }
 
 func buildProbeParticipant(backend string) workorder.Participant {
-	model := provider.DefaultModelIDs["claude_sonnet"]
+	model := modeldefaults.ClaudeSonnet
 	if backend == "codex" {
-		model = provider.DefaultModelIDs["codex"]
+		model = modeldefaults.CodexDefault
 	}
 	return workorder.Participant{ID: backend, Backend: backend, Model: model, Effort: "low", Scope: "codebase"}
 }

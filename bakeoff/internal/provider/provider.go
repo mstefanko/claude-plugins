@@ -15,14 +15,6 @@ import (
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
 )
 
-var DefaultModelIDs = map[string]string{
-	"claude_sonnet": "claude-sonnet-4-6",
-	"claude_opus":   "claude-opus-4-7",
-	"claude_haiku":  "claude-haiku-4-5-20251001",
-	"codex":         "gpt-5.5",
-	"codex_gpt5":    "gpt-5",
-}
-
 type LookupFunc func(string) (string, error)
 
 type CapabilityRegistry struct {

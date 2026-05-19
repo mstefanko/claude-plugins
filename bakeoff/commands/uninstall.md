@@ -5,8 +5,9 @@ description: Remove Bakeoff plugin state and cache
 
 # /bakeoff:uninstall
 
-Remove Bakeoff-owned plugin state and cache, then leave the final plugin
-uninstall as a manual user step.
+Remove Bakeoff-owned plugin state and cache, including setup-installed CLI
+state only when `version.json` marks it as Bakeoff-owned. Leave the final
+plugin uninstall as a manual user step.
 
 Run:
 

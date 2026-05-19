@@ -16,8 +16,13 @@ not write secrets into files.
 1. Run:
 
    ```bash
-   "${CLAUDE_PLUGIN_ROOT}/scripts/bakeoff-ensure-cli"
+   "${CLAUDE_PLUGIN_ROOT}/scripts/bakeoff-ensure-cli" --check
    ```
+
+   If this exits `2`, tell the user to run `/bakeoff:setup`, set
+   `BAKEOFF_GO_BINARY`, install a package with `dist/bakeoff`, or use a source
+   checkout with Go. Do not run a source build unless the user asks for that
+   fallback.
 
 2. Parse `$ARGUMENTS`. Pass through only:
 

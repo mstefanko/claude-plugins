@@ -17,8 +17,12 @@ validation, provider execution, judging, reports, ledgers, and exit codes.
 Run first:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/scripts/bakeoff-ensure-cli"
+"${CLAUDE_PLUGIN_ROOT}/scripts/bakeoff-ensure-cli" --check
 ```
+
+If this exits `2`, stop and direct the user to `/bakeoff:setup`, a
+`BAKEOFF_GO_BINARY` override, a package with `dist/bakeoff`, or a source build
+with Go. Do not build from source implicitly in the normal plugin flow.
 
 Parse `$ARGUMENTS` before deciding whether this is a path or a request.
 

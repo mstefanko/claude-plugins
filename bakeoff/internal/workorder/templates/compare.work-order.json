@@ -8,11 +8,11 @@
   "goal": "ONE SENTENCE: what decision or comparison should be judged?",
   "background": "MULTI-LINE: relevant evidence, constraints, and options.",
   "providers": [
-    { "id": "claude", "backend": "claude", "model": "claude-sonnet-4-6", "effort": "high", "scope": "mixed" },
+    { "id": "claude", "backend": "claude", "model": "sonnet",             "effort": "high", "scope": "mixed" },
     { "id": "codex",  "backend": "codex",  "model": "gpt-5.5",           "effort": "high", "scope": "mixed" }
   ],
   "scope_policy": { "enforcement": "best_effort" },
-  "judge":   { "backend": "claude", "model": "claude-opus-4-7", "effort": "xhigh" },
+  "judge":   { "backend": "claude", "model": "opus", "effort": "xhigh" },
   "budgets": {
     "wall_clock_seconds": 900,
     "max_output_bytes": 60000,

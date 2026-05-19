@@ -1,20 +1,32 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="${BAKEOFF_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}}}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../scripts/bakeoff-lib"
 
-if [[ -n "${BAKEOFF_GO_BINARY:-}" ]]; then
-  exec "$BAKEOFF_GO_BINARY" "$@"
-fi
+while IFS=$'\t' read -r label path kind; do
+  if [[ "$kind" == "explicit" ]]; then
+    if [[ ! -x "$path" ]]; then
+      echo "error: BAKEOFF_GO_BINARY is set but is not executable: $path" >&2
+      exit 2
+    fi
+    exec "$path" "$@"
+  fi
 
-if [[ -x "$ROOT/dist/bakeoff" ]]; then
-  exec "$ROOT/dist/bakeoff" "$@"
-fi
+  if [[ -e "$path" || -L "$path" ]]; then
+    if [[ ! -x "$path" ]]; then
+      echo "error: $label exists but is not executable: $path" >&2
+      exit 2
+    fi
+    exec "$path" "$@"
+  fi
+done < <(bakeoff_candidate_binaries)
 
 if command -v go >/dev/null 2>&1; then
+  ROOT="$(bakeoff_plugin_root)"
   export GOCACHE="${GOCACHE:-/tmp/bakeoff-go-cache}"
   exec go run "$ROOT/cmd/bakeoff" "$@"
 fi
 
-echo "error: bakeoff Go CLI is not built and Go is not on PATH" >&2
-exit 1
+bakeoff_print_missing_cli_help
+exit 2

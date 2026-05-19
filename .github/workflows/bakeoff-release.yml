@@ -1,0 +1,44 @@
+name: Bakeoff Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bakeoff
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: bakeoff/go.mod
+          cache-dependency-path: bakeoff/go.sum
+
+      - name: Test
+        run: |
+          scripts/bakeoff-setup-tests
+          go test ./...
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: latest
+          args: release --clean
+          workdir: bakeoff
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

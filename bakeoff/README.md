@@ -33,10 +33,11 @@ flowchart LR
 
 ## Quick Start
 
-Prerequisites: Claude Code with this plugin installed; `git` for review and build; authenticated `claude` and `codex` CLIs for live runs; Go 1.24+ unless you have `dist/bakeoff` or set `BAKEOFF_GO_BINARY`. Provider auth lives with the provider CLIs — don't put secrets in work orders.
+Prerequisites: Claude Code with this plugin installed; `git` for review and build; `/bakeoff:setup` to install the released Bakeoff CLI; authenticated `claude` and `codex` CLIs for live runs. Go 1.24+ is only needed for source builds. Provider auth lives with the provider CLIs — don't put secrets in work orders.
 
 ```text
-/bakeoff:quickstart                                      # locate or build the CLI, run readiness
+/bakeoff:setup                                           # install the prebuilt CLI into plugin data
+/bakeoff:quickstart                                      # check CLI and local readiness
 /bakeoff:run research the auth retry behavior            # natural-language draft → approve → run
 /bakeoff:run review this diff against main
 /bakeoff:run build competing fixes for this failing test
@@ -49,12 +50,15 @@ Local development install:
 /plugin marketplace add mstefanko-plugins <path>
 /plugin install bakeoff@mstefanko-plugins
 /reload-plugins
+/bakeoff:setup
 /bakeoff:quickstart
 ```
 
 Codex install: this checkout ships `.codex-plugin/plugin.json`; verify the current Codex plugin flow in Codex docs.
 
 Natural-language requests draft a work order, show the full JSON, and wait for explicit approval before writing or running. For large requests, the plugin may suggest 2-3 separate work orders when the split is clean; each part is still a normal Bakeoff run. Sample work orders live in `examples/` (`gather`, `compare`, `analyze`, `review`, `build`).
+
+Generated work orders use Claude model aliases (`sonnet`, `opus`) so defaults stay current; use full model ids in the work order to pin exact versions.
 
 ## Research
 
@@ -185,7 +189,8 @@ Exit `3` is a completed handoff with no canonical winner — not a launcher fail
 
 Slash commands:
 
-- `/bakeoff:quickstart` — locate or build the CLI, run readiness.
+- `/bakeoff:setup` — install or update the released Bakeoff CLI binary in persistent plugin data.
+- `/bakeoff:quickstart` — check CLI and local readiness.
 - `/bakeoff:run <path or request> [--run-id ID] [--out runs] [--quiet] [--keep-worktrees] [--no-triage]` — validate and run, or draft from natural language.
 - `/bakeoff:inspect [latest or run-id]` — open existing reports, decisions, triage, handoff.
 - `/bakeoff:doctor [--skip-auth-probe] [--build] [--quiet]` — readiness check. `--build` runs live edit probes.
@@ -195,16 +200,30 @@ Core CLI: `bakeoff validate`, `bakeoff research`, `bakeoff build`, `bakeoff show
 
 ## Configuration
 
-CLI resolution order: `BAKEOFF_GO_BINARY` → `dist/bakeoff` → `go run ./cmd/bakeoff`.
+CLI resolution order: `BAKEOFF_GO_BINARY` → `${BAKEOFF_PLUGIN_DATA}/bin/bakeoff` → `${CLAUDE_PLUGIN_DATA}/bin/bakeoff` → `dist/bakeoff` → `go run ./cmd/bakeoff`.
 
 | Variable | Role |
 | --- | --- |
 | `CLAUDE_PLUGIN_ROOT` | Set by Claude Code; read by plugin commands and scripts. |
+| `CLAUDE_PLUGIN_DATA` | Persistent Claude Code plugin data directory used by `/bakeoff:setup`. |
 | `CODEX_PLUGIN_ROOT` | Codex-side plugin root when installed there. |
-| `BAKEOFF_GO_BINARY` | Path to a prebuilt `bakeoff` binary. |
+| `BAKEOFF_PLUGIN_DATA` | Explicit plugin data override for tests, mirrors, and non-Claude launchers. |
+| `BAKEOFF_GO_BINARY` | Highest-precedence path to a compatible prebuilt `bakeoff` binary. |
+| `BAKEOFF_RELEASE_REPOSITORY` | Optional owner/repo override for release downloads. Default: `mstefanko/claude-plugins`. |
+| `BAKEOFF_RELEASE_BASE_URL` | Optional release mirror URL, including `file://` for local tests. |
 | `NO_COLOR` | Standard CLI color suppression. |
 
 Work orders carry budgets for wall-clock time, heartbeat cadence, and output caps; most users don't edit them. See [docs/work-orders.md](docs/work-orders.md).
+
+Release setup downloads public GitHub Release assets, verifies `checksums.txt`,
+and writes only under plugin data. v1 macOS binaries should be signed and
+notarized before public distribution; unsigned private dogfood builds are
+explicitly installed by `/bakeoff:setup` and the setup script does not bypass
+Gatekeeper quarantine.
+
+Codex installs do not use a `CODEX_PLUGIN_DATA` directory in v1. Until a
+documented persistent Codex plugin data path is verified, Codex users should use
+`BAKEOFF_GO_BINARY`, a packaged `dist/bakeoff`, or a source build.
 
 ## Why Bakeoff Stays Thin
 
@@ -214,7 +233,7 @@ The plugin drafts work orders, invokes the CLI, and summarizes artifacts. The Go
 
 | Problem | Cause | Try |
 | --- | --- | --- |
-| Quickstart can't find a CLI | No `dist/bakeoff`, no `BAKEOFF_GO_BINARY`, no Go toolchain. | Install Go 1.24+, install a package with `dist/bakeoff`, or set `BAKEOFF_GO_BINARY`. |
+| Quickstart can't find a CLI | No setup-installed binary, no `BAKEOFF_GO_BINARY`, no packaged `dist/bakeoff`. | Run `/bakeoff:setup`, set `BAKEOFF_GO_BINARY`, install a package with `dist/bakeoff`, or install Go for source builds. |
 | Provider auth failed | Provider CLI found but session not ready. | Log in with the provider CLI directly, rerun `/bakeoff:doctor --build`. |
 | Build readiness failed | Live edit probes couldn't complete in temp workspaces. | Inspect doctor output for sandbox, network, filesystem, or auth failures. |
 | No selected build patch | No canonical winner, or evidence not strong enough. | Inspect `decision.json`, `diagnostics.json`, and provider build artifacts. Exit `3` means unresolved, not corrupt. |

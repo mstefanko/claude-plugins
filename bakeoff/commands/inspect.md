@@ -21,7 +21,8 @@ Run first:
 ```
 
 If `--check` reports no provisioned CLI, run without `--check` only after
-telling the user that this may build `dist/bakeoff` from source when Go is
+telling the user to prefer `/bakeoff:setup` for the released binary path and
+that running without `--check` may build `dist/bakeoff` from source when Go is
 available.
 
 ## Arguments

@@ -30,7 +30,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-root="${CLAUDE_PLUGIN_ROOT:-${BAKEOFF_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:-$(cd "$script_dir/.." && pwd)}}}"
+source "$script_dir/bakeoff-lib"
+root="$(bakeoff_plugin_root)"
 cwd="$(pwd)"
 
 removed=()
@@ -104,29 +105,32 @@ is_bakeoff_work_order_file() {
 
 is_bakeoff_plugin_data_dir() {
   local path="$1"
-  [[ -n "$path" && -d "$path" ]] || return 1
+  [[ -n "$path" && -d "$path" && -f "$path/version.json" ]] || return 1
 
-  local path_abs root_abs home_abs data_root cache_root
-  path_abs="$(cd "$path" && pwd -P)"
-  root_abs="$(cd "$root" && pwd -P)"
-  home_abs="$(cd "$HOME" && pwd -P)"
-  data_root="$home_abs/.claude/plugins/data"
-  cache_root="$home_abs/.claude/plugins/cache/mstefanko-plugins/bakeoff"
+  grep -Eq '"schema_version"[[:space:]]*:[[:space:]]*1' "$path/version.json" &&
+  grep -Eq '"owner"[[:space:]]*:[[:space:]]*"bakeoff"' "$path/version.json" &&
+  grep -Eq '"tool"[[:space:]]*:[[:space:]]*"bakeoff"' "$path/version.json" &&
+  grep -Eq '"install_kind"[[:space:]]*:[[:space:]]*"release-binary"' "$path/version.json"
+}
 
-  case "$path_abs/" in
-    "$root_abs"|"$root_abs"/*) return 1 ;;
-  esac
+cleanup_plugin_data_dir() {
+  local data="$1"
+  [[ -n "$data" && -d "$data" ]] || return 0
 
-  case "$path_abs" in
-    "$data_root/bakeoff" | \
-    "$data_root/bakeoff@mstefanko-plugins" | \
-    "$data_root/mstefanko-plugins/bakeoff" | \
-    "$cache_root/data" | \
-    "$cache_root/.data")
-      return 0
-      ;;
-    *) return 1 ;;
-  esac
+  if ! is_bakeoff_plugin_data_dir "$data"; then
+    note_left "$data (plugin data has no Bakeoff release-binary ownership metadata)"
+    return 0
+  fi
+
+  remove_file "$data/bin/bakeoff"
+  remove_file "$data/version.json"
+  remove_dir "$data/tmp"
+  rmdir "$data/bin" 2>/dev/null || true
+  if rmdir "$data" 2>/dev/null; then
+    note_removed "$data (empty Bakeoff plugin data directory)"
+  else
+    note_left "$data (non-Bakeoff files remain)"
+  fi
 }
 
 cleanup_retained_worktrees() {
@@ -219,7 +223,8 @@ Bakeoff uninstall cleanup will remove Bakeoff-owned plugin state:
 
 - $root/dist/bakeoff and an empty $root/dist directory
 - $HOME/.claude/plugins/cache/mstefanko-plugins/bakeoff
-- CLAUDE_PLUGIN_DATA when it is Bakeoff-owned
+- BAKEOFF_PLUGIN_DATA or CLAUDE_PLUGIN_DATA bin/version/tmp state when
+  version.json marks it as Bakeoff-owned
 - Bakeoff-generated run ledgers and work-order/context/report files in:
   $cwd
 
@@ -239,12 +244,8 @@ rmdir "$root/dist" 2>/dev/null || true
 
 remove_dir "$HOME/.claude/plugins/cache/mstefanko-plugins/bakeoff"
 
-if [[ -n "${CLAUDE_PLUGIN_DATA:-}" && -d "$CLAUDE_PLUGIN_DATA" ]]; then
-  if is_bakeoff_plugin_data_dir "$CLAUDE_PLUGIN_DATA"; then
-    remove_dir "$CLAUDE_PLUGIN_DATA"
-  else
-    note_left "$CLAUDE_PLUGIN_DATA (CLAUDE_PLUGIN_DATA is not Bakeoff-owned by path)"
-  fi
+if data_root="$(bakeoff_data_root)"; then
+  cleanup_plugin_data_dir "$data_root"
 fi
 
 cleanup_current_cwd

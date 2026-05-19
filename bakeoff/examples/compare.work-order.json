@@ -11,7 +11,7 @@
     {
       "id": "claude",
       "backend": "claude",
-      "model": "claude-sonnet-4-6",
+      "model": "sonnet",
       "scope": "mixed",
       "effort": "high"
     },
@@ -25,7 +25,7 @@
   ],
   "judge": {
     "backend": "claude",
-    "model": "claude-opus-4-7",
+    "model": "opus",
     "effort": "xhigh"
   },
   "budgets": {

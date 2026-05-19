@@ -1,0 +1,441 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+usage() {
+  cat >&2 <<'EOF'
+usage: scripts/bakeoff-setup [--version <tag>] [--yes] [--dry-run] [--json]
+
+Downloads a released Bakeoff CLI for this platform, verifies its checksum, and
+installs it into persistent plugin data.
+EOF
+}
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$script_dir/bakeoff-lib"
+
+requested_version=""
+assume_yes=0
+dry_run=0
+json_output=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --version)
+      if [[ $# -lt 2 || "$2" == --* ]]; then
+        usage
+        echo "error: --version requires a tag" >&2
+        exit 2
+      fi
+      requested_version="$2"
+      shift 2
+      ;;
+    --version=*)
+      requested_version="${1#--version=}"
+      shift
+      ;;
+    --yes)
+      assume_yes=1
+      shift
+      ;;
+    --dry-run)
+      dry_run=1
+      shift
+      ;;
+    --json)
+      json_output=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      usage
+      echo "error: unknown flag: $1" >&2
+      exit 2
+      ;;
+  esac
+done
+
+json_escape() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//$'\n'/\\n}"
+  value="${value//$'\r'/\\r}"
+  value="${value//$'\t'/\\t}"
+  printf '%s' "$value"
+}
+
+die() {
+  local code="$1"
+  shift
+  local message="$*"
+  if [[ "$json_output" -eq 1 ]]; then
+    printf '{"schema_version":1,"status":"error","message":"%s"}\n' "$(json_escape "$message")" >&2
+  else
+    printf 'error: %s\n' "$message" >&2
+  fi
+  exit "$code"
+}
+
+plugin_version() {
+  local root="$1"
+  local file version
+  for file in "$root/.claude-plugin/plugin.json" "$root/.codex-plugin/plugin.json"; do
+    if [[ -f "$file" ]]; then
+      version="$(sed -nE 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$file" | head -n 1)"
+      if [[ -n "$version" ]]; then
+        printf '%s\n' "$version"
+        return 0
+      fi
+    fi
+  done
+  return 1
+}
+
+normalize_tag() {
+  local value="$1"
+  if [[ "$value" == v* ]]; then
+    printf '%s\n' "$value"
+  else
+    printf 'v%s\n' "$value"
+  fi
+}
+
+download_url() {
+  local url="$1"
+  local target="$2"
+  local source_path err_file
+  download_status_code=""
+  download_error_output=""
+
+  case "$url" in
+    file://*)
+      source_path="${url#file://}"
+      [[ -f "$source_path" ]] || return 1
+      cp -p "$source_path" "$target"
+      ;;
+    *)
+      if ! command -v curl >/dev/null 2>&1; then
+        echo "curl is required for HTTPS release downloads" >&2
+        return 2
+      fi
+      err_file="${target}.curl.err"
+      if ! download_status_code="$(curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 -w '%{http_code}' -o "$target" "$url" 2>"$err_file")"; then
+        download_error_output="$(cat "$err_file" 2>/dev/null || true)"
+        rm -f "$err_file"
+        return 1
+      fi
+      rm -f "$err_file"
+      ;;
+  esac
+}
+
+download_failure_message() {
+  local url="$1"
+  local subject="$2"
+  if [[ "${download_status_code:-}" == "404" ]]; then
+    printf '%s not found (HTTP 404): %s. If release %s has not been published yet, publish the matching GitHub release assets or rerun /bakeoff:setup --version <published-tag>.\n' "$subject" "$url" "$tag"
+    return 0
+  fi
+  if [[ -n "${download_error_output:-}" ]]; then
+    printf 'failed to download %s: %s\n' "$url" "$download_error_output"
+    return 0
+  fi
+  printf 'failed to download %s\n' "$url"
+}
+
+sha256_file() {
+  local path="$1"
+  local digest rest
+  if command -v sha256sum >/dev/null 2>&1; then
+    read -r digest rest < <(sha256sum "$path")
+    printf '%s\n' "$digest"
+    return 0
+  fi
+  if command -v shasum >/dev/null 2>&1; then
+    read -r digest rest < <(shasum -a 256 "$path")
+    printf '%s\n' "$digest"
+    return 0
+  fi
+  if command -v openssl >/dev/null 2>&1; then
+    read -r digest rest < <(openssl dgst -sha256 -r "$path")
+    printf '%s\n' "$digest"
+    return 0
+  fi
+  return 1
+}
+
+checksum_value=""
+load_checksum_for_asset() {
+  local checksums="$1"
+  local asset="$2"
+  local line name count
+  count=0
+  checksum_value=""
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -z "$line" ]] && continue
+    if [[ "$line" == *"$asset"* ]]; then
+      if [[ "$line" =~ ^([0-9a-f]{64})[[:space:]]+([^[:space:]/]+)$ ]]; then
+        name="${BASH_REMATCH[2]}"
+        if [[ "$name" == "$asset" ]]; then
+          count=$((count + 1))
+          checksum_value="${BASH_REMATCH[1]}"
+        fi
+      else
+        die 1 "checksum line for $asset is malformed"
+      fi
+    fi
+  done < "$checksums"
+
+  if [[ "$count" -eq 0 ]]; then
+    die 1 "checksums.txt is missing an entry for $asset"
+  fi
+  if [[ "$count" -gt 1 ]]; then
+    die 1 "checksums.txt has duplicate entries for $asset"
+  fi
+}
+
+validate_archive() {
+  local archive="$1"
+  local list_file="$2"
+  local detail_file="$3"
+  local entry count typechar detail
+  count=0
+
+  if ! tar -tzf "$archive" > "$list_file"; then
+    die 1 "failed to list archive"
+  fi
+  while IFS= read -r entry || [[ -n "$entry" ]]; do
+    [[ -z "$entry" ]] && continue
+    count=$((count + 1))
+    if [[ "$entry" != "bakeoff" ]]; then
+      die 1 "archive must contain only one root entry named bakeoff"
+    fi
+  done < "$list_file"
+  if [[ "$count" -ne 1 ]]; then
+    die 1 "archive must contain exactly one bakeoff executable"
+  fi
+
+  if ! tar -tvzf "$archive" > "$detail_file"; then
+    die 1 "failed to inspect archive metadata"
+  fi
+  detail="$(sed -n '1p' "$detail_file")"
+  typechar="${detail:0:1}"
+  if [[ "$typechar" == "l" || "$typechar" == "d" ]]; then
+    die 1 "archive entry must be a regular file, not a symlink or directory"
+  fi
+  if [[ "$typechar" != "-" ]]; then
+    die 1 "archive entry must be a regular file"
+  fi
+}
+
+probe_gatekeeper_like() {
+  local output="$1"
+  local lower
+  lower="$(printf '%s' "$output" | tr '[:upper:]' '[:lower:]')"
+  case "$lower" in
+    *"cannot verify"*|*"developer cannot be verified"*|*"damaged"*|*"malware"*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+emit_plan_json() {
+  local status="$1"
+  printf '{\n'
+  printf '  "schema_version": 1,\n'
+  printf '  "status": "%s",\n' "$(json_escape "$status")"
+  printf '  "version": "%s",\n' "$(json_escape "$tag")"
+  printf '  "repository": "%s",\n' "$(json_escape "$repository")"
+  printf '  "platform": "%s/%s",\n' "$(json_escape "$goos")" "$(json_escape "$goarch")"
+  printf '  "asset": "%s",\n' "$(json_escape "$asset")"
+  printf '  "source_url": "%s",\n' "$(json_escape "$archive_url")"
+  printf '  "checksum_url": "%s",\n' "$(json_escape "$checksum_url")"
+  printf '  "binary_path": "%s"\n' "$(json_escape "$binary_path")"
+  printf '}\n'
+}
+
+root="$(bakeoff_plugin_root)"
+if ! data="$(bakeoff_data_root)"; then
+  die 2 "CLAUDE_PLUGIN_DATA is not set; set BAKEOFF_PLUGIN_DATA for tests and mirrors, or set BAKEOFF_GO_BINARY for a manual binary"
+fi
+case "$data" in
+  /*) ;;
+  *) data="$(pwd)/$data" ;;
+esac
+
+read -r goos goarch < <(bakeoff_host_os_arch)
+if [[ "$goos" == "windows" ]]; then
+  die 2 "$BAKEOFF_WINDOWS_UNSUPPORTED_MESSAGE"
+fi
+case " $BAKEOFF_SUPPORTED_SETUP_PLATFORMS " in
+  *" $goos/$goarch "*) ;;
+  *) die 2 "unsupported setup platform: $goos/$goarch; supported platforms: $BAKEOFF_SUPPORTED_SETUP_PLATFORMS" ;;
+esac
+
+if [[ -n "$requested_version" ]]; then
+  tag="$(normalize_tag "$requested_version")"
+else
+  if ! configured_version="$(plugin_version "$root")"; then
+    die 2 "could not read plugin version from $root/.claude-plugin/plugin.json"
+  fi
+  tag="$(normalize_tag "$configured_version")"
+fi
+
+if [[ "$tag" == "latest" || "$tag" == "vlatest" ]]; then
+  die 2 "--version latest is not supported in v1; pass an explicit release tag"
+fi
+case "$tag" in
+  *[!A-Za-z0-9._-]*|"") die 2 "invalid release tag: $tag" ;;
+esac
+
+repository="${BAKEOFF_RELEASE_REPOSITORY:-$BAKEOFF_RELEASE_REPOSITORY_DEFAULT}"
+case "$repository" in
+  */*) ;;
+  *) die 2 "BAKEOFF_RELEASE_REPOSITORY must be owner/repo" ;;
+esac
+case "$repository" in
+  *[!A-Za-z0-9._/-]*|*..*|/*|*/) die 2 "invalid BAKEOFF_RELEASE_REPOSITORY: $repository" ;;
+esac
+
+if [[ -n "${BAKEOFF_RELEASE_BASE_URL:-}" ]]; then
+  base_url="${BAKEOFF_RELEASE_BASE_URL%/}"
+else
+  base_url="https://github.com/${repository}/releases/download/${tag}"
+fi
+
+asset="bakeoff_${tag}_${goos}_${goarch}.tar.gz"
+archive_url="${base_url}/${asset}"
+checksum_url="${base_url}/checksums.txt"
+binary_path="${data}/bin/bakeoff"
+
+if [[ "$dry_run" -eq 1 ]]; then
+  if [[ "$json_output" -eq 1 ]]; then
+    emit_plan_json "dry-run"
+  else
+    cat <<EOF
+Bakeoff setup dry run:
+  version: $tag
+  repository: $repository
+  platform: $goos/$goarch
+  target: $binary_path
+  release: $archive_url
+
+No files changed.
+EOF
+  fi
+  exit 0
+fi
+
+if [[ "$assume_yes" -ne 1 ]]; then
+  cat <<EOF
+Bakeoff setup will install:
+  version: $tag
+  platform: $goos/$goarch
+  target: $binary_path
+  release: $archive_url
+EOF
+  printf 'Continue? [y/N] '
+  read -r reply || exit 0
+  case "$reply" in
+    y|Y|yes|YES) ;;
+    *) echo "cancelled"; exit 0 ;;
+  esac
+fi
+
+mkdir -p "$data/bin" "$data/tmp"
+tmp_dir="$(mktemp -d "$data/tmp/setup.XXXXXX")"
+install_tmp=""
+cleanup() {
+  if [[ -n "$install_tmp" ]]; then
+    rm -f "$install_tmp"
+  fi
+  rm -rf "$tmp_dir"
+}
+trap cleanup EXIT
+
+archive_path="$tmp_dir/$asset"
+checksums_path="$tmp_dir/checksums.txt"
+
+if ! download_url "$archive_url" "$archive_path"; then
+  die 1 "$(download_failure_message "$archive_url" "release asset")"
+fi
+if ! download_url "$checksum_url" "$checksums_path"; then
+  die 1 "$(download_failure_message "$checksum_url" "release checksums")"
+fi
+
+load_checksum_for_asset "$checksums_path" "$asset"
+if ! actual_checksum="$(sha256_file "$archive_path")"; then
+  die 1 "no SHA-256 tool found; need sha256sum, shasum, or openssl"
+fi
+if [[ "$actual_checksum" != "$checksum_value" ]]; then
+  die 1 "checksum mismatch for $asset"
+fi
+
+validate_archive "$archive_path" "$tmp_dir/archive-list.txt" "$tmp_dir/archive-detail.txt"
+extract_dir="$tmp_dir/extract"
+mkdir -p "$extract_dir"
+if ! tar -xzf "$archive_path" -C "$extract_dir" bakeoff; then
+  die 1 "failed to extract bakeoff executable"
+fi
+if [[ ! -f "$extract_dir/bakeoff" || -L "$extract_dir/bakeoff" ]]; then
+  die 1 "extracted bakeoff is not a regular file"
+fi
+
+install_tmp="$(mktemp "$data/bin/.bakeoff.XXXXXX")"
+cp "$extract_dir/bakeoff" "$install_tmp"
+chmod 0755 "$install_tmp"
+
+if ! probe_output="$("$install_tmp" --version 2>&1)"; then
+  if [[ "$goos" == "darwin" ]] && probe_gatekeeper_like "$probe_output"; then
+    printf '%s\n' "$BAKEOFF_MACOS_GATEKEEPER_HELP" >&2
+  fi
+  die 1 "downloaded Bakeoff binary failed version probe: $probe_output"
+fi
+
+mv -f "$install_tmp" "$binary_path"
+install_tmp=""
+
+installed_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+metadata_tmp="$(mktemp "$data/.version.XXXXXX")"
+cat > "$metadata_tmp" <<EOF
+{
+  "schema_version": 1,
+  "owner": "bakeoff",
+  "tool": "bakeoff",
+  "install_kind": "release-binary",
+  "repository": "$(json_escape "$repository")",
+  "version": "$(json_escape "$tag")",
+  "commit": "unknown",
+  "date": "unknown",
+  "asset": "$(json_escape "$asset")",
+  "checksum_sha256": "$(json_escape "$checksum_value")",
+  "source_url": "$(json_escape "$archive_url")",
+  "binary_path": "$(json_escape "$binary_path")",
+  "installed_at": "$(json_escape "$installed_at")",
+  "host": {
+    "os": "$(json_escape "$goos")",
+    "arch": "$(json_escape "$goarch")"
+  }
+}
+EOF
+mv -f "$metadata_tmp" "$data/version.json"
+
+if [[ "$json_output" -eq 1 ]]; then
+  emit_plan_json "installed"
+else
+  cat <<EOF
+Installed Bakeoff CLI:
+  binary: $binary_path
+  version: $probe_output
+
+Next: /bakeoff:quickstart
+EOF
+fi

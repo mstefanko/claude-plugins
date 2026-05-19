@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+
+BAKEOFF_RELEASE_REPOSITORY_DEFAULT="mstefanko/claude-plugins"
+BAKEOFF_SUPPORTED_SETUP_PLATFORMS="darwin/arm64 darwin/amd64 linux/arm64 linux/amd64"
+BAKEOFF_WINDOWS_UNSUPPORTED_MESSAGE="Windows setup is unsupported in v1; use BAKEOFF_GO_BINARY, dist/bakeoff, or a source build until the Claude Code shell path is tested on Windows."
+BAKEOFF_MACOS_GATEKEEPER_HELP="macOS may be blocking this unsigned Bakeoff binary. Prefer a signed/notarized release when available, use a source build, or manually remove quarantine only if you explicitly trust the downloaded binary."
+
+BAKEOFF_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+bakeoff_plugin_root() {
+  if [[ -n "${BAKEOFF_PLUGIN_ROOT:-}" ]]; then
+    printf '%s\n' "$BAKEOFF_PLUGIN_ROOT"
+    return 0
+  fi
+  if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" ]]; then
+    printf '%s\n' "$CLAUDE_PLUGIN_ROOT"
+    return 0
+  fi
+  if [[ -n "${CODEX_PLUGIN_ROOT:-}" ]]; then
+    printf '%s\n' "$CODEX_PLUGIN_ROOT"
+    return 0
+  fi
+  cd "$BAKEOFF_LIB_DIR/.." && pwd
+}
+
+bakeoff_data_root() {
+  if [[ -n "${BAKEOFF_PLUGIN_DATA:-}" ]]; then
+    printf '%s\n' "$BAKEOFF_PLUGIN_DATA"
+    return 0
+  fi
+  if [[ -n "${CLAUDE_PLUGIN_DATA:-}" ]]; then
+    printf '%s\n' "$CLAUDE_PLUGIN_DATA"
+    return 0
+  fi
+  return 1
+}
+
+bakeoff_host_os_arch() {
+  local uname_s uname_m goos goarch
+  uname_s="$(uname -s 2>/dev/null || printf unknown)"
+  uname_m="$(uname -m 2>/dev/null || printf unknown)"
+
+  case "$uname_s" in
+    Darwin) goos="darwin" ;;
+    Linux) goos="linux" ;;
+    CYGWIN*|MINGW*|MSYS*|Windows_NT) goos="windows" ;;
+    *) goos="$(printf '%s' "$uname_s" | tr '[:upper:]' '[:lower:]')" ;;
+  esac
+
+  case "$uname_m" in
+    x86_64|amd64) goarch="amd64" ;;
+    arm64|aarch64) goarch="arm64" ;;
+    *) goarch="$uname_m" ;;
+  esac
+
+  printf '%s %s\n' "$goos" "$goarch"
+}
+
+bakeoff_candidate_binaries() {
+  local data root data_label
+
+  if [[ -n "${BAKEOFF_GO_BINARY:-}" ]]; then
+    printf 'BAKEOFF_GO_BINARY\t%s\texplicit\n' "$BAKEOFF_GO_BINARY"
+  fi
+
+  if data="$(bakeoff_data_root)"; then
+    if [[ -n "${BAKEOFF_PLUGIN_DATA:-}" ]]; then
+      data_label="BAKEOFF_PLUGIN_DATA/bin/bakeoff"
+    else
+      data_label="CLAUDE_PLUGIN_DATA/bin/bakeoff"
+    fi
+    printf '%s\t%s/bin/bakeoff\tprovisioned\n' "$data_label" "$data"
+  fi
+
+  root="$(bakeoff_plugin_root)"
+  printf 'dist/bakeoff\t%s/dist/bakeoff\tpackaged\n' "$root"
+}
+
+bakeoff_version_probe() {
+  local binary="$1"
+  local label="$2"
+  local version
+
+  if ! version="$("$binary" --version 2>&1)"; then
+    printf 'error: %s exists but failed version probe: %s\n' "$label" "$version" >&2
+    return 1
+  fi
+  printf '%s\n' "$version"
+}
+
+bakeoff_print_missing_cli_help() {
+  cat >&2 <<'EOF'
+error: no provisioned Bakeoff CLI found.
+
+Run /bakeoff:setup to install the prebuilt Bakeoff CLI, or set
+BAKEOFF_GO_BINARY. Go 1.24+ is only needed for source installs.
+Source checkouts can run scripts/bakeoff-ensure-cli without --check to build
+dist/bakeoff when Go is available.
+EOF
+}

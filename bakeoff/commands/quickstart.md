@@ -6,7 +6,7 @@ allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/bakeoff-ensure-cli:*), Bash(${
 
 # /bakeoff:quickstart
 
-Use after `/plugin install bakeoff@mstefanko-plugins`.
+Use after `/plugin install bakeoff@mstefanko-plugins` and `/bakeoff:setup`.
 
 Apply the shared Bakeoff skill contract. Do not request or write secrets.
 
@@ -15,7 +15,14 @@ Apply the shared Bakeoff skill contract. Do not request or write secrets.
 1. Run:
 
    ```bash
-   "${CLAUDE_PLUGIN_ROOT}/scripts/bakeoff-ensure-cli"
+   "${CLAUDE_PLUGIN_ROOT}/scripts/bakeoff-ensure-cli" --check
+   ```
+
+   If this exits `2`, stop and tell the user:
+
+   ```text
+   Run /bakeoff:setup to install the prebuilt Bakeoff CLI, or set
+   BAKEOFF_GO_BINARY. Go 1.24+ is only needed for source installs.
    ```
 
 2. Run:
@@ -44,6 +51,7 @@ Apply the shared Bakeoff skill contract. Do not request or write secrets.
    /bakeoff:run <request>
    ```
 
-If setup is incomplete, report the action needed: install Go, install a package
-that includes `dist/bakeoff`, set `BAKEOFF_GO_BINARY` to an executable Bakeoff
-binary, or authenticate the provider CLIs through their normal login flows.
+If setup is incomplete, report the action needed: run `/bakeoff:setup`, set
+`BAKEOFF_GO_BINARY` to an executable Bakeoff binary, install a package that
+includes `dist/bakeoff`, install Go for source builds, or authenticate the
+provider CLIs through their normal login flows.

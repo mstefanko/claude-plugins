@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/modeldefaults"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
 )
 
@@ -46,10 +47,10 @@ func TestBuildApplyAndRenderReviewContext(t *testing.T) {
 		"goal":           "Find bugs.",
 		"background":     "Original background.",
 		"providers": []any{
-			map[string]any{"id": "claude", "backend": "claude", "model": "claude-sonnet-4-6", "scope": "codebase"},
-			map[string]any{"id": "codex", "backend": "codex", "model": "gpt-5.5", "scope": "web"},
+			map[string]any{"id": "claude", "backend": "claude", "model": modeldefaults.ClaudeSonnet, "scope": "codebase"},
+			map[string]any{"id": "codex", "backend": "codex", "model": modeldefaults.CodexDefault, "scope": "web"},
 		},
-		"judge":   map[string]any{"backend": "claude", "model": "claude-opus-4-7"},
+		"judge":   map[string]any{"backend": "claude", "model": modeldefaults.ClaudeOpus},
 		"budgets": map[string]any{"wall_clock_seconds": float64(30), "max_output_bytes": float64(1000)},
 	})
 	if err != nil {
@@ -70,10 +71,10 @@ func TestBuildApplyAndRenderReviewContext(t *testing.T) {
 		"goal":           "Find bugs.",
 		"background":     []any{"Base branch: main.", "Acceptance criteria: pass."},
 		"providers": []any{
-			map[string]any{"id": "claude", "backend": "claude", "model": "claude-sonnet-4-6", "scope": "codebase"},
-			map[string]any{"id": "codex", "backend": "codex", "model": "gpt-5.5", "scope": "web"},
+			map[string]any{"id": "claude", "backend": "claude", "model": modeldefaults.ClaudeSonnet, "scope": "codebase"},
+			map[string]any{"id": "codex", "backend": "codex", "model": modeldefaults.CodexDefault, "scope": "web"},
 		},
-		"judge":   map[string]any{"backend": "claude", "model": "claude-opus-4-7"},
+		"judge":   map[string]any{"backend": "claude", "model": modeldefaults.ClaudeOpus},
 		"budgets": map[string]any{"wall_clock_seconds": float64(30), "max_output_bytes": float64(1000)},
 	})
 	if err != nil {

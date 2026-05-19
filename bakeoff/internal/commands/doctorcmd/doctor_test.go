@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/buildinfo"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/modeldefaults"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/output"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/provider"
 )
@@ -78,6 +79,34 @@ func TestRunDoctorBuildPreflightUsesFakeProviders(t *testing.T) {
 	}
 }
 
+func TestRunDoctorJSONReportsModelDefaults(t *testing.T) {
+	f, out := newDoctorFakeFactory(t, true)
+
+	err := runDoctor(context.Background(), f, &DoctorOptions{
+		SkipAuthProbe: true,
+		Quiet:         true,
+		JSON:          true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report := decodeDoctorReport(t, out)
+	defaults := report["defaults"].(map[string]any)
+	want := map[string]string{
+		"claude_sonnet": modeldefaults.ClaudeSonnet,
+		"claude_opus":   modeldefaults.ClaudeOpus,
+		"claude_haiku":  modeldefaults.ClaudeHaiku,
+		"codex":         modeldefaults.CodexDefault,
+		"codex_gpt5":    modeldefaults.CodexGPT5,
+	}
+	for key, value := range want {
+		if defaults[key] != value {
+			t.Fatalf("defaults[%s] = %#v, want %q (all %#v)", key, defaults[key], value, defaults)
+		}
+	}
+}
+
 func TestRunDoctorBuildPreflightFailsWithoutCodexWorkspaceWrite(t *testing.T) {
 	f, out := newDoctorFakeFactory(t, false)
 
@@ -131,6 +160,10 @@ func writeDoctorFakeProvider(t *testing.T, dir string, name string, codexWorkspa
 	if codexWorkspaceWrite {
 		sandboxHelp = "--sandbox <read-only|workspace-write>"
 	}
+	expectedModel := modeldefaults.ClaudeSonnet
+	if name == "codex" {
+		expectedModel = modeldefaults.CodexDefault
+	}
 	help := "echo 'fake claude help'; echo '--allowedTools'; echo '--disallowedTools'; echo '--tools'; echo '--permission-mode'"
 	if name == "codex" {
 		help = fmt.Sprintf("echo 'fake codex exec help'; echo '%s'; echo '--disable'; echo '--profile'; echo '--config'; echo '--output-last-message'", sandboxHelp)
@@ -146,10 +179,24 @@ for arg in "$@"; do
     exit 0
   fi
 done
+model=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --model|-m)
+      shift
+      model="${1:-}"
+      ;;
+  esac
+  shift
+done
+if [ "$model" != "%[3]s" ]; then
+  echo "unexpected model for %[1]s: $model" >&2
+  exit 42
+fi
 cat >/dev/null
 printf 'bakeoff-build-write-ok-%[1]s\n' > bakeoff-doctor-build-probe.txt
 printf '<final_json>{"status":"complete","claims":[],"conflicts":[],"unknowns":[],"recommended_next_checks":[]}</final_json>\n'
-`, name, help)
+`, name, help, expectedModel)
 	path := filepath.Join(dir, name)
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatal(err)

@@ -1,0 +1,331 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+root="$(cd "$script_dir/.." && pwd)"
+source "$script_dir/bakeoff-lib"
+
+tag="v9.9.9"
+read -r host_os host_arch < <(bakeoff_host_os_arch)
+asset="bakeoff_${tag}_${host_os}_${host_arch}.tar.gz"
+
+case " $BAKEOFF_SUPPORTED_SETUP_PLATFORMS " in
+  *" $host_os/$host_arch "*) ;;
+  *)
+    echo "skip: setup platform tests require one of: $BAKEOFF_SUPPORTED_SETUP_PLATFORMS"
+    exit 0
+    ;;
+esac
+
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/bakeoff-setup-tests.XXXXXX")"
+cleanup() {
+  rm -rf "$tmp"
+}
+trap cleanup EXIT
+
+fail() {
+  echo "FAIL: $*" >&2
+  exit 1
+}
+
+assert_contains() {
+  local haystack="$1"
+  local needle="$2"
+  [[ "$haystack" == *"$needle"* ]] || fail "expected output to contain: $needle; got: $haystack"
+}
+
+assert_not_exists() {
+  local path="$1"
+  [[ ! -e "$path" && ! -L "$path" ]] || fail "expected path to be absent: $path"
+}
+
+test_sha256_file() {
+  local path="$1"
+  local digest rest
+  if command -v sha256sum >/dev/null 2>&1; then
+    read -r digest rest < <(sha256sum "$path")
+    printf '%s\n' "$digest"
+    return 0
+  fi
+  if command -v shasum >/dev/null 2>&1; then
+    read -r digest rest < <(shasum -a 256 "$path")
+    printf '%s\n' "$digest"
+    return 0
+  fi
+  if command -v openssl >/dev/null 2>&1; then
+    read -r digest rest < <(openssl dgst -sha256 -r "$path")
+    printf '%s\n' "$digest"
+    return 0
+  fi
+  return 1
+}
+
+run_fail() {
+  local output status
+  set +e
+  output="$("$@" 2>&1)"
+  status=$?
+  set -e
+  if [[ "$status" -eq 0 ]]; then
+    fail "expected failure from: $*"
+  fi
+  printf '%s\n' "$output"
+}
+
+write_fake_bakeoff() {
+  local path="$1"
+  local version="$2"
+  local mode="${3:-ok}"
+  mkdir -p "$(dirname "$path")"
+  cat > "$path" <<EOF
+#!/usr/bin/env bash
+if [[ "\${1:-}" == "--version" ]]; then
+  if [[ "$mode" == "gatekeeper" ]]; then
+    echo "cannot verify developer"
+    exit 1
+  fi
+  echo "bakeoff $version"
+  exit 0
+fi
+echo "fake bakeoff $version"
+EOF
+  chmod 0755 "$path"
+}
+
+write_checksum() {
+  local release_dir="$1"
+  local mode="$2"
+  local digest upper
+  digest="$(test_sha256_file "$release_dir/$asset")"
+
+  case "$mode" in
+    valid)
+      printf '%s  %s\n' "$digest" "$asset" > "$release_dir/checksums.txt"
+      ;;
+    single_space)
+      printf '%s %s\n' "$digest" "$asset" > "$release_dir/checksums.txt"
+      ;;
+    mismatch)
+      printf '%064d  %s\n' 0 "$asset" > "$release_dir/checksums.txt"
+      ;;
+    missing)
+      printf '%s  other.tar.gz\n' "$digest" > "$release_dir/checksums.txt"
+      ;;
+    duplicate)
+      {
+        printf '%s  %s\n' "$digest" "$asset"
+        printf '%s  %s\n' "$digest" "$asset"
+      } > "$release_dir/checksums.txt"
+      ;;
+    path)
+      printf '%s  ./Archive/%s\n' "$digest" "$asset" > "$release_dir/checksums.txt"
+      ;;
+    uppercase)
+      upper="$(printf '%s' "$digest" | tr '[:lower:]' '[:upper:]')"
+      printf '%s  %s\n' "$upper" "$asset" > "$release_dir/checksums.txt"
+      ;;
+    malformed)
+      printf '%s%s\n' "$digest" "$asset" > "$release_dir/checksums.txt"
+      ;;
+    *)
+      fail "unknown checksum mode: $mode"
+      ;;
+  esac
+}
+
+make_release() {
+  local name="$1"
+  local archive_kind="${2:-valid}"
+  local checksum_kind="${3:-valid}"
+  local binary_mode="${4:-ok}"
+  local release_dir="$tmp/releases/$name"
+  local content="$tmp/content/$name"
+  mkdir -p "$release_dir" "$content"
+
+  case "$archive_kind" in
+    valid)
+      write_fake_bakeoff "$content/bakeoff" "$tag" "$binary_mode"
+      (cd "$content" && tar -czf "$release_dir/$asset" bakeoff)
+      ;;
+    extra)
+      write_fake_bakeoff "$content/bakeoff" "$tag"
+      printf 'extra\n' > "$content/extra.txt"
+      (cd "$content" && tar -czf "$release_dir/$asset" bakeoff extra.txt)
+      ;;
+    symlink)
+      printf 'target\n' > "$content/target"
+      ln -s target "$content/bakeoff"
+      (cd "$content" && tar -czf "$release_dir/$asset" bakeoff)
+      ;;
+    missing)
+      printf 'no binary\n' > "$content/not-bakeoff"
+      (cd "$content" && tar -czf "$release_dir/$asset" not-bakeoff)
+      ;;
+    traversal)
+      command -v python3 >/dev/null 2>&1 || return 77
+      python3 - "$release_dir/$asset" <<'PY'
+import io
+import tarfile
+import sys
+
+payload = b'#!/usr/bin/env bash\nif [ "$1" = "--version" ]; then echo bakeoff v9.9.9; fi\n'
+info = tarfile.TarInfo("../bakeoff")
+info.mode = 0o755
+info.size = len(payload)
+with tarfile.open(sys.argv[1], "w:gz") as tf:
+    tf.addfile(info, io.BytesIO(payload))
+PY
+      ;;
+    *)
+      fail "unknown archive kind: $archive_kind"
+      ;;
+  esac
+
+  write_checksum "$release_dir" "$checksum_kind"
+  printf '%s\n' "$release_dir"
+}
+
+run_setup() {
+  local data="$1"
+  local release_dir="$2"
+  shift 2
+  env \
+    BAKEOFF_PLUGIN_DATA="$data" \
+    BAKEOFF_PLUGIN_ROOT="$root" \
+    BAKEOFF_RELEASE_BASE_URL="file://$release_dir" \
+    "$root/scripts/bakeoff-setup" --yes --version "$tag" "$@"
+}
+
+test_no_go_no_binary_check() {
+  local plugin_root="$tmp/plugin-root-empty"
+  local data="$tmp/data-empty"
+  local output status
+  mkdir -p "$plugin_root"
+  set +e
+  output="$(env -i HOME="$HOME" PATH="/usr/bin:/bin" BAKEOFF_PLUGIN_ROOT="$plugin_root" BAKEOFF_PLUGIN_DATA="$data" "$root/scripts/bakeoff-ensure-cli" --check 2>&1)"
+  status=$?
+  set -e
+  [[ "$status" -eq 2 ]] || fail "expected ensure --check exit 2, got $status: $output"
+  assert_contains "$output" "/bakeoff:setup"
+}
+
+test_valid_release_install() {
+  local release data output
+  release="$(make_release valid-install)"
+  data="$tmp/data-valid"
+  output="$(run_setup "$data" "$release")"
+  [[ -x "$data/bin/bakeoff" ]] || fail "installed binary is not executable"
+  assert_contains "$("$data/bin/bakeoff" --version)" "$tag"
+  grep -Eq '"schema_version"[[:space:]]*:[[:space:]]*1' "$data/version.json" || fail "version.json missing schema"
+  grep -Eq '"install_kind"[[:space:]]*:[[:space:]]*"release-binary"' "$data/version.json" || fail "version.json missing ownership"
+  assert_contains "$output" "Next: /bakeoff:quickstart"
+  run_setup "$data" "$release" >/dev/null
+}
+
+test_resolution_order() {
+  local plugin_root="$tmp/plugin-root-resolution"
+  local data="$tmp/data-resolution"
+  local override="$tmp/override-bakeoff"
+  local output
+  mkdir -p "$plugin_root/dist" "$data/bin"
+  write_fake_bakeoff "$plugin_root/dist/bakeoff" "dist"
+  write_fake_bakeoff "$data/bin/bakeoff" "data"
+  output="$(env BAKEOFF_PLUGIN_ROOT="$plugin_root" BAKEOFF_PLUGIN_DATA="$data" "$root/scripts/bakeoff-ensure-cli" --check)"
+  assert_contains "$output" "BAKEOFF_PLUGIN_DATA/bin/bakeoff"
+  assert_contains "$output" "bakeoff data"
+  output="$(env BAKEOFF_PLUGIN_ROOT="$plugin_root" BAKEOFF_PLUGIN_DATA="$data" "$root/bin/bakeoff" --version)"
+  assert_contains "$output" "bakeoff data"
+
+  write_fake_bakeoff "$override" "override"
+  output="$(env BAKEOFF_GO_BINARY="$override" BAKEOFF_PLUGIN_ROOT="$plugin_root" BAKEOFF_PLUGIN_DATA="$data" "$root/scripts/bakeoff-ensure-cli" --check)"
+  assert_contains "$output" "BAKEOFF_GO_BINARY"
+  assert_contains "$output" "bakeoff override"
+  output="$(env BAKEOFF_GO_BINARY="$override" BAKEOFF_PLUGIN_ROOT="$plugin_root" BAKEOFF_PLUGIN_DATA="$data" "$root/bin/bakeoff" --version)"
+  assert_contains "$output" "bakeoff override"
+}
+
+test_checksum_failures() {
+  local mode release data output
+  for mode in mismatch missing duplicate path uppercase malformed; do
+    release="$(make_release "checksum-$mode" valid "$mode")"
+    data="$tmp/data-checksum-$mode"
+    output="$(run_fail run_setup "$data" "$release")"
+    assert_not_exists "$data/bin/bakeoff"
+    case "$mode" in
+      mismatch) assert_contains "$output" "checksum mismatch" ;;
+      missing) assert_contains "$output" "missing an entry" ;;
+      duplicate) assert_contains "$output" "duplicate" ;;
+      *) assert_contains "$output" "malformed" ;;
+    esac
+  done
+}
+
+test_single_space_checksum_is_accepted() {
+  local release data
+  release="$(make_release checksum-single-space valid single_space)"
+  data="$tmp/data-checksum-single-space"
+  run_setup "$data" "$release" >/dev/null
+  [[ -x "$data/bin/bakeoff" ]] || fail "single-space checksum release did not install"
+}
+
+test_archive_failures() {
+  local kind release data output status
+  for kind in extra symlink missing traversal; do
+    set +e
+    release="$(make_release "archive-$kind" "$kind" valid)"
+    status=$?
+    set -e
+    if [[ "$status" -eq 77 ]]; then
+      echo "skip: archive traversal case requires python3"
+      continue
+    fi
+    data="$tmp/data-archive-$kind"
+    output="$(run_fail run_setup "$data" "$release")"
+    assert_not_exists "$data/bin/bakeoff"
+    assert_contains "$output" "archive"
+  done
+}
+
+test_gatekeeper_message() {
+  local release data output
+  [[ "$host_os" == "darwin" ]] || return 0
+  release="$(make_release gatekeeper valid valid gatekeeper)"
+  data="$tmp/data-gatekeeper"
+  output="$(run_fail run_setup "$data" "$release")"
+  assert_contains "$output" "signed/notarized"
+}
+
+test_uninstall_ownership() {
+  local release data project home foreign output
+  release="$(make_release uninstall-valid)"
+  data="$tmp/data-uninstall"
+  run_setup "$data" "$release" >/dev/null
+  project="$tmp/project-uninstall"
+  home="$tmp/home-uninstall"
+  mkdir -p "$project" "$home"
+  output="$(cd "$project" && env HOME="$home" BAKEOFF_PLUGIN_ROOT="$tmp/plugin-uninstall" BAKEOFF_PLUGIN_DATA="$data" "$root/scripts/bakeoff-uninstall" --force)"
+  assert_not_exists "$data/bin/bakeoff"
+  assert_not_exists "$data/version.json"
+  assert_contains "$output" "provider CLIs"
+
+  foreign="$tmp/foreign-data"
+  mkdir -p "$foreign/bin"
+  write_fake_bakeoff "$foreign/bin/bakeoff" "foreign"
+  cat > "$foreign/version.json" <<'EOF'
+{"schema_version":1,"owner":"someone-else","tool":"bakeoff","install_kind":"release-binary"}
+EOF
+  output="$(cd "$project" && env HOME="$home" BAKEOFF_PLUGIN_ROOT="$tmp/plugin-uninstall-foreign" BAKEOFF_PLUGIN_DATA="$foreign" "$root/scripts/bakeoff-uninstall" --force)"
+  [[ -x "$foreign/bin/bakeoff" ]] || fail "foreign binary should remain"
+  assert_contains "$output" "no Bakeoff release-binary ownership metadata"
+}
+
+test_no_go_no_binary_check
+test_valid_release_install
+test_resolution_order
+test_checksum_failures
+test_single_space_checksum_is_accepted
+test_archive_failures
+test_gatekeeper_message
+test_uninstall_ownership
+
+echo "bakeoff setup tests: ok"

@@ -1,0 +1,41 @@
+version: 2
+
+project_name: bakeoff
+
+builds:
+  - id: bakeoff
+    main: ./cmd/bakeoff
+    binary: bakeoff
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - >-
+        -s -w
+        -X github.com/mstefanko/claude-plugins/bakeoff/internal/buildinfo.Version={{ .Tag }}
+        -X github.com/mstefanko/claude-plugins/bakeoff/internal/buildinfo.Commit={{ .FullCommit }}
+        -X github.com/mstefanko/claude-plugins/bakeoff/internal/buildinfo.Date={{ .Date }}
+
+archives:
+  - id: bakeoff
+    ids:
+      - bakeoff
+    formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Tag }}_{{ .Os }}_{{ .Arch }}"
+    files: []
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ .Tag }}-snapshot"
+
+changelog:
+  disable: false

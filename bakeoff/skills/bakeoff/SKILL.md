@@ -167,10 +167,13 @@ Every draft should include explicit:
 
 Default providers:
 
-- research: Claude Sonnet high and Codex GPT-5.5 high, with scope selected by
-  task shape;
+- research: Claude `sonnet` high and Codex `gpt-5.5` high, with scope selected
+  by task shape;
 - build: both providers use `scope: "codebase"`;
-- judge: Claude Opus xhigh.
+- judge: Claude `opus` xhigh.
+
+Use Claude aliases for generated defaults. Use full provider model ids only
+when the user asks to pin a specific version.
 
 Research budgets:
 
