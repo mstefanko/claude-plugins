@@ -120,7 +120,7 @@ Use it when verification is meaningful: performance, robustness, dependency migr
 /bakeoff:run build a safer parser for work-order JSONC with tests as the gate
 ```
 
-Minimum build work order: `type: "build"`, two `codebase` providers, and at least one `kind: "gate"` verifier. See [examples/build.work-order.json](examples/build.work-order.json) for the full shape and [docs/work-orders.md](docs/work-orders.md) for field reference.
+Minimum build work order: `type: "build"`, two `codebase` providers, and at least one `kind: "gate"` verifier. If metric verifier scripts or fixtures should not be edited by providers, list them in `build.protected_paths`; patches that touch protected paths become ineligible. See [examples/build.work-order.json](examples/build.work-order.json) for the full shape and [docs/work-orders.md](docs/work-orders.md) for field reference.
 
 ```mermaid
 flowchart LR

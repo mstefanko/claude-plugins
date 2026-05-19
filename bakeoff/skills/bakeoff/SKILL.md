@@ -138,10 +138,12 @@ part by its own `type`: `build` uses `bakeoff build`; `gather`, `compare`, and
 
 If any split validation fails, stop before execution, surface the validation
 error verbatim, repair the affected JSON, and show the full final set again
-before asking for approval. During execution, continue after exit `0` or `3`;
-exit `3` is a completed Bakeoff handoff with unresolved disagreement. Stop the
-sequence on exit `1`, `2`, `130`, interruption, or command failure. Summarize
-completed parts and the failed part before asking whether to continue.
+before asking for approval. `bakeoff validate` warnings are advisory and do not
+stop the split sequence when validation exits successfully. During execution,
+continue after exit `0` or `3`; exit `3` is a completed Bakeoff handoff with
+unresolved disagreement. Stop the sequence on exit `1`, `2`, `130`,
+interruption, or command failure. Summarize completed parts and the failed part
+before asking whether to continue.
 
 Do not run a decomposition agent, add a DAG runner, create a batch
 work-order-list schema, coordinate shared state across parts, or synthesize an

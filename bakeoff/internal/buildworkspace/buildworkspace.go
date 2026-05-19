@@ -147,8 +147,10 @@ type CaptureResult struct {
 }
 
 type ChangedFile struct {
-	Status string `json:"status"`
-	Path   string `json:"path"`
+	Status  string `json:"status"`
+	Path    string `json:"path"`
+	OldPath string `json:"old_path,omitempty"`
+	NewPath string `json:"new_path,omitempty"`
 }
 
 type ProtectedPathViolation struct {
@@ -607,7 +609,7 @@ func ClassifyBuildEvidenceFiles(changed []ChangedFile) ([]ChangedFile, []Changed
 	tests := []ChangedFile{}
 	benchmarks := []ChangedFile{}
 	for _, file := range changed {
-		path := normalizedChangedPath(file.Path)
+		path := normalizedChangedPath(changedFilePrimaryPath(file))
 		if isBuildTestPath(path) {
 			tests = append(tests, file)
 		}
@@ -625,7 +627,7 @@ func ProtectedPathViolations(changed []ChangedFile, protectedPaths []string) []P
 	seen := map[string]bool{}
 	violations := []ProtectedPathViolation{}
 	for _, file := range changed {
-		for _, changedPath := range normalizedChangedPaths(file.Path) {
+		for _, changedPath := range normalizedChangedPaths(file) {
 			for _, protectedPath := range protectedPaths {
 				protectedPath = strings.Trim(filepath.ToSlash(protectedPath), "/")
 				if protectedPath == "" || !changedPathMatchesProtected(changedPath, protectedPath) {
@@ -663,17 +665,26 @@ func NormalizedPatchDigest(patch []byte) string {
 }
 
 func normalizedChangedPath(path string) string {
-	if strings.Contains(path, " -> ") {
-		parts := strings.Split(path, " -> ")
-		path = parts[len(parts)-1]
-	}
 	return strings.Trim(filepath.ToSlash(path), "/")
 }
 
-func normalizedChangedPaths(path string) []string {
-	parts := []string{path}
-	if strings.Contains(path, " -> ") {
-		parts = strings.Split(path, " -> ")
+func changedFilePrimaryPath(file ChangedFile) string {
+	if file.NewPath != "" {
+		return file.NewPath
+	}
+	return file.Path
+}
+
+func normalizedChangedPaths(file ChangedFile) []string {
+	parts := []string{}
+	if file.OldPath != "" {
+		parts = append(parts, file.OldPath)
+	}
+	if file.NewPath != "" {
+		parts = append(parts, file.NewPath)
+	}
+	if len(parts) == 0 {
+		parts = append(parts, file.Path)
 	}
 	out := make([]string, 0, len(parts))
 	seen := map[string]bool{}
@@ -758,10 +769,14 @@ func ParseNameStatus(text string) []ChangedFile {
 			continue
 		}
 		path := fields[1]
+		changed := ChangedFile{Status: fields[0], Path: path}
 		if len(fields) > 2 {
 			path = fields[1] + " -> " + fields[2]
+			changed.Path = path
+			changed.OldPath = fields[1]
+			changed.NewPath = fields[2]
 		}
-		out = append(out, ChangedFile{Status: fields[0], Path: path})
+		out = append(out, changed)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Path == out[j].Path {

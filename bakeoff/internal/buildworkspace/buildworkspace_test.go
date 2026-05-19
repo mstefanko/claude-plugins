@@ -405,7 +405,7 @@ func TestNameStatusFromRawDiff(t *testing.T) {
 		{
 			name: "rename",
 			raw:  ":100644 100644 abc def R100\told.go\tnew.go\n",
-			want: []ChangedFile{{Status: "R100", Path: "old.go -> new.go"}},
+			want: []ChangedFile{{Status: "R100", Path: "old.go -> new.go", OldPath: "old.go", NewPath: "new.go"}},
 		},
 		{
 			name: "delete",
@@ -439,7 +439,7 @@ func TestProtectedPathViolations(t *testing.T) {
 		{Status: "M", Path: "scripts/bench-json-helper"},
 		{Status: "A", Path: "testdata/latency-corpus.json"},
 		{Status: "M", Path: "testdata/nested/input.json"},
-		{Status: "R100", Path: "old-fixtures/data.json -> fixtures/data.json"},
+		{Status: "R100", Path: "old-fixtures/data.json -> fixtures/data.json", OldPath: "old-fixtures/data.json", NewPath: "fixtures/data.json"},
 		{Status: "M", Path: "Scripts/bench-json"},
 		{Status: "M", Path: "links/bench"},
 	}
@@ -469,6 +469,58 @@ func TestProtectedPathViolations(t *testing.T) {
 		if violation.ChangedPath == "Scripts/bench-json" {
 			t.Fatalf("protected path matching should be case-sensitive: %#v", violations)
 		}
+	}
+}
+
+func TestCaptureRenameProtectedPathViolationsFromGit(t *testing.T) {
+	ctx := context.Background()
+	repoDir := initGitRepo(t, true)
+	if err := os.MkdirAll(filepath.Join(repoDir, "fixtures"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "fixtures", "data.json"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, repoDir, "add", "fixtures/data.json")
+	git(t, repoDir, "commit", "-m", "add fixture")
+
+	repo, err := ResolveRepository(ctx, repoDir, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := PrepareWorktreeParent(ctx, repo, filepath.Join(repoDir, "runs", "run-rename"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	worktreePath := filepath.Join(parent.Path, "rename")
+	if err := CreateDetachedWorktree(ctx, repo, worktreePath); err != nil {
+		t.Fatal(err)
+	}
+	defer CleanupWorktree(ctx, repo, worktreePath, false)
+
+	git(t, worktreePath, "mv", "fixtures/data.json", "fixtures/data-renamed.json")
+	capture, err := CaptureChanges(ctx, CaptureOptions{WorktreePath: worktreePath, BaseCommit: repo.BaseCommit, PatchMaxBytes: 100000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(capture.ChangedFiles) != 1 {
+		t.Fatalf("changed files = %#v", capture.ChangedFiles)
+	}
+	changed := capture.ChangedFiles[0]
+	if !strings.HasPrefix(changed.Status, "R") || changed.OldPath != "fixtures/data.json" || changed.NewPath != "fixtures/data-renamed.json" {
+		t.Fatalf("rename metadata = %#v", changed)
+	}
+	violations := ProtectedPathViolations(capture.ChangedFiles, []string{"fixtures/data.json", "fixtures/data-renamed.json"})
+	got := []string{}
+	for _, violation := range violations {
+		got = append(got, violation.ProtectedPath+"="+violation.ChangedPath)
+	}
+	want := []string{
+		"fixtures/data-renamed.json=fixtures/data-renamed.json",
+		"fixtures/data.json=fixtures/data.json",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("violations = %#v, want %#v", got, want)
 	}
 }
 

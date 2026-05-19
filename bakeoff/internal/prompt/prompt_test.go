@@ -140,6 +140,21 @@ func TestTriageReviewContractRulesOnlyForCodeReviewFacet(t *testing.T) {
 	}
 }
 
+func TestBuildJudgePromptOmitsProtectedPathsWhenEmpty(t *testing.T) {
+	wo := fixtureWorkOrder(t, "build")
+	wo.Build.ProtectedPaths = nil
+	prompt, err := BuildJudgePrompt(wo, fixtureWorkerResult("A"), fixtureWorkerResult("B"), "build")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(prompt, "Protected paths:") {
+		t.Fatalf("prompt should omit empty protected paths branch:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "Verifier commands:") || !strings.Contains(prompt, "min_runs=10") {
+		t.Fatalf("prompt missing verifier details:\n%s", prompt)
+	}
+}
+
 func fixtureWorkOrder(t *testing.T, mode string) *workorder.WorkOrder {
 	t.Helper()
 	secondScope := "mixed"

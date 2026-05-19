@@ -69,11 +69,33 @@ func TestValidateSuppressesMetricCommandWarningWhenProtectedPathsExist(t *testin
 	}
 }
 
+func TestValidateWarnsWhenMetricMinRunsNeedsN(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "build.work-order.json")
+	if err := writeValidateBuildWorkOrderWithMetric(path, []any{"scripts/bench-json"}, map[string]any{"name": "score", "direction": "higher", "min_delta_percent": 1, "min_runs": 10}); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	f := validateTestFactory{streams: output.NewStreams(&out, &errOut)}
+	if err := runValidate(context.Background(), f, &ValidateOptions{WorkOrder: path}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `warning: metric verifier "score" sets metric.min_runs=10; final metric JSON must include "n" >= 10 or the metric comparison will be inconclusive`) {
+		t.Fatalf("missing min_runs warning:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "build.protected_paths is empty") {
+		t.Fatalf("unexpected protected_paths warning:\n%s", out.String())
+	}
+}
+
 func writeValidateBuildWorkOrder(path string, protectedPaths []any) error {
+	return writeValidateBuildWorkOrderWithMetric(path, protectedPaths, map[string]any{"name": "score", "direction": "higher", "min_delta_percent": 1})
+}
+
+func writeValidateBuildWorkOrderWithMetric(path string, protectedPaths []any, metric map[string]any) error {
 	build := map[string]any{
 		"verify": []any{
 			map[string]any{"id": "unit", "kind": "gate", "argv": []any{"go", "test", "./..."}, "wall_clock_seconds": 10, "max_output_bytes": 1000},
-			map[string]any{"id": "score", "kind": "metric", "argv": []any{"./scripts/bench-json"}, "wall_clock_seconds": 10, "max_output_bytes": 1000, "metric": map[string]any{"name": "score", "direction": "higher", "min_delta_percent": 1}},
+			map[string]any{"id": "score", "kind": "metric", "argv": []any{"./scripts/bench-json"}, "wall_clock_seconds": 10, "max_output_bytes": 1000, "metric": metric},
 		},
 	}
 	if protectedPaths != nil {

@@ -152,7 +152,9 @@ files unless the user explicitly asks.
 After split approval, write all files, validate all files, and only then run
 the parts sequentially. If any validation fails, run no parts; surface the
 validation error verbatim, repair the affected JSON, show the full final set,
-and ask for approval again. Route each part by its own `type`: `build` uses
+and ask for approval again. `bakeoff validate` warnings are advisory; preserve
+them in the summary when relevant, but do not stop the split sequence when
+validation exits successfully. Route each part by its own `type`: `build` uses
 `bakeoff build`; `gather`, `compare`, and `analyze` use `bakeoff research`.
 Apply the same mode-specific flag routing to each part. Continue after exit
 `0` or `3`. Stop on exit `1`, `2`, `130`, interruption, or command failure,

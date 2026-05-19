@@ -3,6 +3,7 @@ package validatecmd
 import (
 	"context"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands"
@@ -59,15 +60,20 @@ func runValidate(_ context.Context, f commands.Factory, opts *ValidateOptions) e
 }
 
 func validateWarnings(wo *workorder.WorkOrder) []string {
-	if wo == nil || wo.Build == nil || len(wo.Build.ProtectedPaths) > 0 {
+	if wo == nil || wo.Build == nil {
 		return nil
 	}
 	var warnings []string
 	for _, verifier := range wo.Build.Verify {
-		if verifier.Kind != "metric" || len(verifier.Argv) == 0 || !repoRelativeCommand(verifier.Argv[0]) {
+		if verifier.Kind != "metric" {
 			continue
 		}
-		warnings = append(warnings, `metric verifier "`+verifier.ID+`" runs repo-relative command "`+verifier.Argv[0]+`" while build.protected_paths is empty; add the verifier script and any data fixtures to build.protected_paths if providers should not edit them`)
+		if len(wo.Build.ProtectedPaths) == 0 && len(verifier.Argv) > 0 && repoRelativeCommand(verifier.Argv[0]) {
+			warnings = append(warnings, `metric verifier "`+verifier.ID+`" runs repo-relative command "`+verifier.Argv[0]+`" while build.protected_paths is empty; add the verifier script and any data fixtures to build.protected_paths if providers should not edit them`)
+		}
+		if verifier.Metric != nil && verifier.Metric.MinRuns > 1 {
+			warnings = append(warnings, `metric verifier "`+verifier.ID+`" sets metric.min_runs=`+strconv.Itoa(verifier.Metric.MinRuns)+`; final metric JSON must include "n" >= `+strconv.Itoa(verifier.Metric.MinRuns)+` or the metric comparison will be inconclusive`)
+		}
 	}
 	return warnings
 }
