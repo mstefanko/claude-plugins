@@ -1,8 +1,8 @@
 # Bakeoff
 
-Run the same research, review, or build task through Claude and Codex, then get an auditable report and replayable artifacts.
+Bakeoff turns agent comparison into a repeatable workflow. Give Claude and Codex the same research, review, or build task; Bakeoff runs them in parallel, collects their work, judges the outputs, and returns a report with replayable artifacts.
 
-Bakeoff is a thin launcher and Go CLI. It runs providers, captures artifacts, verifies or judges outputs, and writes a ledger. It does not apply patches, open PRs, or hide state outside the run directory. Use it from Claude Code with `/bakeoff:*`; this checkout also ships `.codex-plugin/plugin.json` for Codex.
+The tool is deliberately small and transparent. It launches providers, records artifacts, runs verification or judging, and writes a ledger, while leaving your checkout untouched. No surprise patches, no automatic PRs, no hidden state. Just parallel agent work with enough evidence to audit, reproduce, and trust the result.
 
 ## Modes
 
@@ -54,7 +54,7 @@ Local development install:
 
 Codex install: this checkout ships `.codex-plugin/plugin.json`; verify the current Codex plugin flow in Codex docs.
 
-Natural-language requests draft a work order, show the full JSON, and wait for explicit approval before writing or running. Sample work orders live in `examples/` (`gather`, `compare`, `analyze`, `review`, `build`).
+Natural-language requests draft a work order, show the full JSON, and wait for explicit approval before writing or running. For large requests, the plugin may suggest 2-3 separate work orders when the split is clean; each part is still a normal Bakeoff run. Sample work orders live in `examples/` (`gather`, `compare`, `analyze`, `review`, `build`).
 
 ## Research
 

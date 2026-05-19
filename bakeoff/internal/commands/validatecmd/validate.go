@@ -2,6 +2,8 @@ package validatecmd
 
 import (
 	"context"
+	"path/filepath"
+	"strings"
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
@@ -50,5 +52,30 @@ func runValidate(_ context.Context, f commands.Factory, opts *ValidateOptions) e
 		streams.Printf("    - %s: %s %s (%s, %s)\n", provider.ID, provider.Backend, provider.Model, provider.Scope, provider.Effort)
 	}
 	streams.Printf("  judge:   %s %s (%s)\n", wo.Judge.Backend, wo.Judge.Model, wo.Judge.Effort)
+	for _, warning := range validateWarnings(wo) {
+		streams.Printf("warning: %s\n", warning)
+	}
 	return nil
+}
+
+func validateWarnings(wo *workorder.WorkOrder) []string {
+	if wo == nil || wo.Build == nil || len(wo.Build.ProtectedPaths) > 0 {
+		return nil
+	}
+	var warnings []string
+	for _, verifier := range wo.Build.Verify {
+		if verifier.Kind != "metric" || len(verifier.Argv) == 0 || !repoRelativeCommand(verifier.Argv[0]) {
+			continue
+		}
+		warnings = append(warnings, `metric verifier "`+verifier.ID+`" runs repo-relative command "`+verifier.Argv[0]+`" while build.protected_paths is empty; add the verifier script and any data fixtures to build.protected_paths if providers should not edit them`)
+	}
+	return warnings
+}
+
+func repoRelativeCommand(command string) bool {
+	command = strings.TrimSpace(command)
+	if command == "" || filepath.IsAbs(command) || strings.HasPrefix(command, "../") {
+		return false
+	}
+	return strings.HasPrefix(command, "./") || strings.Contains(command, "/")
 }

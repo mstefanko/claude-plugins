@@ -173,6 +173,7 @@ func fixtureWorkOrder(t *testing.T, mode string) *workorder.WorkOrder {
 			"base_ref":        "HEAD",
 			"comparison_goal": "Prefer the clearer patch with stronger test coverage.",
 			"patch_max_bytes": 100000,
+			"protected_paths": []any{"scripts/bench-json", "testdata/latency-corpus.json"},
 			"verify": []any{
 				map[string]any{
 					"id":                 "unit",
@@ -192,6 +193,7 @@ func fixtureWorkOrder(t *testing.T, mode string) *workorder.WorkOrder {
 						"direction":           "lower",
 						"min_delta_percent":   10,
 						"noise_floor_percent": 5,
+						"min_runs":            10,
 					},
 				},
 			},

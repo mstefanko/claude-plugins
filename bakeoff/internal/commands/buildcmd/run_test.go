@@ -252,6 +252,7 @@ func TestRunBuildMutatesIsolatedWorktreesAndCapturesPatches(t *testing.T) {
 		"Use this report and the selected patch artifact as handoff material for a fresh session",
 		"Post-run edits, synthesis, or reimplementation are outside this bakeoff decision.",
 		"Patch artifact: `providers/claude/build/diff.patch`",
+		"score=1, unit=points, n=10, statistic=sample, method=fake metric",
 	} {
 		if !strings.Contains(reportText, want) {
 			t.Fatalf("report missing handoff contract %q:\n%s", want, reportText)
@@ -377,6 +378,100 @@ test -f README.md
 	decision := readJSONFile(t, filepath.Join(outDir, "gate-winner", "decision.json"))
 	if decision["decision_kind"] != "pick_winner" || decision["selection_basis"] != "gate" || decision["canonical_winner"] != "claude" || decision["judge_ran"] != false {
 		t.Fatalf("decision = %#v", decision)
+	}
+}
+
+func TestRunBuildProtectedPathMakesProviderIneligible(t *testing.T) {
+	repoDir := initBuildGitRepo(t)
+	root := t.TempDir()
+	workOrderPath := filepath.Join(root, "build.work-order.json")
+	writeBuildWorkOrder(t, workOrderPath, "protected-one", 100000, []map[string]any{
+		{"id": "readme", "kind": "gate", "argv": []string{"test", "-f", "README.md"}, "wall_clock_seconds": 5, "max_output_bytes": 2000},
+	})
+	data := readJSONFile(t, workOrderPath)
+	build := data["build"].(map[string]any)
+	build["protected_paths"] = []any{"codex-build.txt"}
+	if err := workorder.WriteJSONAtomic(workOrderPath, data); err != nil {
+		t.Fatal(err)
+	}
+	outDir := filepath.Join(root, "runs")
+	if out, errOut, err := runBuildTest(t, repoDir, workOrderPath, outDir, BuildOptions{RunID: "protected-one", Quiet: true, JSON: true}); err != nil {
+		t.Fatalf("build should continue with claude after codex protected path violation: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
+	}
+	runDir := filepath.Join(outDir, "protected-one")
+	decision := readJSONFile(t, filepath.Join(runDir, "decision.json"))
+	if decision["decision_kind"] != "single_provider_only" || decision["canonical_winner"] != "claude" {
+		t.Fatalf("decision = %#v", decision)
+	}
+	statuses := decision["provider_statuses"].(map[string]any)
+	codexStatus := statuses["codex"].(map[string]any)
+	if codexStatus["patch_state"] != "protected_path_changed" || codexStatus["verify_state"] != "not_run" {
+		t.Fatalf("codex status = %#v", codexStatus)
+	}
+	reason := fmt.Sprint(codexStatus["ineligible_reasons"])
+	if !strings.Contains(reason, `patch changed protected path "codex-build.txt"; revise the patch or remove that path from build.protected_paths if it is intentionally editable`) {
+		t.Fatalf("missing exact protected path reason: %#v", codexStatus)
+	}
+	protected := readJSONFile(t, filepath.Join(runDir, "providers", "codex", "build", "protected-paths.json"))
+	if !strings.Contains(fmt.Sprint(protected["violations"]), "codex-build.txt") {
+		t.Fatalf("protected artifact = %#v", protected)
+	}
+	if _, err := os.Stat(filepath.Join(runDir, "providers", "codex", "build", "verify", "readme")); !os.IsNotExist(err) {
+		t.Fatalf("codex verification should be skipped, stat err=%v", err)
+	}
+}
+
+func TestRunBuildBothProtectedPathViolationsUseBothFailed(t *testing.T) {
+	repoDir := initBuildGitRepo(t)
+	root := t.TempDir()
+	workOrderPath := filepath.Join(root, "build.work-order.json")
+	writeBuildWorkOrder(t, workOrderPath, "protected-both", 100000, []map[string]any{
+		{"id": "readme", "kind": "gate", "argv": []string{"test", "-f", "README.md"}, "wall_clock_seconds": 5, "max_output_bytes": 2000},
+	})
+	data := readJSONFile(t, workOrderPath)
+	build := data["build"].(map[string]any)
+	build["protected_paths"] = []any{"bakeoff-build-output.txt"}
+	if err := workorder.WriteJSONAtomic(workOrderPath, data); err != nil {
+		t.Fatal(err)
+	}
+	outDir := filepath.Join(root, "runs")
+	out, errOut, err := runBuildTest(t, repoDir, workOrderPath, outDir, BuildOptions{RunID: "protected-both", Quiet: true, JSON: true})
+	if err == nil {
+		t.Fatalf("expected both providers to be ineligible\nstdout:\n%s\nstderr:\n%s", out, errOut)
+	}
+	decision := readJSONFile(t, filepath.Join(outDir, "protected-both", "decision.json"))
+	if decision["decision_kind"] != "both_failed" || decision["selection_basis"] != "none" || decision["canonical_winner"] != nil {
+		t.Fatalf("decision = %#v", decision)
+	}
+	if strings.Contains(fmt.Sprint(decision), "both_ineligible") {
+		t.Fatalf("should not add a new decision kind for protected paths: %#v", decision)
+	}
+	if !strings.Contains(fmt.Sprint(decision["caveats"]), "protected path") {
+		t.Fatalf("missing protected path caveat: %#v", decision)
+	}
+}
+
+func TestRunBuildIdenticalCapturedPatchesTieWithoutJudge(t *testing.T) {
+	repoDir := initBuildGitRepo(t)
+	root := t.TempDir()
+	workOrderPath := filepath.Join(root, "build.work-order.json")
+	writeBuildWorkOrder(t, workOrderPath, "identical-patch", 100000, []map[string]any{
+		{"id": "readme", "kind": "gate", "argv": []string{"test", "-f", "README.md"}, "wall_clock_seconds": 5, "max_output_bytes": 2000},
+	})
+	t.Setenv("BAKEOFF_FAKE_IDENTICAL_BUILD_PATCH", "1")
+	t.Setenv("BAKEOFF_FAKE_JUDGE_MODE", "build_pick_claude")
+	outDir := filepath.Join(root, "runs")
+	out, errOut, err := runBuildTest(t, repoDir, workOrderPath, outDir, BuildOptions{RunID: "identical-patch", Quiet: true, JSON: true})
+	if err == nil {
+		t.Fatalf("expected unresolved identical-patch tie\nstdout:\n%s\nstderr:\n%s", out, errOut)
+	}
+	runDir := filepath.Join(outDir, "identical-patch")
+	decision := readJSONFile(t, filepath.Join(runDir, "decision.json"))
+	if decision["decision_kind"] != "tie" || decision["selection_basis"] != "identical_patch" || decision["judge_ran"] != false {
+		t.Fatalf("decision = %#v", decision)
+	}
+	if _, err := os.Stat(filepath.Join(runDir, "judge", "result-pass1.json")); !os.IsNotExist(err) {
+		t.Fatalf("judge should not run for identical patches, stat err=%v", err)
 	}
 }
 
@@ -810,9 +905,9 @@ func initBuildGitRepo(t *testing.T) string {
 	}
 	metric := `#!/bin/sh
 if [ -f claude-build.txt ]; then
-  printf '{"score":1}\n'
+  printf '{"score":1,"unit":"points","n":10,"statistic":"sample","method":"fake metric"}\n'
 else
-  printf '{"score":2}\n'
+  printf '{"score":2,"unit":"points","n":10,"statistic":"sample","method":"fake metric"}\n'
 fi
 `
 	if err := os.WriteFile(filepath.Join(dir, "metric.sh"), []byte(metric), 0o755); err != nil {

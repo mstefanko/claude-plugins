@@ -433,6 +433,53 @@ func TestNameStatusFromRawDiff(t *testing.T) {
 	}
 }
 
+func TestProtectedPathViolations(t *testing.T) {
+	changed := []ChangedFile{
+		{Status: "M", Path: "scripts/bench-json"},
+		{Status: "M", Path: "scripts/bench-json-helper"},
+		{Status: "A", Path: "testdata/latency-corpus.json"},
+		{Status: "M", Path: "testdata/nested/input.json"},
+		{Status: "R100", Path: "old-fixtures/data.json -> fixtures/data.json"},
+		{Status: "M", Path: "Scripts/bench-json"},
+		{Status: "M", Path: "links/bench"},
+	}
+	violations := ProtectedPathViolations(changed, []string{
+		"scripts/bench-json",
+		"testdata",
+		"old-fixtures",
+		"fixtures/data.json",
+		"links/bench",
+	})
+	got := []string{}
+	for _, violation := range violations {
+		got = append(got, violation.ProtectedPath+"="+violation.ChangedPath)
+	}
+	want := []string{
+		"fixtures/data.json=fixtures/data.json",
+		"links/bench=links/bench",
+		"old-fixtures=old-fixtures/data.json",
+		"scripts/bench-json=scripts/bench-json",
+		"testdata=testdata/latency-corpus.json",
+		"testdata=testdata/nested/input.json",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("violations = %#v, want %#v", got, want)
+	}
+	for _, violation := range violations {
+		if violation.ChangedPath == "Scripts/bench-json" {
+			t.Fatalf("protected path matching should be case-sensitive: %#v", violations)
+		}
+	}
+}
+
+func TestNormalizedPatchDigestNormalizesLineEndings(t *testing.T) {
+	left := NormalizedPatchDigest([]byte("diff --git a/a b/a\r\n+one\r\n"))
+	right := NormalizedPatchDigest([]byte("diff --git a/a b/a\n+one\n"))
+	if left == "" || left != right {
+		t.Fatalf("digests = %q / %q", left, right)
+	}
+}
+
 func initGitRepo(t *testing.T, ignoreRuns bool) string {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {

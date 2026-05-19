@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -112,6 +113,7 @@ type BuildSpec struct {
 	BaseRef        string         `json:"base_ref"`
 	ComparisonGoal string         `json:"comparison_goal,omitempty"`
 	PatchMaxBytes  int            `json:"patch_max_bytes"`
+	ProtectedPaths []string       `json:"protected_paths,omitempty"`
 	Verify         []VerifierSpec `json:"verify"`
 	Raw            map[string]any `json:"-"`
 }
@@ -131,6 +133,7 @@ type MetricSpec struct {
 	Direction         string         `json:"direction"`
 	MinDeltaPercent   float64        `json:"min_delta_percent"`
 	NoiseFloorPercent float64        `json:"noise_floor_percent,omitempty"`
+	MinRuns           int            `json:"min_runs,omitempty"`
 	Raw               map[string]any `json:"-"`
 }
 
@@ -646,6 +649,10 @@ func validateBuildSpec(value any) (*BuildSpec, error) {
 		}
 		patchMaxBytes = value
 	}
+	protectedPaths, err := validateProtectedPaths(obj["protected_paths"], "build.protected_paths")
+	if err != nil {
+		return nil, err
+	}
 	verify, err := validateVerifierSpecs(obj["verify"])
 	if err != nil {
 		return nil, err
@@ -654,9 +661,62 @@ func validateBuildSpec(value any) (*BuildSpec, error) {
 		BaseRef:        baseRef,
 		ComparisonGoal: comparisonGoal,
 		PatchMaxBytes:  patchMaxBytes,
+		ProtectedPaths: protectedPaths,
 		Verify:         verify,
 		Raw:            obj,
 	}, nil
+}
+
+func validateProtectedPaths(value any, label string) ([]string, error) {
+	if value == nil {
+		return nil, nil
+	}
+	items, ok := value.([]any)
+	if !ok {
+		return nil, Validationf("%s must be an array of repository-relative paths", label)
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(items))
+	for i, item := range items {
+		raw, ok := item.(string)
+		if !ok || strings.TrimSpace(raw) == "" {
+			return nil, Validationf("%s[%d] must be a non-empty repository-relative path", label, i)
+		}
+		normalized, err := normalizeProtectedPath(raw)
+		if err != nil {
+			return nil, Validationf("%s[%d] %s", label, i, err.Error())
+		}
+		if seen[normalized] {
+			return nil, Validationf("%s[%d] duplicates protected path %s", label, i, pyRepr(normalized))
+		}
+		seen[normalized] = true
+		out = append(out, normalized)
+	}
+	return out, nil
+}
+
+func normalizeProtectedPath(raw string) (string, error) {
+	text := strings.TrimSpace(raw)
+	if strings.Contains(text, "\\") {
+		return "", fmt.Errorf("must use slash-separated repository-relative paths")
+	}
+	if filepath.IsAbs(text) || path.IsAbs(text) {
+		return "", fmt.Errorf("must be relative to the repository root")
+	}
+	if strings.ContainsAny(text, "*?[") {
+		return "", fmt.Errorf("must not use glob syntax")
+	}
+	parts := strings.Split(text, "/")
+	for _, part := range parts {
+		if part == ".." {
+			return "", fmt.Errorf("must not contain .. path traversal")
+		}
+	}
+	normalized := path.Clean(text)
+	if normalized == "." || strings.HasPrefix(normalized, "../") || normalized == ".." {
+		return "", fmt.Errorf("must be a repository-relative file or directory path")
+	}
+	return normalized, nil
 }
 
 func validateVerifierSpecs(value any) ([]VerifierSpec, error) {
@@ -788,11 +848,20 @@ func validateMetricSpec(value any, label string) (*MetricSpec, error) {
 		}
 		noiseFloor = value
 	}
+	minRuns := 1
+	if raw, ok := obj["min_runs"]; ok {
+		value, ok := asInt(raw)
+		if !ok || value <= 0 {
+			return nil, Validationf("%s.min_runs must be a positive integer", label)
+		}
+		minRuns = value
+	}
 	return &MetricSpec{
 		Name:              strings.TrimSpace(name),
 		Direction:         direction,
 		MinDeltaPercent:   minDelta,
 		NoiseFloorPercent: noiseFloor,
+		MinRuns:           minRuns,
 		Raw:               obj,
 	}, nil
 }

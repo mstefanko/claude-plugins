@@ -4,6 +4,9 @@ Work orders are the input contract for the Go CLI. They are JSON or JSONC
 objects with `schema_version: 1`, exactly two providers, one judge, budgets, a
 scope policy, and a workflow type.
 
+Bakeoff has no batch work-order schema in v1. Split plugin runs are represented
+as separate normal work-order files.
+
 The fastest way to start is the examples directory:
 
 - [examples/gather.work-order.json](../examples/gather.work-order.json)
@@ -106,6 +109,7 @@ Build work orders require a `build` object.
 | `base_ref` | Base commit-ish for detached worktrees. Defaults to `HEAD`. |
 | `comparison_goal` | Optional selector guidance for comparing patches. |
 | `patch_max_bytes` | Positive max captured patch size. Defaults to `100000`; max is `5000000`. |
+| `protected_paths` | Optional repository-relative scripts, data, fixtures, golden files, or expected outputs that provider patches must not change. |
 | `verify` | Non-empty verifier list with at least one gate verifier. |
 
 Verifier fields:
@@ -120,9 +124,9 @@ Verifier fields:
 | `metric` | Required only for metric verifiers. |
 
 Metric verifier specs require `name`, `direction` (`lower` or `higher`), and
-`min_delta_percent`; `noise_floor_percent` is optional. Metric commands should
-print a JSON object as the last non-empty stdout line with the metric name as a
-finite numeric field.
+`min_delta_percent`; `noise_floor_percent` and `min_runs` are optional.
+Metric commands should print one final aggregate JSON object as the last
+non-empty stdout line with the metric name as a finite numeric field.
 
 Verifier commands are the shared measuring stick. Bakeoff runs the same
 predeclared verifier specs against the baseline and each provider candidate, so
@@ -131,11 +135,46 @@ start editing. Provider-authored tests, probes, or benchmarks can be useful
 patch evidence, but they are not decisive unless a human promotes them into the
 shared verifier list for a later run.
 
+Protected paths make that rule enforceable. If a provider patch changes a path
+listed in `build.protected_paths`, Bakeoff marks that provider ineligible before
+running provider verification. Use repository-relative slash paths, such as
+`scripts/bench-json` or `testdata/latency-corpus.json`; entries match exact
+files and directory descendants. If a protected path is intentionally editable,
+remove it from `build.protected_paths` and rerun.
+
 For performance metrics, prefer a verifier that already handles noise and emits
 one final JSON line. In Go projects, that often means repeated benchmark runs
 and a statistical comparison such as
 [`benchstat`](https://pkg.go.dev/golang.org/x/perf/cmd/benchstat), then a JSON
 summary with the configured metric name.
+
+Go benchmark recipe:
+
+```sh
+go test -run='^$' -bench='BenchmarkName' -benchmem -count=10 ./pkg/...
+benchstat old.txt new.txt
+```
+
+For a Bakeoff metric verifier, do the repeated measurement inside the command
+and emit one final JSON object:
+
+```json
+{
+  "elapsed_ns_per_op": 12345,
+  "unit": "ns/op",
+  "n": 10,
+  "statistic": "benchstat",
+  "method": "go test -bench -count=10 plus benchstat"
+}
+```
+
+When `metric.min_runs` is greater than `1`, both provider metric outputs must
+include `n` at or above that value before the metric can decide a winner.
+Bakeoff reports `min_delta_percent` and `noise_floor_percent` separately so the
+decision shows whether the practical effect-size gate and the configured noise
+gate both passed. Bakeoff does not currently set provider or judge temperature
+or seed; reproducibility comes from predeclared verifiers, repeated metric
+runs, metric metadata, source/base commit capture, and swapped judging.
 
 Minimal build shape:
 
@@ -171,6 +210,42 @@ Minimal build shape:
 }
 ```
 
+Metric verifier with protected harness paths:
+
+```json
+{
+  "build": {
+    "protected_paths": [
+      "scripts/bench-json",
+      "testdata/latency-corpus.json"
+    ],
+    "verify": [
+      {
+        "id": "tests",
+        "kind": "gate",
+        "argv": ["go", "test", "./..."],
+        "wall_clock_seconds": 300,
+        "max_output_bytes": 60000
+      },
+      {
+        "id": "latency",
+        "kind": "metric",
+        "argv": ["./scripts/bench-json"],
+        "metric": {
+          "name": "elapsed_ms",
+          "direction": "lower",
+          "min_delta_percent": 10,
+          "noise_floor_percent": 5,
+          "min_runs": 10
+        },
+        "wall_clock_seconds": 300,
+        "max_output_bytes": 60000
+      }
+    ]
+  }
+}
+```
+
 ## Drafting From The Plugin
 
 `/bakeoff:run` drafts clean JSON from natural language. It does not call
@@ -184,3 +259,7 @@ Write and run this work order? Reply `yes` to continue, or tell me what to chang
 
 Only explicit approval lets the plugin write `./<id>.work-order.json` and run
 `bakeoff validate`.
+
+When the plugin suggests a clean split, it shows each separate work-order JSON
+block before approval. The files remain ordinary single-work-order inputs such
+as `./<id>.part-1.work-order.json` and `./<id>.part-2.work-order.json`.

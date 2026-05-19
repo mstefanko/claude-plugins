@@ -2,6 +2,7 @@ package buildcmd
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/artifact"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/buildverify"
@@ -30,6 +31,7 @@ func resolveBuildDecision(wo *workorder.WorkOrder, workerResults map[string]map[
 		Pass2Order:       pass2Order,
 		BaselineVerify:   baseline,
 		ProviderBuild:    buildProviderArtifacts(runs),
+		Caveats:          buildMetricCaveats(runs, metrics),
 	}
 	decision, exitCode := decisionpkg.ResolveBuild(input)
 	if judgeFailure != nil {
@@ -67,8 +69,13 @@ func buildProviderStatuses(wo *workorder.WorkOrder, workerResults map[string]map
 		status["verify_state"] = verifyState(run)
 		status["metric_state"] = metricState(run)
 		status["scope_diagnostics"] = run.ScopeDiagnostics
+		if len(run.ProtectedViolations) > 0 {
+			status["protected_path_violations"] = run.ProtectedViolations
+			status["protected_paths_path"] = "providers/" + participant.ID + "/build/protected-paths.json"
+		}
 		if run.Capture != nil {
 			status["patch_bytes"] = run.Capture.PatchBytes
+			status["patch_digest"] = run.Capture.PatchDigest
 			status["patch_over_cap"] = run.Capture.PatchOverCap
 			status["gitlink_change_rejected"] = run.Capture.GitlinkChangeRejected
 			status["patch_path"] = "providers/" + participant.ID + "/build/diff.patch"
@@ -94,6 +101,7 @@ func buildProviderArtifacts(runs []providerRun) map[string]any {
 		}
 		if run.Capture != nil {
 			entry["patch_bytes"] = run.Capture.PatchBytes
+			entry["patch_digest"] = run.Capture.PatchDigest
 			entry["patch_over_cap"] = run.Capture.PatchOverCap
 			entry["gitlink_change_rejected"] = run.Capture.GitlinkChangeRejected
 			entry["scope_diagnostics"] = run.ScopeDiagnostics
@@ -101,6 +109,10 @@ func buildProviderArtifacts(runs []providerRun) map[string]any {
 			entry["changed_files"] = run.Capture.ChangedFiles
 			entry["test_files"] = run.Capture.TestFiles
 			entry["benchmark_files"] = run.Capture.BenchmarkFiles
+		}
+		if len(run.ProtectedViolations) > 0 {
+			entry["protected_path_violations"] = run.ProtectedViolations
+			entry["protected_paths_path"] = "providers/" + run.ID + "/build/protected-paths.json"
 		}
 		out[run.ID] = entry
 	}
@@ -172,12 +184,17 @@ func metricDecisionMaps(metrics []buildverify.MetricComparison) []map[string]any
 	out := make([]map[string]any, 0, len(metrics))
 	for _, metric := range metrics {
 		entry := map[string]any{
-			"id":                metric.ID,
-			"name":              metric.Name,
-			"direction":         metric.Direction,
-			"delta_percent":     metric.DeltaPercent,
-			"threshold_percent": metric.Threshold,
-			"conclusive":        metric.Conclusive,
+			"id":                  metric.ID,
+			"name":                metric.Name,
+			"direction":           metric.Direction,
+			"delta_percent":       metric.DeltaPercent,
+			"min_delta_percent":   metric.MinDeltaPercent,
+			"noise_floor_percent": metric.NoiseFloorPercent,
+			"meets_min_delta":     metric.MeetsMinDelta,
+			"meets_noise_floor":   metric.MeetsNoiseFloor,
+			"min_runs":            metric.MinRuns,
+			"threshold_percent":   metric.Threshold,
+			"conclusive":          metric.Conclusive,
 		}
 		if metric.Winner != "" {
 			entry["winner"] = metric.Winner
@@ -188,6 +205,33 @@ func metricDecisionMaps(metrics []buildverify.MetricComparison) []map[string]any
 		out = append(out, entry)
 	}
 	return out
+}
+
+func buildMetricCaveats(runs []providerRun, metrics []buildverify.MetricComparison) []string {
+	caveats := []string{}
+	seen := map[string]bool{}
+	add := func(caveat string) {
+		if caveat == "" || seen[caveat] {
+			return
+		}
+		seen[caveat] = true
+		caveats = append(caveats, caveat)
+	}
+	for _, run := range runs {
+		for _, result := range run.Verify.Results {
+			if result.Kind != "metric" || result.Metric == nil || result.Metric.SampleJSONLinesIgnored == 0 {
+				continue
+			}
+			add(fmt.Sprintf("metric `%s` for provider `%s`: ignored %d earlier metric JSON line(s); emit one final aggregate JSON object", result.ID, run.ID, result.Metric.SampleJSONLinesIgnored))
+		}
+	}
+	for _, metric := range metrics {
+		if metric.Conclusive || metric.Reason == "" || !strings.Contains(metric.Reason, "metric.min_runs") {
+			continue
+		}
+		add(fmt.Sprintf("metric `%s`: %s", metric.ID, metric.Reason))
+	}
+	return caveats
 }
 
 func patchState(run providerRun) string {
@@ -202,6 +246,9 @@ func patchState(run providerRun) string {
 	}
 	if run.Capture.GitlinkChangeRejected {
 		return "submodule_change_rejected"
+	}
+	if len(run.ProtectedViolations) > 0 {
+		return "protected_path_changed"
 	}
 	return "patch_captured"
 }
@@ -250,11 +297,16 @@ func buildDecision(wo *workorder.WorkOrder, workerResults map[string]map[string]
 		}
 		if run.Capture != nil {
 			entry["patch_bytes"] = run.Capture.PatchBytes
+			entry["patch_digest"] = run.Capture.PatchDigest
 			entry["patch_over_cap"] = run.Capture.PatchOverCap
 			entry["gitlink_change_rejected"] = run.Capture.GitlinkChangeRejected
 			entry["scope_diagnostics"] = run.ScopeDiagnostics
 			entry["patch_path"] = "providers/" + run.ID + "/build/diff.patch"
 			entry["changed_files"] = run.Capture.ChangedFiles
+		}
+		if len(run.ProtectedViolations) > 0 {
+			entry["protected_path_violations"] = run.ProtectedViolations
+			entry["protected_paths_path"] = "providers/" + run.ID + "/build/protected-paths.json"
 		}
 		providerBuild[run.ID] = entry
 	}

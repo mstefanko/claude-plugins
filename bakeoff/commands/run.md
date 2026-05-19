@@ -1,13 +1,13 @@
 ---
-description: Draft, validate, and run a Bakeoff work order
+description: Draft, validate, and run Bakeoff work orders
 argument-hint: "<work-order-path | request> [--run-id ID] [--out runs] [--quiet] [--keep-worktrees] [--no-triage]"
 allowed-tools: Read, Write, Edit, Glob, Grep, Bash(${CLAUDE_PLUGIN_ROOT}/scripts/bakeoff-ensure-cli:*), Bash(${CLAUDE_PLUGIN_ROOT}/bin/bakeoff validate:*), Bash(${CLAUDE_PLUGIN_ROOT}/bin/bakeoff research:*), Bash(${CLAUDE_PLUGIN_ROOT}/bin/bakeoff build:*), Bash(bakeoff validate:*), Bash(bakeoff research:*), Bash(bakeoff build:*), Bash(git status:*), Bash(git diff:*), Bash(git rev-parse:*)
 ---
 
 # /bakeoff:run
 
-Draft, validate, and run one Bakeoff work order from a path or natural-language
-request.
+Draft, validate, and run a Bakeoff work order from a path, or one or more work
+orders from a natural-language request.
 
 Apply the shared Bakeoff skill contract. Bakeoff is the source of truth for
 validation, provider execution, judging, reports, ledgers, and exit codes.
@@ -68,7 +68,103 @@ Do not run `bakeoff research` for `type: "build"`, and do not run
 
 ## Natural Language Drafting
 
-Infer the work-order shape silently unless the ambiguity changes safety or cost.
+Existing work-order paths do not enter this flow. For natural-language input,
+run the task-fit check before silent type inference or JSON drafting.
+
+If the request is a weak fit, stop and warn instead of drafting. Use the phrase
+"this may not need Bakeoff" and name the reason:
+
+- mechanical edits or formatter-only work;
+- build requests with no meaningful verifier or acceptance criterion;
+- vague requests without a target, scope, or evidence standard;
+- review requests without a bounded branch, PR, diff, file set, or local-change
+  scope;
+- RCA or analyze requests without a concrete symptom, log, reproduction,
+  trace, file set, incident, or command to inspect;
+- highly sequential planning where each answer depends on the prior result.
+
+Recommended wording:
+
+```text
+This may not need Bakeoff because <reason>. Bakeoff usually pays off when two
+independent providers can produce meaningfully different evidence or patches,
+and when there is a verifier, scope, or citation standard. Reply `draft anyway`
+to continue with Bakeoff, or tell me how to narrow it.
+```
+
+The warning is advisory. A clear same-turn phrase such as `draft anyway` or
+"run Bakeoff anyway" satisfies it for that turn only. Do not add a task-fit
+flag or persistent opt-out. If the user narrows the request, re-run the check.
+Task-fit confirmation does not waive required work-order fields; for example,
+build mode still needs a gate verifier before a valid work order can run.
+
+After task fit passes or is confirmed, run the clean-split check before
+drafting. Do not propose a split in the same response as a task-fit warning.
+
+Suggest a split only when the request has 2-3 obvious independent parts, each
+part has its own goal and evidence surface or verifier, no part depends on
+another Bakeoff result, shared context fits in 1-2 repeatable sentences, and
+every part maps to an existing work-order type. Do not split existing
+work-order paths, sequential plans, more than three parts, under-scoped parts,
+or anything needing shared state, a final merge agent, or cross-run synthesis.
+
+Use this wording shape:
+
+```text
+This looks like it cleanly splits into <N> independent Bakeoff work orders:
+
+1. <part one goal>
+2. <part two goal>
+3. <part three goal>
+
+Each can run separately with the same shared context, and none depends on
+another result. Reply `split` to draft separate work orders, or tell me to keep
+it as one.
+```
+
+If the user declines the split, continue with one normal work order if the task
+is otherwise valid. If the user accepts, draft every part separately. Show a
+one-line summary above each full JSON block, then list all filenames and
+commands before writing anything:
+
+```text
+Files to write:
+- ./<base-id>.part-1.work-order.json
+- ./<base-id>.part-2.work-order.json
+
+Commands to run:
+- bakeoff <research|build> ./<base-id>.part-1.work-order.json ...
+- bakeoff <research|build> ./<base-id>.part-2.work-order.json ...
+
+Write these files and run them one after another? Reply `write and run` to
+continue, or tell me what to change.
+```
+
+One approval covers only the currently shown set. If the user changes any part,
+show the full final set again before asking for approval.
+
+For split work orders, derive one base slug from the original request. Append
+`.part-N` to each work-order `id`, filename, and supplied `--run-id` value. If
+no run id was supplied, let the CLI use the part work-order ids. Apply filename
+and run-id collision policy after appending `.part-N`; do not overwrite exact
+files unless the user explicitly asks.
+
+After split approval, write all files, validate all files, and only then run
+the parts sequentially. If any validation fails, run no parts; surface the
+validation error verbatim, repair the affected JSON, show the full final set,
+and ask for approval again. Route each part by its own `type`: `build` uses
+`bakeoff build`; `gather`, `compare`, and `analyze` use `bakeoff research`.
+Apply the same mode-specific flag routing to each part. Continue after exit
+`0` or `3`. Stop on exit `1`, `2`, `130`, interruption, or command failure,
+summarize completed parts and the failed part, and ask before running any
+remaining parts.
+
+Summarize split runs independently. Do not produce an overall winner, merged
+patch, merged answer, or cross-run synthesis unless the user asks for that as a
+separate follow-up.
+
+For one-work-order drafting, infer the work-order shape silently unless the
+ambiguity changes safety or cost.
 
 - implementation candidates, competing patches, "build this", "fix this and
   compare", or "pick a winning patch" -> `type: "build"`;

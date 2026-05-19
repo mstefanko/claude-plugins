@@ -37,6 +37,7 @@ type providerRun struct {
 	Cleanup             buildworkspace.CleanupResult
 	ScopeMetadata       map[string]any
 	ScopeDiagnostics    buildScopeDiagnostics
+	ProtectedViolations []buildworkspace.ProtectedPathViolation
 	IneligibleReasons   []string
 	Workspace           buildworkspace.WorkspaceMetadata
 	ProviderArtifactDir string

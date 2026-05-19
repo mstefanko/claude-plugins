@@ -47,6 +47,18 @@ def emit(obj: dict) -> None:
 
 def worker_payload(name: str, prompt: str) -> dict:
     if all(marker in prompt for marker in ("files_touched", "tests_added_or_changed", "manual_checks")):
+        if bool_env("BAKEOFF_FAKE_IDENTICAL_BUILD_PATCH"):
+            pathlib.Path("shared-build.txt").write_text(
+                "identical provider build output\n", encoding="utf-8"
+            )
+            return {
+                "status": "complete",
+                "summary": f"{name} wrote shared build output",
+                "files_touched": ["shared-build.txt"],
+                "tests_added_or_changed": [],
+                "risks": [],
+                "manual_checks": [],
+            }
         pathlib.Path("bakeoff-build-output.txt").write_text(
             f"build output from {name}\n", encoding="utf-8"
         )

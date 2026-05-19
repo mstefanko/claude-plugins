@@ -22,7 +22,12 @@ func buildSummary(repo buildworkspace.Repository, runDir string, runID string, o
 		}
 		if run.Capture != nil {
 			entry["patch_bytes"] = run.Capture.PatchBytes
+			entry["patch_digest"] = run.Capture.PatchDigest
 			entry["patch_path"] = filepath.Join(runDir, "providers", run.ID, "build", "diff.patch")
+		}
+		if len(run.ProtectedViolations) > 0 {
+			entry["protected_path_violations"] = run.ProtectedViolations
+			entry["protected_paths_path"] = filepath.Join(runDir, "providers", run.ID, "build", "protected-paths.json")
 		}
 		providers[run.ID] = entry
 	}

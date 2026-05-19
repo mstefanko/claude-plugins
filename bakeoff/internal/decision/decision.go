@@ -217,6 +217,9 @@ func ResolveBuild(input BuildResolutionInput) (map[string]any, int) {
 	if input.ProviderBuild != nil {
 		out["provider_build"] = input.ProviderBuild
 	}
+	for _, caveat := range protectedPathCaveats(providerIDs, input.ProviderStatuses) {
+		out["caveats"] = appendCaveat(out["caveats"], caveat)
+	}
 
 	captured := []string{}
 	gatePassed := []string{}
@@ -256,6 +259,13 @@ func ResolveBuild(input BuildResolutionInput) (map[string]any, int) {
 		out["selection_basis"] = "gate"
 		out["canonical_winner"] = gatePassed[0]
 		return out, 0
+	}
+	if identical, ok := identicalPatchDigest(gatePassed, input.ProviderStatuses); ok && identical {
+		out["decision_kind"] = "tie"
+		out["selection_basis"] = "identical_patch"
+		out["canonical_winner"] = nil
+		out["caveats"] = appendCaveat(out["caveats"], "captured patches were identical after normalization")
+		return out, 3
 	}
 
 	if winner, ok, split := buildMetricWinner(input.MetricDecisions); ok {
@@ -351,6 +361,61 @@ func buildMetricWinner(decisions []map[string]any) (string, bool, bool) {
 		}
 	}
 	return winner, winner != "", false
+}
+
+func identicalPatchDigest(providerIDs []string, statuses map[string]map[string]any) (bool, bool) {
+	if len(providerIDs) != 2 {
+		return false, false
+	}
+	first := ""
+	for _, id := range providerIDs {
+		status := statuses[id]
+		if !buildPatchCaptured(status) {
+			return false, false
+		}
+		digest, _ := status["patch_digest"].(string)
+		if digest == "" {
+			return false, false
+		}
+		if first == "" {
+			first = digest
+			continue
+		}
+		return first == digest, true
+	}
+	return false, false
+}
+
+func protectedPathCaveats(providerIDs []string, statuses map[string]map[string]any) []string {
+	out := []string{}
+	for _, id := range providerIDs {
+		status := statuses[id]
+		if status == nil || status["patch_state"] != "protected_path_changed" {
+			continue
+		}
+		for _, reason := range listStrings(status["ineligible_reasons"]) {
+			if strings.Contains(reason, "protected path") {
+				out = append(out, "provider "+id+" "+reason)
+				break
+			}
+		}
+	}
+	return out
+}
+
+func listStrings(value any) []string {
+	switch typed := value.(type) {
+	case []string:
+		return append([]string(nil), typed...)
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			out = append(out, stringify(item))
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 func appendCaveat(value any, caveat string) []string {

@@ -27,6 +27,9 @@ func buildJudgeNeeded(runs []providerRun, metrics []buildverify.MetricComparison
 	if len(gatePassed) != 2 {
 		return false
 	}
+	if identicalEligiblePatchDigests(runs) {
+		return false
+	}
 	metricWinner := ""
 	for _, metric := range metrics {
 		if !metric.Conclusive || metric.Winner == "" {
@@ -41,6 +44,17 @@ func buildJudgeNeeded(runs []providerRun, metrics []buildverify.MetricComparison
 		}
 	}
 	return metricWinner == ""
+}
+
+func identicalEligiblePatchDigests(runs []providerRun) bool {
+	digests := []string{}
+	for _, run := range runs {
+		if patchState(run) != "patch_captured" || !run.Verify.GatesPassed || run.Capture == nil || run.Capture.PatchDigest == "" {
+			continue
+		}
+		digests = append(digests, run.Capture.PatchDigest)
+	}
+	return len(digests) == 2 && digests[0] == digests[1]
 }
 
 func runBuildJudgePhase(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder, baseline buildverify.Result, runs []providerRun, metrics []buildverify.MetricComparison, runDir string, quiet bool, humanOutput bool) (map[string]map[string]any, map[string]string, map[string]string, []buildPhaseTiming, error) {
@@ -135,11 +149,16 @@ func buildJudgePayload(runDir string, run providerRun) map[string]any {
 	if run.Capture != nil {
 		patch := map[string]any{
 			"patch_bytes":             run.Capture.PatchBytes,
+			"patch_digest":            run.Capture.PatchDigest,
 			"patch_over_cap":          run.Capture.PatchOverCap,
 			"gitlink_change_rejected": run.Capture.GitlinkChangeRejected,
 			"changed_files":           run.Capture.ChangedFiles,
 			"test_files":              run.Capture.TestFiles,
 			"benchmark_files":         run.Capture.BenchmarkFiles,
+		}
+		if len(run.ProtectedViolations) > 0 {
+			patch["protected_path_violations"] = run.ProtectedViolations
+			patch["protected_paths_path"] = mustRelative(runDir, filepath.Join(runDir, "providers", run.ID, "build", "protected-paths.json"))
 		}
 		if run.Capture.DiffstatPath != "" {
 			if preview, truncated, err := readTextPreview(run.Capture.DiffstatPath, buildJudgeDiffstatPreviewBytes); err == nil {

@@ -75,6 +75,45 @@ func TestResolveBuildSelectsMetricWinner(t *testing.T) {
 	}
 }
 
+func TestResolveBuildIdenticalPatchDigestTiesBeforeMetricsOrJudge(t *testing.T) {
+	decision, exitCode := ResolveBuild(BuildResolutionInput{
+		ProviderIDs: []string{"claude", "codex"},
+		ProviderStatuses: map[string]map[string]any{
+			"claude": {"patch_state": "patch_captured", "verify_state": "gate_passed", "patch_digest": "same"},
+			"codex":  {"patch_state": "patch_captured", "verify_state": "gate_passed", "patch_digest": "same"},
+		},
+		MetricDecisions: []map[string]any{
+			{"id": "latency", "winner": "claude", "conclusive": true},
+		},
+		JudgeResults: map[string]map[string]any{
+			"pass1": {"winner": "A", "rationale": "A", "risks": []any{}},
+			"pass2": {"winner": "B", "rationale": "B", "risks": []any{}},
+		},
+		Pass1Order: map[string]string{"A": "claude", "B": "codex"},
+		Pass2Order: map[string]string{"A": "codex", "B": "claude"},
+	})
+	if exitCode != 3 || decision["decision_kind"] != "tie" || decision["selection_basis"] != "identical_patch" || decision["canonical_winner"] != nil || decision["judge_ran"] != false {
+		t.Fatalf("decision=%#v exit=%d", decision, exitCode)
+	}
+}
+
+func TestResolveBuildProtectedPathIneligibleUsesExistingFailureKind(t *testing.T) {
+	decision, exitCode := ResolveBuild(BuildResolutionInput{
+		ProviderIDs: []string{"claude", "codex"},
+		ProviderStatuses: map[string]map[string]any{
+			"claude": {"patch_state": "protected_path_changed", "verify_state": "not_run", "ineligible_reasons": []any{`patch changed protected path "scripts/bench-json"; revise the patch or remove that path from build.protected_paths if it is intentionally editable`}},
+			"codex":  {"patch_state": "protected_path_changed", "verify_state": "not_run", "ineligible_reasons": []any{`patch changed protected path "scripts/bench-json"; revise the patch or remove that path from build.protected_paths if it is intentionally editable`}},
+		},
+	})
+	if exitCode != 1 || decision["decision_kind"] != "both_failed" || decision["selection_basis"] != "none" {
+		t.Fatalf("decision=%#v exit=%d", decision, exitCode)
+	}
+	caveats := decision["caveats"].([]string)
+	if !strings.Contains(strings.Join(caveats, "\n"), "protected path") {
+		t.Fatalf("missing protected path caveat: %#v", decision)
+	}
+}
+
 func TestResolveBuildSingleProviderOnly(t *testing.T) {
 	decision, exitCode := ResolveBuild(BuildResolutionInput{
 		ProviderIDs: []string{"claude", "codex"},

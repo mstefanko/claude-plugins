@@ -21,9 +21,13 @@ Base ref: HEAD
 Patch max bytes: 100000
 Comparison goal: Prefer the clearer patch with stronger test coverage.
 
+Protected paths:
+- scripts/bench-json
+- testdata/latency-corpus.json
+
 Verifier commands:
 - unit (gate): go test ./...; timeout=300s; max_output=60000 bytes
-- latency (metric): ./scripts/bench-json; timeout=300s; max_output=60000 bytes; metric=elapsed_ms direction=lower min_delta=10% noise_floor=5%
+- latency (metric): ./scripts/bench-json; timeout=300s; max_output=60000 bytes; metric=elapsed_ms direction=lower min_delta=10% noise_floor=5% min_runs=10
 </build_spec>
 
 <facet>
@@ -50,6 +54,9 @@ Exclude:
 - Do not commit, create branches, or run commands that mutate the source checkout.
 - Make the implementation production-quality and aligned with nearby code.
 - Provider-authored tests or benchmarks are useful patch content, but the harness decides using the predeclared verifier commands.
+- You may add tests, benchmarks, or probes as evidence in your patch. Do not modify predeclared verifier commands or the data, fixtures, golden files, or expected outputs they depend on, unless the task explicitly says the verifier itself is the target. Do not fake metric output or metric metadata.
+- Do not hardcode known benchmark inputs.
+- Do not disable tests, skip assertions, weaken fixtures, or change expected outputs just to pass the run.
 - Do not emit apply, merge, commit, or continuation instructions. The harness records the patch artifact for a separate handoff session.
 - Do not run declared metric verifier commands manually unless you are debugging a specific verifier failure. Prefer focused local checks; the harness runs the declared verifier suite after patch capture.
 - If you cannot implement the change, emit `status: "blocked"` and explain why in `summary` and `risks`.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
@@ -121,6 +122,31 @@ func TestParseMetricUsesLastNonEmptyStdoutLine(t *testing.T) {
 	}
 }
 
+func TestParseMetricMetadataAndIgnoredSamples(t *testing.T) {
+	spec := &workorder.MetricSpec{Name: "p95_ms", Direction: "lower", MinDeltaPercent: 10}
+	metric := ParseMetric("warmup\n{\"p95_ms\": 13}\n{\"p95_ms\": 12.5, \"unit\":\" ms \", \"n\":10, \"statistic\":\"median\", \"method\":\"benchstat\", \"ignored\":true}\n", spec)
+	if !metric.Conclusive || metric.Value == nil || *metric.Value != 12.5 {
+		t.Fatalf("metric = %#v", metric)
+	}
+	if metric.Unit != "ms" || metric.N == nil || *metric.N != 10 || metric.Statistic != "median" || metric.Method != "benchstat" {
+		t.Fatalf("metadata = %#v", metric)
+	}
+	if metric.SampleJSONLinesIgnored != 1 || len(metric.MetadataWarnings) != 1 {
+		t.Fatalf("ignored sample warnings = %#v", metric)
+	}
+}
+
+func TestParseMetricDropsInvalidOptionalMetadata(t *testing.T) {
+	spec := &workorder.MetricSpec{Name: "score", Direction: "higher", MinDeltaPercent: 1}
+	metric := ParseMetric("{\"score\": 5, \"unit\": 123, \"n\": 0, \"statistic\": \"ok\"}\n", spec)
+	if !metric.Conclusive || metric.Value == nil {
+		t.Fatalf("metric should remain conclusive with invalid optional metadata: %#v", metric)
+	}
+	if metric.Unit != "" || metric.N != nil || metric.Statistic != "ok" || len(metric.MetadataWarnings) != 2 {
+		t.Fatalf("metadata warnings = %#v", metric)
+	}
+}
+
 func TestCompareMetricHonorsThresholdAndDirection(t *testing.T) {
 	spec := workorder.VerifierSpec{
 		ID:   "bench",
@@ -138,10 +164,46 @@ func TestCompareMetricHonorsThresholdAndDirection(t *testing.T) {
 	if !comparison.Conclusive || comparison.Winner != "left" {
 		t.Fatalf("comparison = %#v", comparison)
 	}
+	if !comparison.MeetsMinDelta || !comparison.MeetsNoiseFloor || comparison.MinDeltaPercent != 10 || comparison.NoiseFloorPercent != 5 {
+		t.Fatalf("comparison thresholds = %#v", comparison)
+	}
 	leftValue = 96
 	comparison = CompareMetric(spec, "left", VerifierResult{Metric: &MetricResult{Name: "p95_ms", Value: &leftValue, Conclusive: true}}, "right", VerifierResult{Metric: &MetricResult{Name: "p95_ms", Value: &rightValue, Conclusive: true}})
 	if comparison.Conclusive || comparison.Winner != "" {
 		t.Fatalf("expected threshold miss, got %#v", comparison)
+	}
+	if comparison.MeetsMinDelta || comparison.MeetsNoiseFloor {
+		t.Fatalf("expected both threshold gates to miss, got %#v", comparison)
+	}
+}
+
+func TestCompareMetricRequiresConfiguredMinRuns(t *testing.T) {
+	spec := workorder.VerifierSpec{
+		ID:   "bench",
+		Kind: "metric",
+		Metric: &workorder.MetricSpec{
+			Name:              "score",
+			Direction:         "higher",
+			MinDeltaPercent:   5,
+			NoiseFloorPercent: 1,
+			MinRuns:           10,
+		},
+	}
+	leftValue := 120.0
+	rightValue := 100.0
+	comparison := CompareMetric(spec, "left", VerifierResult{Metric: &MetricResult{Name: "score", Value: &leftValue, Conclusive: true}}, "right", VerifierResult{Metric: &MetricResult{Name: "score", Value: &rightValue, Conclusive: true}})
+	if comparison.Conclusive || !strings.Contains(comparison.Reason, "n was missing") {
+		t.Fatalf("expected missing n to be inconclusive, got %#v", comparison)
+	}
+	lowRuns := 3
+	enoughRuns := 10
+	comparison = CompareMetric(spec, "left", VerifierResult{Metric: &MetricResult{Name: "score", Value: &leftValue, N: &lowRuns, Conclusive: true}}, "right", VerifierResult{Metric: &MetricResult{Name: "score", Value: &rightValue, N: &enoughRuns, Conclusive: true}})
+	if comparison.Conclusive || !strings.Contains(comparison.Reason, "below") {
+		t.Fatalf("expected low n to be inconclusive, got %#v", comparison)
+	}
+	comparison = CompareMetric(spec, "left", VerifierResult{Metric: &MetricResult{Name: "score", Value: &leftValue, N: &enoughRuns, Conclusive: true}}, "right", VerifierResult{Metric: &MetricResult{Name: "score", Value: &rightValue, N: &enoughRuns, Conclusive: true}})
+	if !comparison.Conclusive || comparison.Winner != "left" {
+		t.Fatalf("expected enough runs to compare, got %#v", comparison)
 	}
 }
 

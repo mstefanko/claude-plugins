@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -160,6 +161,17 @@ func runOneBuildProvider(ctx context.Context, f commands.Factory, wo *workorder.
 			if capture.GitlinkChangeRejected {
 				run.IneligibleReasons = append(run.IneligibleReasons, "patch includes gitlink/submodule changes")
 			}
+			run.ProtectedViolations = buildworkspace.ProtectedPathViolations(capture.ChangedFiles, wo.Build.ProtectedPaths)
+			if len(run.ProtectedViolations) > 0 {
+				reason := protectedPathIneligibleReason(run.ProtectedViolations)
+				run.IneligibleReasons = append(run.IneligibleReasons, reason)
+				if err := workorder.WriteJSONAtomic(filepath.Join(buildDir, "protected-paths.json"), map[string]any{
+					"reason":     reason,
+					"violations": run.ProtectedViolations,
+				}); err != nil {
+					return run, err
+				}
+			}
 		}
 	}
 	if len(run.IneligibleReasons) == 0 {
@@ -200,4 +212,29 @@ func runOneBuildProvider(ctx context.Context, f commands.Factory, wo *workorder.
 		}
 	}
 	return run, nil
+}
+
+func protectedPathIneligibleReason(violations []buildworkspace.ProtectedPathViolation) string {
+	paths := protectedPathNames(violations)
+	if len(paths) == 1 {
+		return `patch changed protected path "` + paths[0] + `"; revise the patch or remove that path from build.protected_paths if it is intentionally editable`
+	}
+	quoted := make([]string, 0, len(paths))
+	for _, path := range paths {
+		quoted = append(quoted, `"`+path+`"`)
+	}
+	return "patch changed protected paths " + strings.Join(quoted, ", ") + "; revise the patch or remove those paths from build.protected_paths if they are intentionally editable"
+}
+
+func protectedPathNames(violations []buildworkspace.ProtectedPathViolation) []string {
+	seen := map[string]bool{}
+	paths := []string{}
+	for _, violation := range violations {
+		if violation.ProtectedPath == "" || seen[violation.ProtectedPath] {
+			continue
+		}
+		seen[violation.ProtectedPath] = true
+		paths = append(paths, violation.ProtectedPath)
+	}
+	return paths
 }

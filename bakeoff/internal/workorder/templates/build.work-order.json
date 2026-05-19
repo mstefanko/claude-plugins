@@ -17,6 +17,7 @@
     "base_ref": "HEAD",
     "comparison_goal": "Prefer the patch that satisfies the acceptance criteria with the smallest maintainable change.",
     "patch_max_bytes": 100000,
+    "protected_paths": [],
     "verify": [
       {
         "id": "tests",

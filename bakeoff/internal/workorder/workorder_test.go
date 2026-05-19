@@ -126,11 +126,70 @@ func TestBuildWorkOrderValidation(t *testing.T) {
 	if wo.Build.PatchMaxBytes != 100000 {
 		t.Fatalf("patch max = %d", wo.Build.PatchMaxBytes)
 	}
+	if len(wo.Build.ProtectedPaths) != 0 {
+		t.Fatalf("protected paths = %#v", wo.Build.ProtectedPaths)
+	}
 	if got := wo.Build.Verify[0].Kind; got != "gate" {
 		t.Fatalf("default verifier kind = %q", got)
 	}
 	if got := wo.Build.Verify[1].Metric.Name; got != "elapsed_ms" {
 		t.Fatalf("metric name = %q", got)
+	}
+	if got := wo.Build.Verify[1].Metric.MinRuns; got != 1 {
+		t.Fatalf("default metric min_runs = %d", got)
+	}
+}
+
+func TestBuildProtectedPathsValidation(t *testing.T) {
+	data := validBuildWorkOrder()
+	build := data["build"].(map[string]any)
+	build["protected_paths"] = []any{"scripts/bench-json", "testdata/./latency-corpus.json"}
+	verify := build["verify"].([]any)
+	verify[1].(map[string]any)["metric"].(map[string]any)["min_runs"] = 10
+
+	wo, err := Validate(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(wo.Build.ProtectedPaths, ","); got != "scripts/bench-json,testdata/latency-corpus.json" {
+		t.Fatalf("protected paths = %#v", wo.Build.ProtectedPaths)
+	}
+	if got := wo.Build.Verify[1].Metric.MinRuns; got != 10 {
+		t.Fatalf("metric min_runs = %d", got)
+	}
+}
+
+func TestBuildProtectedPathsRejectsUnsafeEntries(t *testing.T) {
+	cases := []struct {
+		name  string
+		value any
+		want  string
+	}{
+		{name: "empty", value: []any{""}, want: "non-empty"},
+		{name: "absolute", value: []any{"/scripts/bench-json"}, want: "relative"},
+		{name: "parent", value: []any{"scripts/../bench-json"}, want: ".. path traversal"},
+		{name: "glob", value: []any{"scripts/*"}, want: "glob"},
+		{name: "duplicate", value: []any{"scripts/bench-json", "scripts/./bench-json"}, want: "duplicates"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			data := validBuildWorkOrder()
+			data["build"].(map[string]any)["protected_paths"] = tc.value
+			_, err := Validate(data)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("expected %q error, got %v", tc.want, err)
+			}
+		})
+	}
+}
+
+func TestBuildMetricValidationRejectsInvalidMinRuns(t *testing.T) {
+	data := validBuildWorkOrder()
+	verify := data["build"].(map[string]any)["verify"].([]any)
+	verify[1].(map[string]any)["metric"].(map[string]any)["min_runs"] = 0
+	_, err := Validate(data)
+	if err == nil || !strings.Contains(err.Error(), "min_runs") {
+		t.Fatalf("expected min_runs validation error, got %v", err)
 	}
 }
 

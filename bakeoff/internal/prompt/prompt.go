@@ -255,12 +255,21 @@ func RenderBuildSpecBlock(spec *workorder.BuildSpec) string {
 	if spec.ComparisonGoal != "" {
 		lines = append(lines, "Comparison goal: "+spec.ComparisonGoal)
 	}
+	if len(spec.ProtectedPaths) > 0 {
+		lines = append(lines, "", "Protected paths:")
+		for _, protectedPath := range spec.ProtectedPaths {
+			lines = append(lines, "- "+protectedPath)
+		}
+	}
 	if len(spec.Verify) > 0 {
 		lines = append(lines, "", "Verifier commands:")
 		for _, verifier := range spec.Verify {
 			line := fmt.Sprintf("- %s (%s): %s; timeout=%ds; max_output=%d bytes", verifier.ID, verifier.Kind, strings.Join(verifier.Argv, " "), verifier.WallClockSeconds, verifier.MaxOutputBytes)
 			if verifier.Metric != nil {
 				line += fmt.Sprintf("; metric=%s direction=%s min_delta=%.3g%% noise_floor=%.3g%%", verifier.Metric.Name, verifier.Metric.Direction, verifier.Metric.MinDeltaPercent, verifier.Metric.NoiseFloorPercent)
+				if verifier.Metric.MinRuns > 1 {
+					line += fmt.Sprintf(" min_runs=%d", verifier.Metric.MinRuns)
+				}
 			}
 			lines = append(lines, line)
 		}

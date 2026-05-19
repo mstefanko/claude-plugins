@@ -35,11 +35,29 @@
     "base_ref": "HEAD",
     "comparison_goal": "Prefer the patch that satisfies the acceptance criteria with the smallest maintainable change.",
     "patch_max_bytes": 100000,
+    "protected_paths": [
+      "scripts/bench-json",
+      "testdata/latency-corpus.json"
+    ],
     "verify": [
       {
         "id": "tests",
         "kind": "gate",
         "argv": ["go", "test", "./..."],
+        "wall_clock_seconds": 300,
+        "max_output_bytes": 60000
+      },
+      {
+        "id": "latency",
+        "kind": "metric",
+        "argv": ["./scripts/bench-json"],
+        "metric": {
+          "name": "elapsed_ms",
+          "direction": "lower",
+          "min_delta_percent": 10,
+          "noise_floor_percent": 5,
+          "min_runs": 10
+        },
         "wall_clock_seconds": 300,
         "max_output_bytes": 60000
       }

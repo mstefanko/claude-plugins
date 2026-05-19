@@ -3,6 +3,8 @@ package buildworkspace
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -134,6 +136,7 @@ type CaptureResult struct {
 	TestFiles                []ChangedFile `json:"test_files"`
 	BenchmarkFiles           []ChangedFile `json:"benchmark_files"`
 	PatchBytes               int           `json:"patch_bytes"`
+	PatchDigest              string        `json:"patch_digest,omitempty"`
 	PatchOverCap             bool          `json:"patch_over_cap"`
 	GitlinkChangeRejected    bool          `json:"gitlink_change_rejected"`
 	PatchPath                string        `json:"patch_path,omitempty"`
@@ -146,6 +149,12 @@ type CaptureResult struct {
 type ChangedFile struct {
 	Status string `json:"status"`
 	Path   string `json:"path"`
+}
+
+type ProtectedPathViolation struct {
+	ProtectedPath string `json:"protected_path"`
+	ChangedPath   string `json:"changed_path"`
+	Status        string `json:"status"`
 }
 
 type Lock struct {
@@ -494,6 +503,7 @@ func CaptureChanges(ctx context.Context, opts CaptureOptions) (CaptureResult, er
 		ProviderCommittedChanges: head != opts.BaseCommit,
 		ChangedFiles:             ParseNameStatus(nameStatus),
 		PatchBytes:               len(patch),
+		PatchDigest:              NormalizedPatchDigest(patch),
 		PatchOverCap:             len(patch) > opts.PatchMaxBytes,
 		GitlinkChangeRejected:    HasGitlinkDiff(raw),
 	}
@@ -608,12 +618,78 @@ func ClassifyBuildEvidenceFiles(changed []ChangedFile) ([]ChangedFile, []Changed
 	return tests, benchmarks
 }
 
+func ProtectedPathViolations(changed []ChangedFile, protectedPaths []string) []ProtectedPathViolation {
+	if len(changed) == 0 || len(protectedPaths) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	violations := []ProtectedPathViolation{}
+	for _, file := range changed {
+		for _, changedPath := range normalizedChangedPaths(file.Path) {
+			for _, protectedPath := range protectedPaths {
+				protectedPath = strings.Trim(filepath.ToSlash(protectedPath), "/")
+				if protectedPath == "" || !changedPathMatchesProtected(changedPath, protectedPath) {
+					continue
+				}
+				key := file.Status + "\x00" + changedPath + "\x00" + protectedPath
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+				violations = append(violations, ProtectedPathViolation{
+					ProtectedPath: protectedPath,
+					ChangedPath:   changedPath,
+					Status:        file.Status,
+				})
+			}
+		}
+	}
+	sort.Slice(violations, func(i, j int) bool {
+		if violations[i].ProtectedPath != violations[j].ProtectedPath {
+			return violations[i].ProtectedPath < violations[j].ProtectedPath
+		}
+		if violations[i].ChangedPath != violations[j].ChangedPath {
+			return violations[i].ChangedPath < violations[j].ChangedPath
+		}
+		return violations[i].Status < violations[j].Status
+	})
+	return violations
+}
+
+func NormalizedPatchDigest(patch []byte) string {
+	normalized := bytes.ReplaceAll(patch, []byte("\r\n"), []byte("\n"))
+	sum := sha256.Sum256(normalized)
+	return hex.EncodeToString(sum[:])
+}
+
 func normalizedChangedPath(path string) string {
 	if strings.Contains(path, " -> ") {
 		parts := strings.Split(path, " -> ")
 		path = parts[len(parts)-1]
 	}
 	return strings.Trim(filepath.ToSlash(path), "/")
+}
+
+func normalizedChangedPaths(path string) []string {
+	parts := []string{path}
+	if strings.Contains(path, " -> ") {
+		parts = strings.Split(path, " -> ")
+	}
+	out := make([]string, 0, len(parts))
+	seen := map[string]bool{}
+	for _, part := range parts {
+		normalized := strings.Trim(filepath.ToSlash(strings.TrimSpace(part)), "/")
+		if normalized == "" || seen[normalized] {
+			continue
+		}
+		seen[normalized] = true
+		out = append(out, normalized)
+	}
+	return out
+}
+
+func changedPathMatchesProtected(changedPath string, protectedPath string) bool {
+	return changedPath == protectedPath || strings.HasPrefix(changedPath, protectedPath+"/")
 }
 
 func isBuildTestPath(path string) bool {

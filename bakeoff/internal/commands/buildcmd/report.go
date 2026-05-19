@@ -72,6 +72,12 @@ func renderBuildReport(wo *workorder.WorkOrder, runID string, outDir string, run
 				lines = append(lines, changedFileBulletLines(run.Capture.BenchmarkFiles)...)
 			}
 		}
+		if len(run.ProtectedViolations) > 0 {
+			lines = append(lines, "- Protected path changes:")
+			for _, violation := range run.ProtectedViolations {
+				lines = append(lines, fmt.Sprintf("  - `%s` changed `%s` (protected `%s`)", violation.Status, violation.ChangedPath, violation.ProtectedPath))
+			}
+		}
 		if len(run.IneligibleReasons) > 0 {
 			lines = append(lines, "- Ineligible reasons:")
 			for _, reason := range run.IneligibleReasons {
@@ -106,7 +112,7 @@ func renderBuildReport(wo *workorder.WorkOrder, runID string, outDir string, run
 			if reason == "" {
 				reason = "clear thresholded winner"
 			}
-			lines = append(lines, fmt.Sprintf("- `%s`: winner `%s`, delta %.3g%%, threshold %.3g%% (%s)", metric.ID, winner, metric.DeltaPercent, metric.Threshold, reason))
+			lines = append(lines, fmt.Sprintf("- `%s`: winner `%s`, delta %.3g%%, min_delta %.3g%% met=%t, noise_floor %.3g%% met=%t (%s)", metric.ID, winner, metric.DeltaPercent, metric.MinDeltaPercent, metric.MeetsMinDelta, metric.NoiseFloorPercent, metric.MeetsNoiseFloor, reason))
 		}
 		lines = append(lines, "")
 	}
@@ -303,12 +309,38 @@ func verifierLines(results []buildverify.VerifierResult) []string {
 		line := fmt.Sprintf("- `%s` (%s): `%s`", result.ID, result.Kind, result.Status)
 		if result.Metric != nil && result.Metric.Value != nil {
 			line += fmt.Sprintf(", %s=%.6g", result.Metric.Name, *result.Metric.Value)
+			if metadata := metricMetadataSummary(result.Metric); metadata != "" {
+				line += ", " + metadata
+			}
 		} else if result.Metric != nil && result.Metric.Error != "" {
 			line += ", metric inconclusive: " + result.Metric.Error
+		}
+		if result.Metric != nil && len(result.Metric.MetadataWarnings) > 0 {
+			line += "; warnings: " + strings.Join(result.Metric.MetadataWarnings, "; ")
 		}
 		lines = append(lines, line)
 	}
 	return lines
+}
+
+func metricMetadataSummary(metric *buildverify.MetricResult) string {
+	if metric == nil {
+		return ""
+	}
+	parts := []string{}
+	if metric.Unit != "" {
+		parts = append(parts, "unit="+metric.Unit)
+	}
+	if metric.N != nil {
+		parts = append(parts, fmt.Sprintf("n=%d", *metric.N))
+	}
+	if metric.Statistic != "" {
+		parts = append(parts, "statistic="+metric.Statistic)
+	}
+	if metric.Method != "" {
+		parts = append(parts, "method="+metric.Method)
+	}
+	return strings.Join(parts, ", ")
 }
 
 func changedFileBulletLines(files []buildworkspace.ChangedFile) []string {

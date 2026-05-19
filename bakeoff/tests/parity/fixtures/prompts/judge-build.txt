@@ -15,9 +15,13 @@ Base ref: HEAD
 Patch max bytes: 100000
 Comparison goal: Prefer the clearer patch with stronger test coverage.
 
+Protected paths:
+- scripts/bench-json
+- testdata/latency-corpus.json
+
 Verifier commands:
 - unit (gate): go test ./...; timeout=300s; max_output=60000 bytes
-- latency (metric): ./scripts/bench-json; timeout=300s; max_output=60000 bytes; metric=elapsed_ms direction=lower min_delta=10% noise_floor=5%
+- latency (metric): ./scripts/bench-json; timeout=300s; max_output=60000 bytes; metric=elapsed_ms direction=lower min_delta=10% noise_floor=5% min_runs=10
 </build_spec>
 
 <shared_build_evidence>
@@ -100,6 +104,9 @@ Do not let style, verbosity, or patch size alone override failing verifier evide
 - The harness will call you TWICE with candidates swapped. Your verdict must be driven by the rubric, not by which candidate appears first.
 - A verdict of "tie" is valid when both candidates are close, both have critical flaws, or the evidence is insufficient.
 - Do not invent evidence that is not present in the candidate payloads.
+- Do not invent test counts, metric values, file names, or command results that are not present in the artifacts.
+- Treat unknown test or metric details as unknown, not as zero and not as support for either candidate.
+- Resist position, verbosity, self-preference, consensus, and familiarity bias when verifier evidence is not decisive.
 - You are judging existing artifacts only. Do not edit files, apply patches, run git commands, merge candidates, or synthesize a third patch.
 - Post-run edits, synthesis, or reimplementation are outside the Bakeoff decision and require fresh verification before being treated as ready.
 </rules>
