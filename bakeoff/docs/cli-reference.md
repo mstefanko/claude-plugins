@@ -9,7 +9,8 @@ place.
 
 | Command | Purpose |
 | --- | --- |
-| `/bakeoff:setup [--version vX.Y.Z] [--yes]` | Install or update the released CLI binary in persistent plugin data. |
+| `/bakeoff:setup [--yes]` | Build or update the bundled Go CLI in persistent plugin data. |
+| `/bakeoff:setup --from-release --version vX.Y.Z [--yes]` | Optional no-Go path: install a released CLI binary from GitHub Releases. |
 | `/bakeoff:quickstart` | Check the CLI, then run `doctor --skip-auth-probe --json`. |
 | `/bakeoff:run <path or request> [flags]` | Validate and run an existing work order, or draft one from natural language. |
 | `/bakeoff:inspect [latest or run-id] [flags]` | Read ledgers, reports, decisions, triage, and build handoff artifacts. |
@@ -37,6 +38,10 @@ routes to `bakeoff build`; `gather`, `compare`, and `analyze` route to
 
 ## Launcher Resolution
 
+Bakeoff omits an explicit plugin version so Claude Code uses the plugin's git
+SHA as the update key. Internal users get new plugin source when the marketplace
+updates, then rerun `/bakeoff:setup` to rebuild the CLI from that source.
+
 Both plugin surfaces use the same launcher contract:
 
 ```text
@@ -47,22 +52,27 @@ BAKEOFF_GO_BINARY
   -> go run ./cmd/bakeoff
 ```
 
-`/bakeoff:setup` installs `${CLAUDE_PLUGIN_DATA}/bin/bakeoff` from a release
-asset and verifies `checksums.txt` first. `scripts/bakeoff-ensure-cli --check`
-only checks configured, setup-installed, or packaged binaries; it does not
-build. Running `scripts/bakeoff-ensure-cli` without `--check` may build
-`dist/bakeoff` from source when Go is available.
+By default, `/bakeoff:setup` runs `go build` against
+`${CLAUDE_PLUGIN_ROOT}/cmd/bakeoff` and installs the result at
+`${CLAUDE_PLUGIN_DATA}/bin/bakeoff`. This requires Go 1.24+ and may download Go
+modules through the normal Go toolchain cache on first setup.
 
-Release setup defaults to:
+`scripts/bakeoff-ensure-cli --check` only checks configured, setup-installed, or
+packaged binaries; it does not build. Running `scripts/bakeoff-ensure-cli`
+without `--check` may build `dist/bakeoff` from source when Go is available.
+
+The optional release-binary setup path verifies `checksums.txt` first:
 
 ```text
-https://github.com/mstefanko/claude-plugins/releases/download/<tag>
+/bakeoff:setup --from-release --version vX.Y.Z
 ```
 
-`BAKEOFF_RELEASE_REPOSITORY` can override the owner/repo portion of that URL.
-`BAKEOFF_RELEASE_BASE_URL` can point at a mirror or `file://` test release.
+Release downloads default to
+`https://github.com/mstefanko/claude-plugins/releases/download/<tag>`.
+`BAKEOFF_RELEASE_REPOSITORY` can override the owner/repo portion of that URL,
+and `BAKEOFF_RELEASE_BASE_URL` can point at a mirror or `file://` test release.
 Codex installs do not use `CODEX_PLUGIN_DATA` in v1; use `BAKEOFF_GO_BINARY`,
-`dist/bakeoff`, or a source build there until a persistent Codex data path is
+`dist/bakeoff`, or source setup there until a persistent Codex data path is
 documented.
 
 ## Root Command

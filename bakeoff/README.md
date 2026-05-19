@@ -39,10 +39,10 @@ flowchart LR
 
 ## Quick Start
 
-Prerequisites: Claude Code with this plugin installed; `git` for review and build; `/bakeoff:setup` to install the released Bakeoff CLI; authenticated `claude` and `codex` CLIs for live runs. Go 1.24+ is only needed for source builds. Provider auth lives with the provider CLIs — don't put secrets in work orders.
+Prerequisites: Claude Code with this plugin installed; Go 1.24+ so `/bakeoff:setup` can build the bundled CLI source; `git` for review and build; authenticated `claude` and `codex` CLIs for live runs. Provider auth lives with the provider CLIs — don't put secrets in work orders.
 
 ```text
-/bakeoff:setup                                           # install the prebuilt CLI into plugin data
+/bakeoff:setup                                           # build bundled Go CLI into plugin data
 /bakeoff:quickstart                                      # check CLI and local readiness
 /bakeoff:run research the auth retry behavior            # natural-language draft → approve → run
 /bakeoff:run review this diff against main
@@ -59,6 +59,11 @@ Local development install:
 /bakeoff:setup
 /bakeoff:quickstart
 ```
+
+Internal installs track the plugin's git revision instead of an explicit plugin
+version. When the plugin source updates, rerun `/bakeoff:setup` to rebuild the
+CLI from the updated bundled source. Optional no-Go release binaries are
+documented in [docs/release-publishing.md](docs/release-publishing.md).
 
 Codex install: this checkout ships `.codex-plugin/plugin.json`; verify the current Codex plugin flow in Codex docs.
 
@@ -216,7 +221,7 @@ Exit `3` is a completed handoff with no canonical winner — not a launcher fail
 
 Slash commands:
 
-- `/bakeoff:setup` — install or update the released Bakeoff CLI binary in persistent plugin data.
+- `/bakeoff:setup` — build or update the bundled Bakeoff Go CLI in persistent plugin data.
 - `/bakeoff:quickstart` — check CLI and local readiness.
 - `/bakeoff:run <path or request> [--run-id ID] [--out runs] [--quiet] [--keep-worktrees] [--no-triage]` — validate and run, or draft from natural language.
 - `/bakeoff:inspect [latest or run-id]` — open existing reports, decisions, triage, handoff.
@@ -233,7 +238,7 @@ Most users do not write work orders by hand. When you run `/bakeoff:run ...` wit
 
 See [docs/work-orders.md](docs/work-orders.md) for the full work-order reference.
 
-Setup is handled by `/bakeoff:setup`, which installs the `bakeoff` CLI into persistent Claude plugin data. If the plugin cannot find a usable CLI, run `/bakeoff:quickstart` or `/bakeoff:setup`.
+Setup is handled by `/bakeoff:setup`, which builds the bundled `bakeoff` Go CLI into persistent Claude plugin data. If the plugin cannot find a usable CLI, install Go 1.24+ and run `/bakeoff:setup`.
 
 Advanced launcher settings, release mirrors, and binary override variables are documented in [docs/cli-reference.md](docs/cli-reference.md).
 
@@ -245,7 +250,8 @@ The plugin drafts work orders, invokes the CLI, and summarizes artifacts. The Go
 
 | Problem | Cause | Try |
 | --- | --- | --- |
-| Quickstart can't find a CLI | No setup-installed binary, no `BAKEOFF_GO_BINARY`, no packaged `dist/bakeoff`. | Run `/bakeoff:setup`, set `BAKEOFF_GO_BINARY`, install a package with `dist/bakeoff`, or install Go for source builds. |
+| Quickstart can't find a CLI | No setup-built binary and no `BAKEOFF_GO_BINARY`. | Install Go 1.24+ and run `/bakeoff:setup`, or set `BAKEOFF_GO_BINARY` to a trusted binary. |
+| Setup reports a missing release asset | You used the optional `--from-release` path for a tag with no GitHub Release archive or `checksums.txt`. | Use the default `/bakeoff:setup` source build, or publish the matching release assets. |
 | Provider auth failed | Provider CLI found but session not ready. | Log in with the provider CLI directly, rerun `/bakeoff:doctor --build`. |
 | Build readiness failed | Live edit probes couldn't complete in temp workspaces. | Inspect doctor output for sandbox, network, filesystem, or auth failures. |
 | No selected build patch | No canonical winner, or evidence not strong enough. | Inspect `decision.json`, `diagnostics.json`, and provider build artifacts. Exit `3` means unresolved, not corrupt. |

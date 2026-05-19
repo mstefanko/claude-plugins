@@ -185,7 +185,7 @@ PY
   printf '%s\n' "$release_dir"
 }
 
-run_setup() {
+run_release_setup() {
   local data="$1"
   local release_dir="$2"
   shift 2
@@ -193,7 +193,16 @@ run_setup() {
     BAKEOFF_PLUGIN_DATA="$data" \
     BAKEOFF_PLUGIN_ROOT="$root" \
     BAKEOFF_RELEASE_BASE_URL="file://$release_dir" \
-    "$root/scripts/bakeoff-setup" --yes --version "$tag" "$@"
+    "$root/scripts/bakeoff-setup" --yes --from-release --version "$tag" "$@"
+}
+
+run_source_setup() {
+  local data="$1"
+  shift
+  env \
+    BAKEOFF_PLUGIN_DATA="$data" \
+    BAKEOFF_PLUGIN_ROOT="$root" \
+    "$root/scripts/bakeoff-setup" --yes "$@"
 }
 
 test_no_go_no_binary_check() {
@@ -213,13 +222,32 @@ test_valid_release_install() {
   local release data output
   release="$(make_release valid-install)"
   data="$tmp/data-valid"
-  output="$(run_setup "$data" "$release")"
+  output="$(run_release_setup "$data" "$release")"
   [[ -x "$data/bin/bakeoff" ]] || fail "installed binary is not executable"
   assert_contains "$("$data/bin/bakeoff" --version)" "$tag"
   grep -Eq '"schema_version"[[:space:]]*:[[:space:]]*1' "$data/version.json" || fail "version.json missing schema"
   grep -Eq '"install_kind"[[:space:]]*:[[:space:]]*"release-binary"' "$data/version.json" || fail "version.json missing ownership"
   assert_contains "$output" "Next: /bakeoff:quickstart"
-  run_setup "$data" "$release" >/dev/null
+  run_release_setup "$data" "$release" >/dev/null
+}
+
+test_source_build_install() {
+  local data output
+  command -v go >/dev/null 2>&1 || {
+    echo "skip: source setup test requires go"
+    return 0
+  }
+  data="$tmp/data-source"
+  output="$(run_source_setup "$data")"
+  [[ -x "$data/bin/bakeoff" ]] || fail "source-built binary is not executable"
+  assert_contains "$("$data/bin/bakeoff" --version)" "bakeoff source"
+  grep -Eq '"schema_version"[[:space:]]*:[[:space:]]*1' "$data/version.json" || fail "source version.json missing schema"
+  grep -Eq '"install_kind"[[:space:]]*:[[:space:]]*"source-build"' "$data/version.json" || fail "source version.json missing ownership"
+  assert_contains "$output" "Installed Bakeoff CLI from bundled source"
+  output="$(env BAKEOFF_PLUGIN_ROOT="$root" BAKEOFF_PLUGIN_DATA="$data" "$root/scripts/bakeoff-ensure-cli" --check)"
+  assert_contains "$output" "BAKEOFF_PLUGIN_DATA/bin/bakeoff"
+  assert_contains "$output" "bakeoff source"
+  run_source_setup "$data" >/dev/null
 }
 
 test_resolution_order() {
@@ -249,7 +277,7 @@ test_checksum_failures() {
   for mode in mismatch missing duplicate path uppercase malformed; do
     release="$(make_release "checksum-$mode" valid "$mode")"
     data="$tmp/data-checksum-$mode"
-    output="$(run_fail run_setup "$data" "$release")"
+    output="$(run_fail run_release_setup "$data" "$release")"
     assert_not_exists "$data/bin/bakeoff"
     case "$mode" in
       mismatch) assert_contains "$output" "checksum mismatch" ;;
@@ -264,7 +292,7 @@ test_single_space_checksum_is_accepted() {
   local release data
   release="$(make_release checksum-single-space valid single_space)"
   data="$tmp/data-checksum-single-space"
-  run_setup "$data" "$release" >/dev/null
+  run_release_setup "$data" "$release" >/dev/null
   [[ -x "$data/bin/bakeoff" ]] || fail "single-space checksum release did not install"
 }
 
@@ -280,7 +308,7 @@ test_archive_failures() {
       continue
     fi
     data="$tmp/data-archive-$kind"
-    output="$(run_fail run_setup "$data" "$release")"
+    output="$(run_fail run_release_setup "$data" "$release")"
     assert_not_exists "$data/bin/bakeoff"
     assert_contains "$output" "archive"
   done
@@ -291,7 +319,7 @@ test_gatekeeper_message() {
   [[ "$host_os" == "darwin" ]] || return 0
   release="$(make_release gatekeeper valid valid gatekeeper)"
   data="$tmp/data-gatekeeper"
-  output="$(run_fail run_setup "$data" "$release")"
+  output="$(run_fail run_release_setup "$data" "$release")"
   assert_contains "$output" "signed/notarized"
 }
 
@@ -299,7 +327,7 @@ test_uninstall_ownership() {
   local release data project home foreign output
   release="$(make_release uninstall-valid)"
   data="$tmp/data-uninstall"
-  run_setup "$data" "$release" >/dev/null
+  run_release_setup "$data" "$release" >/dev/null
   project="$tmp/project-uninstall"
   home="$tmp/home-uninstall"
   mkdir -p "$project" "$home"
@@ -316,10 +344,11 @@ test_uninstall_ownership() {
 EOF
   output="$(cd "$project" && env HOME="$home" BAKEOFF_PLUGIN_ROOT="$tmp/plugin-uninstall-foreign" BAKEOFF_PLUGIN_DATA="$foreign" "$root/scripts/bakeoff-uninstall" --force)"
   [[ -x "$foreign/bin/bakeoff" ]] || fail "foreign binary should remain"
-  assert_contains "$output" "no Bakeoff release-binary ownership metadata"
+  assert_contains "$output" "no Bakeoff setup ownership metadata"
 }
 
 test_no_go_no_binary_check
+test_source_build_install
 test_valid_release_install
 test_resolution_order
 test_checksum_failures

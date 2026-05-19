@@ -20,9 +20,9 @@ Run first:
 "${CLAUDE_PLUGIN_ROOT}/scripts/bakeoff-ensure-cli" --check
 ```
 
-If this exits `2`, stop and direct the user to `/bakeoff:setup`, a
-`BAKEOFF_GO_BINARY` override, a package with `dist/bakeoff`, or a source build
-with Go. Do not build from source implicitly in the normal plugin flow.
+If this exits `2`, stop and direct the user to install Go 1.24+ and run
+`/bakeoff:setup`, set `BAKEOFF_GO_BINARY`, or use the optional release-binary
+setup path. Do not build from source implicitly in `/bakeoff:run`.
 
 Parse `$ARGUMENTS` before deciding whether this is a path or a request.
 

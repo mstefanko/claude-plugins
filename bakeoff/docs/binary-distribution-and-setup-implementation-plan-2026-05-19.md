@@ -2,6 +2,13 @@
 
 Date: 2026-05-19
 
+Status: superseded for the internal developer workflow. Bakeoff now defaults to
+building the bundled Go source into `${CLAUDE_PLUGIN_DATA}/bin/bakeoff` via
+`/bakeoff:setup`, and the plugin manifests omit explicit versions so Claude
+Code tracks updates by git SHA. Release downloads remain available only as the
+optional `--from-release --version <tag>` no-Go path. See
+`docs/cli-reference.md` and `docs/release-publishing.md` for current behavior.
+
 ## Requirement
 
 Make Bakeoff usable by normal Claude Code plugin users without requiring a Go

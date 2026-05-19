@@ -4,16 +4,20 @@ umask 077
 
 usage() {
   cat >&2 <<'EOF'
-usage: scripts/bakeoff-setup [--version <tag>] [--yes] [--dry-run] [--json]
+usage: scripts/bakeoff-setup [--yes] [--dry-run] [--json] [--from-source]
+                             [--from-release --version <tag>]
 
-Downloads a released Bakeoff CLI for this platform, verifies its checksum, and
-installs it into persistent plugin data.
+Default: build the bundled Bakeoff Go source into persistent plugin data.
+Optional: download a released Bakeoff CLI for this platform, verify its
+checksum, and install it into persistent plugin data.
 EOF
 }
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$script_dir/bakeoff-lib"
 
+install_mode=""
+mode_explicit=0
 requested_version=""
 assume_yes=0
 dry_run=0
@@ -21,6 +25,16 @@ json_output=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --from-source|--source)
+      install_mode="source"
+      mode_explicit=1
+      shift
+      ;;
+    --from-release|--release)
+      install_mode="release"
+      mode_explicit=1
+      shift
+      ;;
     --version)
       if [[ $# -lt 2 || "$2" == --* ]]; then
         usage
@@ -28,10 +42,16 @@ while [[ $# -gt 0 ]]; do
         exit 2
       fi
       requested_version="$2"
+      if [[ "$mode_explicit" -eq 0 ]]; then
+        install_mode="release"
+      fi
       shift 2
       ;;
     --version=*)
       requested_version="${1#--version=}"
+      if [[ "$mode_explicit" -eq 0 ]]; then
+        install_mode="release"
+      fi
       shift
       ;;
     --yes)
@@ -58,6 +78,14 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ -z "$install_mode" ]]; then
+  install_mode="source"
+fi
+if [[ "$install_mode" == "source" && -n "$requested_version" ]]; then
+  echo "error: --version is only valid with --from-release" >&2
+  exit 2
+fi
+
 json_escape() {
   local value="$1"
   value="${value//\\/\\\\}"
@@ -78,21 +106,6 @@ die() {
     printf 'error: %s\n' "$message" >&2
   fi
   exit "$code"
-}
-
-plugin_version() {
-  local root="$1"
-  local file version
-  for file in "$root/.claude-plugin/plugin.json" "$root/.codex-plugin/plugin.json"; do
-    if [[ -f "$file" ]]; then
-      version="$(sed -nE 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$file" | head -n 1)"
-      if [[ -n "$version" ]]; then
-        printf '%s\n' "$version"
-        return 0
-      fi
-    fi
-  done
-  return 1
 }
 
 normalize_tag() {
@@ -137,7 +150,21 @@ download_failure_message() {
   local url="$1"
   local subject="$2"
   if [[ "${download_status_code:-}" == "404" ]]; then
-    printf '%s not found (HTTP 404): %s. If release %s has not been published yet, publish the matching GitHub release assets or rerun /bakeoff:setup --version <published-tag>.\n' "$subject" "$url" "$tag"
+    cat <<EOF
+$subject not found (HTTP 404): $url.
+
+Bakeoff $tag is not installable through the optional release-binary setup path until the matching GitHub Release exists.
+
+Default internal developer path:
+- Run /bakeoff:setup without --from-release to build the bundled Go source into plugin data.
+
+Release maintainer checklist:
+1. Pick the CLI release tag explicitly, for example --version $tag.
+2. From the repository root, run bakeoff/scripts/bakeoff-setup-tests, then run go test ./... inside bakeoff/.
+3. Push main, then create and push a matching release tag: git push origin main; git tag $tag; git push origin $tag.
+4. Wait for .github/workflows/bakeoff-release.yml to publish $asset and checksums.txt.
+5. Verify the release, then rerun /bakeoff:setup --from-release --version $tag.
+EOF
     return 0
   fi
   if [[ -n "${download_error_output:-}" ]]; then
@@ -247,11 +274,82 @@ probe_gatekeeper_like() {
   esac
 }
 
-emit_plan_json() {
+go_mod_version() {
+  local root="$1"
+  sed -nE 's/^go[[:space:]]+([0-9]+(\.[0-9]+){1,2}).*/\1/p' "$root/go.mod" | head -n 1
+}
+
+go_runtime_version() {
+  local value
+  value="$(go env GOVERSION 2>/dev/null || true)"
+  if [[ -z "$value" ]]; then
+    value="$(go version 2>/dev/null | sed -nE 's/^go version (go[0-9.]+).*/\1/p')"
+  fi
+  printf '%s\n' "$value"
+}
+
+version_at_least() {
+  local actual="$1"
+  local required="$2"
+  local actual_major actual_minor required_major required_minor
+  actual="${actual#go}"
+  actual_major="${actual%%.*}"
+  actual="${actual#*.}"
+  actual_minor="${actual%%.*}"
+  required_major="${required%%.*}"
+  required="${required#*.}"
+  required_minor="${required%%.*}"
+
+  [[ "$actual_major" =~ ^[0-9]+$ && "$actual_minor" =~ ^[0-9]+$ ]] || return 0
+  [[ "$required_major" =~ ^[0-9]+$ && "$required_minor" =~ ^[0-9]+$ ]] || return 0
+
+  if (( actual_major > required_major )); then
+    return 0
+  fi
+  if (( actual_major == required_major && actual_minor >= required_minor )); then
+    return 0
+  fi
+  return 1
+}
+
+source_commit() {
+  local root="$1"
+  git -C "$root" rev-parse HEAD 2>/dev/null || printf 'unknown\n'
+}
+
+module_path() {
+  local root="$1"
+  sed -nE 's/^module[[:space:]]+(.+)/\1/p' "$root/go.mod" | head -n 1
+}
+
+emit_source_json() {
+  local status="$1"
+  local go_path go_required go_version
+  go_path="$(command -v go 2>/dev/null || true)"
+  go_required="$(go_mod_version "$root")"
+  if [[ -n "$go_path" ]]; then
+    go_version="$(go_runtime_version)"
+  else
+    go_version=""
+  fi
+  printf '{\n'
+  printf '  "schema_version": 1,\n'
+  printf '  "status": "%s",\n' "$(json_escape "$status")"
+  printf '  "install_kind": "source-build",\n'
+  printf '  "source_root": "%s",\n' "$(json_escape "$root")"
+  printf '  "binary_path": "%s",\n' "$(json_escape "$binary_path")"
+  printf '  "go_required": "%s",\n' "$(json_escape "$go_required")"
+  printf '  "go_path": "%s",\n' "$(json_escape "$go_path")"
+  printf '  "go_version": "%s"\n' "$(json_escape "$go_version")"
+  printf '}\n'
+}
+
+emit_release_json() {
   local status="$1"
   printf '{\n'
   printf '  "schema_version": 1,\n'
   printf '  "status": "%s",\n' "$(json_escape "$status")"
+  printf '  "install_kind": "release-binary",\n'
   printf '  "version": "%s",\n' "$(json_escape "$tag")"
   printf '  "repository": "%s",\n' "$(json_escape "$repository")"
   printf '  "platform": "%s/%s",\n' "$(json_escape "$goos")" "$(json_escape "$goarch")"
@@ -264,7 +362,7 @@ emit_plan_json() {
 
 root="$(bakeoff_plugin_root)"
 if ! data="$(bakeoff_data_root)"; then
-  die 2 "CLAUDE_PLUGIN_DATA is not set; set BAKEOFF_PLUGIN_DATA for tests and mirrors, or set BAKEOFF_GO_BINARY for a manual binary"
+  die 2 "CLAUDE_PLUGIN_DATA is not set; set BAKEOFF_PLUGIN_DATA for tests, or set BAKEOFF_GO_BINARY for a manual binary"
 fi
 case "$data" in
   /*) ;;
@@ -272,6 +370,121 @@ case "$data" in
 esac
 
 read -r goos goarch < <(bakeoff_host_os_arch)
+binary_path="${data}/bin/bakeoff"
+
+if [[ "$install_mode" == "source" ]]; then
+  if [[ "$dry_run" -eq 1 ]]; then
+    if [[ "$json_output" -eq 1 ]]; then
+      emit_source_json "dry-run"
+    else
+      cat <<EOF
+Bakeoff setup dry run:
+  mode: source-build
+  source: $root
+  target: $binary_path
+  go required: $(go_mod_version "$root")
+  go found: $(command -v go 2>/dev/null || printf 'not found')
+
+No files changed.
+EOF
+    fi
+    exit 0
+  fi
+
+  go_required="$(go_mod_version "$root")"
+  if ! go_path="$(command -v go 2>/dev/null)"; then
+    die 2 "Go $go_required or newer is required for default source setup. Install Go, or use BAKEOFF_GO_BINARY / --from-release with a published Bakeoff binary."
+  fi
+  go_version="$(go_runtime_version)"
+  if ! version_at_least "$go_version" "$go_required"; then
+    die 2 "Go $go_required or newer is required for default source setup; found $go_version at $go_path"
+  fi
+
+  if [[ "$assume_yes" -ne 1 ]]; then
+    cat <<EOF
+Bakeoff setup will build from bundled source:
+  mode: source-build
+  source: $root
+  target: $binary_path
+  go: $go_path ($go_version)
+
+This may download Go modules through the normal Go toolchain cache if they are
+not already present.
+EOF
+    printf 'Continue? [y/N] '
+    read -r reply || exit 0
+    case "$reply" in
+      y|Y|yes|YES) ;;
+      *) echo "cancelled"; exit 0 ;;
+    esac
+  fi
+
+  mkdir -p "$data/bin" "$data/tmp" "$data/go-cache"
+  tmp_dir="$(mktemp -d "$data/tmp/setup.XXXXXX")"
+  install_tmp=""
+  cleanup() {
+    if [[ -n "$install_tmp" ]]; then
+      rm -f "$install_tmp"
+    fi
+    rm -rf "$tmp_dir"
+  }
+  trap cleanup EXIT
+
+  installed_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  commit="$(source_commit "$root")"
+  mod_path="$(module_path "$root")"
+  install_tmp="$(mktemp "$data/bin/.bakeoff.XXXXXX")"
+  ldflags="-s -w -X github.com/mstefanko/claude-plugins/bakeoff/internal/buildinfo.Version=source -X github.com/mstefanko/claude-plugins/bakeoff/internal/buildinfo.Commit=$commit -X github.com/mstefanko/claude-plugins/bakeoff/internal/buildinfo.Date=$installed_at"
+  if ! build_output="$(cd "$root" && GOCACHE="${GOCACHE:-$data/go-cache}" go build -ldflags "$ldflags" -o "$install_tmp" ./cmd/bakeoff 2>&1)"; then
+    die 1 "failed to build Bakeoff CLI from bundled source: $build_output"
+  fi
+  chmod 0755 "$install_tmp"
+
+  if ! probe_output="$("$install_tmp" --version 2>&1)"; then
+    die 1 "built Bakeoff binary failed version probe: $probe_output"
+  fi
+
+  mv -f "$install_tmp" "$binary_path"
+  install_tmp=""
+
+  metadata_tmp="$(mktemp "$data/.version.XXXXXX")"
+  cat > "$metadata_tmp" <<EOF
+{
+  "schema_version": 1,
+  "owner": "bakeoff",
+  "tool": "bakeoff",
+  "install_kind": "source-build",
+  "source_root": "$(json_escape "$root")",
+  "source_commit": "$(json_escape "$commit")",
+  "module": "$(json_escape "$mod_path")",
+  "go_version": "$(json_escape "$go_version")",
+  "binary_path": "$(json_escape "$binary_path")",
+  "installed_at": "$(json_escape "$installed_at")",
+  "host": {
+    "os": "$(json_escape "$goos")",
+    "arch": "$(json_escape "$goarch")"
+  }
+}
+EOF
+  mv -f "$metadata_tmp" "$data/version.json"
+
+  if [[ "$json_output" -eq 1 ]]; then
+    emit_source_json "installed"
+  else
+    cat <<EOF
+Installed Bakeoff CLI from bundled source:
+  binary: $binary_path
+  version: $probe_output
+
+Next: /bakeoff:quickstart
+EOF
+  fi
+  exit 0
+fi
+
+if [[ -z "$requested_version" ]]; then
+  die 2 "--from-release requires --version <tag>"
+fi
 if [[ "$goos" == "windows" ]]; then
   die 2 "$BAKEOFF_WINDOWS_UNSUPPORTED_MESSAGE"
 fi
@@ -280,15 +493,7 @@ case " $BAKEOFF_SUPPORTED_SETUP_PLATFORMS " in
   *) die 2 "unsupported setup platform: $goos/$goarch; supported platforms: $BAKEOFF_SUPPORTED_SETUP_PLATFORMS" ;;
 esac
 
-if [[ -n "$requested_version" ]]; then
-  tag="$(normalize_tag "$requested_version")"
-else
-  if ! configured_version="$(plugin_version "$root")"; then
-    die 2 "could not read plugin version from $root/.claude-plugin/plugin.json"
-  fi
-  tag="$(normalize_tag "$configured_version")"
-fi
-
+tag="$(normalize_tag "$requested_version")"
 if [[ "$tag" == "latest" || "$tag" == "vlatest" ]]; then
   die 2 "--version latest is not supported in v1; pass an explicit release tag"
 fi
@@ -314,14 +519,14 @@ fi
 asset="bakeoff_${tag}_${goos}_${goarch}.tar.gz"
 archive_url="${base_url}/${asset}"
 checksum_url="${base_url}/checksums.txt"
-binary_path="${data}/bin/bakeoff"
 
 if [[ "$dry_run" -eq 1 ]]; then
   if [[ "$json_output" -eq 1 ]]; then
-    emit_plan_json "dry-run"
+    emit_release_json "dry-run"
   else
     cat <<EOF
 Bakeoff setup dry run:
+  mode: release-binary
   version: $tag
   repository: $repository
   platform: $goos/$goarch
@@ -336,7 +541,8 @@ fi
 
 if [[ "$assume_yes" -ne 1 ]]; then
   cat <<EOF
-Bakeoff setup will install:
+Bakeoff setup will install a released binary:
+  mode: release-binary
   version: $tag
   platform: $goos/$goarch
   target: $binary_path
@@ -429,10 +635,10 @@ EOF
 mv -f "$metadata_tmp" "$data/version.json"
 
 if [[ "$json_output" -eq 1 ]]; then
-  emit_plan_json "installed"
+  emit_release_json "installed"
 else
   cat <<EOF
-Installed Bakeoff CLI:
+Installed Bakeoff CLI from release:
   binary: $binary_path
   version: $probe_output
 

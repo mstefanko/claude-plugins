@@ -2,7 +2,7 @@
 
 BAKEOFF_RELEASE_REPOSITORY_DEFAULT="mstefanko/claude-plugins"
 BAKEOFF_SUPPORTED_SETUP_PLATFORMS="darwin/arm64 darwin/amd64 linux/arm64 linux/amd64"
-BAKEOFF_WINDOWS_UNSUPPORTED_MESSAGE="Windows setup is unsupported in v1; use BAKEOFF_GO_BINARY, dist/bakeoff, or a source build until the Claude Code shell path is tested on Windows."
+BAKEOFF_WINDOWS_UNSUPPORTED_MESSAGE="Windows setup is unsupported in v1; use BAKEOFF_GO_BINARY, dist/bakeoff, or run from a source checkout until the Claude Code shell path is tested on Windows."
 BAKEOFF_MACOS_GATEKEEPER_HELP="macOS may be blocking this unsigned Bakeoff binary. Prefer a signed/notarized release when available, use a source build, or manually remove quarantine only if you explicitly trust the downloaded binary."
 
 BAKEOFF_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -92,9 +92,10 @@ bakeoff_print_missing_cli_help() {
   cat >&2 <<'EOF'
 error: no provisioned Bakeoff CLI found.
 
-Run /bakeoff:setup to install the prebuilt Bakeoff CLI, or set
-BAKEOFF_GO_BINARY. Go 1.24+ is only needed for source installs.
-Source checkouts can run scripts/bakeoff-ensure-cli without --check to build
-dist/bakeoff when Go is available.
+Run /bakeoff:setup to build the bundled Bakeoff Go CLI into plugin data, or set
+BAKEOFF_GO_BINARY to a trusted executable. The default setup path requires Go
+1.24+ on this developer machine. Source checkouts can also run
+scripts/bakeoff-ensure-cli without --check to build dist/bakeoff when Go is
+available.
 EOF
 }

@@ -1,6 +1,5 @@
 {
   "name": "bakeoff",
-  "version": "0.1.0",
   "description": "Run two-provider research and competitive build bakeoffs with replayable ledgers and artifact-only judging.",
   "author": {
     "name": "mstefanko"
