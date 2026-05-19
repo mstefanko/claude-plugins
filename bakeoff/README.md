@@ -67,7 +67,7 @@ documented in [docs/release-publishing.md](docs/release-publishing.md).
 
 Codex install: this checkout ships `.codex-plugin/plugin.json`; verify the current Codex plugin flow in Codex docs.
 
-Natural-language requests draft a work order, show a compact review preview, and wait for explicit approval before writing or running. Short drafts include the full JSON inline; longer drafts show the planned work-order file and let you reply `show` to print the JSON before approving. For large requests, the plugin may suggest 2-3 separate work orders when the split is clean; each part is still a normal Bakeoff run. Sample work orders live in `examples/` (`gather`, `compare`, `analyze`, `review`, `build`).
+Natural-language requests draft a work order, show a compact review preview, and wait for explicit approval before writing or running. Short drafts include the full JSON inline; longer drafts show the planned work-order file and let you reply `show` to print the JSON before approving. For large requests, the plugin may suggest 2-3 separate work orders when the split is clean; each part is still a normal Bakeoff run. Explicit multi-lens review works the same way: it drafts separate normal review runs, then writes a short summary file after they finish. Sample work orders live in `examples/` (`gather`, `compare`, `analyze`, `review`, `build`).
 
 Generated work orders use Claude model aliases (`sonnet`, `opus`) so defaults stay current; use full model ids in the work order to pin exact versions.
 
@@ -125,12 +125,15 @@ Then Bakeoff runs triage automatically. Triage checks each finding for actionabi
 ```text
 /bakeoff:run review this diff against main
 /bakeoff:run review my local changes for correctness and missing tests
+/bakeoff:run review this PR with security, performance, and UX lenses
 /bakeoff:run review branch feature/auth-cache against main --run-id review-auth-cache
 /bakeoff:run review this diff --base main --diff
 /bakeoff:run review this diff --no-triage
 ```
 
 `--base` and `--diff` capture read-only git context. `--no-triage` skips the automatic triage step for review runs. See [examples/review.work-order.json](examples/review.work-order.json) for the facet shape; field-level reference is in [docs/work-orders.md](docs/work-orders.md).
+
+Plain review stays one run, even when you mention several concerns. If you explicitly ask for separate lenses, such as security plus performance plus UX, `/bakeoff:run` drafts one normal review work order per lens, keeps triage on for each lens unless disabled, runs them sequentially after `write and run` approval, and writes `runs/<base>.multi-lens-summary.md`. Synthesis into one prioritized fix plan is a separate follow-up approval, not an automatic hidden step.
 
 After a run, open `runs/<run-id>/report.md` first. Then open `runs/<run-id>/triage/triage.md`, unless you used `--no-triage`.
 

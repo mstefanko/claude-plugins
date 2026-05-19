@@ -1,6 +1,6 @@
 ---
 description: Draft, validate, and run Bakeoff work orders
-argument-hint: "<work-order-path | request> [--run-id ID] [--out runs] [--quiet] [--keep-worktrees] [--no-triage]"
+argument-hint: "<work-order-path | request> [--run-id ID] [--out runs] [--base REF] [--diff] [--changed-files] [--quiet] [--keep-worktrees] [--no-triage]"
 allowed-tools: Read, Write, Edit, Glob, Grep, Bash(${CLAUDE_PLUGIN_ROOT}/scripts/bakeoff-ensure-cli:*), Bash(${CLAUDE_PLUGIN_ROOT}/bin/bakeoff validate:*), Bash(${CLAUDE_PLUGIN_ROOT}/bin/bakeoff research:*), Bash(${CLAUDE_PLUGIN_ROOT}/bin/bakeoff build:*), Bash(${CLAUDE_PLUGIN_ROOT}/bin/bakeoff rerun:*), Bash(bakeoff validate:*), Bash(bakeoff research:*), Bash(bakeoff build:*), Bash(bakeoff rerun:*), Bash(git status:*), Bash(git diff:*), Bash(git rev-parse:*)
 ---
 
@@ -30,6 +30,9 @@ Recognized flags:
 
 - `--out <dir>` or `--out=<dir>`
 - `--run-id <id>` or `--run-id=<id>`
+- `--base <ref>` or `--base=<ref>`
+- `--diff`
+- `--changed-files`
 - `--quiet`
 - `--keep-worktrees`
 - `--no-triage`
@@ -41,6 +44,8 @@ Route flags by final type:
 
 - pass `--out`, `--run-id`, and `--quiet` to either `bakeoff research` or
   `bakeoff build`;
+- pass `--base`, `--diff`, and `--changed-files` only to
+  `bakeoff research`;
 - pass `--keep-worktrees` only to `bakeoff build`;
 - pass `--no-triage` only to `bakeoff research`;
 - stop before execution when a mode-specific flag is supplied for the wrong
@@ -102,8 +107,9 @@ flag or persistent opt-out. If the user narrows the request, re-run the check.
 Task-fit confirmation does not waive required work-order fields; for example,
 build mode still needs a gate verifier before a valid work order can run.
 
-After task fit passes or is confirmed, run the clean-split check before
-drafting. Do not propose a split in the same response as a task-fit warning.
+After task fit passes or is confirmed, check for explicit multi-lens review
+requests before the generic clean-split check. Do not propose a split or
+multi-lens run in the same response as a task-fit warning.
 
 Suggest a split only when the request has 2-3 obvious independent parts, each
 part has its own goal and evidence surface or verifier, no part depends on
@@ -180,7 +186,169 @@ remaining parts.
 
 Summarize split runs independently. Do not produce an overall winner, merged
 patch, merged answer, or cross-run synthesis unless the user asks for that as a
-separate follow-up.
+separate follow-up. Multi-lens review has its own bounded summary rule below;
+generic split runs remain independent.
+
+## Multi-Lens Review
+
+Use this path only for review-shaped natural-language requests that explicitly
+ask for separate lenses or separate review passes. Do not add
+`/bakeoff:review-swarm` in v1, and do not create a batch work-order schema.
+Plain review remains one normal `type: "gather"` work order with
+`facet.id: "code-review"`.
+
+Trigger phrases include:
+
+- `multi-lens`
+- `review swarm`
+- `with separate lenses`
+- `separate review passes`
+- `run security and performance as separate reviews`
+- `security, performance, and UX lenses`
+
+Do not trigger multi-lens just because a normal review mentions multiple
+concerns. "review this for security and tests" drafts one normal review.
+"review this with security and tests as separate lenses" drafts two lens runs.
+
+Run the task-fit gate before lens selection. If the review target is not
+bounded by a branch, PR, diff, file set, or local changes, stop with the usual
+"this may not need Bakeoff" warning and do not ask for lenses yet.
+
+If the user asks for multi-lens review without naming lenses, ask:
+
+```text
+Which 2-3 lenses should I run? Common choices are correctness/tests, security,
+performance, UX/frontend behavior, and maintainability.
+```
+
+Default support is 2-3 lenses. For more than 3, warn and ask the user to narrow
+or explicitly approve all:
+
+```text
+That would run <N> separate review runs. I recommend narrowing this to 2-3
+lenses unless you really want the extra cost and summary volume. Tell me which
+lenses to keep, or say `run all lenses`.
+```
+
+Recognized lens presets:
+
+| Lens slug | Synonyms and examples | Focus |
+| --- | --- | --- |
+| `correctness` | correctness, bugs, behavior, edge cases, error handling, data correctness | Changed behavior, edge cases, data correctness, error handling. |
+| `tests` | tests, test coverage, regression tests, missing tests, stale tests | Missing, misleading, or stale tests for changed behavior. |
+| `security` | security, auth, authn, authz, injection, SQL injection, XSS, CSRF, secrets, data exposure, trust boundary | Concrete auth, injection, secrets, trust-boundary, and unsafe data-flow risks. |
+| `performance` | performance, perf, latency, memory, resource use, scaling, database queries, N+1 | Changed hot paths, resource use, repeated work, avoidable I/O, and scaling risks. |
+| `ux` | UX, frontend, UI, accessibility, a11y, copy, loading states, error states, responsive behavior | User-visible regressions, accessibility, copy/state mismatch, loading/error behavior. |
+| `maintainability` | maintainability, readability, coupling, architecture risk, migration risk | Defect-prone structure, confusing ownership, fragile coupling, migration risks. |
+| `reliability` | reliability, resilience, concurrency, races, retries, timeouts, idempotency | Concurrency, retries, timeouts, idempotency, failure handling, resilience risks. |
+
+Map `SQL injection` to `security` with SQL injection called out in background.
+Map `accessibility` to `ux`. Unknown narrow lenses are allowed as custom safe
+kebab slugs, such as `billing-invariants`. Ask one clarification question for
+vague unknown lenses such as `quality`, `architecture`, `stuff`, or
+`everything`.
+
+For each selected lens, draft one normal review work order. Use
+`type: "gather"`, `facet.id: "code-review"`, the normal review providers,
+judge, budgets, scope policy, and review-context flags. Add lens-specific
+`goal`, `background`, `facet.focus`, `facet.include`, and `facet.exclude`.
+Keep automatic code-review triage enabled unless the user passes `--no-triage`
+or clearly asks to run without triage.
+
+Derive one base slug from the request or supplied `--run-id`. Append the lens
+slug as the final semantic component for work-order ids, filenames, and run
+ids: `<base>.<lens>`. Examples:
+
+```text
+review-auth.security.work-order.json      --run-id review-auth.security
+review-auth.performance.work-order.json   --run-id review-auth.performance
+review-auth.ux.work-order.json            --run-id review-auth.ux
+```
+
+If a work-order filename or run directory already exists, append a numeric
+collision suffix after the lens slug and use the same stem for both file and
+run id, for example `review-auth.security-2.work-order.json` and
+`--run-id review-auth.security-2`. Never use `.part-N` names for multi-lens
+review.
+
+Before writing files, show a compact preview. Use user-facing terms such as
+"reviewers", "merge", "verification", and "review settings"; reserve "facet",
+"judge", and `type: "gather"` for shown JSON or implementation notes. Do not
+print full JSON by default.
+
+```text
+This will run <N> separate review runs:
+
+1. Security review
+2. Performance review
+3. UX/frontend behavior review
+
+Each run asks the same two reviewers to inspect the same change from one lens,
+then merges and verifies that lens's findings.
+
+Cost note: this is about <N>x a normal review. With the current 900s default
+budget, each lens can reserve up to about 45 minutes worst-case (reviewers,
+merge, verification). <N> lenses can therefore reserve up to about
+<computed-total> minutes worst-case, though typical runs may finish sooner.
+
+Verification is on for each lens by default. Synthesis is not automatic; after
+the runs finish I will summarize the lens results and ask whether you want one
+prioritized fix plan.
+
+Write, validate, and run these one after another? Reply `write and run`, reply
+`show` to print the full JSON, or tell me what to change.
+```
+
+When budgets are not the 900-second research default, compute the worst-case
+from `wall_clock_seconds`: one worker phase, one merge phase, and one
+verification phase per lens when triage is enabled. The two provider reviews
+run in parallel, so do not double-count the worker phase. If `--no-triage` is
+set, omit the verification phase and state that findings will be raw and
+unverified.
+
+Use `write and run` as the multi-lens approval phrase. If the user replies
+`show`, print full JSON only when the combined draft fits the existing
+120-line / 10 KB budget; otherwise offer `show <lens>` or ask for approval to
+write the files.
+
+After approval, write all lens files, validate every file, and only then run
+the lens runs sequentially. Route every lens through `bakeoff research`:
+
+```text
+bakeoff research <lens-work-order> --run-id <base>.<lens> [--out <dir>] [--base <ref>] [--diff] [--changed-files] [--quiet] [--no-triage]
+```
+
+Continue after exit `0`. Treat exit `3` as a completed but unusual research
+handoff only if it occurs; mark the lens untriaged unless triage artifacts
+exist. Stop on validation failure, exit `1`, exit `2`, exit `4`, exit `130`,
+interruption, or command failure. Summarize completed and failed lenses before
+asking whether to continue.
+
+After all completed lens runs finish, read artifacts when present:
+
+- `report.md`
+- `decision.json`
+- `triage/final.json`
+- `triage/triage.md`
+- `triage/source_finding_filter.json`
+
+Write a markdown summary to `<out>/<base>.multi-lens-summary.md`, applying the
+same numeric collision policy as lens run ids. The summary and final response
+must include each lens, run id, report path, triage path/state, run status,
+triage counts when available (`real_issue`, `needs_repro`, evidence gaps, false
+positives, deferred, documented, and ignored items), most actionable findings
+grouped by lens, overlapping themes, clean lenses, caveats for untriaged or
+failed runs, `bakeoff show` commands, and the persisted summary path. If triage
+was disabled, artifacts are missing, or triage was only recommended, say
+findings are raw and unverified.
+
+Do not synthesize automatically. Ask: "Want a synthesis pass that dedupes these
+verified lens results into one prioritized fix plan?" If accepted, draft a
+normal `type: "analyze"` work order over the completed reports and triage
+files. It must not invent new findings; it should prefer verified `real_issue`
+and `needs_repro` items, preserve source lens and run id, merge duplicates only
+when evidence and changed behavior match, and produce one prioritized
+remediation plan.
 
 For one-work-order drafting, infer the work-order shape silently unless the
 ambiguity changes safety or cost.

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/apperror"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/buildinfo"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/output"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/provider"
@@ -260,6 +262,67 @@ JSON
 	}
 }
 
+func TestRunResearchJudgeOnlyRunsAutoTriageForCodeReview(t *testing.T) {
+	root := t.TempDir()
+	fakeBin := filepath.Join(root, "bin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeExecutable(t, filepath.Join(fakeBin, "claude"), `#!/bin/sh
+if [ "$1" = "--version" ]; then
+  printf 'claude fake\n'
+  exit 0
+fi
+prompt=$(cat)
+case "$prompt" in
+  *source_findings*)
+    cat <<'JSON'
+<final_json>{"schema_version":1,"status":"complete","summary":"No actionable issues.","items":[],"unknowns":[]}</final_json>
+JSON
+    ;;
+  *)
+    cat <<'JSON'
+<final_json>{"merged_claims":[{"claim":"Merged review finding","sources":["A","B"],"evidence":["file.go:12"],"confidence":"high"}],"conflicts":[],"unknowns_union":[]}</final_json>
+JSON
+    ;;
+esac
+`)
+	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	outDir := filepath.Join(root, "runs")
+	sourceRun := filepath.Join(outDir, "source")
+	writeJudgeOnlySourceRun(t, sourceRun, "gather", "exit_error")
+	addCodeReviewFacet(t, sourceRun)
+
+	var out, errOut bytes.Buffer
+	factory := researchTestFactory{streams: output.NewStreams(&out, &errOut)}
+	err := RunResearchJudgeOnly(context.Background(), factory, &ResearchJudgeOnlyOptions{
+		SourceRunDir: sourceRun,
+		SourceRunID:  "source",
+		Out:          outDir,
+		RunID:        "retry-code-review",
+		Quiet:        true,
+	})
+	if err != nil {
+		t.Fatalf("RunResearchJudgeOnly returned error: %v\nstdout:\n%s\nstderr:\n%s", err, out.String(), errOut.String())
+	}
+	runDir := filepath.Join(outDir, "retry-code-review")
+	if _, err := os.Stat(filepath.Join(runDir, "triage", "final.json")); err != nil {
+		t.Fatalf("auto-triage final missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(runDir, "triage", "triage.md")); err != nil {
+		t.Fatalf("auto-triage markdown missing: %v", err)
+	}
+	manifest := readTestJSON(t, filepath.Join(runDir, "manifest.json"))
+	triageSummary, _ := manifest["triage"].(map[string]any)
+	if triageSummary["state"] != "yes" {
+		t.Fatalf("triage manifest summary = %#v", triageSummary)
+	}
+	if !strings.Contains(out.String(), "auto-triage starting") {
+		t.Fatalf("missing auto-triage note:\n%s", out.String())
+	}
+}
+
 func TestLoadResearchWorkerResultsFromArtifactsValidation(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -333,6 +396,63 @@ func TestRunResearchJudgeOnlyRejectsNoFailedJudgeAttempt(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "judge already completed") {
 		t.Fatalf("expected successful judge rejection, got %v", err)
+	}
+}
+
+func TestFinalizeResearchRunWrapsDecisionIncomplete(t *testing.T) {
+	root := t.TempDir()
+	runDir := filepath.Join(root, "runs", "incomplete")
+	rawWorkOrder := map[string]any{
+		"schema_version": 1,
+		"id":             "incomplete",
+		"type":           "gather",
+		"goal":           "test",
+		"background":     "",
+		"providers": []map[string]any{
+			{"id": "claude", "backend": "claude", "model": "m", "scope": "codebase"},
+			{"id": "codex", "backend": "codex", "model": "m", "scope": "web"},
+		},
+		"judge":   map[string]any{"backend": "claude", "model": "judge"},
+		"budgets": map[string]any{"wall_clock_seconds": 3, "max_output_bytes": 1000},
+	}
+	if err := workorder.WriteJSONAtomic(filepath.Join(runDir, "work-order.json"), rawWorkOrder); err != nil {
+		t.Fatal(err)
+	}
+	wo, err := workorder.Load(filepath.Join(runDir, "work-order.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workerResults := map[string]map[string]any{
+		"claude": {"status": "ok", "final_json": map[string]any{"claims": []any{}, "unknowns": []any{}}},
+		"codex":  {"status": "ok", "final_json": map[string]any{"claims": []any{}, "unknowns": []any{}}},
+	}
+	decisionDoc := map[string]any{
+		"mode":              "gather",
+		"decision_kind":     "provider_union_only",
+		"judge_ran":         true,
+		"judge_attempted":   true,
+		"judge_completed":   false,
+		"provider_statuses": map[string]any{"claude": map[string]any{"status": "ok"}, "codex": map[string]any{"status": "ok"}},
+		"caveats":           []any{"gather judge failed with exit_error"},
+	}
+
+	factory := researchTestFactory{streams: output.NewStreams(&bytes.Buffer{}, &bytes.Buffer{})}
+	err = finalizeResearchRun(context.Background(), factory, researchFinalizeOptions{
+		WorkOrder:      wo,
+		Out:            filepath.Dir(runDir),
+		RunID:          "incomplete",
+		RunDir:         runDir,
+		StartedAt:      "2026-05-19T00:00:00Z",
+		WorkerResults:  workerResults,
+		DecisionDoc:    decisionDoc,
+		JudgeResults:   map[string]map[string]any{"pass1": {}},
+		ExitCode:       4,
+		NoTriage:       true,
+		LookupProvider: factory.LookupProvider,
+	})
+	var incomplete *apperror.DecisionIncompleteError
+	if !errors.As(err, &incomplete) {
+		t.Fatalf("expected DecisionIncompleteError through wrapping, got %T %v", err, err)
 	}
 }
 
@@ -435,6 +555,22 @@ func writeJudgeOnlySourceRun(t *testing.T, runDir string, mode string, judgeStat
 		t.Fatal(err)
 	}
 	return wo
+}
+
+func addCodeReviewFacet(t *testing.T, runDir string) {
+	t.Helper()
+	workOrderPath := filepath.Join(runDir, "work-order.json")
+	raw := readTestJSON(t, workOrderPath)
+	raw["facet"] = map[string]any{
+		"id":      "code-review",
+		"kind":    "generic",
+		"focus":   "Find actionable defects introduced or exposed by the change.",
+		"include": []any{"correctness bugs and edge cases"},
+		"exclude": []any{"style-only preferences"},
+	}
+	if err := workorder.WriteJSONAtomic(workOrderPath, raw); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func readTestJSON(t *testing.T, path string) map[string]any {

@@ -199,6 +199,9 @@ func RunResearchJudgeOnly(ctx context.Context, f commands.Factory, opts *Researc
 	if err := validateFailedJudgeAttempt(wo, opts.SourceRunDir); err != nil {
 		return err
 	}
+	// Preflight source provider artifacts before creating the retry run or
+	// updating latest. The copied artifacts are loaded again below so the new
+	// self-contained ledger remains the source of truth for judging.
 	if _, err := loadResearchWorkerResultsFromArtifacts(wo, opts.SourceRunDir); err != nil {
 		return commands.WrapValidation(err)
 	}
@@ -239,16 +242,13 @@ func RunResearchJudgeOnly(ctx context.Context, f commands.Factory, opts *Researc
 	if sourceRunID == "" || sourceRunID == "latest" {
 		sourceRunID = filepath.Base(opts.SourceRunDir)
 	}
-	humanOutput := true
 	effectiveQuiet := opts.Quiet
-	if humanOutput {
-		printRunHeader(f, wo, runDir, runID)
-		f.Streams().Printf("note: judge-only rerun reuses provider artifacts from %s\n", sourceRunID)
-		if fsutil.FileExists(filepath.Join(runDir, "review-context.md")) {
-			f.Streams().Printf("review context: replayed from %s\n", opts.SourceRunDir)
-		}
+	printRunHeader(f, wo, runDir, runID)
+	f.Streams().Printf("note: judge-only rerun reuses provider artifacts from %s\n", sourceRunID)
+	if fsutil.FileExists(filepath.Join(runDir, "review-context.md")) {
+		f.Streams().Printf("review context: replayed from %s\n", opts.SourceRunDir)
 	}
-	decisionDoc, judgeResults, exitCode, err := runJudgePhase(ctx, f, wo, workerResults, runDir, effectiveQuiet, humanOutput)
+	decisionDoc, judgeResults, exitCode, err := runJudgePhase(ctx, f, wo, workerResults, runDir, effectiveQuiet, true)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return err
@@ -270,7 +270,7 @@ func RunResearchJudgeOnly(ctx context.Context, f commands.Factory, opts *Researc
 		ExitCode:       exitCode,
 		NoTriage:       opts.NoTriage,
 		Quiet:          effectiveQuiet,
-		HumanOutput:    humanOutput,
+		HumanOutput:    true,
 		LookupProvider: f.LookupProvider,
 		MetaExtra: map[string]any{
 			"source_run_id":  sourceRunID,
@@ -741,6 +741,9 @@ func validateFailedJudgeAttempt(wo *workorder.WorkOrder, sourceRunDir string) er
 		}
 	}
 	decisionFailed := failedJudgeDecision(decisionDoc)
+	// Status files prove an attempted judge pass and take precedence for
+	// success rejection; decision.json keeps legacy failed-judge runs
+	// recoverable when status artifacts are absent or incomplete.
 	if statusPresent && !statusFailed {
 		return &apperror.ValidationError{Message: "--judge-only cannot retry a run whose judge already completed successfully"}
 	}

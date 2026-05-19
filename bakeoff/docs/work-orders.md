@@ -5,7 +5,10 @@ objects with `schema_version: 1`, exactly two providers, one judge, budgets, a
 scope policy, and a workflow type.
 
 Bakeoff has no batch work-order schema in v1. Split plugin runs are represented
-as separate normal work-order files.
+as separate normal work-order files. Multi-lens review is also a plugin
+drafting workflow, not a work-order schema feature: each lens is a normal
+`gather` work order with the standard `code-review` facet and lens-specific
+focus/include/exclude text.
 
 The fastest way to start is the examples directory:
 
@@ -299,3 +302,10 @@ When the plugin suggests a clean split, it shows a preview for each separate
 work order before approval, with full JSON inline only when the combined draft
 stays readable. The files remain ordinary single-work-order inputs such as
 `./<id>.part-1.work-order.json` and `./<id>.part-2.work-order.json`.
+
+When the plugin drafts explicit multi-lens review, it uses readable lens stems
+instead of `.part-N`, such as `./review-auth.security.work-order.json` with
+`--run-id review-auth.security`. After the approved lens runs finish, the plugin
+may write a convenience summary such as
+`runs/review-auth.multi-lens-summary.md`; that file is not a CLI decision
+artifact and does not change the work-order contract.

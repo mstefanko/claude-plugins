@@ -24,6 +24,7 @@ func TestExitCodeMapping(t *testing.T) {
 		{name: "unclassified", err: errors.New("boom"), want: 1},
 		{name: "judge disagreement", err: &apperror.JudgeDisagreementError{}, want: 3},
 		{name: "decision incomplete", err: &apperror.DecisionIncompleteError{}, want: 4},
+		{name: "silent decision incomplete", err: &apperror.SilentError{Err: &apperror.DecisionIncompleteError{}}, want: 4},
 		{name: "interrupted", err: &apperror.InterruptedError{}, want: 130},
 		{name: "context canceled by signal", err: context.Canceled, signaled: true, want: 130},
 		{name: "internal context canceled", err: context.Canceled, want: 1},

@@ -43,6 +43,35 @@ behavior.
   - Expect: plugin drafts one `type: "gather"` work order with
     `facet.id: "code-review"` and the standard approval prompt.
 
+- [ ] Multiple review concerns without separate-lens wording stay single-run.
+  - Prompt: `/bakeoff:run review this diff against main for security and tests`
+  - Expect: plugin drafts one normal `code-review` work order with security and
+    tests in the shared focus; it does not draft separate lens files.
+
+- [ ] Explicit two-lens review shows a multi-lens preview.
+  - Prompt: `/bakeoff:run review this diff against main with security and tests as separate lenses`
+  - Expect: plugin previews two separate review runs, uses filenames and run ids
+    like `<base>.security` and `<base>.tests`, includes the cost note with a
+    worst-case wall-clock estimate, keeps verification/triage on, and asks for
+    `write and run`.
+
+- [ ] `review swarm` without lenses asks for lens names after task fit passes.
+  - Prompt: `/bakeoff:run review swarm this PR`
+  - Expect: plugin asks which 2-3 lenses to run and suggests common choices. It
+    does not ask for lenses if the review scope is missing or unbounded.
+
+- [ ] Too many lenses requires narrowing or explicit approval.
+  - Prompt: `/bakeoff:run review this diff against main with security, performance, UX, tests, and reliability lenses`
+  - Expect: plugin warns that this would run five separate review runs, asks the
+    user to narrow to 2-3 lenses or say `run all lenses`, and drafts nothing
+    until clarified.
+
+- [ ] Unknown lens handling distinguishes narrow from vague.
+  - Prompt: `/bakeoff:run review this diff against main with billing invariants as a separate lens`
+  - Expect: plugin accepts a custom `billing-invariants` lens.
+  - Prompt: `/bakeoff:run review this diff against main with quality as a separate lens`
+  - Expect: plugin asks one clarification question because `quality` is vague.
+
 - [ ] Concrete analyze request drafts a single analyze work order.
   - Prompt: `/bakeoff:run analyze why import retries duplicate receipts; use logs in <path> and files under internal/import`
   - Expect: plugin drafts one `type: "analyze"` work order with the supplied
@@ -92,3 +121,35 @@ behavior.
   - Expect: final response reports each run independently and avoids "overall
     winner", merged patch, merged answer, or cross-run synthesis unless the user
     asks separately.
+
+- [ ] Multi-lens validation failure stops before execution.
+  - Setup: make one generated lens work order invalid during command review.
+  - Expect: plugin validates all lens files before running any; on validation
+    error, it reports the failing file and error, repairs the JSON, and shows
+    the final set again before asking for approval.
+
+- [ ] Multi-lens `--no-triage` applies to every lens.
+  - Prompt: `/bakeoff:run review this diff against main with security and performance as separate lenses --no-triage`
+  - Expect: plugin passes `--no-triage` to each lens run, omits verification
+    from the cost estimate, and marks final findings raw and unverified.
+
+- [ ] Multi-lens execution stops on failed lens and reports progress.
+  - Setup: first lens exits `0`, second lens exits `1`, `2`, `4`, or `130`.
+  - Expect: plugin summarizes completed and failed lenses and asks before
+    continuing. Exit `3`, if encountered, is marked as a completed unusual
+    handoff and untriaged unless triage artifacts exist.
+
+- [ ] Completed multi-lens runs produce a persisted summary.
+  - Prompt: after approved security/performance/UX lens runs finish.
+  - Expect: plugin reads available `report.md`, `decision.json`, and triage
+    artifacts; writes `<out>/<base>.multi-lens-summary.md`; reports run ids,
+    report paths, triage state/paths, triage counts when available, top
+    actionable findings by lens, overlaps, clean lenses, caveats, `bakeoff show`
+    commands, and the summary path.
+
+- [ ] Multi-lens synthesis is a separate approval step.
+  - Prompt: after the summary, user asks for synthesis.
+  - Expect: plugin drafts a normal `type: "analyze"` work order over the
+    completed reports and triage files, constrains it to dedupe existing
+    findings into one prioritized fix plan, and asks for approval before
+    writing or running.

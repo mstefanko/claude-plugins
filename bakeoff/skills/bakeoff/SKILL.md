@@ -76,8 +76,9 @@ when Bakeoff is likely to add cost, ambiguity, or risk without better evidence.
 If the user narrows the request, re-run the task-fit check on the revised
 prompt.
 
-After task fit passes or is explicitly confirmed, run the clean-split check.
-Do not propose a split in the same response as a task-fit warning.
+After task fit passes or is explicitly confirmed, check for explicit
+multi-lens review requests before the generic clean-split check. Do not propose
+a split or multi-lens run in the same response as a task-fit warning.
 
 Suggest 2-3 separate work orders only when the split is obvious and all of
 these are true:
@@ -164,7 +165,166 @@ failed part before asking whether to continue.
 Do not run a decomposition agent, add a DAG runner, create a batch
 work-order-list schema, coordinate shared state across parts, or synthesize an
 overall winner, merged patch, or merged answer from split runs. Cross-run
-synthesis is a separate user request.
+synthesis is a separate user request. Multi-lens review has its own bounded
+summary rule below; generic split runs remain independent.
+
+## Multi-Lens Review Drafts
+
+Multi-lens review is a specialized review split, not a new work-order schema or
+CLI mode. Use it only for natural-language review requests that explicitly ask
+for separate lenses or separate review passes. Plain review remains one normal
+`type: "gather"` work order with `facet.id: "code-review"`.
+
+Trigger multi-lens only for wording such as:
+
+- `multi-lens`;
+- `review swarm`;
+- `with separate lenses`;
+- `separate review passes`;
+- `run security and performance as separate reviews`;
+- `security, performance, and UX lenses`.
+
+Do not trigger multi-lens just because a normal review names several concerns.
+For example, "review this for security and tests" drafts one review with those
+concerns in the shared focus. "review this with security and tests as separate
+lenses" drafts two lens runs.
+
+Run the task-fit gate first. If the target is not bounded by a branch, PR,
+diff, file set, or local-change scope, show the usual "this may not need
+Bakeoff" warning and do not ask for lenses yet. Once the review scope is valid,
+do not also run the generic clean-split proposal; show one multi-lens preview.
+
+If the user asks for a multi-lens review without naming lenses, ask:
+
+```text
+Which 2-3 lenses should I run? Common choices are correctness/tests, security,
+performance, UX/frontend behavior, and maintainability.
+```
+
+Default support is 2-3 lenses. If the user asks for more than 3, warn before
+drafting:
+
+```text
+That would run <N> separate review runs. I recommend narrowing this to 2-3
+lenses unless you really want the extra cost and summary volume. Tell me which
+lenses to keep, or say `run all lenses`.
+```
+
+You may hard-stop at 3 unless the user explicitly says `run all lenses` or
+`run all <N>`.
+
+Use "lens" in user-facing text. Reserve "facet" for implementation notes and
+shown JSON. Lens presets are task filters, not personas:
+
+| Lens slug | Synonyms and examples | Focus |
+| --- | --- | --- |
+| `correctness` | correctness, bugs, behavior, edge cases, error handling, data correctness | Changed behavior, edge cases, data correctness, and error handling. |
+| `tests` | tests, test coverage, regression tests, missing tests, stale tests | Missing, misleading, or stale tests for changed behavior. |
+| `security` | security, auth, authn, authz, injection, SQL injection, XSS, CSRF, secrets, data exposure, trust boundary | Concrete auth, injection, secrets, trust-boundary, and unsafe data-flow risks. |
+| `performance` | performance, perf, latency, memory, resource use, scaling, database queries, N+1 | Changed hot paths, resource use, repeated work, avoidable I/O, and scaling risks. |
+| `ux` | UX, frontend, UI, accessibility, a11y, copy, loading states, error states, responsive behavior | User-visible regressions, accessibility, copy/state mismatch, loading/error behavior. |
+| `maintainability` | maintainability, readability, coupling, architecture risk, migration risk | Defect-prone structure, confusing ownership, fragile coupling, and migration risks. |
+| `reliability` | reliability, resilience, concurrency, races, retries, timeouts, idempotency | Concurrency, retries, timeouts, idempotency, failure handling, and resilience risks. |
+
+Map `data correctness` to `correctness` with data correctness called out in the
+background. Map `SQL injection` to `security` with SQL injection called out in
+the background. Map `accessibility` to `ux`. Unknown narrow review topics are
+allowed as custom lenses: normalize to a safe kebab slug, keep the focus narrow,
+and create custom focus/include/exclude text. Ask one clarification question
+for vague unknown lenses such as `quality`, `architecture`, `stuff`, or
+`everything`.
+
+For each selected lens, draft one normal review work order:
+
+- `type: "gather"`;
+- `facet.id: "code-review"`;
+- shared providers, judge, budgets, scope policy, base, and diff behavior from
+  normal review drafting;
+- lens-specific `goal`, `background`, `facet.focus`, `facet.include`, and
+  `facet.exclude`;
+- automatic code-review triage enabled unless the user passes `--no-triage` or
+  explicitly asks to run without triage.
+
+Use a single base slug from the request or supplied `--run-id`. Append the lens
+slug as the final semantic component for work-order ids, filenames, and run
+ids: `<base>.<lens>`, for example `review-auth.security.work-order.json` with
+`--run-id review-auth.security`. If the filename or run directory already
+exists, append the numeric collision suffix after the lens slug and use the
+same stem for both file and run id, such as
+`review-auth.security-2.work-order.json` and
+`--run-id review-auth.security-2`. Never switch multi-lens review to `.part-N`
+naming.
+
+Before writing files, show a compact multi-lens preview. Do not print full JSON
+by default. Include the selected lenses, planned files, run ids, commands,
+review settings, whether verification/triage is on, and a cost note:
+
+```text
+This will run <N> separate review runs:
+
+1. Security review
+2. Performance review
+3. UX/frontend behavior review
+
+Each run asks the same two reviewers to inspect the same change from one lens,
+then merges and verifies that lens's findings.
+
+Cost note: this is about <N>x a normal review. With the current 900s default
+budget, each lens can reserve up to about 45 minutes worst-case (reviewers,
+merge, verification). <N> lenses can therefore reserve up to about
+<computed-total> minutes worst-case, though typical runs may finish sooner.
+
+Verification is on for each lens by default. Synthesis is not automatic; after
+the runs finish I will summarize the lens results and ask whether you want one
+prioritized fix plan.
+
+Write, validate, and run these one after another? Reply `write and run`, reply
+`show` to print the full JSON, or tell me what to change.
+```
+
+If a non-default `budgets.wall_clock_seconds` is used, compute worst-case as
+one worker phase plus one merge phase plus one verification phase per lens when
+triage is enabled. The two provider reviews run in parallel, so do not
+double-count the worker phase. If `--no-triage` is set, omit the verification
+phase and state that findings will be raw and unverified. Full JSON may be
+shown after `show` only when the combined draft fits the 120-line / 10 KB
+preview budget; otherwise offer `show <lens>` or ask for approval to write the
+files.
+
+Require explicit `write and run` approval before writing or executing
+multi-lens files. After approval, write every lens file, validate all files
+before running any, and run them sequentially with existing commands:
+
+```text
+bakeoff research <lens-work-order> --run-id <base>.<lens> [--out <dir>] [--base <ref>] [--diff] [--changed-files] [--quiet] [--no-triage]
+```
+
+Continue after exit `0`. Treat exit `3` as a completed but unusual research
+handoff if it occurs, and mark that lens untriaged unless triage artifacts
+exist. Stop on validation failure, exit `1`, exit `2`, exit `4`, exit `130`,
+interruption, or command failure. Summarize completed and failed lenses before
+asking whether to continue.
+
+After the lens runs finish, read each run's `report.md`, `decision.json`,
+`triage/final.json`, `triage/triage.md`, and
+`triage/source_finding_filter.json` when present. Write a plugin-created
+summary file to `<out>/<base>.multi-lens-summary.md`, applying the same numeric
+collision policy to the summary stem. The summary and final response must
+include each lens, run id, report path, triage path/state, run status, triage
+counts when available (`real_issue`, `needs_repro`, evidence gaps, false
+positives, deferred, documented, and ignored items), the most actionable
+findings grouped by lens, duplicate or overlapping themes, clean lenses,
+caveats for untriaged or failed runs, `bakeoff show` commands, and the
+persisted summary path. If triage is disabled, missing, or only recommended,
+say findings are raw and unverified.
+
+Do not synthesize automatically. Ask: "Want a synthesis pass that dedupes these
+verified lens results into one prioritized fix plan?" If the user accepts,
+draft a separate normal `type: "analyze"` work order over the completed reports
+and triage files. Constrain it to dedupe verified lens results into one
+prioritized fix plan without inventing new findings, while preserving source
+lens and run id. If per-lens triage was disabled, say synthesis will consume
+raw, untriaged findings.
 
 ## Drafting Rules
 
@@ -337,9 +497,9 @@ not converge, while provider artifacts are durable. When all providers are
 Command `allowed-tools` frontmatter is a packaged convenience: it pre-approves
 listed tools and does not deny all other tools by itself.
 
-`Write` and `Edit` in `/bakeoff:run` are only for drafting work-order files.
-They are never permission to apply, rewrite, combine, or publish provider
-patches after a build.
+`Write` and `Edit` in `/bakeoff:run` are only for drafting work-order files and
+plugin-created multi-lens summary files. They are never permission to apply,
+rewrite, combine, or publish provider patches after a build.
 
 Do not pre-approve or run `git apply`, `git am`, `git commit`, `git switch`,
 `git checkout`, `gh pr create`, provider CLIs directly, or broad mutation
