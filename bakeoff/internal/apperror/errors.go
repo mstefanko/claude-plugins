@@ -96,6 +96,25 @@ func (e *JudgeDisagreementError) Unwrap() error {
 	return e.Err
 }
 
+type DecisionIncompleteError struct {
+	Message string
+	Err     error
+}
+
+func (e *DecisionIncompleteError) Error() string {
+	if e.Message != "" {
+		return e.Message
+	}
+	if e.Err != nil {
+		return e.Err.Error()
+	}
+	return "decision incomplete"
+}
+
+func (e *DecisionIncompleteError) Unwrap() error {
+	return e.Err
+}
+
 type InterruptedError struct {
 	Err error
 }

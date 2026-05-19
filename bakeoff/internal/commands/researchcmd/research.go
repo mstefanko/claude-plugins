@@ -21,6 +21,15 @@ type ResearchOptions struct {
 	ReplaySourceRunDir string
 }
 
+type ResearchJudgeOnlyOptions struct {
+	SourceRunDir string
+	SourceRunID  string
+	Out          string
+	RunID        string
+	Quiet        bool
+	NoTriage     bool
+}
+
 func NewCmdResearch(f commands.Factory, runF func(context.Context, *ResearchOptions) error) *cobra.Command {
 	_ = f
 	opts := &ResearchOptions{Out: "runs"}

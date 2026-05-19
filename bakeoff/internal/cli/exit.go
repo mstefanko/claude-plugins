@@ -13,6 +13,7 @@ const (
 	ExitRuntimeFailure    = 1
 	ExitUsage             = 2
 	ExitJudgeDisagreement = 3
+	ExitDecisionIncomplete = 4
 	ExitInterrupted       = 130
 )
 
@@ -35,6 +36,10 @@ func ExitCode(err error, rootSignalCanceled bool) int {
 	var disagreement *apperror.JudgeDisagreementError
 	if errors.As(err, &disagreement) {
 		return ExitJudgeDisagreement
+	}
+	var incomplete *apperror.DecisionIncompleteError
+	if errors.As(err, &incomplete) {
+		return ExitDecisionIncomplete
 	}
 	return ExitRuntimeFailure
 }

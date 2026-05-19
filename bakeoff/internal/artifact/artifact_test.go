@@ -60,6 +60,22 @@ func TestResultMapClassifiesStderrKind(t *testing.T) {
 	if codex["stderr_kind"] != "transport_noise" {
 		t.Fatalf("codex stderr kind = %#v", codex["stderr_kind"])
 	}
+	preambleOnly := ResultMap(runner.Result{
+		Status: runner.StatusOK,
+		Stderr: "Reading prompt from stdin...\nOpenAI Codex v0.125.0\n" +
+			"user\ntranscript without final json",
+	})
+	if preambleOnly["stderr_kind"] != "diagnostic" {
+		t.Fatalf("preamble-only stderr kind = %#v", preambleOnly["stderr_kind"])
+	}
+	trailingError := ResultMap(runner.Result{
+		Status:    runner.StatusOK,
+		Stderr:    "Reading prompt from stdin...\nOpenAI Codex v0.125.0\n<final_json>{\"ok\":true}</final_json>\nERROR trailing failure",
+		FinalJSON: map[string]any{"ok": true},
+	})
+	if trailingError["stderr_kind"] != "diagnostic" {
+		t.Fatalf("trailing-error stderr kind = %#v", trailingError["stderr_kind"])
+	}
 	failed := ResultMap(runner.Result{Status: runner.StatusExitError, Stderr: "boom"})
 	if failed["stderr_kind"] != "errors" {
 		t.Fatalf("failed stderr kind = %#v", failed["stderr_kind"])

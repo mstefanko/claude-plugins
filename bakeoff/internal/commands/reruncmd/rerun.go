@@ -21,11 +21,13 @@ type RerunOptions struct {
 	NewRunID    string
 	Quiet       bool
 	NoTriage    bool
+	JudgeOnly   bool
 }
 
 var (
-	runResearch = researchcmd.RunResearch
-	runBuild    = buildcmd.RunBuild
+	runResearch          = researchcmd.RunResearch
+	runResearchJudgeOnly = researchcmd.RunResearchJudgeOnly
+	runBuild             = buildcmd.RunBuild
 )
 
 func NewCmdRerun(f commands.Factory, runF func(context.Context, *RerunOptions) error) *cobra.Command {
@@ -49,6 +51,7 @@ func NewCmdRerun(f commands.Factory, runF func(context.Context, *RerunOptions) e
 	cmd.Flags().StringVar(&opts.NewRunID, "run-id", "", "explicit new run id")
 	cmd.Flags().BoolVar(&opts.Quiet, "quiet", false, "suppress provider heartbeat lines")
 	cmd.Flags().BoolVar(&opts.NoTriage, "no-triage", false, "skip automatic triage for code-review runs")
+	cmd.Flags().BoolVar(&opts.JudgeOnly, "judge-only", false, "retry only the failed research judge using existing provider artifacts")
 	return cmd
 }
 
@@ -69,12 +72,29 @@ func runRerun(ctx context.Context, f commands.Factory, opts *RerunOptions) error
 		return commands.WrapValidation(err)
 	}
 	if wo.Type == "build" {
+		if opts.JudgeOnly {
+			return &apperror.ValidationError{Message: "--judge-only is currently supported only for research runs"}
+		}
 		f.Streams().Printf("note: build rerun runs against the current source tree, not the original run's snapshot\n")
 		return runBuild(ctx, f, &buildcmd.BuildOptions{
 			WorkOrder: workOrderPath,
 			Out:       opts.Out,
 			RunID:     opts.NewRunID,
 			Quiet:     opts.Quiet,
+		})
+	}
+	if opts.JudgeOnly {
+		sourceRunID := opts.SourceRunID
+		if sourceRunID == "latest" {
+			sourceRunID = filepath.Base(sourceRun)
+		}
+		return runResearchJudgeOnly(ctx, f, &researchcmd.ResearchJudgeOnlyOptions{
+			SourceRunDir: sourceRun,
+			SourceRunID:  sourceRunID,
+			Out:          opts.Out,
+			RunID:        opts.NewRunID,
+			Quiet:        opts.Quiet,
+			NoTriage:     opts.NoTriage,
 		})
 	}
 	return runResearch(ctx, f, &researchcmd.ResearchOptions{

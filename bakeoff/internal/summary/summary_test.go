@@ -26,6 +26,9 @@ func TestCommandStatus(t *testing.T) {
 	if CommandStatus(3) != "judge_disagreement" {
 		t.Fatal("exit 3 should be judge_disagreement")
 	}
+	if CommandStatus(4) != "decision_incomplete" {
+		t.Fatal("exit 4 should be decision_incomplete")
+	}
 	if CommandStatus(1) != "failed" {
 		t.Fatal("exit 1 should be failed")
 	}

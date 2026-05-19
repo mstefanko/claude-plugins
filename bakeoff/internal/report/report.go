@@ -41,6 +41,7 @@ func Render(wo *workorder.WorkOrder, decision map[string]any, workerResults map[
 		"# Bakeoff Report: " + wo.ID,
 		"",
 	}
+	lines = append(lines, renderJudgeFailureStatus(decision, opts)...)
 	lines = append(lines, renderOutcome(wo, decision, workerResults, opts)...)
 	lines = append(lines, decisionAudit(decision)...)
 	lines = append(lines, renderProviderStatusTable(decision)...)
@@ -102,8 +103,38 @@ func renderOutcome(wo *workorder.WorkOrder, decision map[string]any, workerResul
 	return lines
 }
 
+func renderJudgeFailureStatus(decision map[string]any, opts RenderOptions) []string {
+	if !judgeIncomplete(decision) {
+		return nil
+	}
+	lines := []string{"## Status", ""}
+	caveatItems := jsonutil.ListValue(decision["caveats"])
+	if len(caveatItems) == 0 {
+		lines = append(lines, "- Judge did not complete.")
+	} else {
+		for _, item := range caveatItems {
+			lines = append(lines, "- "+fmt.Sprint(item))
+		}
+	}
+	if kind := jsonutil.StringValue(decision["judge_error_kind"]); kind != "" {
+		lines = append(lines, "- Judge error kind: `"+kind+"`")
+	}
+	action := "bakeoff rerun <run-id> --judge-only"
+	if opts.RunID != "" {
+		action = ledger.BakeoffJudgeOnlyRerunCommand(opts.RunID, opts.OutDir)
+	}
+	lines = append(lines, "Action: judge failed; provider claims below; consider `"+action+"`.", "")
+	return lines
+}
+
 func decisionAudit(decision map[string]any) []string {
 	lines := []string{"## Decision Audit", "", "- Judge ran: `" + strings.ToLower(fmt.Sprintf("%v", jsonutil.BoolValue(decision["judge_ran"]))) + "`"}
+	if _, ok := decision["judge_completed"]; ok {
+		lines = append(lines, "- Judge completed: `"+strings.ToLower(fmt.Sprintf("%v", jsonutil.BoolValue(decision["judge_completed"])))+"`")
+	}
+	if kind := jsonutil.StringValue(decision["judge_error_kind"]); kind != "" {
+		lines = append(lines, "- Judge error kind: `"+kind+"`")
+	}
 	if winner := jsonutil.StringValue(decision["canonical_winner"]); winner != "" {
 		lines = append(lines, "- Canonical winner: `"+winner+"`")
 	}
@@ -158,6 +189,23 @@ func decisionAudit(decision map[string]any) []string {
 	return lines
 }
 
+func judgeIncomplete(decision map[string]any) bool {
+	kind := jsonutil.StringValue(decision["decision_kind"])
+	if kind == "provider_union_only" || kind == "judge_failed" {
+		return true
+	}
+	if completed, ok := decision["judge_completed"].(bool); ok && !completed {
+		return jsonutil.BoolValue(decision["judge_ran"]) || jsonutil.BoolValue(decision["judge_attempted"])
+	}
+	for _, item := range jsonutil.ListValue(decision["caveats"]) {
+		text := strings.ToLower(fmt.Sprint(item))
+		if strings.Contains(text, "judge failed") || strings.Contains(text, "judge crashed") {
+			return true
+		}
+	}
+	return false
+}
+
 func judgePassParenthetical(positional string, relation string) string {
 	parts := []string{}
 	if positional != "" {
@@ -190,18 +238,16 @@ func renderProviderStatusTable(decision map[string]any) []string {
 		status, _ := statuses[providerID].(map[string]any)
 		stdoutBytes := jsonutil.IntValue(jsonutil.FirstNonNil(status["stdout_bytes"], status["output_bytes"], 0))
 		stderrBytes := jsonutil.IntValue(jsonutil.FirstNonNil(status["stderr_bytes"], 0))
+		stdoutObserved := jsonutil.IntValue(status["stdout_observed_bytes"])
+		stderrObserved := jsonutil.IntValue(status["stderr_observed_bytes"])
+		stdoutCell := byteCell(stdoutBytes, stdoutObserved, jsonutil.BoolValue(status["stdout_truncated"]))
+		stderrCell := byteCell(stderrBytes, stderrObserved, jsonutil.BoolValue(status["stderr_truncated"]))
 		notes := []string{}
-		if jsonutil.BoolValue(status["stdout_truncated"]) {
+		if jsonutil.BoolValue(status["stdout_truncated"]) && stdoutCell == humanBytes(stdoutBytes) {
 			notes = append(notes, "stdout truncated")
 		}
-		if jsonutil.BoolValue(status["stderr_truncated"]) {
+		if jsonutil.BoolValue(status["stderr_truncated"]) && stderrCell == humanBytes(stderrBytes) {
 			notes = append(notes, "stderr truncated")
-		}
-		if observed := jsonutil.IntValue(status["stdout_observed_bytes"]); observed != 0 && observed != stdoutBytes {
-			notes = append(notes, fmt.Sprintf("stdout observed %s", humanBytes(observed)))
-		}
-		if observed := jsonutil.IntValue(status["stderr_observed_bytes"]); observed != 0 && observed != stderrBytes {
-			notes = append(notes, fmt.Sprintf("stderr observed %s", humanBytes(observed)))
 		}
 		if kind := jsonutil.StringValue(status["stderr_kind"]); kind != "" && kind != "none" {
 			notes = append(notes, "stderr kind: "+kind)
@@ -223,14 +269,22 @@ func renderProviderStatusTable(decision map[string]any) []string {
 			providerID,
 			jsonutil.StringValue(status["status"]),
 			jsonutil.FirstNonNil(status["wall_seconds"], 0),
-			humanBytes(stdoutBytes),
-			humanBytes(stderrBytes),
+			stdoutCell,
+			stderrCell,
 			escapeTableCell(scopeText),
 			escapeTableCell(strings.Join(notes, "; ")),
 		))
 	}
 	lines = append(lines, "")
 	return lines
+}
+
+func byteCell(captured int, observed int, truncated bool) string {
+	text := humanBytes(captured)
+	if truncated && observed != 0 && observed != captured {
+		text += " (obs " + humanBytes(observed) + ")"
+	}
+	return text
 }
 
 func humanBytes(size int) string {
@@ -255,6 +309,11 @@ func renderGather(wo *workorder.WorkOrder, decision map[string]any, workerResult
 		providerID := jsonutil.StringValue(decision["canonical_winner"])
 		worker := jsonutil.FinalJSONMap(workerResults[providerID])
 		return append(append([]string{"## Findings", ""}, claimLines(jsonutil.ListValue(worker["claims"]), providerID, false)...), unknowns(worker)...)
+	case "provider_union_only", "judge_failed":
+		return renderPerProviderResearch(wo, workerResults, "## Findings")
+	}
+	if judgeIncomplete(decision) {
+		return renderPerProviderResearch(wo, workerResults, "## Findings")
 	}
 	judge := judgeResults["pass1"]
 	if judge == nil {
@@ -326,6 +385,9 @@ func renderCompare(decision map[string]any, workerResults map[string]map[string]
 	lines := []string{"## Comparison", ""}
 	kind := jsonutil.StringValue(decision["decision_kind"])
 	winner := jsonutil.StringValue(decision["canonical_winner"])
+	if kind == "judge_failed" || judgeIncomplete(decision) {
+		return renderPerProviderComparison(workerResults, "## Comparison")
+	}
 	switch {
 	case kind == "pick_winner" && winner != "":
 		final := jsonutil.FinalJSONMap(workerResults[winner])
@@ -366,6 +428,9 @@ func renderAnalyze(decision map[string]any, workerResults map[string]map[string]
 	winner := jsonutil.StringValue(decision["canonical_winner"])
 	if decision["decision_kind"] == "both_failed" {
 		return append(lines, "No provider completed successfully.", "")
+	}
+	if decision["decision_kind"] == "judge_failed" || judgeIncomplete(decision) {
+		return renderPerProviderComparison(workerResults, "## Primary Explanation")
 	}
 	if winner == "" {
 		return append(lines, "No stable spine was selected. Human decision required.", "")

@@ -119,6 +119,9 @@ func CommandStatus(exitCode int) string {
 	if exitCode == 3 {
 		return "judge_disagreement"
 	}
+	if exitCode == 4 {
+		return "decision_incomplete"
+	}
 	return "failed"
 }
 

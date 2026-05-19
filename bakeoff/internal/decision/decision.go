@@ -68,14 +68,21 @@ func GatherStructuredUnion(wo *workorder.WorkOrder, workerResults map[string]map
 	out := Base(wo, workerResults)
 	out["decision_kind"] = "structured_union"
 	out["judge_ran"] = true
+	out["judge_attempted"] = true
+	out["judge_completed"] = true
 	out["order_maps"] = map[string]any{"pass1": order}
 	out["canonical_winner"] = nil
 	out["judge_rationale"] = []string{}
 	out["caveats"] = []string{}
 	if !artifact.ProviderSucceeded(judgeResult) {
 		status, _ := judgeResult["status"].(string)
+		out["decision_kind"] = "provider_union_only"
+		out["judge_completed"] = false
+		if kind := jsonutil.StringValue(judgeResult["judge_error_kind"]); kind != "" {
+			out["judge_error_kind"] = kind
+		}
 		out["caveats"] = []string{"gather judge failed with " + status}
-		return out, judgeResults, 1
+		return out, judgeResults, 4
 	}
 	return out, judgeResults, 0
 }
@@ -85,6 +92,8 @@ func ResolveCompare(base map[string]any, judgeResults map[string]map[string]any,
 	pass2 := judgeResults["pass2"]
 	out := cloneMap(base)
 	out["judge_ran"] = true
+	out["judge_attempted"] = true
+	out["judge_completed"] = true
 	out["order_maps"] = map[string]any{"pass1": pass1Order, "pass2": pass2Order}
 	out["judge_passes"] = map[string]any{
 		"pass1": JudgePassSummary(pass1, pass1Order, "winner"),
@@ -156,6 +165,8 @@ func ResolveAnalyze(base map[string]any, workerResults map[string]map[string]any
 	out := cloneMap(base)
 	out["decision_kind"] = "pick_winner"
 	out["judge_ran"] = true
+	out["judge_attempted"] = true
+	out["judge_completed"] = true
 	out["order_maps"] = map[string]any{"pass1": pass1Order, "pass2": pass2Order}
 	out["judge_passes"] = map[string]any{
 		"pass1": JudgePassSummary(pass1, pass1Order, "spine_winner"),

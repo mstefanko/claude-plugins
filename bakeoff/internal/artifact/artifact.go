@@ -3,6 +3,8 @@ package artifact
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -67,6 +69,7 @@ func StatusWithoutPayload(result map[string]any) map[string]any {
 		"stderr_truncated",
 		"final_json_source",
 		"stderr_kind",
+		"judge_error_kind",
 	} {
 		if value, ok := result[key]; ok {
 			status[key] = value
@@ -101,7 +104,30 @@ func codexTransportNoise(stderr string, finalJSON any) bool {
 	if !strings.HasPrefix(stderr, "Reading prompt from stdin...\nOpenAI Codex ") && !strings.HasPrefix(stderr, "OpenAI Codex ") {
 		return false
 	}
-	return true
+	return endsWithValidFinalJSON(stderr)
+}
+
+func endsWithValidFinalJSON(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	if !strings.HasSuffix(trimmed, runner.FinalJSONClose) {
+		return false
+	}
+	start := strings.LastIndex(trimmed, runner.FinalJSONOpen)
+	if start < 0 {
+		return false
+	}
+	payload := strings.TrimSpace(trimmed[start+len(runner.FinalJSONOpen) : len(trimmed)-len(runner.FinalJSONClose)])
+	if payload == "" {
+		return false
+	}
+	var obj map[string]any
+	decoder := json.NewDecoder(strings.NewReader(payload))
+	decoder.UseNumber()
+	if err := decoder.Decode(&obj); err != nil {
+		return false
+	}
+	var extra any
+	return decoder.Decode(&extra) == io.EOF
 }
 
 func ProviderSucceeded(result map[string]any) bool {
@@ -206,6 +232,10 @@ type MetaOptions struct {
 }
 
 func WriteMeta(ctx context.Context, runDir string, wo *workorder.WorkOrder, runID string, startedAt string, opts MetaOptions) error {
+	return WriteMetaWithExtra(ctx, runDir, wo, runID, startedAt, opts, nil)
+}
+
+func WriteMetaWithExtra(ctx context.Context, runDir string, wo *workorder.WorkOrder, runID string, startedAt string, opts MetaOptions, extra map[string]any) error {
 	inputHashes, err := triage.ComputeInputHashes(runDir)
 	if err != nil {
 		return err
@@ -253,6 +283,9 @@ func WriteMeta(ctx context.Context, runDir string, wo *workorder.WorkOrder, runI
 		meta["decision_kind"] = opts.Decision["decision_kind"]
 		meta["canonical_winner"] = opts.Decision["canonical_winner"]
 		meta["judge_ran"] = jsonutil.BoolValue(opts.Decision["judge_ran"])
+	}
+	for key, value := range extra {
+		meta[key] = value
 	}
 	return workorder.WriteJSONAtomic(filepath.Join(runDir, "meta.json"), meta)
 }

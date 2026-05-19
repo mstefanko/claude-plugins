@@ -160,6 +160,10 @@ func BakeoffRerunCommand(runID string, outDir string) string {
 	return "bakeoff rerun " + shellQuote(runID) + outDirSuffix(outDir)
 }
 
+func BakeoffJudgeOnlyRerunCommand(runID string, outDir string) string {
+	return BakeoffRerunCommand(runID, outDir) + " --judge-only"
+}
+
 func outDirSuffix(outDir string) string {
 	if outDir == "runs" {
 		return ""
