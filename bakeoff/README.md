@@ -87,7 +87,19 @@ More: [docs/research-basis.md](docs/research-basis.md).
 
 ## Review
 
-Review is a `gather` run with a `code-review` facet. Both providers inspect the same scope through a shared focus, include list, and exclude list. The judge dedupes findings; triage then verifies actionability, citations, and staleness before you start fixing anything.
+Think of `review` as:
+
+**same scope -> two independent reviews -> one combined finding list -> automatic triage**
+
+Review is implemented as a `gather` run with a `code-review` facet. Both providers inspect the same branch, diff, or local changes through the same review boundaries:
+
+- `focus`: what the review should care about
+- `include`: what should be in scope
+- `exclude`: what should stay out of scope
+
+The judge does not pick a winning reviewer. It combines the findings from both providers, removes duplicates, and keeps the useful candidates.
+
+Then Bakeoff runs triage automatically. Triage checks each finding for actionability, citations, and staleness before you decide what to fix.
 
 ```text
 /bakeoff:run review this diff against main
@@ -97,16 +109,16 @@ Review is a `gather` run with a `code-review` facet. Both providers inspect the 
 /bakeoff:run review this diff --no-triage
 ```
 
-`--base` and `--diff` capture read-only git context. `--no-triage` skips the default auto-triage. See [examples/review.work-order.json](examples/review.work-order.json) for the facet shape; field-level reference is in [docs/work-orders.md](docs/work-orders.md).
+`--base` and `--diff` capture read-only git context. `--no-triage` skips the automatic triage step for review runs. See [examples/review.work-order.json](examples/review.work-order.json) for the facet shape; field-level reference is in [docs/work-orders.md](docs/work-orders.md).
 
-After a run, open `runs/<run-id>/report.md` first, then `runs/<run-id>/triage/triage.md` if triage ran.
+After a run, open `runs/<run-id>/report.md` first. Then open `runs/<run-id>/triage/triage.md`, unless you used `--no-triage`.
 
 <details open>
 <summary>Research and evidence behind this design</summary>
 
 Persona prompts ("act as a senior reviewer") don't reliably improve review quality and often add noise ([persona prompting limits](https://arxiv.org/abs/2311.10054)). Bounded, context-rich review scopes do ([Rethinking Code Review Workflows](https://arxiv.org/abs/2505.16339)). So Bakeoff drops role-play and uses a `code-review` facet — a shared focus, include list, and exclude list — that both providers and the judge filter against.
 
-LLM reviewers produce real findings mixed with false positives and stale comments at industrial scale ([Ericsson experience report](https://arxiv.org/abs/2507.19115)), and asking one model to self-correct without outside signal generally fails ([self-correction limits](https://arxiv.org/abs/2310.01798)). So after the merge judge, Bakeoff runs a separate triage pass that re-checks each finding for actionability, citation validity, and staleness — a cheap jury rather than self-review ([Replacing Judges with Juries](https://arxiv.org/abs/2404.18796)).
+LLM reviewers produce real findings mixed with false positives and stale comments at industrial scale ([Ericsson experience report](https://arxiv.org/abs/2507.19115)), and asking one model to self-correct without outside signal generally fails ([self-correction limits](https://arxiv.org/abs/2310.01798)). So Bakeoff runs review additively: each provider can contribute findings, the judge builds one combined candidate list, and automatic triage re-checks that list before you act — a cheap jury rather than self-review ([Replacing Judges with Juries](https://arxiv.org/abs/2404.18796)).
 
 More: [docs/research-basis.md](docs/research-basis.md).
 
