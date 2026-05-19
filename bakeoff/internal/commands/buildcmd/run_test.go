@@ -713,6 +713,57 @@ func TestRunBuildBaselineFailureSkipsProviders(t *testing.T) {
 	}
 }
 
+func TestRunBuildBaselineMustFailPassSurpriseSkipsProviders(t *testing.T) {
+	repoDir := initBuildGitRepo(t)
+	root := t.TempDir()
+	workOrderPath := filepath.Join(root, "build.work-order.json")
+	writeBuildWorkOrder(t, workOrderPath, "baseline-surprise", 100000, []map[string]any{
+		{"id": "target", "kind": "gate", "baseline": "must_fail", "argv": []string{"test", "-f", "README.md"}, "wall_clock_seconds": 5, "max_output_bytes": 2000},
+	})
+	outDir := filepath.Join(root, "runs")
+	out, errOut, err := runBuildTest(t, repoDir, workOrderPath, outDir, BuildOptions{RunID: "baseline-surprise", Quiet: true, JSON: true})
+	if err == nil {
+		t.Fatalf("expected baseline expectation failure\nstdout:\n%s\nstderr:\n%s", out, errOut)
+	}
+	runDir := filepath.Join(outDir, "baseline-surprise")
+	decision := readJSONFile(t, filepath.Join(runDir, "decision.json"))
+	if decision["decision_kind"] != "baseline_expectation_failed" {
+		t.Fatalf("decision = %#v", decision)
+	}
+	caveats := fmt.Sprint(decision["caveats"])
+	if !strings.Contains(caveats, "expected baseline `must_fail`, observed `passed`") {
+		t.Fatalf("missing expectation caveat: %#v", decision)
+	}
+	if _, err := os.Stat(filepath.Join(runDir, "providers", "claude")); !os.IsNotExist(err) {
+		t.Fatalf("providers should not be launched, stat err=%v", err)
+	}
+}
+
+func TestRunBuildMayFailBaselineIsInformational(t *testing.T) {
+	repoDir := initBuildGitRepo(t)
+	root := t.TempDir()
+	workOrderPath := filepath.Join(root, "build.work-order.json")
+	writeBuildWorkOrder(t, workOrderPath, "baseline-may-fail", 100000, []map[string]any{
+		{"id": "target", "kind": "gate", "baseline": "may_fail", "argv": []string{"test", "-f", "bakeoff-build-output.txt"}, "wall_clock_seconds": 5, "max_output_bytes": 2000},
+	})
+	outDir := filepath.Join(root, "runs")
+	out, errOut, err := runBuildTest(t, repoDir, workOrderPath, outDir, BuildOptions{RunID: "baseline-may-fail", Quiet: true, JSON: true})
+	if err != nil {
+		t.Fatalf("may_fail baseline should not block providers: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
+	}
+	runDir := filepath.Join(outDir, "baseline-may-fail")
+	baseline := readJSONFile(t, filepath.Join(runDir, "baseline", "verify", "result.json"))
+	results := baseline["results"].([]any)
+	first := results[0].(map[string]any)
+	if first["baseline_expectation"] != "may_fail" || first["baseline_matched"] != true || first["status"] != "failed" {
+		t.Fatalf("baseline result = %#v", first)
+	}
+	providerStatus := readJSONFile(t, filepath.Join(runDir, "providers", "claude", "build", "verify", "target", "status.json"))
+	if providerStatus["transition"] != "baseline_failed_to_provider_passed" {
+		t.Fatalf("provider status = %#v", providerStatus)
+	}
+}
+
 func TestRunBuildKeepWorktreesAndForceCleanup(t *testing.T) {
 	repoDir := initBuildGitRepo(t)
 	root := t.TempDir()

@@ -48,6 +48,7 @@ func ResultMap(result runner.Result) map[string]any {
 	if result.RepairArtifacts != nil {
 		out["repair_artifacts"] = result.RepairArtifacts
 	}
+	out["stderr_kind"] = StderrKind(out)
 	return out
 }
 
@@ -65,6 +66,7 @@ func StatusWithoutPayload(result map[string]any) map[string]any {
 		"stdout_truncated",
 		"stderr_truncated",
 		"final_json_source",
+		"stderr_kind",
 	} {
 		if value, ok := result[key]; ok {
 			status[key] = value
@@ -76,6 +78,30 @@ func StatusWithoutPayload(result map[string]any) map[string]any {
 		}
 	}
 	return status
+}
+
+func StderrKind(result map[string]any) string {
+	stderr := strings.TrimSpace(jsonutil.StringValue(result["stderr"]))
+	if stderr == "" {
+		return "none"
+	}
+	if !ProviderSucceeded(result) {
+		return "errors"
+	}
+	if codexTransportNoise(stderr, result["final_json"]) {
+		return "transport_noise"
+	}
+	return "diagnostic"
+}
+
+func codexTransportNoise(stderr string, finalJSON any) bool {
+	if finalJSON == nil {
+		return false
+	}
+	if !strings.HasPrefix(stderr, "Reading prompt from stdin...\nOpenAI Codex ") && !strings.HasPrefix(stderr, "OpenAI Codex ") {
+		return false
+	}
+	return true
 }
 
 func ProviderSucceeded(result map[string]any) bool {
@@ -172,7 +198,14 @@ func WriteFormatRetryArtifacts(directory string, result map[string]any, suffix s
 	return workorder.WriteJSONAtomic(filepath.Join(directory, "repair-status"+suffixPart+".json"), obj["status"])
 }
 
-func WriteMeta(ctx context.Context, runDir string, wo *workorder.WorkOrder, runID string, startedAt string, workerResults map[string]map[string]any, lookup provider.LookupFunc) error {
+type MetaOptions struct {
+	WorkerResults  map[string]map[string]any
+	Decision       map[string]any
+	ExitCode       int
+	LookupProvider provider.LookupFunc
+}
+
+func WriteMeta(ctx context.Context, runDir string, wo *workorder.WorkOrder, runID string, startedAt string, opts MetaOptions) error {
 	inputHashes, err := triage.ComputeInputHashes(runDir)
 	if err != nil {
 		return err
@@ -185,7 +218,7 @@ func WriteMeta(ctx context.Context, runDir string, wo *workorder.WorkOrder, runI
 			"scope":   participant.Scope,
 			"effort":  participant.Effort,
 		}
-		if result, ok := workerResults[participant.ID]; ok {
+		if result, ok := opts.WorkerResults[participant.ID]; ok {
 			if scopeMetadata, ok := result["scope_enforcement"]; ok {
 				entry["scope_enforcement"] = scopeMetadata
 			}
@@ -196,12 +229,16 @@ func WriteMeta(ctx context.Context, runDir string, wo *workorder.WorkOrder, runI
 		"run_id":                runID,
 		"type":                  wo.Type,
 		"facet":                 facetMap(wo.Facet),
+		"decision_kind":         nil,
+		"canonical_winner":      nil,
+		"judge_ran":             nil,
+		"exit_code":             opts.ExitCode,
 		"started_at":            startedAt,
 		"finished_at":           UTCNow(),
 		"cwd":                   mustGetwd(),
 		"bakeoff_version":       buildinfo.Current().Version,
 		"scope_policy":          map[string]any{"enforcement": wo.ScopePolicy.Enforcement},
-		"provider_cli_versions": map[string]any{"claude": ToolVersion(ctx, "claude", lookup), "codex": ToolVersion(ctx, "codex", lookup), "git": ToolVersion(ctx, "git", lookup)},
+		"provider_cli_versions": map[string]any{"claude": ToolVersion(ctx, "claude", opts.LookupProvider), "codex": ToolVersion(ctx, "codex", opts.LookupProvider), "git": ToolVersion(ctx, "git", opts.LookupProvider)},
 		"input_hashes":          inputHashes,
 		"resolved_models": map[string]any{
 			"providers": providers,
@@ -211,6 +248,11 @@ func WriteMeta(ctx context.Context, runDir string, wo *workorder.WorkOrder, runI
 				"effort":  wo.Judge.Effort,
 			},
 		},
+	}
+	if opts.Decision != nil {
+		meta["decision_kind"] = opts.Decision["decision_kind"]
+		meta["canonical_winner"] = opts.Decision["canonical_winner"]
+		meta["judge_ran"] = jsonutil.BoolValue(opts.Decision["judge_ran"])
 	}
 	return workorder.WriteJSONAtomic(filepath.Join(runDir, "meta.json"), meta)
 }

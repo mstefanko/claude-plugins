@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "id": "provider-status-projection-drift",
+  "type": "analyze",
+  "goal": "Determine whether the projection of per-provider status (e.g., state, exit code, decision/winner classification, error fields, byte/time accounting) can drift across the four bakeoff JSON surfaces — `bakeoff research --json`, the on-disk `manifest.json` for a run, `bakeoff ls --json`, and `bakeoff runs verify --json`. If meaningful drift is possible, propose the smallest shared contract (single source-of-truth type, projection function, or schema fragment) that would eliminate the drift without breaking existing consumers. If drift is not possible in practice, explain precisely why (shared type, single projection point, or enforced invariants) and cite the code.",
+  "background": "Repo: /Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/bakeoff (Go, cobra-style CLI). Relevant surfaces to inspect:\n\n  1. `bakeoff research --json` — JSON emitted at end of a research-mode run. Look in `cmd/` for the research command and any `--json` renderer; trace what fields per-provider status carries.\n  2. `manifest.json` — the on-disk per-run manifest written under the run output directory. Find where it is serialized (likely `internal/...` run/manifest writer).\n  3. `bakeoff ls --json` — the `ls` subcommand's machine-readable output, listing runs and their provider status summary.\n  4. `bakeoff runs verify --json` — the `runs verify` subcommand's machine-readable output, which re-reads manifests and reports per-run/per-provider verification results.\n\nFor each surface, identify: (a) the Go struct(s) used for the wire/disk shape, (b) the projection function that builds it from internal run state, (c) the per-provider fields it exposes (state, exit code, decision/winner, error, duration, output bytes, gates, scope violations, etc.), and (d) whether the fields are derived from a single shared type or independently reconstructed.\n\nThen reason about drift: where the projections diverge today (field naming, enum values, presence/optionality, units, semantics of 'success' vs 'winner' vs 'verified'), and what would happen if one is changed without updating the others.\n\nDeliverable: (1) a side-by-side field/projection comparison across the four surfaces, (2) a yes/no answer on whether drift is structurally possible today, (3) cited evidence (file:line) for each claim, and (4) if drift is possible, the smallest shared contract (e.g., one `ProviderStatus` type + one projection function used by all four call sites, or a documented schema fragment + a verifier test) — chosen to minimize churn for existing JSON consumers. Avoid recommending a full refactor if a thin shared type or single helper suffices.\n\nNon-goals: do not propose new product features; do not redesign the manifest format beyond what is needed to remove drift; do not change exit-code semantics.",
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "sonnet",
+      "scope": "codebase",
+      "effort": "high"
+    },
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "scope": "codebase",
+      "effort": "high"
+    }
+  ],
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  }
+}

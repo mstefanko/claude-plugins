@@ -158,13 +158,14 @@ func RunBuild(ctx context.Context, f commands.Factory, opts *BuildOptions) error
 
 	if !baseline.GatesPassed {
 		workerResults := emptyWorkerResults(wo)
-		decision := buildDecision(wo, workerResults, nil, baseline, nil, "baseline_failed", "none", "", []string{"baseline gate verifier failed; providers were not launched"})
+		decisionKind, caveats := baselineFailureDecision(baseline)
+		decision := buildDecision(wo, workerResults, nil, baseline, nil, decisionKind, "none", "", caveats)
 		exitCode := 1
 		timings = append(timings, finishPhase("build_total", "", "", overallStarted))
 		if err := finalizeBuildRun(ctx, f, opts, wo, repo, runDir, runID, startedAt, workerResults, decision, baseline, nil, nil, timings, exitCode, humanOutput); err != nil {
 			return err
 		}
-		return buildExitError(exitCode, "baseline verification failed")
+		return buildExitError(exitCode, baselineFailureMessage(decisionKind))
 	}
 
 	worktreePaths := map[string]string{}
@@ -195,7 +196,7 @@ func RunBuild(ctx context.Context, f commands.Factory, opts *BuildOptions) error
 			f.Streams().Printf("[%s] launching in worktree...\n", participant.ID)
 		}
 	}
-	providerRuns, err := runBuildProviders(ctx, f, wo, repo, runDir, worktreePaths, capabilities, opts.KeepWorktrees, effectiveQuiet)
+	providerRuns, err := runBuildProviders(ctx, f, wo, repo, runDir, baseline, worktreePaths, capabilities, opts.KeepWorktrees, effectiveQuiet)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return err
@@ -254,7 +255,12 @@ func finalizeBuildRun(ctx context.Context, f commands.Factory, opts *BuildOption
 	if err := workorder.WriteTextAtomic(filepath.Join(runDir, "report.md"), reportText); err != nil {
 		return &apperror.RuntimeError{Err: err}
 	}
-	if err := artifact.WriteMeta(ctx, runDir, wo, runID, startedAt, workerResults, f.LookupProvider); err != nil {
+	if err := artifact.WriteMeta(ctx, runDir, wo, runID, startedAt, artifact.MetaOptions{
+		WorkerResults:  workerResults,
+		Decision:       decision,
+		ExitCode:       exitCode,
+		LookupProvider: f.LookupProvider,
+	}); err != nil {
 		return &apperror.RuntimeError{Err: err}
 	}
 	if _, err := manifest.WriteRunManifest(runDir); err != nil {

@@ -75,6 +75,18 @@ func TestRenderOutcomeByMode(t *testing.T) {
 			want: "Winner: `claude`",
 		},
 		{
+			name: "compare consensus",
+			wo:   &workorder.WorkOrder{ID: "compare-consensus", Type: "compare"},
+			decision: map[string]any{
+				"mode":              "compare",
+				"decision_kind":     "consensus",
+				"canonical_winner":  nil,
+				"judge_ran":         true,
+				"provider_statuses": map[string]any{},
+			},
+			want: "Result: both providers agreed",
+		},
+		{
 			name: "analyze",
 			wo:   &workorder.WorkOrder{ID: "analyze-sample", Type: "analyze"},
 			decision: map[string]any{
@@ -97,5 +109,60 @@ func TestRenderOutcomeByMode(t *testing.T) {
 				t.Fatalf("Outcome should precede Decision Audit:\n%s", text)
 			}
 		})
+	}
+}
+
+func TestRenderConsensusUsesClearAuditAndDivergenceHeading(t *testing.T) {
+	text := Render(
+		&workorder.WorkOrder{ID: "sample", Type: "compare"},
+		map[string]any{
+			"mode":              "compare",
+			"decision_kind":     "consensus",
+			"judge_ran":         true,
+			"provider_statuses": map[string]any{},
+			"judge_passes": map[string]any{
+				"pass1": map[string]any{"A": "claude", "B": "codex", "canonical_winner": nil, "positional_winner": "", "relation": "consensus"},
+			},
+			"consensus_strongest":     []any{"same answer"},
+			"consensus_disagreements": []any{"different caveat"},
+		},
+		map[string]map[string]any{},
+		map[string]map[string]any{},
+		RenderOptions{},
+	)
+	for _, want := range []string{
+		"Result: both providers agreed",
+		"relation=consensus, no positional winner",
+		"### Sub-Claim Divergences",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("report missing %q:\n%s", want, text)
+		}
+	}
+	for _, unwanted := range []string{"positional ``", "### Consensus Disagreements", "Result: `consensus`"} {
+		if strings.Contains(text, unwanted) {
+			t.Fatalf("report contains unwanted %q:\n%s", unwanted, text)
+		}
+	}
+}
+
+func TestRenderProviderStatusShowsStderrKind(t *testing.T) {
+	text := Render(
+		&workorder.WorkOrder{ID: "sample", Type: "gather"},
+		map[string]any{
+			"mode":          "gather",
+			"decision_kind": "single_provider_only",
+			"judge_ran":     false,
+			"provider_statuses": map[string]any{
+				"codex": map[string]any{"status": "ok", "stderr_bytes": 1024, "stderr_kind": "transport_noise", "stderr_path": "providers/codex/stderr.txt"},
+			},
+			"canonical_winner": "codex",
+		},
+		map[string]map[string]any{"codex": {"final_json": map[string]any{"claims": []any{}, "unknowns": []any{}}}},
+		map[string]map[string]any{},
+		RenderOptions{},
+	)
+	if !strings.Contains(text, "stderr kind: transport_noise") {
+		t.Fatalf("report missing stderr kind:\n%s", text)
 	}
 }

@@ -204,6 +204,20 @@ func TestResearchResultLineSummarizesGatherAndWinnerModes(t *testing.T) {
 	if compare != "winner=claude, basis=most_corroborated" {
 		t.Fatalf("compare result line = %q", compare)
 	}
+	consensus := researchResultLine(&workorder.WorkOrder{Type: "compare"}, map[string]any{
+		"decision_kind": "consensus",
+		"judge_ran":     true,
+	}, "")
+	if consensus != "consensus (both providers agree)" {
+		t.Fatalf("consensus result line = %q", consensus)
+	}
+	unresolved := researchResultLine(&workorder.WorkOrder{Type: "compare"}, map[string]any{
+		"decision_kind": "tie",
+		"judge_ran":     true,
+	}, "")
+	if unresolved != "no winner (unresolved disagreement, basis=judge)" {
+		t.Fatalf("unresolved result line = %q", unresolved)
+	}
 }
 
 func writeExecutable(t *testing.T, path string, text string) {

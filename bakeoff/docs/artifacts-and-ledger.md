@@ -13,7 +13,7 @@ Every completed run should have:
 | --- | --- |
 | `work-order.json` | Exact work order used by the run. |
 | `decision.json` | Machine-readable decision record. |
-| `meta.json` | Run metadata: type, facet, timestamps, cwd, versions, scope policy, resolved models, input hashes. |
+| `meta.json` | Run metadata: type, facet, terminal decision kind, canonical winner, judge status, exit code, timestamps, cwd, versions, scope policy, resolved models, input hashes. |
 | `report.md` | Human-readable report. |
 | `manifest.json` | Manifest with artifact paths and SHA-256 fingerprints. |
 
@@ -35,6 +35,10 @@ Provider artifacts live under `providers/<provider-id>/`.
 Repair artifacts such as `repair-prompt.txt`, `repair-stdout.txt`,
 `repair-stderr.txt`, and `repair-status.json` may appear when format retry was
 needed.
+
+Provider and judge `status.json` files include `stderr_kind` when available.
+Values are `none`, `transport_noise`, `diagnostic`, or `errors`; raw
+`stderr.txt` is still preserved unchanged.
 
 ## Judge Artifacts
 
@@ -117,6 +121,10 @@ Per-provider build artifacts live under `providers/<provider-id>/build/`.
 | `verify/<verifier-id>/stderr.txt` | Verifier stderr. |
 | `verify/<verifier-id>/status.json` | Verifier status. |
 | `verify/<verifier-id>/metric.json` | Metric parse result when applicable. |
+
+Gate verifier status objects may include `baseline_expectation`,
+`baseline_matched`, and `transition`. These fields are additive and explain how
+baseline status related to provider status, especially for fail-to-pass gates.
 
 If there is a canonical winner, the selected handoff patch is:
 

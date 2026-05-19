@@ -263,6 +263,15 @@ func compactVerifierResults(runDir string, results []buildverify.VerifierResult)
 		if result.MetricPath != "" {
 			entry["metric_path"] = mustRelative(runDir, result.MetricPath)
 		}
+		if result.BaselineExpectation != "" {
+			entry["baseline_expectation"] = result.BaselineExpectation
+		}
+		if result.BaselineMatched != nil {
+			entry["baseline_matched"] = *result.BaselineMatched
+		}
+		if result.Transition != "" {
+			entry["transition"] = result.Transition
+		}
 		if result.ArtifactError != "" {
 			entry["artifact_error"] = result.ArtifactError
 		}

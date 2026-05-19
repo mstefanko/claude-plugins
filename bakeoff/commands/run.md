@@ -127,11 +127,21 @@ it as one.
 ```
 
 If the user declines the split, continue with one normal work order if the task
-is otherwise valid. If the user accepts, draft every part separately. Show a
-one-line summary above each full JSON block, then list all filenames and
-commands before writing anything:
+is otherwise valid. If the user accepts, draft every part separately. Before
+writing anything, show a compact review preview for each part, then list all
+filenames and commands. Include the full JSON blocks only when the combined
+draft is still readable: at most 120 lines and at most 10 KB. For longer split
+drafts, say the full JSON is verbose and can be printed with `show`.
 
 ```text
+Draft work orders:
+1. <part-1-id> (<type>) -> ./<base-id>.part-1.work-order.json
+   Goal: <brief goal>
+   Providers: <provider summary>; judge: <judge summary>
+2. <part-2-id> (<type>) -> ./<base-id>.part-2.work-order.json
+   Goal: <brief goal>
+   Providers: <provider summary>; judge: <judge summary>
+
 Files to write:
 - ./<base-id>.part-1.work-order.json
 - ./<base-id>.part-2.work-order.json
@@ -141,11 +151,13 @@ Commands to run:
 - bakeoff <research|build> ./<base-id>.part-2.work-order.json ...
 
 Write these files and run them one after another? Reply `write and run` to
-continue, or tell me what to change.
+continue, reply `show` to print the full JSON, or tell me what to change.
 ```
 
 One approval covers only the currently shown set. If the user changes any part,
-show the full final set again before asking for approval.
+show the final set again with the same preview rules before asking for
+approval. If the user replies `show`, print the full JSON for every part and
+ask the same approval question again.
 
 For split work orders, derive one base slug from the original request. Append
 `.part-N` to each work-order `id`, filename, and supplied `--run-id` value. If
@@ -155,10 +167,11 @@ files unless the user explicitly asks.
 
 After split approval, write all files, validate all files, and only then run
 the parts sequentially. If any validation fails, run no parts; surface the
-validation error verbatim, repair the affected JSON, show the full final set,
-and ask for approval again. `bakeoff validate` warnings are advisory; preserve
-them in the summary when relevant, but do not stop the split sequence when
-validation exits successfully. Route each part by its own `type`: `build` uses
+validation error verbatim, repair the affected JSON, show the final set again
+with the same preview rules, and ask for approval again. `bakeoff validate`
+warnings are advisory; preserve them in the summary when relevant, but do not
+stop the split sequence when validation exits successfully. Route each part by
+its own `type`: `build` uses
 `bakeoff build`; `gather`, `compare`, and `analyze` use `bakeoff research`.
 Apply the same mode-specific flag routing to each part. Continue after exit
 `0` or `3`. Stop on exit `1`, `2`, `130`, interruption, or command failure,
@@ -213,15 +226,25 @@ Draft clean JSON, not a TODO template. Include explicit `schema_version`, `id`,
 `scope_policy.enforcement: "best_effort"`. Reject or repair build work orders
 with any provider `scope: "web"`.
 
-Show the full JSON in a fenced `json` block and ask:
+Before approval, show a compact review preview instead of dumping raw JSON by
+default. Include the id and type, planned file path, providers, judge, budget,
+scope policy, goal, a brief background summary, and the command that will run.
+Include the full JSON in a fenced `json` block only when the draft is still
+readable: at most 120 lines and at most 10 KB. For longer drafts, say the full
+JSON is verbose and can be printed with `show`; still show the planned
+`./<id>.work-order.json` path.
+
+Ask:
 
 ```text
-Write and run this work order? Reply `yes` to continue, or tell me what to change.
+Write, validate, and run this work order? Reply `yes` to continue, reply `show` to print the full JSON, or tell me what to change.
 ```
 
 Only explicit affirmative replies such as `yes`, `y`, `approve`, `run it`, or
-`write and run` count. If the user edits, asks a question, or replies
-ambiguously, revise or clarify and show the JSON again before writing.
+`write and run` count. If the user replies `show`, print the full JSON and ask
+the same approval question again. If the user edits, asks a question, or
+replies ambiguously, revise or clarify and show the updated preview before
+writing.
 
 After approval, write only `./<id>.work-order.json`, applying the collision
 policy from the shared skill. Never overwrite an existing work-order file
@@ -233,8 +256,8 @@ Run:
 "${CLAUDE_PLUGIN_ROOT}/bin/bakeoff" validate <path>
 ```
 
-Surface validation errors verbatim. Repair the JSON, show it again, and
-revalidate only after approval.
+Surface validation errors verbatim. Repair the JSON, show the updated preview
+with the same rules, and revalidate only after approval.
 
 ## Execution And Summary
 

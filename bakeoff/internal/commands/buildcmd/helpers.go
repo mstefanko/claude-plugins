@@ -116,6 +116,37 @@ func verifierMetadata(wo *workorder.WorkOrder) []buildworkspace.VerifierMetadata
 	return out
 }
 
+func verifierResultsByID(results []buildverify.VerifierResult) map[string]buildverify.VerifierResult {
+	out := map[string]buildverify.VerifierResult{}
+	for _, result := range results {
+		out[result.ID] = result
+	}
+	return out
+}
+
+func baselineFailureDecision(baseline buildverify.Result) (string, []string) {
+	expectationCaveats := []string{}
+	for _, result := range baseline.Results {
+		if result.Kind != "gate" || result.BaselineMatched == nil || *result.BaselineMatched {
+			continue
+		}
+		if result.BaselineExpectation != workorder.VerifierBaselineMustPass {
+			expectationCaveats = append(expectationCaveats, fmt.Sprintf("baseline expectation failed for verifier `%s`: expected baseline `%s`, observed `%s`; providers were not launched", result.ID, result.BaselineExpectation, result.Status))
+		}
+	}
+	if len(expectationCaveats) > 0 {
+		return "baseline_expectation_failed", expectationCaveats
+	}
+	return "baseline_failed", []string{"baseline gate verifier failed; providers were not launched"}
+}
+
+func baselineFailureMessage(decisionKind string) string {
+	if decisionKind == "baseline_expectation_failed" {
+		return "baseline expectation failed"
+	}
+	return "baseline verification failed"
+}
+
 func buildExitError(exitCode int, message string) error {
 	if exitCode == 0 {
 		return nil

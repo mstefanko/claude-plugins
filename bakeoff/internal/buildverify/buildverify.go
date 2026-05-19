@@ -28,6 +28,7 @@ type Options struct {
 	CWD                   string
 	ProviderID            string
 	Baseline              bool
+	BaselineResults       map[string]VerifierResult
 	Verifiers             []workorder.VerifierSpec
 	Env                   []string
 	HeartbeatSeconds      int
@@ -63,6 +64,9 @@ type VerifierResult struct {
 	StderrPath          string                    `json:"stderr_path,omitempty"`
 	StatusPath          string                    `json:"status_path,omitempty"`
 	MetricPath          string                    `json:"metric_path,omitempty"`
+	BaselineExpectation string                    `json:"baseline_expectation,omitempty"`
+	BaselineMatched     *bool                     `json:"baseline_matched,omitempty"`
+	Transition          string                    `json:"transition,omitempty"`
 	ArtifactError       string                    `json:"artifact_error,omitempty"`
 	Metric              *MetricResult             `json:"metric,omitempty"`
 }
@@ -132,6 +136,7 @@ func Run(ctx context.Context, opts Options) Result {
 			},
 		})
 		verifierResult := resultFromRunner(verifier, commandResult)
+		annotateBaselineFields(verifier, &verifierResult, opts)
 		if verifier.Kind == "metric" {
 			metric := ParseMetric(commandResult.Stdout, verifier.Metric)
 			if commandResult.Status != runner.StatusOK && metric.Error == "" {
@@ -156,7 +161,7 @@ func Run(ctx context.Context, opts Options) Result {
 				verifierResult.ArtifactError = writeErr.Error()
 			}
 		}
-		if verifier.Kind == "gate" && verifierResult.Status != StatusPassed {
+		if verifier.Kind == "gate" && !gateMatchesExpectation(verifier, verifierResult.Status, opts.Baseline) {
 			result.GatesPassed = false
 		}
 		result.Results = append(result.Results, verifierResult)
@@ -332,6 +337,68 @@ func resultFromRunner(verifier workorder.VerifierSpec, result runner.Result) Ver
 		IO:                  result.IO,
 		OutputCap:           result.OutputCap,
 	}
+}
+
+func annotateBaselineFields(verifier workorder.VerifierSpec, result *VerifierResult, opts Options) {
+	if verifier.Kind != "gate" {
+		return
+	}
+	expectation := baselineExpectation(verifier)
+	result.BaselineExpectation = expectation
+	if opts.Baseline {
+		matched := baselineExpectationMatched(expectation, result.Status)
+		result.BaselineMatched = &matched
+		return
+	}
+	if baseline, ok := opts.BaselineResults[verifier.ID]; ok {
+		if baseline.BaselineExpectation != "" {
+			result.BaselineExpectation = baseline.BaselineExpectation
+		}
+		if baseline.BaselineMatched != nil {
+			matched := *baseline.BaselineMatched
+			result.BaselineMatched = &matched
+		} else {
+			matched := baselineExpectationMatched(result.BaselineExpectation, baseline.Status)
+			result.BaselineMatched = &matched
+		}
+		result.Transition = baselineTransition(baseline.Status, result.Status)
+	}
+}
+
+func gateMatchesExpectation(verifier workorder.VerifierSpec, status string, baseline bool) bool {
+	if !baseline {
+		return status == StatusPassed
+	}
+	return baselineExpectationMatched(baselineExpectation(verifier), status)
+}
+
+func baselineExpectation(verifier workorder.VerifierSpec) string {
+	if verifier.Baseline != "" {
+		return verifier.Baseline
+	}
+	return workorder.VerifierBaselineMustPass
+}
+
+func baselineExpectationMatched(expectation string, status string) bool {
+	switch expectation {
+	case workorder.VerifierBaselineMayFail:
+		return true
+	case workorder.VerifierBaselineMustFail:
+		return status != StatusPassed
+	default:
+		return status == StatusPassed
+	}
+}
+
+func baselineTransition(baselineStatus string, providerStatus string) string {
+	if baselineStatus == "" || providerStatus == "" {
+		return ""
+	}
+	return "baseline_" + transitionStatus(baselineStatus) + "_to_provider_" + transitionStatus(providerStatus)
+}
+
+func transitionStatus(status string) string {
+	return strings.ReplaceAll(status, "-", "_")
 }
 
 func verifierStatus(status string) string {

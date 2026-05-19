@@ -18,8 +18,10 @@ place.
 | `/bakeoff:uninstall` | Remove Bakeoff-owned plugin state and cache, then ask you to run the manual plugin uninstall. |
 
 `/bakeoff:run` accepts either a work-order path or natural language. Natural
-language drafts must show the full JSON and wait for an explicit approval such
-as `yes`, `approve`, or `run it` before the plugin writes or runs anything.
+language drafts show a compact review preview, include full JSON inline only
+when it stays readable, and wait for an explicit approval such as `yes`,
+`approve`, or `run it` before the plugin writes or runs anything. Reply `show`
+to print verbose JSON before approving.
 
 Recognized `/bakeoff:run` flags:
 

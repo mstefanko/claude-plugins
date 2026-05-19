@@ -39,6 +39,64 @@ func TestRunGateVerifierStatusesAndArtifacts(t *testing.T) {
 	}
 }
 
+func TestRunBaselineVerifierExpectations(t *testing.T) {
+	dir := t.TempDir()
+	result := Run(context.Background(), Options{
+		CWD:      dir,
+		Baseline: true,
+		Verifiers: []workorder.VerifierSpec{
+			{ID: "must-pass", Kind: "gate", Baseline: workorder.VerifierBaselineMustPass, Argv: []string{"test", "-d", "."}, WallClockSeconds: 2, MaxOutputBytes: 1000},
+			{ID: "must-fail", Kind: "gate", Baseline: workorder.VerifierBaselineMustFail, Argv: []string{"test", "-f", "missing"}, WallClockSeconds: 2, MaxOutputBytes: 1000},
+			{ID: "may-fail", Kind: "gate", Baseline: workorder.VerifierBaselineMayFail, Argv: []string{"test", "-f", "missing"}, WallClockSeconds: 2, MaxOutputBytes: 1000},
+		},
+	})
+	if !result.GatesPassed {
+		t.Fatalf("expected baseline expectations to match: %#v", result)
+	}
+	for _, item := range result.Results {
+		if item.BaselineExpectation == "" || item.BaselineMatched == nil || !*item.BaselineMatched {
+			t.Fatalf("missing matched baseline fields: %#v", item)
+		}
+	}
+
+	surprise := Run(context.Background(), Options{
+		CWD:      dir,
+		Baseline: true,
+		Verifiers: []workorder.VerifierSpec{
+			{ID: "must-fail", Kind: "gate", Baseline: workorder.VerifierBaselineMustFail, Argv: []string{"test", "-d", "."}, WallClockSeconds: 2, MaxOutputBytes: 1000},
+		},
+	})
+	if surprise.GatesPassed || len(surprise.Results) != 1 || surprise.Results[0].BaselineMatched == nil || *surprise.Results[0].BaselineMatched {
+		t.Fatalf("expected must_fail baseline pass surprise: %#v", surprise)
+	}
+}
+
+func TestRunProviderGateMustPassAfterPatchWithBaselineTransition(t *testing.T) {
+	dir := t.TempDir()
+	baseline := Run(context.Background(), Options{
+		CWD:      dir,
+		Baseline: true,
+		Verifiers: []workorder.VerifierSpec{
+			{ID: "target", Kind: "gate", Baseline: workorder.VerifierBaselineMustFail, Argv: []string{"test", "-f", "missing"}, WallClockSeconds: 2, MaxOutputBytes: 1000},
+		},
+	})
+	provider := Run(context.Background(), Options{
+		CWD:             dir,
+		ProviderID:      "claude",
+		BaselineResults: byID(baseline.Results),
+		Verifiers: []workorder.VerifierSpec{
+			{ID: "target", Kind: "gate", Baseline: workorder.VerifierBaselineMustFail, Argv: []string{"test", "-f", "missing"}, WallClockSeconds: 2, MaxOutputBytes: 1000},
+		},
+	})
+	if provider.GatesPassed || len(provider.Results) != 1 {
+		t.Fatalf("provider gate should still have to pass: %#v", provider)
+	}
+	got := provider.Results[0]
+	if got.BaselineMatched == nil || !*got.BaselineMatched || got.Transition != "baseline_failed_to_provider_failed" {
+		t.Fatalf("provider baseline fields = %#v", got)
+	}
+}
+
 func TestRunVerifierTimeoutAndOutputCapStatuses(t *testing.T) {
 	dir := t.TempDir()
 	result := Run(context.Background(), Options{

@@ -170,11 +170,53 @@ func TestBuildWorkOrderValidation(t *testing.T) {
 	if got := wo.Build.Verify[0].Kind; got != "gate" {
 		t.Fatalf("default verifier kind = %q", got)
 	}
+	if got := wo.Build.Verify[0].Baseline; got != VerifierBaselineMustPass {
+		t.Fatalf("default verifier baseline = %q", got)
+	}
 	if got := wo.Build.Verify[1].Metric.Name; got != "elapsed_ms" {
 		t.Fatalf("metric name = %q", got)
 	}
 	if got := wo.Build.Verify[1].Metric.MinRuns; got != 1 {
 		t.Fatalf("default metric min_runs = %d", got)
+	}
+}
+
+func TestBuildVerifierBaselineValidation(t *testing.T) {
+	data := validBuildWorkOrder()
+	verify := data["build"].(map[string]any)["verify"].([]any)
+	verify[0].(map[string]any)["baseline"] = "must_fail"
+	wo, err := Validate(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := wo.Build.Verify[0].Baseline; got != VerifierBaselineMustFail {
+		t.Fatalf("baseline = %q", got)
+	}
+
+	data = validBuildWorkOrder()
+	verify = data["build"].(map[string]any)["verify"].([]any)
+	verify[0].(map[string]any)["baseline"] = "optional"
+	_, err = Validate(data)
+	if err == nil || !strings.Contains(err.Error(), "baseline must be one of") {
+		t.Fatalf("expected baseline enum error, got %v", err)
+	}
+
+	data = validBuildWorkOrder()
+	verify = data["build"].(map[string]any)["verify"].([]any)
+	verify[1].(map[string]any)["baseline"] = "may_fail"
+	_, err = Validate(data)
+	if err == nil || !strings.Contains(err.Error(), "baseline is only valid when kind is gate") {
+		t.Fatalf("expected metric baseline rejection, got %v", err)
+	}
+}
+
+func TestBuildVerifierRejectsUnsupportedKeys(t *testing.T) {
+	data := validBuildWorkOrder()
+	verify := data["build"].(map[string]any)["verify"].([]any)
+	verify[0].(map[string]any)["future_field"] = true
+	_, err := Validate(data)
+	if err == nil || !strings.Contains(err.Error(), "unsupported keys: future_field") {
+		t.Fatalf("expected unsupported key error, got %v", err)
 	}
 }
 

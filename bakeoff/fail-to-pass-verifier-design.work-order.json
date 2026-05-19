@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "id": "fail-to-pass-verifier-design",
+  "type": "compare",
+  "goal": "Compare three designs for adding fail-to-pass build verifier support to Bakeoff and recommend one v1-compatible path, with migration risks enumerated.",
+  "background": "Bakeoff's build mode currently runs gate verifiers expected to pass after a provider's patch. A 'fail-to-pass' verifier must fail on the pre-patch baseline (proving the test is meaningful) and pass after the patch — the SWE-bench-style discipline. Three designs are on the table:\n\n1. **`kind: target_gate`** — introduce a new gate kind in the work-order schema that intrinsically encodes fail-to-pass semantics. The CLI runs the verifier twice (baseline + post-patch) and the gate only passes when baseline fails AND post-patch passes.\n\n2. **`gate.baseline: may_fail`** — keep the existing gate kinds; add a `baseline` field to any gate declaring its required pre-patch state (e.g. `must_pass`, `may_fail`, `must_fail`). Runner inspects the field to decide whether to run a baseline pass and how to interpret it.\n\n3. **Docs-only workaround** — ship no schema change; document a pattern using existing primitives (e.g. a wrapper script that runs `git stash && verifier; git stash pop && verifier` and exits 0 only on the fail/pass transition).\n\nEvaluate each on:\n- v1 schema compatibility (current `schema_version: 1` — does the change require a bump, can old work orders still validate, and what does the migration path look like for in-flight runs?)\n- expressiveness (can it represent must_fail, may_fail, must_pass uniformly? regressions? flaky-test handling?)\n- runner/judge complexity (worktree lifecycle, caching, parallelism, reporting)\n- failure modes (what does a partial run look like? how does the report explain a baseline-pass surprise?)\n- author ergonomics (what does a work-order author write per verifier?)\n- migration risks for current users (downstream consumers of `decision.json`, report shape, existing gate fields, CI integrations)\n\nRecommend exactly one path that is v1-compatible (or call out why none are and what schema_version 2 would minimally require). List concrete migration risks for the recommended path: schema changes, behavioral changes to existing runs, report-format changes, and CLI flag surface.\n\nReference material: bakeoff repo at this plugin (work-order schema in `pkg/workorder`, gate execution in `pkg/runner`, report generation in `pkg/report`, examples in `examples/build.work-order.json`).",
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "sonnet",
+      "scope": "mixed",
+      "effort": "high"
+    },
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "scope": "mixed",
+      "effort": "high"
+    }
+  ],
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  }
+}

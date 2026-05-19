@@ -24,14 +24,14 @@ import (
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
 )
 
-func runBuildProviders(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder, repo buildworkspace.Repository, runDir string, worktreePaths map[string]string, capabilities map[string]provider.ScopeCapabilities, keepWorktrees bool, quiet bool) ([]providerRun, error) {
+func runBuildProviders(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder, repo buildworkspace.Repository, runDir string, baseline buildverify.Result, worktreePaths map[string]string, capabilities map[string]provider.ScopeCapabilities, keepWorktrees bool, quiet bool) ([]providerRun, error) {
 	group, groupCtx := errgroup.WithContext(ctx)
 	results := make([]providerRun, len(wo.Providers))
 	for index, participant := range wo.Providers {
 		index := index
 		participant := participant
 		group.Go(func() error {
-			run, err := runOneBuildProvider(groupCtx, f, wo, participant, repo, runDir, worktreePaths[participant.ID], capabilities[participant.Backend], keepWorktrees, quiet)
+			run, err := runOneBuildProvider(groupCtx, f, wo, participant, repo, runDir, baseline, worktreePaths[participant.ID], capabilities[participant.Backend], keepWorktrees, quiet)
 			if err != nil && !errors.Is(err, context.Canceled) {
 				run = providerRun{
 					ID:                  participant.ID,
@@ -58,7 +58,7 @@ func runBuildProviders(ctx context.Context, f commands.Factory, wo *workorder.Wo
 	}
 	return results, nil
 }
-func runOneBuildProvider(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder, participant workorder.Participant, repo buildworkspace.Repository, runDir string, worktreePath string, caps provider.ScopeCapabilities, keepWorktrees bool, quiet bool) (run providerRun, err error) {
+func runOneBuildProvider(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder, participant workorder.Participant, repo buildworkspace.Repository, runDir string, baseline buildverify.Result, worktreePath string, caps provider.ScopeCapabilities, keepWorktrees bool, quiet bool) (run providerRun, err error) {
 	phaseStarted := time.Now()
 	providerDir := filepath.Join(runDir, "providers", participant.ID)
 	buildDir := filepath.Join(providerDir, "build")
@@ -178,6 +178,7 @@ func runOneBuildProvider(ctx context.Context, f commands.Factory, wo *workorder.
 		run.Verify = buildverify.Run(ctx, buildverify.Options{
 			CWD:                   providerCWD,
 			ProviderID:            participant.ID,
+			BaselineResults:       verifierResultsByID(baseline.Results),
 			Verifiers:             wo.Build.Verify,
 			Env:                   runnerenv.SafeEnv(os.Environ()),
 			HeartbeatSeconds:      wo.Budgets.HeartbeatSeconds,

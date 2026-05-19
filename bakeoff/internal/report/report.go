@@ -14,8 +14,9 @@ var actionableSections = map[string]bool{
 	"Actionable Follow-ups":   true,
 	"Findings":                true,
 	"Comparison":              true,
-	"Strongest Material":      true,
 	"Consensus Disagreements": true,
+	"Strongest Material":      true,
+	"Sub-Claim Divergences":   true,
 	"Kept From Nonwinner":     true,
 	"Additions From Loser":    true,
 	"Conflicts":               true,
@@ -82,11 +83,17 @@ func renderOutcome(wo *workorder.WorkOrder, decision map[string]any, workerResul
 	} else if winner != "" && kind == "single_provider_only" {
 		lines = append(lines, "Winner: `"+winner+"`")
 	} else {
-		result := kind
-		if result == "" {
-			result = "unknown"
+		if (mode == "compare" || mode == "analyze") && kind == "consensus" {
+			lines = append(lines, "Result: both providers agreed")
+		} else if (mode == "compare" || mode == "analyze") && kind == "tie" {
+			lines = append(lines, "Result: no stable winner")
+		} else {
+			result := kind
+			if result == "" {
+				result = "unknown"
+			}
+			lines = append(lines, "Result: `"+result+"`")
 		}
-		lines = append(lines, "Result: `"+result+"`")
 	}
 	if opts.RunID != "" {
 		lines = append(lines, "Next: `"+ledger.BakeoffShowCommand(opts.RunID, opts.OutDir, "")+"`")
@@ -127,11 +134,8 @@ func decisionAudit(decision map[string]any) []string {
 				verdict = "none"
 			}
 			positional := jsonutil.StringValue(summary["positional_winner"])
-			relation := ""
-			if summary["relation"] != nil {
-				relation = ", relation=`" + jsonutil.StringValue(summary["relation"]) + "`"
-			}
-			lines = append(lines, fmt.Sprintf("  - %s: A=`%s`, B=`%s`, winner=`%s` (positional `%s`%s)", name, jsonutil.StringValue(summary["A"]), jsonutil.StringValue(summary["B"]), verdict, positional, relation))
+			relation := jsonutil.StringValue(summary["relation"])
+			lines = append(lines, fmt.Sprintf("  - %s: A=`%s`, B=`%s`, winner=`%s` (%s)", name, jsonutil.StringValue(summary["A"]), jsonutil.StringValue(summary["B"]), verdict, judgePassParenthetical(positional, relation)))
 		}
 	}
 	if rationale := jsonutil.ListValue(decision["judge_rationale"]); len(rationale) > 0 {
@@ -152,6 +156,23 @@ func decisionAudit(decision map[string]any) []string {
 	}
 	lines = append(lines, "")
 	return lines
+}
+
+func judgePassParenthetical(positional string, relation string) string {
+	parts := []string{}
+	if positional != "" {
+		parts = append(parts, "positional=`"+positional+"`")
+	}
+	if relation != "" {
+		parts = append(parts, "relation="+relation)
+	}
+	if relation == "consensus" && positional == "" {
+		parts = append(parts, "no positional winner")
+	}
+	if len(parts) == 0 {
+		return "no positional winner"
+	}
+	return strings.Join(parts, ", ")
 }
 
 func renderProviderStatusTable(decision map[string]any) []string {
@@ -181,6 +202,9 @@ func renderProviderStatusTable(decision map[string]any) []string {
 		}
 		if observed := jsonutil.IntValue(status["stderr_observed_bytes"]); observed != 0 && observed != stderrBytes {
 			notes = append(notes, fmt.Sprintf("stderr observed %s", humanBytes(observed)))
+		}
+		if kind := jsonutil.StringValue(status["stderr_kind"]); kind != "" && kind != "none" {
+			notes = append(notes, "stderr kind: "+kind)
 		}
 		if path := jsonutil.StringValue(status["stderr_path"]); path != "" {
 			notes = append(notes, "stderr: `"+path+"`")
@@ -314,7 +338,7 @@ func renderCompare(decision map[string]any, workerResults map[string]map[string]
 	case kind == "consensus":
 		lines = append(lines, "The judge found both providers reached the same position.", "", "### Strongest Material", "")
 		lines = append(lines, genericItemLines(jsonutil.ListValue(decision["consensus_strongest"]))...)
-		lines = append(lines, "", "### Consensus Disagreements", "")
+		lines = append(lines, "", "### Sub-Claim Divergences", "")
 		lines = append(lines, genericItemLines(jsonutil.ListValue(decision["consensus_disagreements"]))...)
 	case kind == "single_provider_only" && winner != "":
 		final := jsonutil.FinalJSONMap(workerResults[winner])

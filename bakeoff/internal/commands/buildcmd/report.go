@@ -307,6 +307,15 @@ func verifierLines(results []buildverify.VerifierResult) []string {
 	lines := []string{}
 	for _, result := range results {
 		line := fmt.Sprintf("- `%s` (%s): `%s`", result.ID, result.Kind, result.Status)
+		if result.BaselineExpectation != "" {
+			line += ", baseline=" + result.BaselineExpectation
+		}
+		if result.BaselineMatched != nil {
+			line += fmt.Sprintf(", baseline_matched=%t", *result.BaselineMatched)
+		}
+		if result.Transition != "" {
+			line += ", transition=" + result.Transition
+		}
 		if result.Metric != nil && result.Metric.Value != nil {
 			line += fmt.Sprintf(", %s=%.6g", result.Metric.Name, *result.Metric.Value)
 			if metadata := metricMetadataSummary(result.Metric); metadata != "" {

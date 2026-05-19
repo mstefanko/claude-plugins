@@ -18,6 +18,10 @@ import (
 
 const (
 	DefaultOutputCapGraceSeconds = 10
+
+	VerifierBaselineMustPass = "must_pass"
+	VerifierBaselineMayFail  = "may_fail"
+	VerifierBaselineMustFail = "must_fail"
 )
 
 var (
@@ -37,6 +41,7 @@ var (
 	analyzeScores       = []string{"step_atomicity", "citation_grounding", "assumption_transparency", "coherence"}
 	buildScores         = []string{"correctness", "verifier_evidence", "comparative_evidence", "scope_control", "test_quality", "benchmark_quality", "maintainability"}
 	verifierKinds       = []string{"gate", "metric"}
+	verifierBaselines   = []string{VerifierBaselineMustPass, VerifierBaselineMayFail, VerifierBaselineMustFail}
 	metricDirections    = []string{"lower", "higher"}
 	loserPositions      = []string{"agrees", "disagrees", "not_covered", "adds"}
 	followupKinds       = []string{"bug", "risk", "doc_drift", "test_gap", "follow_up"}
@@ -50,6 +55,10 @@ var (
 
 var facetKeys = map[string]bool{
 	"id": true, "kind": true, "focus": true, "include": true, "exclude": true, "notes": true,
+}
+
+var verifierKeys = map[string]bool{
+	"id": true, "kind": true, "argv": true, "metric": true, "wall_clock_seconds": true, "max_output_bytes": true, "baseline": true,
 }
 
 var facetReservedIDs = map[string]bool{
@@ -123,6 +132,7 @@ type VerifierSpec struct {
 	Kind             string         `json:"kind"`
 	Argv             []string       `json:"argv"`
 	Metric           *MetricSpec    `json:"metric,omitempty"`
+	Baseline         string         `json:"baseline,omitempty"`
 	WallClockSeconds int            `json:"wall_clock_seconds"`
 	MaxOutputBytes   int            `json:"max_output_bytes"`
 	Raw              map[string]any `json:"-"`
@@ -753,6 +763,16 @@ func validateVerifierSpecs(value any) ([]VerifierSpec, error) {
 
 func validateVerifierSpec(obj map[string]any, index int) (VerifierSpec, error) {
 	label := fmt.Sprintf("build.verify[%d]", index)
+	var unknown []string
+	for key := range obj {
+		if !verifierKeys[key] {
+			unknown = append(unknown, key)
+		}
+	}
+	sort.Strings(unknown)
+	if len(unknown) > 0 {
+		return VerifierSpec{}, Validationf("%s has unsupported keys: %s", label, strings.Join(unknown, ", "))
+	}
 	id, ok := obj["id"].(string)
 	if !ok || strings.TrimSpace(id) == "" {
 		return VerifierSpec{}, Validationf("%s.id must be a non-empty slug", label)
@@ -790,11 +810,25 @@ func validateVerifierSpec(obj map[string]any, index int) (VerifierSpec, error) {
 	} else if _, ok := obj["metric"]; ok {
 		return VerifierSpec{}, Validationf("%s.metric is only valid when kind is metric", label)
 	}
+	baseline := ""
+	if raw, ok := obj["baseline"]; ok {
+		if kind != "gate" {
+			return VerifierSpec{}, Validationf("%s.baseline is only valid when kind is gate", label)
+		}
+		value, ok := raw.(string)
+		if !ok || !contains(verifierBaselines, value) {
+			return VerifierSpec{}, Validationf("%s.baseline must be one of: %s", label, strings.Join(verifierBaselines, ", "))
+		}
+		baseline = value
+	} else if kind == "gate" {
+		baseline = VerifierBaselineMustPass
+	}
 	return VerifierSpec{
 		ID:               id,
 		Kind:             kind,
 		Argv:             argv,
 		Metric:           metric,
+		Baseline:         baseline,
 		WallClockSeconds: wall,
 		MaxOutputBytes:   maxOutput,
 		Raw:              obj,

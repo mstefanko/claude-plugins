@@ -175,7 +175,12 @@ func RunResearch(ctx context.Context, f commands.Factory, opts *ResearchOptions)
 	if err := workorder.WriteTextAtomic(filepath.Join(runDir, "report.md"), reportText); err != nil {
 		return &apperror.RuntimeError{Err: err}
 	}
-	if err := artifact.WriteMeta(ctx, runDir, wo, runID, startedAt, workerResults, f.LookupProvider); err != nil {
+	if err := artifact.WriteMeta(ctx, runDir, wo, runID, startedAt, artifact.MetaOptions{
+		WorkerResults:  workerResults,
+		Decision:       decisionDoc,
+		ExitCode:       exitCode,
+		LookupProvider: f.LookupProvider,
+	}); err != nil {
 		return &apperror.RuntimeError{Err: err}
 	}
 	if _, err := manifest.WriteRunManifest(runDir); err != nil {
@@ -222,6 +227,17 @@ func RunResearch(ctx context.Context, f commands.Factory, opts *ResearchOptions)
 		if recommendation := triagepkg.ShouldRecommendTriage(wo.Raw, decisionDoc, reportText); recommendation != "" {
 			f.Streams().Printf("recommended: %s  (%s)\n", ledger.BakeoffTriageCommand(runID, opts.Out, false), recommendation)
 		}
+	}
+	if err := artifact.WriteMeta(ctx, runDir, wo, runID, startedAt, artifact.MetaOptions{
+		WorkerResults:  workerResults,
+		Decision:       decisionDoc,
+		ExitCode:       exitCode,
+		LookupProvider: f.LookupProvider,
+	}); err != nil {
+		return &apperror.RuntimeError{Err: err}
+	}
+	if _, err := manifest.WriteRunManifest(runDir); err != nil {
+		return &apperror.RuntimeError{Err: err}
 	}
 	if opts.JSON {
 		value := summary.BuildResearch(runDir, runID, opts.Out, decisionDoc, workerResults, exitCode, autoTriageStarted, triageExitCode)
@@ -494,15 +510,21 @@ func researchResultLine(wo *workorder.WorkOrder, decisionDoc map[string]any, rep
 		}
 		return line
 	default:
-		winner, _ := decisionDoc["canonical_winner"].(string)
-		if winner == "" {
-			winner = "none"
+		if kind == "consensus" {
+			return "consensus (both providers agree)"
 		}
+		winner, _ := decisionDoc["canonical_winner"].(string)
 		basis := "n/a"
 		if tiebreak, _ := decisionDoc["spine_tiebreak"].(string); tiebreak != "" {
 			basis = tiebreak
 		} else if ran, _ := decisionDoc["judge_ran"].(bool); ran {
 			basis = "judge"
+		}
+		if winner == "" {
+			if ran, _ := decisionDoc["judge_ran"].(bool); ran {
+				return fmt.Sprintf("no winner (unresolved disagreement, basis=%s)", basis)
+			}
+			winner = "none"
 		}
 		return fmt.Sprintf("winner=%s, basis=%s", winner, basis)
 	}

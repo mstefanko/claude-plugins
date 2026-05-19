@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "id": "multi-lens-code-review-evidence",
+  "type": "gather",
+  "goal": "Find peer-reviewed research and credible practitioner studies on whether running code review through multiple distinct lenses (e.g., correctness, security, UX, performance, maintainability) yields meaningfully better outcomes than a single general-purpose review pass. Outcomes of interest: defect detection rate, defect type coverage, false-positive rate, reviewer fatigue, and review cycle time. Each claim must cite a specific paper, study, or industry report (title, authors or org, year, venue or URL).",
+  "background": "The bakeoff CLI today supports a single optional top-level 'facet' on a gather work order, which scopes reviewer focus (include/exclude/focus). We are weighing whether to add support for multiple facets per work order so that one review run could explicitly evaluate code under security, UX, and performance lenses simultaneously instead of forcing the user to run separate work orders. We want evidence on whether multi-lens or role-based review actually improves results, before changing the schema. Treat 'multi-faceted review' broadly: checklist-based reviews segmented by category, perspective-based reading (PBR) techniques, multiple specialized reviewers vs. one generalist, role rotation, or AI/LLM ensembles with distinct prompts per lens are all in scope.",
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "sonnet",
+      "scope": "web",
+      "effort": "high"
+    },
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "scope": "web",
+      "effort": "high"
+    }
+  ],
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "budgets": {
+    "wall_clock_seconds": 1200,
+    "max_output_bytes": 80000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  },
+  "scope_policy": {
+    "enforcement": "best_effort"
+  }
+}

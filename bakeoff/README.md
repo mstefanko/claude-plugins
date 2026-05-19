@@ -67,7 +67,7 @@ documented in [docs/release-publishing.md](docs/release-publishing.md).
 
 Codex install: this checkout ships `.codex-plugin/plugin.json`; verify the current Codex plugin flow in Codex docs.
 
-Natural-language requests draft a work order, show the full JSON, and wait for explicit approval before writing or running. For large requests, the plugin may suggest 2-3 separate work orders when the split is clean; each part is still a normal Bakeoff run. Sample work orders live in `examples/` (`gather`, `compare`, `analyze`, `review`, `build`).
+Natural-language requests draft a work order, show a compact review preview, and wait for explicit approval before writing or running. Short drafts include the full JSON inline; longer drafts show the planned work-order file and let you reply `show` to print the JSON before approving. For large requests, the plugin may suggest 2-3 separate work orders when the split is clean; each part is still a normal Bakeoff run. Sample work orders live in `examples/` (`gather`, `compare`, `analyze`, `review`, `build`).
 
 Generated work orders use Claude model aliases (`sonnet`, `opus`) so defaults stay current; use full model ids in the work order to pin exact versions.
 
@@ -234,7 +234,7 @@ Core CLI: `bakeoff validate`, `bakeoff research`, `bakeoff build`, `bakeoff show
 
 The work order is the main configuration file for a run. It carries the mode, providers, scope, budgets, verifiers, protected paths, and output caps.
 
-Most users do not write work orders by hand. When you run `/bakeoff:run ...` with a natural-language request, Claude drafts the work order, shows you the JSON, and waits for approval before running it. You can also pass an existing work-order file when you want exact control.
+Most users do not write work orders by hand. When you run `/bakeoff:run ...` with a natural-language request, Claude drafts the work order, shows a compact review preview, and waits for approval before running it. You can reply `show` to print the full JSON before approving, or pass an existing work-order file when you want exact control.
 
 See [docs/work-orders.md](docs/work-orders.md) for the full work-order reference.
 

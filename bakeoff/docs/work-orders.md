@@ -137,11 +137,24 @@ Verifier fields:
 | `wall_clock_seconds` | Required positive integer. |
 | `max_output_bytes` | Required positive integer. |
 | `metric` | Required only for metric verifiers. |
+| `baseline` | Optional for gate verifiers only. One of `must_pass`, `may_fail`, or `must_fail`; omitted gates default to `must_pass`. |
 
 Metric verifier specs require `name`, `direction` (`lower` or `higher`), and
 `min_delta_percent`; `noise_floor_percent` and `min_runs` are optional.
 Metric commands should print one final aggregate JSON object as the last
 non-empty stdout line with the metric name as a finite numeric field.
+
+Gate baseline expectations control only the pre-patch baseline run. Provider
+verification still requires every gate to pass after the patch. Use
+`baseline: "must_fail"` for fail-to-pass reproducers that should fail before
+the patch and pass after it. Use `baseline: "may_fail"` when the baseline state
+is informational and should be recorded without blocking provider launch.
+Metric verifiers do not accept `baseline`; use metric thresholds and metadata
+for metric comparisons.
+
+Work orders that use `build.verify[].baseline` require a Bakeoff binary that
+supports the field. Pin the updated binary in CI before adopting the field;
+older binaries can misinterpret additive verifier fields.
 
 Verifier commands are the shared measuring stick. Bakeoff runs the same
 predeclared verifier specs against the baseline and each provider candidate, so
@@ -266,15 +279,19 @@ Metric verifier with protected harness paths:
 `/bakeoff:run` drafts clean JSON from natural language. It does not call
 `bakeoff init` for generated drafts and does not inherit TODO placeholders.
 
-The plugin must show the full JSON and ask:
+The plugin shows a compact review preview before approval. The preview includes
+the planned file path, core settings, goal, brief background summary, and run
+command. Short drafts also include the full JSON inline; longer drafts say that
+the full JSON can be printed with `show`.
 
 ```text
-Write and run this work order? Reply `yes` to continue, or tell me what to change.
+Write, validate, and run this work order? Reply `yes` to continue, reply `show` to print the full JSON, or tell me what to change.
 ```
 
 Only explicit approval lets the plugin write `./<id>.work-order.json` and run
 `bakeoff validate`.
 
-When the plugin suggests a clean split, it shows each separate work-order JSON
-block before approval. The files remain ordinary single-work-order inputs such
-as `./<id>.part-1.work-order.json` and `./<id>.part-2.work-order.json`.
+When the plugin suggests a clean split, it shows a preview for each separate
+work order before approval, with full JSON inline only when the combined draft
+stays readable. The files remain ordinary single-work-order inputs such as
+`./<id>.part-1.work-order.json` and `./<id>.part-2.work-order.json`.
