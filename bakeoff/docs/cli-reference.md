@@ -11,7 +11,7 @@ place.
 | --- | --- |
 | `/bakeoff:setup [--yes]` | Build or update the bundled Go CLI in persistent plugin data. |
 | `/bakeoff:setup --from-release --version vX.Y.Z [--yes]` | Optional no-Go path: install a released CLI binary from GitHub Releases. |
-| `/bakeoff:quickstart` | Check the CLI, then run `doctor --skip-auth-probe --json`. |
+| `/bakeoff:quickstart` | Check the CLI, then run `doctor --json` with provider auth probes. |
 | `/bakeoff:run <path or request> [flags]` | Validate and run an existing work order, or draft one from natural language. |
 | `/bakeoff:inspect [latest or run-id] [flags]` | Read ledgers, reports, decisions, triage, and build handoff artifacts. |
 | `/bakeoff:doctor [flags]` | Run readiness diagnostics through the CLI. |

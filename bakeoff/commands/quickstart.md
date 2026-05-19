@@ -28,8 +28,11 @@ Apply the shared Bakeoff skill contract. Do not request or write secrets.
 2. Run:
 
    ```bash
-   "${CLAUDE_PLUGIN_ROOT}/bin/bakeoff" doctor --skip-auth-probe --json
+   "${CLAUDE_PLUGIN_ROOT}/bin/bakeoff" doctor --json --quiet
    ```
+
+   This runs provider auth probes. If the user wants a faster/no-spend check,
+   direct them to `/bakeoff:doctor --skip-auth-probe`.
 
 3. Summarize local readiness from the JSON:
 
@@ -40,8 +43,8 @@ Apply the shared Bakeoff skill contract. Do not request or write secrets.
    - scope controls and any advisory fallback;
    - warnings or missing setup tasks.
 
-4. If auth probes were skipped, say that full runs still depend on normal
-   provider CLI login/session state.
+4. Surface provider auth/session failures as next actions. Do not ask for API
+   keys; tell the user to authenticate with the provider CLI directly.
 
 5. Mention that `/bakeoff:doctor --build` runs the live build readiness probe.
 
