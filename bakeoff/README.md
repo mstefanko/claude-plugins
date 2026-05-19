@@ -10,9 +10,11 @@ The tool is deliberately small and transparent. It launches providers, records a
 | --- | --- | --- | --- |
 | Gather | `type: "gather"` | Inventories, source-backed findings, coverage questions. | `/bakeoff:run research how auth retry works` |
 | Compare | `type: "compare"` | Choosing between options, vendors, designs. | `/bakeoff:run compare SQLite FTS vs Tantivy` |
-| Analyze | `type: "analyze"` | Root cause, architecture, synthesis. | `/bakeoff:run analyze why reports get truncated` |
+| Analyze | `type: "analyze"` | Root cause, architecture, synthesis. | `/bakeoff:run why reports get truncated` |
 | Review | `type: "gather"` + `facet.id: "code-review"` | Auditing a branch, PR, diff, or local change. | `/bakeoff:run review this diff against main` |
 | Build | `type: "build"` | Competing implementations with verifiers as the selector. | `/bakeoff:run build competing fixes for the failing test` |
+
+Mode words are steering hints, not required syntax: `/bakeoff:run` infers the work-order type from the request, so a "why" question can draft an `analyze` work order without saying `analyze`.
 
 ```mermaid
 flowchart LR
@@ -221,30 +223,15 @@ Core CLI: `bakeoff validate`, `bakeoff research`, `bakeoff build`, `bakeoff show
 
 ## Configuration
 
-CLI resolution order: `BAKEOFF_GO_BINARY` → `${BAKEOFF_PLUGIN_DATA}/bin/bakeoff` → `${CLAUDE_PLUGIN_DATA}/bin/bakeoff` → `dist/bakeoff` → `go run ./cmd/bakeoff`.
+The work order is the main configuration file for a run. It carries the mode, providers, scope, budgets, verifiers, protected paths, and output caps.
 
-| Variable | Role |
-| --- | --- |
-| `CLAUDE_PLUGIN_ROOT` | Set by Claude Code; read by plugin commands and scripts. |
-| `CLAUDE_PLUGIN_DATA` | Persistent Claude Code plugin data directory used by `/bakeoff:setup`. |
-| `CODEX_PLUGIN_ROOT` | Codex-side plugin root when installed there. |
-| `BAKEOFF_PLUGIN_DATA` | Explicit plugin data override for tests, mirrors, and non-Claude launchers. |
-| `BAKEOFF_GO_BINARY` | Highest-precedence path to a compatible prebuilt `bakeoff` binary. |
-| `BAKEOFF_RELEASE_REPOSITORY` | Optional owner/repo override for release downloads. Default: `mstefanko/claude-plugins`. |
-| `BAKEOFF_RELEASE_BASE_URL` | Optional release mirror URL, including `file://` for local tests. |
-| `NO_COLOR` | Standard CLI color suppression. |
+Most users do not write work orders by hand. When you run `/bakeoff:run ...` with a natural-language request, Claude drafts the work order, shows you the JSON, and waits for approval before running it. You can also pass an existing work-order file when you want exact control.
 
-Work orders carry budgets for wall-clock time, heartbeat cadence, and output caps; most users don't edit them. See [docs/work-orders.md](docs/work-orders.md).
+See [docs/work-orders.md](docs/work-orders.md) for the full work-order reference.
 
-Release setup downloads public GitHub Release assets, verifies `checksums.txt`,
-and writes only under plugin data. v1 macOS binaries should be signed and
-notarized before public distribution; unsigned private dogfood builds are
-explicitly installed by `/bakeoff:setup` and the setup script does not bypass
-Gatekeeper quarantine.
+Setup is handled by `/bakeoff:setup`, which installs the `bakeoff` CLI into persistent Claude plugin data. If the plugin cannot find a usable CLI, run `/bakeoff:quickstart` or `/bakeoff:setup`.
 
-Codex installs do not use a `CODEX_PLUGIN_DATA` directory in v1. Until a
-documented persistent Codex plugin data path is verified, Codex users should use
-`BAKEOFF_GO_BINARY`, a packaged `dist/bakeoff`, or a source build.
+Advanced launcher settings, release mirrors, and binary override variables are documented in [docs/cli-reference.md](docs/cli-reference.md).
 
 ## Why Bakeoff Stays Thin
 
