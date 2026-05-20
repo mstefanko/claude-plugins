@@ -12,10 +12,17 @@ Use Bakeoff as the source of truth. Do not reimplement Bakeoff behavior in
 Claude instructions. Do not place secrets in work orders, background text,
 generated context, prompts, summaries, or plugin-written files.
 
-Bakeoff is a thin CLI wrapper surface. Claude may draft work orders, inspect
-artifacts, invoke `bakeoff`, and summarize results. The Go CLI owns validation,
-provider execution, judging, patch capture, reports, ledgers, triage, and exit
-codes.
+Bakeoff is a thin CLI wrapper surface. Claude's plugin-side role is to draft
+work orders, invoke `bakeoff`, inspect artifacts, and summarize results. The Go
+CLI owns validation, provider execution, judging, patch capture, reports,
+ledgers, triage, and exit codes.
+
+For `/bakeoff:run`, Claude must not satisfy the requested research, review,
+comparison, analysis, or build inline. Claude only drafts work orders, invokes
+`bakeoff`, inspects artifacts, and summarizes CLI results. If the request cannot
+enter that flow, stop with the documented warning, clarification, or error. Do
+not call provider CLIs directly for the user task; only the Bakeoff CLI may
+launch providers for this command.
 
 ## Work-Order Classification
 
@@ -49,6 +56,9 @@ stop and ask for confirmation instead of silently drafting. This is advisory,
 not a hard block: a clear same-turn phrase such as `draft anyway` or "run
 Bakeoff anyway" satisfies the warning for that turn. Do not add a flag,
 persistent preference, or "never warn me again" state.
+The warning does not permit an inline answer. After a task-fit warning, do not
+answer the task directly unless the user explicitly asks to abandon Bakeoff and
+answer inline.
 
 Use this wording shape:
 
@@ -157,10 +167,11 @@ If any split validation fails, stop before execution, surface the validation
 error verbatim, repair the affected JSON, and show the final set again with the
 same preview rules before asking for approval. `bakeoff validate` warnings are
 advisory and do not stop the split sequence when validation exits successfully.
-During execution, continue after exit `0` or `3`; exit `3` is a completed
-Bakeoff handoff with unresolved disagreement. Stop the sequence on exit `1`,
-`2`, `130`, interruption, or command failure. Summarize completed parts and the
-failed part before asking whether to continue.
+During execution, continue after exit `0`, `3`, or `4`; exit `3` is a completed
+Bakeoff handoff with unresolved disagreement, and exit `4` is a
+decision-incomplete handoff with durable provider artifacts. Stop the sequence
+on exit `1`, `2`, `130`, interruption, or command failure. Summarize completed
+parts and the failed part before asking whether to continue.
 
 Do not run a decomposition agent, add a DAG runner, create a batch
 work-order-list schema, coordinate shared state across parts, or synthesize an
@@ -270,8 +281,8 @@ This will run <N> separate review runs:
 2. Performance review
 3. UX/frontend behavior review
 
-Each run asks the same two reviewers to inspect the same change from one lens,
-then merges and verifies that lens's findings.
+Each run asks the configured reviewers to inspect the same change from one
+lens, then merges and verifies that lens's findings.
 
 Cost note: this is about <N>x a normal review. With the configured
 <budget-seconds> second budget, each lens can reserve up to about
@@ -289,12 +300,14 @@ Write, validate, and run these one after another? Reply `write and run`, reply
 
 Compute the displayed worst-case from `budgets.wall_clock_seconds`: one worker
 phase, one merge phase, and one verification phase per lens when triage is
-enabled. The two provider reviews run in parallel, so do not double-count the
-worker phase. For the default 900-second budget with triage enabled, this is
-45 minutes per lens. If `--no-triage` is set, omit the verification phase,
-state that findings will be raw and unverified, and use two phases in the
-estimate. Full JSON may be shown after `show` only when the combined draft fits
-the 120-line / 10 KB preview budget.
+enabled. Provider reviews run in parallel, so do not double-count the worker
+phase. For the default 900-second budget with triage enabled, this is 45
+minutes per lens. If `--no-triage` is set, omit the verification phase, state
+that findings will be raw and unverified, and use two phases in the estimate.
+Full JSON may be shown after `show` only when the combined draft fits the
+120-line / 10 KB preview budget.
+If the draft uses one or more than two providers, name the provider count in the
+preview and still count one worker phase because providers run in parallel.
 
 Require explicit `write and run` approval before writing or executing
 multi-lens files. For multi-lens, `yes`, `approve`, or `run it` is not enough;
@@ -484,6 +497,9 @@ Route existing work-order paths by `type`:
   `bakeoff research <path>`.
 
 Do not reinterpret missing path-like input as natural language.
+If input is path-like but missing or invalid, report the path error only; do not
+reinterpret the remaining words as a natural-language request or answer them
+inline.
 
 ## Competitive Build Handoff
 

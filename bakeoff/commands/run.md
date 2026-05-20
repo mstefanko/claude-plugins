@@ -12,6 +12,26 @@ orders from a natural-language request.
 Apply the shared Bakeoff skill contract. Bakeoff is the source of truth for
 validation, provider execution, judging, reports, ledgers, and exit codes.
 
+## Invocation Contract
+
+The user invoked `/bakeoff:run`; do not satisfy the underlying request inline.
+The default path is to preflight, classify the input, draft or validate a work
+order, get any required approval, run `bakeoff validate`, and then run
+`bakeoff research` or `bakeoff build`.
+
+Before a Bakeoff run starts, the only allowed stops are CLI preflight failure,
+missing path-like input, unknown or wrong-mode flags, a task-fit warning,
+missing required draft fields, split or multi-lens clarification or approval,
+or validation failure needing repair. In those stops, ask or advise only. Do
+not perform the requested review, analysis, comparison, or implementation
+yourself.
+
+Local file and git reads are allowed only to draft the work order, validate
+scope, or summarize Bakeoff artifacts. Do not read target files and produce
+substantive findings as a substitute for the CLI.
+Do not call provider CLIs directly for the user task; only the Bakeoff CLI may
+launch providers for this command.
+
 ## Preflight
 
 Run first:
@@ -23,6 +43,10 @@ Run first:
 If this exits `2`, stop and direct the user to install Go 1.24+ and run
 `/bakeoff:setup`, set `BAKEOFF_GO_BINARY`, or use the optional release-binary
 setup path. Do not build from source implicitly in `/bakeoff:run`.
+
+If this exits with any other non-zero status, stop, surface the check output as
+an unexpected CLI resolution failure, and direct the user to `/bakeoff:doctor`.
+Do not draft, validate, or run a work order until preflight succeeds.
 
 Parse `$ARGUMENTS` before deciding whether this is a path or a request.
 
@@ -61,6 +85,9 @@ If the first remaining argument names an existing file, read it and inspect
 Path-like missing input is an error, not a natural-language request. Treat input
 as path-like when it has a path separator, starts with `.`, `~`, or `/`, or ends
 in `.json`, `.jsonc`, or `.work-order.json`.
+If input is path-like but missing or invalid, report the path error only; do not
+reinterpret the remaining words as a natural-language request or answer them
+inline.
 
 Always run:
 
@@ -108,6 +135,10 @@ The warning is advisory. A clear same-turn phrase such as `draft anyway` or
 flag or persistent opt-out. If the user narrows the request, re-run the check.
 Task-fit confirmation does not waive required work-order fields; for example,
 build mode still needs a gate verifier before a valid work order can run.
+The task-fit warning is not permission to answer directly. Stop at the warning
+until the user narrows or confirms; after confirmation, continue through the
+Bakeoff draft, validate, and run flow. Do not answer directly unless the user
+explicitly asks to abandon Bakeoff and answer inline.
 
 After task fit passes or is confirmed, check for explicit multi-lens review
 requests before the generic clean-split check. Do not propose a split or
@@ -182,7 +213,9 @@ stop the split sequence when validation exits successfully. Route each part by
 its own `type`: `build` uses
 `bakeoff build`; `gather`, `compare`, and `analyze` use `bakeoff research`.
 Apply the same mode-specific flag routing to each part. Continue after exit
-`0` or `3`. Stop on exit `1`, `2`, `130`, interruption, or command failure,
+`0`, `3`, or `4`; exit `4` is a decision-incomplete handoff with durable
+provider artifacts and should include the judge-only rerun recommendation when
+applicable. Stop on exit `1`, `2`, `130`, interruption, or command failure,
 summarize completed parts and the failed part, and ask before running any
 remaining parts.
 
@@ -289,8 +322,8 @@ This will run <N> separate review runs:
 2. Performance review
 3. UX/frontend behavior review
 
-Each run asks the same two reviewers to inspect the same change from one lens,
-then merges and verifies that lens's findings.
+Each run asks the configured reviewers to inspect the same change from one
+lens, then merges and verifies that lens's findings.
 
 Cost note: this is about <N>x a normal review. With the configured
 <budget-seconds> second budget, each lens can reserve up to about
@@ -308,11 +341,12 @@ Write, validate, and run these one after another? Reply `write and run`, reply
 
 Compute the displayed worst-case from `budgets.wall_clock_seconds`: one worker
 phase, one merge phase, and one verification phase per lens when triage is
-enabled. The two provider reviews run in parallel, so do not double-count the
-worker phase. For the default 900-second budget with triage enabled, this is
-45 minutes per lens. If `--no-triage` is set, omit the verification phase,
-state that findings will be raw and unverified, and use two phases in the
-estimate.
+enabled. Provider reviews run in parallel, so do not double-count the worker
+phase. For the default 900-second budget with triage enabled, this is 45
+minutes per lens. If `--no-triage` is set, omit the verification phase, state
+that findings will be raw and unverified, and use two phases in the estimate.
+If the draft uses one or more than two providers, name the provider count in the
+preview and still count one worker phase because providers run in parallel.
 
 Use `write and run` as the multi-lens approval phrase. For multi-lens, `yes`,
 `approve`, or `run it` is not enough; reply by asking for exact `write and run`

@@ -14,7 +14,23 @@ behavior.
 - [ ] Existing work-order path bypasses advisory checks.
   - Prompt: `/bakeoff:run examples/gather.work-order.json`
   - Expect: plugin runs the existing validate-and-route flow with no task-fit
-    warning and no split proposal.
+    warning and no split proposal. It does not summarize or answer from the
+    file contents alone.
+
+- [ ] CLI preflight is mandatory.
+  - Setup: make `scripts/bakeoff-ensure-cli --check` exit `2`.
+  - Expect: plugin stops and directs the user to install Go 1.24+, run
+    `/bakeoff:setup`, set `BAKEOFF_GO_BINARY`, or use release setup. It does
+    not draft or run.
+  - Setup: make `scripts/bakeoff-ensure-cli --check` exit non-zero other than
+    `2`.
+  - Expect: plugin surfaces the check output as an unexpected CLI resolution
+    failure and directs the user to `/bakeoff:doctor`. It does not draft or run.
+
+- [ ] Missing path-like input is a path error only.
+  - Prompt: `/bakeoff:run docs/does-not-exist.work-order.json`
+  - Expect: plugin reports the missing path-like input and does not reinterpret
+    the prompt as natural language or answer inline.
 
 - [ ] Formatter-only work shows the task-fit warning.
   - Prompt: `/bakeoff:run format these files`
@@ -41,7 +57,14 @@ behavior.
 - [ ] Normal review drafts a single review work order.
   - Prompt: `/bakeoff:run review this diff against main`
   - Expect: plugin drafts one `type: "gather"` work order with
-    `facet.id: "code-review"` and the standard approval prompt.
+    `facet.id: "code-review"` and the standard approval prompt. It does not
+    list findings directly.
+
+- [ ] Single-review approval accepts the cross-mode phrase.
+  - Prompt: accept a normal single review preview with `write and run`.
+  - Expect: plugin treats it as explicit approval, writes one work-order file,
+    validates it, and runs `bakeoff research`. It does not infer a split or
+    multi-lens run from the phrase.
 
 - [ ] Multiple review concerns without separate-lens wording stay single-run.
   - Prompt: `/bakeoff:run review this diff against main for security and tests`
@@ -93,7 +116,8 @@ behavior.
 - [ ] Concrete analyze request drafts a single analyze work order.
   - Prompt: `/bakeoff:run analyze why import retries duplicate receipts; use logs in <path> and files under internal/import`
   - Expect: plugin drafts one `type: "analyze"` work order with the supplied
-    symptom, evidence surface, and scope.
+    symptom, evidence surface, and scope. It does not explain the root cause
+    directly.
 
 - [ ] Two independent research goals trigger a split proposal.
   - Prompt: `/bakeoff:run research where receipt dedupe happens and compare SQLite FTS vs Tantivy for product search`
@@ -129,6 +153,12 @@ behavior.
   - Expect: plugin treats exit `3` as a completed handoff with unresolved
     disagreement and proceeds to part 2.
 
+- [ ] Split execution continues after exit `4`.
+  - Setup: part 1 completes with exit `4`.
+  - Expect: plugin treats exit `4` as a decision-incomplete handoff with durable
+    provider artifacts, recommends `bakeoff rerun <run-id> --judge-only` when
+    applicable, and proceeds to part 2.
+
 - [ ] Split execution stops on real failures or interruption.
   - Setup: part 1 exits `1`, `2`, or `130`.
   - Expect: plugin stops before remaining parts, summarizes completed parts and
@@ -150,6 +180,13 @@ behavior.
   - Prompt: `/bakeoff:run review this diff against main with security and performance as separate lenses --no-triage`
   - Expect: plugin passes `--no-triage` to each lens run, omits verification
     from the cost estimate, and marks final findings raw and unverified.
+
+- [ ] Multi-lens cost estimate handles non-default provider counts.
+  - Setup: user asks for a multi-lens review with one provider or three
+    providers in the generated draft.
+  - Expect: plugin names the provider count in the preview, counts one worker
+    phase per lens because providers run in parallel, and does not hardcode
+    "two reviewers" in user-facing text.
 
 - [ ] Multi-lens execution stops on failed lens and reports progress.
   - Setup: first lens exits `0`, second lens exits `1`, `2`, `4`, or `130`.
