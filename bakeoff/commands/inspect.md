@@ -9,6 +9,10 @@ allowed-tools: Read, Glob, Grep, Bash(${CLAUDE_PLUGIN_ROOT}/scripts/bakeoff-ensu
 Inspect existing Bakeoff run ledgers and reports. Read-only inspection is the
 default.
 
+Use `/bakeoff:history` when the user wants a recent run list or needs to find a
+run id. Use `/bakeoff:inspect` when the user names a specific run or asks for
+the latest report/artifacts.
+
 Apply the shared Bakeoff skill contract, especially the competitive build
 handoff language.
 

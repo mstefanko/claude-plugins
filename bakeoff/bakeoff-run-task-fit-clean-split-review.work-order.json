@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "id": "bakeoff-run-task-fit-clean-split-review",
+  "type": "gather",
+  "goal": "Identify actionable UX defects, ambiguity, and mismatches between the /bakeoff:run task-fit and clean-split instructions in commands/run.md and the manual scenario checklist in docs/task-fit-test-scenarios.md.",
+  "background": [
+    "Target file 1 (instructions under review): commands/run.md, specifically the 'Natural Language Drafting' task-fit warning block and the clean-split suggestion logic that follows it (approximately lines 124-235). Adjacent sections — Multi-Lens Review, Existing Work-Order Path, Preflight, and Execution And Summary — are background context, not primary review targets, but cross-section interactions are in scope.",
+    "Target file 2 (manual scenario checklist, treat as source of truth for expected behavior): docs/task-fit-test-scenarios.md.",
+    "These instructions govern Claude Code's behavior when /bakeoff:run is invoked with natural-language input. Defects manifest as bad user experiences: wrong warnings, missed splits, ambiguous approval state, and contradictions between the prose and the checklist.",
+    "Treat the prose as a spec. For each instruction rule (task-fit weak-fit categories, recommended wording, draft-anyway gate, clean-split predicates, split preview rules, split approval phrases, run sequencing, .part-N id/filename derivation, validation-failure handling, collision policy, summary independence), check whether the manual scenario checklist exercises it and whether the rule unambiguously determines the expected outcome for each scenario.",
+    "Also check the reverse direction: for each scenario or expectation in the checklist, locate the governing rule in the instructions and flag any scenarios with no governing rule, multiple conflicting rules, or rules whose wording could plausibly be read either way by an LLM caller.",
+    "Reviewers are not implementing changes. Output is a defect list with concrete file:line evidence from commands/run.md and explicit scenario references from docs/task-fit-test-scenarios.md."
+  ],
+  "facet": {
+    "id": "code-review",
+    "kind": "generic",
+    "focus": "Find actionable defects in the /bakeoff:run task-fit and clean-split instructions that would cause Claude to behave incorrectly against the manual scenario checklist.",
+    "include": [
+      "rule/scenario coverage gaps — checklist scenarios with no governing instruction rule, or instruction rules with no checklist coverage",
+      "contradictions between instruction text and checklist expected behavior",
+      "ambiguous triggers — what phrase counts as 'narrow', 'draft anyway', 'split', 'show', or affirmative approval; whether case/punctuation/synonyms are accepted",
+      "state-transition holes — re-narrowing after a task-fit warning, switching from split to single after split was offered, user editing one part of a split draft, mode-flag conflicts surfacing mid-flow",
+      "wording defects that force the user to guess the next move or to type an exact phrase that is not advertised",
+      "cross-section interactions where task-fit or clean-split rules conflict with Multi-Lens Review, Existing Work-Order Path, or Execution And Summary rules",
+      "filename, run-id, and .part-N collision-policy gaps when applied to the scenarios in the checklist",
+      "split-preview rules (120-line / 10 KB budget, show command, per-part filenames and commands) versus checklist scenarios that would produce oversized drafts"
+    ],
+    "exclude": [
+      "style-only preferences without checklist evidence",
+      "speculation not tied to a specific instruction line or scenario id",
+      "rewrites of Multi-Lens Review, Execution And Summary, or other sections that are not part of the task-fit / clean-split scope",
+      "suggestions to change the work-order JSON schema",
+      "general copyediting of unrelated prose"
+    ]
+  },
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "sonnet",
+      "scope": "codebase",
+      "effort": "high"
+    },
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "scope": "codebase",
+      "effort": "high"
+    }
+  ],
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  },
+  "scope_policy": {
+    "enforcement": "best_effort"
+  }
+}

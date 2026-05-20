@@ -13,6 +13,7 @@ place.
 | `/bakeoff:setup --from-release --version vX.Y.Z [--yes]` | Optional no-Go path: install a released CLI binary from GitHub Releases. |
 | `/bakeoff:quickstart` | Check the CLI, then run `doctor --json` with provider auth probes. |
 | `/bakeoff:run <path or request> [flags]` | Validate and run an existing work order, or draft one from natural language. |
+| `/bakeoff:history [limit] [flags]` | List recent runs with run ids, states, and short goal summaries. |
 | `/bakeoff:inspect [latest or run-id] [flags]` | Read ledgers, reports, decisions, triage, and build handoff artifacts. |
 | `/bakeoff:doctor [flags]` | Run readiness diagnostics through the CLI. |
 | `/bakeoff:uninstall` | Remove Bakeoff-owned plugin state and cache, then ask you to run the manual plugin uninstall. |
@@ -38,6 +39,19 @@ Mode-specific flags stop execution when they are supplied for the wrong final
 type. Existing work-order paths are validated first, then `type: "build"`
 routes to `bakeoff build`; `gather`, `compare`, and `analyze` route to
 `bakeoff research`.
+
+`/bakeoff:history` is a Claude plugin convenience command. It calls
+`bakeoff ls --json`, sorts by `finished_at`, reads displayed runs'
+`work-order.json` files for a short goal summary, and prints the latest 10 runs
+by default. Recognized flags:
+
+| Flag | Meaning |
+| --- | --- |
+| positional `limit` | Number of rows to show. Default: `10`. |
+| `--out <dir>` | Run ledger directory. Default: `runs`. |
+| `--facet <id>` | Filter by facet id. |
+| `--triage-state <state>` | Filter by `no`, `dry_run`, `yes`, or `stale`. |
+| `--type <type>` | Filter by `gather`, `compare`, `analyze`, or `build`. |
 
 ## Launcher Resolution
 

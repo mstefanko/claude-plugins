@@ -49,6 +49,8 @@ ask one clarification question.
 
 Apply these advisory checks only when drafting from natural language. Existing
 work-order paths bypass both checks and keep the normal validate-and-run path.
+If no path or natural-language request remains after flag parsing, stop and ask
+the user for a work-order path or request. Do not infer a task from flags alone.
 
 Run the task-fit check after parsing flags and path detection, but before type
 inference, JSON drafting, or filename decisions. If the request is a weak fit,
@@ -151,12 +153,17 @@ One approval covers only the currently shown set. If the user changes any part,
 show the final set again with the same preview rules before asking for
 approval. If the user replies `show`, print the full JSON for every part and
 ask the same approval question again.
+Require exact `write and run` approval before writing or executing split files.
+For splits, `yes`, `approve`, or `run it` is not enough; reply by asking for
+exact `write and run` approval because multiple files and runs are involved.
 
 Derive one base slug from the original request. Append `.part-N` to each
 work-order `id`, filename, and supplied `--run-id` value. If the user did not
-pass `--run-id`, let the CLI use the work-order id. Apply the existing run-id
-and filename collision policy after appending `.part-N`; do not overwrite exact
-files unless the user explicitly asks.
+pass `--run-id`, let the CLI use the work-order id. If a work-order filename or
+run directory already exists, append the smallest numeric collision suffix after
+`.part-N` and use the same stem for both file and run id, such as
+`base.part-1-2.work-order.json` and `--run-id base.part-1-2`. Do not use date
+suffixes, and do not overwrite exact files unless the user explicitly asks.
 
 After split approval, write all part files, validate all of them before running
 any part, and run them sequentially with the existing CLI commands. Route each
@@ -165,9 +172,10 @@ part by its own `type`: `build` uses `bakeoff build`; `gather`, `compare`, and
 
 If any split validation fails, stop before execution, surface the validation
 error verbatim, repair the affected JSON, and show the final set again with the
-same preview rules before asking for approval. `bakeoff validate` warnings are
-advisory and do not stop the split sequence when validation exits successfully.
-During execution, continue after exit `0`, `3`, or `4`; exit `3` is a completed
+same preview rules before asking for exact `write and run` approval.
+`bakeoff validate` warnings are advisory and do not stop the split sequence when
+validation exits successfully. During execution, continue after exit `0`, `3`,
+or `4`; exit `3` is a completed
 Bakeoff handoff with unresolved disagreement, and exit `4` is a
 decision-incomplete handoff with durable provider artifacts. Stop the sequence
 on exit `1`, `2`, `130`, interruption, or command failure. Summarize completed
@@ -212,7 +220,7 @@ do not also run the generic clean-split proposal; show one multi-lens preview.
 If the user asks for a multi-lens review without naming lenses, ask:
 
 ```text
-Which 2-3 lenses should I run? Common choices are correctness/tests, security,
+Which 2-3 lenses should I run? Common choices are correctness, tests, security,
 performance, UX/frontend behavior, and maintainability.
 ```
 
@@ -258,7 +266,8 @@ For each selected lens, draft one normal review work order:
 - lens-specific `goal`, `background`, `facet.focus`, `facet.include`, and
   `facet.exclude`;
 - automatic code-review triage enabled unless the user passes `--no-triage` or
-  explicitly asks to run without triage.
+  explicitly asks to run without triage. If `--no-triage` is set, include
+  `--no-triage` in every generated lens command.
 
 Use a single base slug from the request or supplied `--run-id`. Append the lens
 slug as the final semantic component for work-order ids, filenames, and run
@@ -318,7 +327,11 @@ the user replies `show <lens>` with a selected lens label or slug, print only
 that lens's JSON and then repeat the multi-lens approval question.
 
 After approval, write every lens file, validate all files before running any,
-and run them sequentially with existing commands:
+and run them sequentially with existing commands. If any validation fails, run
+no lenses; surface the validation error verbatim, repair the affected JSON, show
+the final set again with the same preview rules, and ask for exact
+`write and run` approval again. `bakeoff validate` warnings are advisory and do
+not stop the lens sequence when validation exits successfully.
 
 ```text
 bakeoff research <lens-work-order> --run-id <base>.<lens> [--out <dir>] [--base <ref>] [--diff] [--changed-files] [--quiet] [--no-triage] [--no-repo-layout]
@@ -476,8 +489,8 @@ the same approval question again. If the user edits, asks a question, or
 replies ambiguously, revise or clarify and show the updated preview before
 writing.
 
-If `runs/<id>` already exists, append `-YYYYMMDD` or the smallest numeric suffix
-needed to make the run id unique before showing JSON for approval.
+If `runs/<id>` already exists, append the smallest numeric suffix needed to make
+the run id unique before showing JSON for approval.
 
 Write only `./<id>.work-order.json`. If that filename exists, do not overwrite
 it. Use `./<id>-2.work-order.json`, `./<id>-3.work-order.json`, and so on,

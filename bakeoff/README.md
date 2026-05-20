@@ -48,6 +48,7 @@ Prerequisites: Claude Code with this plugin installed; Go 1.24+ so `/bakeoff:set
 /bakeoff:run review this diff against main
 /bakeoff:run build competing fixes for this failing test
 /bakeoff:run examples/build.work-order.json              # run an existing work order
+/bakeoff:history                                         # list recent runs and run ids
 ```
 
 Local development install:
@@ -91,7 +92,8 @@ Simple rule: use `gather` when you want breadth and citations, like "find every 
 /bakeoff:run analyze why provider output caps sometimes produce incomplete reports
 ```
 
-After a run: `bakeoff show <run-id>`.
+After a run, use `/bakeoff:history` to find recent run ids and
+`/bakeoff:inspect <run-id>` to open the report.
 
 <details open>
 <summary>Research and evidence behind this design</summary>
@@ -230,11 +232,12 @@ Slash commands:
 - `/bakeoff:setup` — build or update the bundled Bakeoff Go CLI in persistent plugin data.
 - `/bakeoff:quickstart` — check CLI, local readiness, and provider auth/session state.
 - `/bakeoff:run <path or request> [--run-id ID] [--out runs] [--quiet] [--keep-worktrees] [--no-triage] [--no-repo-layout]` — validate and run, or draft from natural language.
+- `/bakeoff:history [limit] [--out runs] [--facet ID] [--triage-state STATE] [--type TYPE]` — list recent runs with run ids and short goal summaries.
 - `/bakeoff:inspect [latest or run-id]` — open existing reports, decisions, triage, handoff.
 - `/bakeoff:doctor [--skip-auth-probe] [--build] [--quiet]` — readiness check. `--build` runs live edit probes.
 - `/bakeoff:uninstall` — remove plugin state, then guide manual plugin uninstall.
 
-Core CLI: `bakeoff validate`, `bakeoff research`, `bakeoff build`, `bakeoff rerun`, `bakeoff show`, `bakeoff triage`, `bakeoff doctor`. Full reference in [docs/cli-reference.md](docs/cli-reference.md).
+Core CLI: `bakeoff validate`, `bakeoff research`, `bakeoff build`, `bakeoff rerun`, `bakeoff ls`, `bakeoff show`, `bakeoff triage`, `bakeoff doctor`. Full reference in [docs/cli-reference.md](docs/cli-reference.md).
 
 ## Configuration
 

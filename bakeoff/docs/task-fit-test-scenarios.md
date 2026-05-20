@@ -32,6 +32,11 @@ behavior.
   - Expect: plugin reports the missing path-like input and does not reinterpret
     the prompt as natural language or answer inline.
 
+- [ ] Empty request asks for input.
+  - Prompt: `/bakeoff:run`
+  - Expect: plugin asks for a work-order path or natural-language request. It
+    does not infer a task from prior conversation or flags alone.
+
 - [ ] Formatter-only work shows the task-fit warning.
   - Prompt: `/bakeoff:run format these files`
   - Expect: plugin says the request may not need Bakeoff, cites formatter-only
@@ -41,6 +46,22 @@ behavior.
   - Prompt: `/bakeoff:run build competing fixes for the cache bug`
   - Expect: plugin asks for a project test command, regression test, benchmark,
     or explicit `draft anyway` confirmation before drafting.
+
+- [ ] Build request with verifier drafts a build work order.
+  - Prompt: `/bakeoff:run build competing fixes for the cache bug; verify with go test ./internal/cache`
+  - Expect: plugin drafts one `type: "build"` work order with a gate verifier
+    and asks for approval. It does not implement a fix inline.
+
+- [ ] Comparison request drafts a compare work order.
+  - Prompt: `/bakeoff:run compare SQLite FTS vs Tantivy for product search using files under internal/search`
+  - Expect: plugin drafts one `type: "compare"` work order with the options and
+    evidence surface. It does not answer the comparison inline.
+
+- [ ] "Build a comparison/report/matrix" routes to research.
+  - Prompt: `/bakeoff:run build a comparison matrix for SQLite FTS vs Tantivy`
+  - Expect: plugin treats "build" as a request to produce a research artifact,
+    not code patches, and drafts a research-shaped work order unless the user
+    explicitly asks providers to edit code.
 
 - [ ] Conversational opt-out bypasses only the task-fit warning for the turn.
   - Prompt: `/bakeoff:run build competing fixes for the cache bug`, then reply
@@ -135,18 +156,22 @@ behavior.
     filenames like `./<base>.part-1.work-order.json`, lists the commands to run,
     and asks for `write and run` approval.
 
+- [ ] Split approval requires the exact multi-file phrase.
+  - Prompt: accept a split preview with `yes`.
+  - Expect: plugin asks for `write and run` because multiple files and runs are
+    being approved. It does not write files on plain `yes`.
+
 - [ ] Split filename and run-id collisions apply after `.part-N`.
   - Setup: assume `runs/base.part-1` and `base.part-1.work-order.json` already
     exist.
-  - Expect: plugin uses names such as `base.part-1-YYYYMMDD` or
-    `base.part-1-2`; it does not use `base-YYYYMMDD.part-1`, and it does not
-    overwrite existing files.
+  - Expect: plugin uses names such as `base.part-1-2`; it does not use date
+    suffixes or overwrite existing files.
 
 - [ ] Split validation failure stops before execution.
   - Setup: make part 2 invalid during command review.
   - Expect: plugin validates all parts before running any; on validation error,
     it reports the failing file and error, repairs the JSON, and shows the full
-    final set again before asking for approval.
+    final set again before asking for exact `write and run` approval.
 
 - [ ] Split execution continues after exit `3`.
   - Setup: part 1 completes with exit `3`.
@@ -174,7 +199,7 @@ behavior.
   - Setup: make one generated lens work order invalid during command review.
   - Expect: plugin validates all lens files before running any; on validation
     error, it reports the failing file and error, repairs the JSON, and shows
-    the final set again before asking for approval.
+    the final set again before asking for exact `write and run` approval.
 
 - [ ] Multi-lens `--no-triage` applies to every lens.
   - Prompt: `/bakeoff:run review this diff against main with security and performance as separate lenses --no-triage`
