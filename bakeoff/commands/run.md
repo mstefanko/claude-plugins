@@ -113,8 +113,9 @@ path, careful path, split, multi-lens). They are not fast-path-specific.
 
 ### Required-Field Synthesis Guidance (Advisory)
 
-If the request omits any of the following, the model **should** prefer
-asking the missing question(s) verbatim over synthesizing a default.
+If the request omits any of the following, the model **should** classify the
+missing value before proposing a value or asking the user. Do not synthesize
+a default.
 
 **This is prompt-level guidance, not a Go-side semantic gate.** The
 clean final-contract dogfood showed the checklist and R1.6 refactor
@@ -394,6 +395,19 @@ missing-field ask in one response when both apply, rather than chaining them
 across turns.
 The phrase `draft anyway` only clears the task-fit or duplicate-work warning
 for the current turn; it does not waive required build fields.
+When a task-fit or duplicate-work warning appears together with missing build
+fields, separate the choices instead of bundling them into one unclear
+`inspect / draft anyway` option plus a field list:
+
+- `inspect <run-id>`: inspect the existing run first, then report whether its
+  verifier, edit boundary, protected paths, or user-owned decisions can be
+  reused.
+- `draft anyway`: clear only the warning, then continue the careful drafting
+  flow. For repo-discoverable fields, run one narrowly targeted read-only repo
+  pass and propose values with evidence. For user-owned fields, ask directly.
+- `provide fields`: accept exact verifier, edit boundary, protected paths,
+  acceptance criteria, or invariants supplied by the user.
+
 The task-fit warning is not permission to answer directly. Stop at the warning
 until the user narrows or confirms; after confirmation, continue through the
 Bakeoff draft, validate, and run flow. Do not answer directly unless the user

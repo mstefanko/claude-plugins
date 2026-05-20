@@ -74,9 +74,11 @@ behavior.
   - Prompt: `/bakeoff:run Implement bakeoff ls ordering by finished_at
     descending, with stable fallback for legacy/malformed runs, and add focused
     tests.`, then reply `draft anyway` to the duplicate or weak-fit warning.
-  - Expect: plugin treats the warning as satisfied for that turn only, performs
-    one narrowly targeted read-only repo pass over the `ls` command, nearby
-    tests, and existing work-order history, proposes a verifier and edit
+  - Expect: plugin's warning distinguishes `inspect <run-id>` from
+    `draft anyway` and does not bundle them as one unclear option. After
+    `draft anyway`, plugin treats the warning as satisfied for that turn only,
+    performs one narrowly targeted read-only repo pass over the `ls` command,
+    nearby tests, and existing work-order history, proposes a verifier and edit
     boundary with evidence, states that proposal is not approval, shows the
     normal preview approval prompt, and writes nothing before approval.
 

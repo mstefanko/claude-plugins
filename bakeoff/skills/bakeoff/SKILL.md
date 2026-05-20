@@ -94,6 +94,18 @@ across turns. If the user narrows the request, re-run the task-fit check on
 the revised prompt.
 The phrase `draft anyway` only clears the task-fit or duplicate-work warning
 for the current turn; it does not waive required build fields.
+When a task-fit or duplicate-work warning appears together with missing build
+fields, separate the choices instead of bundling them into one unclear
+`inspect / draft anyway` option plus a field list:
+
+- `inspect <run-id>`: inspect the existing run first, then report whether its
+  verifier, edit boundary, protected paths, or user-owned decisions can be
+  reused.
+- `draft anyway`: clear only the warning, then continue the careful drafting
+  flow. For repo-discoverable fields, run one narrowly targeted read-only repo
+  pass and propose values with evidence. For user-owned fields, ask directly.
+- `provide fields`: accept exact verifier, edit boundary, protected paths,
+  acceptance criteria, or invariants supplied by the user.
 
 After task fit passes or is explicitly confirmed, check for explicit
 multi-lens review requests before the generic clean-split check. Do not propose
@@ -416,8 +428,9 @@ this section must stay in sync with that file.
 
 ### Required-Field Synthesis Guidance (Advisory)
 
-If the request omits any of the following, the model **should** prefer
-asking the missing question(s) verbatim over synthesizing a default.
+If the request omits any of the following, the model **should** classify the
+missing value before proposing a value or asking the user. Do not synthesize
+a default.
 
 **This is prompt-level guidance, not a Go-side semantic gate.** The
 clean final-contract dogfood showed the checklist and R1.6 refactor
