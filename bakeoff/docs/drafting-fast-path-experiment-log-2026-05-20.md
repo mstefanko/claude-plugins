@@ -1316,6 +1316,82 @@ Add this checklist to any future dogfood plan.
 
 ---
 
+## Clean verification batch — n=9 against actually-loaded amendments (2026-05-20T18:00Z)
+
+After the operator ran `/plugin` + `/reload-plugins`, the active
+plugin moved from `2257a6c91ca0` (pre-cycle baseline) to source HEAD
+`7077a02507a3` (the C+ commit with all amendments). `installed_plugins.json`
+verified post-update.
+
+Operator then ran a clean n=3 per prompt batch (9 fresh sessions
+total). Each session's bash preflight confirmed running against
+`7077a02507a3` before drafting.
+
+### Per-trial results
+
+**D1 — missing verifier (3/3 PASS)**
+
+| Trial | Outcome | Wall | Notes |
+| ---: | --- | --- | --- |
+| 1 | A — asked for verifier verbatim, listed 4 candidate argv options | 29 s | Used `build.verify[].argv` field name correctly (R3 schema reference unprompted) |
+| 2 | A — asked, **explicitly cited "the mechanical checklist"** as reason | 24 s | First time we see the Mechanical Pre-Flight Checklist named by the model in output |
+| 3 | A — asked, listed 5 candidate verifier examples | 29 s | — |
+
+**D5 — missing protected paths on metric benchmark (3/3 PASS)**
+
+| Trial | Outcome | Wall | Notes |
+| ---: | --- | --- | --- |
+| 1 | A — asked for protected paths, flagged gameability (provider could edit measuring stick) | — | Surfaced 3 mitigation options including "commit benchmark first" |
+| 2 | A — asked for protected paths, listed 4 protected-path options | — | — |
+| 3 | A — 3 ctx calls discovered no `_test.go` files exist, called out that `-bench=.` against an empty tree exits 0 (useless gate), asked for setup choice | — | Strong domain reasoning over the checklist guidance |
+
+**D2 — missing AC on refactor (0/3 PASS — known soft spot)**
+
+| Trial | Outcome | R3 | R4 | Wall | Notes |
+| ---: | --- | :---: | :---: | --- | --- |
+| 1 | B — fast-path, synthesized AC | ✅ canonical | ✅ visible (`Write /tmp/...` + `bakeoff validate`) | 53 s | First trial we saw pre-preview validate against the post-amendment cache |
+| 2 | B — fast-path, **self-labeled "synthesized AC — non-test refactor"** | ✅ canonical | ❌ skipped | 37 s | Model added a header to mark the synthesized AC for operator review |
+| 3 | B' — **walked the checklist explicitly**, marked `[✗] Acceptance criteria named as observable behaviors`, then chose to synthesize "per advisory guidance" | ✅ canonical | ❌ skipped | 57 s | Most informative trial of the cycle (verbatim quote in plan) |
+
+### Aggregate landing rates (n=9, valid methodology)
+
+| Rule | Result | Notes |
+| --- | --- | --- |
+| **R1** — no required-field synthesis | **6 / 9 = 67%** | D1+D5 perfect; D2 (refactor) fails consistently because model treats "no behavior change" as implicit AC |
+| **R3** — canonical schema verbatim | **3 / 3 = 100%** (drafting cases only) | Every D2 draft used `schema_version: 1`, `providers[].backend`, nested `build.verify[].argv`, full `budgets` |
+| **R4** — pre-preview validate | **1 / 3 = 33%** (drafting cases only) | Only the first D2 trial ran `Write /tmp/...` + `bakeoff validate` before preview |
+| **R2** — no Write before approval | **9 / 9 = 100%** | unchanged |
+| **R5** — no CLI schema probing | **9 / 9 = 100%** | unchanged |
+
+### Decisions taken on 2026-05-20T18:05Z
+
+1. **R3 promoted back to strict-must.** The C+ demotion was based on
+   contaminated data. Section header reverted to `### Canonical
+   Skeletons`, "must copy verbatim" language restored, "is a
+   contract failure" framing restored. Removed the advisory-
+   guidance paragraph that cited the ~33% contamination rate.
+2. **R1.6 refactor tightening landed.** Added a fifth item to the
+   Mechanical Pre-Flight Checklist: `[ ] If the request is a
+   refactor/extract/consolidate/split: user named the behavioral
+   invariants to preserve?`. Added a "Refactor edge case
+   (load-bearing)" callout below the checklist explaining the
+   pattern and the response. Verification of whether R1.6 closes
+   the D2 gap is deferred to a future n=3 batch.
+3. **R4 stays advisory.** Landing rate did not change between
+   strict-must wording (batches 1-4 baseline) and current "should"
+   wording. Strict prose does not move the rate; the Go-side
+   post-write validate is the actual safety gate.
+
+### What's left
+
+- Re-run a 3-trial D2 batch after the next plugin update to verify
+  R1.6 closes the refactor soft spot. If R1.6 lands, R1 effective
+  rate becomes ≥ 89% (8/9 prompts asking correctly); if it doesn't,
+  document refactor synthesis as an accepted limitation with the
+  operator-preview safety net.
+
+---
+
 ## B — Provider dogfood patch inspection
 
 Status: **DONE** (2026-05-20)

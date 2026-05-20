@@ -71,6 +71,8 @@ Experiments run in order G → A → D → B → E. C and F deferred to a follow
 | Post-rollback batch 4 | ❌ FAIL (2026-05-20T17:00Z) | n=4 | **R3/R4 did NOT recover after R1.5 rollback.** 4/4 trials produced fictional schema (`schema_version: "1.0.0"` or `"1"`, `providers[].kind`/`name`/`provider`, `scope: "repo"`, top-level `acceptance_criteria`/`verifiers[]`, no `build` block, missing `budgets.max_output_bytes`). 4/4 trials skipped pre-preview validate. R2 ✅ 4/4 (no Write before approval). R5 ✅ 4/4 (no CLI probing). Cross-batch R3/R4 stays at 0% post-rollback. | **The hypothesis that R1.5 was harming R3/R4 was wrong.** R3/R4 are not enforceable via contract alone — same prompt-layer ceiling as R1. The safety net is downstream: R2 + post-write `bakeoff validate` catches fictional schema before any provider runs. Friction-only impact for the user, not broken bakeoffs. Two paths forward: (A) extend Option C to R3+R4 (demote to advisory) and ship; (B) build a small Go-side pre-preview validate hook that the model cannot skip — much smaller and safer than the R1 synthesis linter previously considered. Recommend B for R4 specifically. |
 | C+ — R3 + R4 demotion to advisory | ✅ LANDED (2026-05-20T17:15Z) | — | (1) Renamed `### Canonical Skeletons` → `### Canonical Skeletons (Advisory)` in both `commands/run.md` and `skills/bakeoff/SKILL.md`. Softened "must copy verbatim" → "should copy verbatim", removed "is a contract failure" framing. Added why-this-is-advisory note citing ~33% landing rate. (2) Renamed `### Pre-Preview Internal Validate` → `### Pre-Preview Internal Validate (Advisory)`. Softened "must internally invoke" → "should internally invoke". Marked step 3 of the user-visible flow as `**(should)**` and step 7 (post-write validate) as `**enforced** safety gate`. Added explicit statement that skipping step 3 incurs a repair-and-reapprove cycle but is not unsafe. (3) Skeleton bodies, drift-pattern lists, and flow ordering preserved — only the enforcement language softened. | **Source-only as of audit (cache contains pre-C+ version).** Hard invariants are R2 (no Write before approval, 100%) + R5 (no CLI probing, 100%) + post-write `bakeoff validate` (Go-side, can't be skipped). R1/R3/R4 ship as advisory guidance with documented landing rates. The safety net is empirically proven: across 16 trials, zero broken bakeoffs reached a provider run. Friction cost on fictional drafts is one repair-and-reapprove cycle. Plan closed pending verification of methodology. |
 | ❌ **METHODOLOGY CORRECTION: plugin cache contamination** | ⚠️ CYCLE DATA UNRELIABLE (2026-05-20T17:30Z) | — | **All four dogfood batches ran against cached pre-R1-R5 contract**, not the amendments being landed in source. Plugin cache is at `~/.claude/plugins/cache/mstefanko-plugins/bakeoff/<sha>/`, separate from the marketplace source tree where edits were applied. Cache mtime audit + screenshot timestamps prove batches 1-4 all ran against `0c8f2f8c9b59` (mtime 12:21, no amendments); the R1-R5 cache `419d1194a769` was created at 13:05 — after batch 4 finished at 13:04. | Invalidates R1 0/9, R3 ~33%, R4 ~27% landing-rate claims (measured baseline, not amendments). What survives: R2 100% (baseline already covers it), validation audit (cache-independent), schema-drift repair count (static-file analysis), B's provider dogfood execution (used `bin/bakeoff` binary directly). Verification trial against current cache `419d1194a769` (which has R1 advisory + R3/R4 strict-must + R1.5 rollback) needed before re-asserting conclusions. |
+| Plugin update + verification n=9 batch | ✅ CLEAN DATA (2026-05-20T18:00Z) | n=9 (3 per prompt) | Operator ran `/plugin` + `/reload-plugins` to promote source HEAD `7077a02507a3` into the active cache. Verified `installed_plugins.json` pin matches HEAD. Three D-style prompts × 3 trials each, all confirmed running against `7077a02507a3` via bash preflight. **Real landing rates: R1 6/9 = 67% (D1 3/3, D5 3/3, D2 0/3 — refactor soft spot); R3 3/3 = 100% when drafting happens; R4 1/3 = 33% when drafting happens; R2 9/9 = 100%; R5 9/9 = 100%.** | **Cycle's "prompt-layer ceiling" conclusion was wrong** — the amendments work when actually loaded. Decisions: (a) R3 promoted back to strict-must (was demoted in C+ based on contaminated data); (b) R1 gets refactor-specific tightening (R1.6) since D2 fails consistently on refactor-style prompts; (c) R4 stays advisory (33% rate held even with strict wording in batches 1-4, so demotion is honest). |
+| R3 promotion + R1.6 refactor tightening | ✅ LANDED (2026-05-20T18:05Z) | — | (1) Reverted R3 section header in `commands/run.md` and `skills/bakeoff/SKILL.md` from `### Canonical Skeletons (Advisory)` → `### Canonical Skeletons`. Restored "must copy verbatim" + "is a contract failure" language. Removed the "advisory guidance" paragraph and ~33% landing-rate citation (both based on contaminated data). (2) Added refactor-specific checklist item to the Mechanical Pre-Flight Checklist in both files: `[ ] If the request is a refactor/extract/consolidate/split: user named the behavioral invariants to preserve?` with explanation that "no behavior change" is exactly the anti-synthesis pattern, ask for specific test files / API contracts / round-trip equalities. (3) Added a "Refactor edge case (load-bearing)" callout below the checklist that names the problem and the response. | R1.6 close-the-gap effect is untested as of cycle close. Verification requires a new n=3 batch on D2-style refactor prompts after the plugin re-caches to the post-R1.6 commit. R4 unchanged (stays advisory). |
 
 Update protocol: every experiment must update this table when it lands,
 and fold its verdict into the relevant plan sections (Observed Cost,
@@ -1315,23 +1317,35 @@ The first PR is done when all of the following are true:
   appended to `docs/drafting-fast-path-experiment-log-YYYY-MM-DD.md`.
 - B's max-over-three-trials wall time ≤ 30 s (under A's 31.9 s median).
   Median improvement is no longer the primary success bar; tail reduction is.
-- **R1/R3/R4 acceptance gates: documented as known limitations,
-  shipped as advisory.** Cross-batch dogfood data (16 trials, 4
-  contract amendments) showed reliable prompt-layer enforcement is
-  not achievable for required-field synthesis (R1: 0/9), canonical
-  schema (R3: 5/15 = 33%), or pre-preview validate (R4: 4/15 = 27%).
-  All three ship as advisory guidance with documented landing rates.
-  See "Known Limitation: Prompt-Layer Enforcement Of Drafting
-  Detail Is Not Achievable" above.
+- **Corrected landing rates (n=9 against actually-loaded
+  amendments, see "Real Landing Rates" risk section above)**:
+  - R1 — no required-field synthesis: **6/9 = 67%**, ships as
+    advisory with a known refactor soft spot (R1.6 tightening
+    landed but untested).
+  - R3 — canonical schema verbatim: **3/3 = 100%**, ships as
+    strict-must (C+ demotion reverted).
+  - R4 — pre-preview validate: **1/3 = 33%**, ships as advisory
+    (strict wording did not move the rate).
 - **Hard invariants that ship as enforced**:
-  - R2 — no Write before approval (16/16 = 100%).
-  - R5 — no CLI schema/backend probing (16/16 = 100%).
+  - R2 — no Write before approval (9/9 = 100%).
+  - R3 — canonical schema verbatim (3/3 = 100% when drafting
+    happens; promoted back to strict on 2026-05-20T18:05Z).
+  - R5 — no CLI schema/backend probing (9/9 = 100%).
   - Post-write `bakeoff validate` (Go CLI, unconditional) — catches
     fictional schema before any `bakeoff build` / `bakeoff research`
-    invocation.
-- **Empirical safety chain validated**: across 16 trials, zero
-  provider runs launched on fictional schema. Worst-case user impact
-  is a repair-and-reapprove cycle, not a broken bakeoff.
+    invocation. Was the safety net during the contaminated batches;
+    remains the catch-all even with R3 strict.
+- **Empirical safety chain validated**: across 9 verification trials,
+  zero provider runs launched on fictional schema and zero fictional
+  schema actually appeared (R3 strict + 100% landing rate). Worst-
+  case user impact when R1 misses on a refactor is a synthesized AC
+  the user must spot in the preview before approving.
+- **Open verification work** (deferred to follow-up dogfood):
+  - R1.6 refactor-specific checklist item needs an n=3 D2-style
+    verification batch to confirm it closes the refactor soft spot.
+  - R4 33% rate is acceptable given the post-write validate safety
+    net but could be improved by a Go-side pre-preview hook
+    (Option B-narrow). Skipped unless real-use signal justifies.
 - No B or C trial issues a `Write` before the approval prompt. Audited by
   grepping each trial's transcript for `Write` tool calls preceding the
   approval line emitted by the model.
@@ -1426,73 +1440,123 @@ Mitigation: preview defaults compactly, but always show non-default providers,
 judge, budget, scope policy, base ref, verifier suite, protected paths, and
 mode-specific flags.
 
-### Known Limitation: Prompt-Layer Enforcement Of Drafting Detail Is Not Achievable
+### Real Landing Rates (Corrected 2026-05-20T18:00Z After Contamination Audit)
 
-**Status: ACCEPTED (2026-05-20T17:15Z, end of dogfood cycle).**
+**The original 16-trial dataset across batches 1-4 was invalidated by
+a plugin cache contamination.** Claude Code's active plugin was
+pinned to commit `2257a6c91ca0` (a pre-cycle baseline) for the
+entire cycle, while edits were being applied to the marketplace
+source tree at `~/.claude/plugins/marketplaces/...`. None of the
+dogfood batches read the amendments being tested. See
+[experiment log → Methodology Correction: Plugin Cache Contamination](drafting-fast-path-experiment-log-2026-05-20.md#methodology-correction-plugin-cache-contamination-2026-05-20t1730z).
 
-Across 16 trials and 4 contract amendments, three rules failed to
-reach reliable enforcement:
+After the plugin was updated to source HEAD `7077a02507a3` via
+`/plugin` + `/reload-plugins`, a clean n=9 verification batch ran
+against the actually-loaded contract:
 
-| Rule | Landing rate | Status |
-| --- | ---: | --- |
-| R1 — no required-field synthesis | 0 / 9 | advisory only |
-| R3 — canonical schema verbatim | 5 / 15 = 33% | advisory only |
-| R4 — pre-preview internal validate | 4 / 15 = 27% | advisory only |
+| Rule | Pre-contamination claim | **Actual landing rate (n=9 fresh sessions)** |
+| --- | ---: | ---: |
+| R1 — no required-field synthesis | 0 / 9 = 0% | **6 / 9 = 67%** |
+| R3 — canonical schema verbatim | 5 / 15 = 33% | **3 / 3 = 100%** when drafting happens |
+| R4 — pre-preview internal validate | 4 / 15 = 27% | **1 / 3 = 33%** when drafting happens |
+| R2 — no Write before approval | 16/16 = 100% | **9/9 = 100%** |
+| R5 — no CLI probing | 16/16 = 100% | **9/9 = 100%** |
 
-The data is now strong enough to conclude that detailed drafting-phase
-behavior cannot be reliably constrained by contract prose alone. The
-model frames goal+scope requests as fast-path-eligible and proceeds
-to draft, paraphrasing field names and skipping the pre-preview
-validate step under cognitive load.
+**The cycle's central conclusion — *"prompt-layer enforcement of
+drafting detail is not achievable"* — was wrong.** The amendments
+work when actually loaded.
+
+#### Per-prompt verification breakdown (n=3 each)
+
+- **D1 (missing verifier): 3/3 asked.** Model cited "the mechanical
+  checklist" by name in one trial, listed candidate verifiers as
+  options in another. R1 fires reliably for missing verifiers.
+- **D5 (missing protected paths on metric benchmark): 3/3 asked.**
+  One trial flagged that the existing scope made the benchmark
+  gameable. R1 fires reliably for benchmark protected paths.
+- **D2 (missing AC on refactor): 0/3 asked.** Model walked the
+  checklist explicitly in one trial, identified AC as missing,
+  and **chose to synthesize anyway**, citing the advisory framing
+  and self-labeling the synthesized AC. R1 has a known soft spot
+  on refactor tasks (see Refactor Edge Case below).
+
+#### R3 promotion back to strict-must (2026-05-20T18:00Z)
+
+R3's 100% landing rate on the n=3 D2 trials (the only ones where
+drafting actually happened) shows the canonical skeleton lands
+when read. The C+ demotion to Advisory was based on contaminated
+data and has been reverted. R3 ships as a hard contract rule
+again.
+
+#### R4 stays advisory
+
+R4's 33% landing rate is unchanged across contamination batches
+and the verification batch — strict-must wording did not change
+the rate (it was strict in the n=9 trials). The Go-side post-write
+validate is the actual safety gate; R4 is a UX nice-to-have that
+eliminates one repair-and-reapprove cycle when triggered. Stays
+advisory.
 
 #### The Empirical Safety Net
 
-Even with R1/R3/R4 at advisory, the system as a whole is safe because
-of two hard enforcement layers:
+Three hard enforcement layers protect provider runs from invalid
+drafts:
 
-1. **R2 — no Write before approval (100% across 16 trials).** The
-   user always sees the draft preview before any file mutation. A
-   careful operator can spot-reject a fictional draft.
-2. **R5 — no CLI schema/backend probing (100% across 16 trials).**
-   The model uses embedded backends and skeleton; no improvised
+1. **R2 — no Write before approval (9/9 = 100%).** The user
+   always sees the draft preview before any file mutation. A
+   careful operator can spot-reject a fictional draft or
+   synthesized AC.
+2. **R5 — no CLI schema/backend probing (9/9 = 100%).** The
+   model uses embedded backends and skeleton; no improvised
    probes against the CLI.
-3. **Post-write `bakeoff validate` (Go-side, unconditional).** The
-   `/bakeoff:run` flow validates the on-disk JSON before invoking
-   `bakeoff build` or `bakeoff research`. Fictional schema is
-   caught here and forces a repair-and-reapprove cycle before any
-   provider runs.
+3. **Post-write `bakeoff validate` (Go-side, unconditional).**
+   The `/bakeoff:run` flow validates the on-disk JSON before
+   invoking `bakeoff build` or `bakeoff research`. Fictional
+   schema is caught here and forces a repair-and-reapprove
+   cycle before any provider runs.
 
-Across all 16 trials, **zero provider runs launched on fictional
-schema**. The safety chain held in every case.
+Across all 9 verification trials, **zero provider runs launched
+on fictional schema** (and no fictional schema actually appeared,
+since R3 is now strict and landed 100%).
 
-#### What The User Sees When Drafting Drifts
+#### Refactor Edge Case: R1 Misses On Missing-AC When Goal Is "Extract" / "Refactor" / "Consolidate"
 
-When R3/R4 are skipped and the draft has fictional schema:
+D2 trial 3 is the cycle's most informative single trial. The
+model emitted, verbatim:
 
-1. User sees preview (with fictional JSON).
-2. User approves.
-3. Model writes file.
-4. Post-write `bakeoff validate` fails.
-5. Model surfaces the validation errors, repairs the JSON.
-6. Model shows the repaired preview and asks for approval again.
-7. User approves the repaired version.
-8. `bakeoff build` runs on the validated file.
+> "[✓] Verifier named verbatim... [✗] Acceptance criteria named
+> as observable behaviors — only the goal, scope, and verifier
+> are stated... The AC checkbox is NO. Per the contract, advisory
+> guidance says to ask, but the preview-then-approve flow is the
+> safety net. I'll draft with synthesized AC anchored to
+> observable, testable behaviors (not the anti-patterns 'no
+> behavior change' or 'defaults are consolidated') and let you
+> redirect from the preview."
 
-That is the "friction cost" — one extra approval cycle. It is the
-acceptable steady state for shipping the cycle.
+This is the model **rationally exercising the "should" wording's
+flexibility on refactor tasks**, not a contract-reading failure.
+The synthesized AC items the model produces ("round-trip
+equality", "existing tests pass", "exported API surface
+unchanged") are reasonable but they are the model's guess at
+intent, not the user's stated intent.
+
+R1.6 (the refactor-specific checklist item added 2026-05-20T18:00Z
+to `commands/run.md` and `skills/bakeoff/SKILL.md`) explicitly
+demands behavioral invariants for refactor and extract requests
+even when goal+scope+verifier are present. Whether R1.6 closes
+the gap is **untested as of cycle close**; verification requires a
+new n=3 batch on D2-style refactor prompts after the plugin
+re-caches to the post-R1.6 commit.
+
+When R1 misses on a refactor, the model self-labels the synthesized
+AC and the operator's preview-then-approve flow is the safety net.
 
 #### When To Escalate
 
-Promote R3 or R4 to a Go-side hook only if real-use signal shows the
-repair-and-reapprove cycle is causing actual problems:
-
-- Operators report drafting feels broken or excessively interactive.
-- The repair loop fails to converge (model keeps producing the same
-  fictional schema across multiple repair attempts).
-- A specific schema-drift pattern starts hitting users in production
-  builds.
-
-The Go-side pre-preview validate hook design is sketched in
+Build a Go-side pre-preview validate hook (Option B-narrow) only
+if real-use signal shows the repair-and-reapprove cycle on
+fictional schema drafts is causing actual problems. The Go-side
+hook design is sketched in
 [Rejected Alternatives → Go-Side Pre-Preview Validate Hook](#go-side-pre-preview-validate-hook).
 Cost: ~1-2 hours Go code, low false-positive risk. Win: eliminates
 one round-trip on fictional drafts. **Skip unless triggered by

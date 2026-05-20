@@ -177,7 +177,27 @@ apply — take the careful flow and ask for the missing field verbatim.
     (Files the providers must not edit — the measuring stick.
     A benchmark request without protected paths is not fast-path
     eligible; ask for the metric harness path and direction.)
+
+[ ] If the request is a refactor ("extract X", "rename Y",
+    "consolidate Z", "split A into B"): user named the behavioral
+    invariants to preserve?
+    (Not the implicit "no behavior change" — that is exactly the
+    anti-synthesis pattern. Ask for the specific test files,
+    API contracts, exit-code mappings, byte-equality conditions,
+    or round-trip equalities that must hold. Refactors hide
+    missing AC inside the verb; ask anyway.)
 ```
+
+**Refactor edge case (load-bearing):** Refactor and extract requests
+trigger a known soft spot. The model sees an explicit verifier, an
+explicit scope, an explicit goal, and treats "no behavior change" as
+implicit AC. The Anti-Synthesis Patterns below list "no behavior
+change" as vacuous, but the refactor framing tends to override the
+example. For refactor requests, the checklist item above is not
+optional — ask for the specific behavioral invariants even if the
+synthesized version ("existing tests pass", "round-trip equality")
+looks reasonable. The user knows the invariants that matter; the
+model is guessing.
 
 #### Anti-Synthesis Patterns (Examples Of Contract Failure)
 
@@ -231,26 +251,13 @@ drafting flow:
 If the user names an unknown backend, ask one clarification question;
 do not improvise.
 
-### Canonical Skeletons (Advisory)
+### Canonical Skeletons
 
-The model **should** copy field names and structure verbatim from the
-canonical skeleton for the resolved work-order type. Substitute only
-the angle-bracket placeholders. Avoid omitting other fields. Avoid
-adding fields not in the skeleton. If unsure of a default, copy the
-skeleton value verbatim.
-
-**This is advisory guidance, not an enforced invariant.** Cross-batch
-dogfood data (15 trials across 4 contract amendments) showed schema
-correctness lands at ~33% — the model paraphrases field names from
-semantic intent (e.g., `name`/`kind`/`provider`/`reasoning_effort`
-instead of `id`/`backend`/`backend`/`effort`) rather than copying
-verbatim. The actual safety net is downstream: `bakeoff validate`
-runs on the on-disk file before `bakeoff build` or `bakeoff
-research`, so fictional schema never reaches a provider run; the
-visible cost is a repair-and-reapprove cycle when drift is caught.
-
-The skeleton below is still the authoritative shape — using it
-verbatim eliminates that repair cycle.
+The model **must** copy field names and structure verbatim from the
+canonical skeleton for the resolved work-order type. Inventing or
+renaming fields is a contract failure. Substitute only the angle-bracket
+placeholders. Do not omit other fields. Do not add fields not in the
+skeleton. If unsure of a default, copy the skeleton value verbatim.
 
 **Build skeleton:**
 
