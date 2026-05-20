@@ -1392,6 +1392,73 @@ total). Each session's bash preflight confirmed running against
 
 ---
 
+## R1.6 verification batch (2026-05-20T18:15Z) — 3/3 PASS
+
+After the plugin was updated to source HEAD `a3e882b8e423` (commit
+"Reworking" — landed R3 promotion + R1.6 refactor tightening),
+operator ran 3 fresh sessions with the D2 refactor prompt. All
+trials confirmed running against `a3e882b8e423` via bash preflight.
+
+### Per-trial results
+
+| Trial | Outcome | R1.6 reference used by model | Notes |
+| ---: | --- | --- | --- |
+| 1 | **A** — asked for behavioral invariants, no drafted JSON | "Per the contract's refactor-edge-case rule, I need to ask for the specific behavioral invariants before drafting — synthesized 'no behavior change' AC degrade refactor quality." | Offered 4 multi-select invariants (Public API unchanged, byte-identical defaults, resolution order preserved, existing tests pass) plus "Skip AC ask" / "Submit" escape hatches. |
+| 2 | **A** — asked for behavioral invariants, no drafted JSON | "the contract's load-bearing refactor edge case directs me to ask for the specific behavioral invariants to preserve, rather than synthesize 'no behavior change' or 'existing tests pass' as acceptance criteria." | Explicitly named two anti-synthesis patterns ("no behavior change", "existing tests pass") as the patterns to avoid. Offered 3 strictness levels for the invariants. |
+| 3 | **A** — asked for behavioral invariants, no drafted JSON | "the contract flags refactors as a known soft spot for synthesized acceptance criteria" | Offered 3 options including a "let me paste exact behaviors" escape hatch. Brief "Invalid tool parameters" UI hiccup in transcript but model recovered and asked the question. |
+
+### Aggregate (R1.6 verification subset, n=3)
+
+| Rule | Result | Notes |
+| --- | --- | --- |
+| **R1 (with R1.6)** | **3 / 3 = 100%** on refactor prompts | All 3 trials cited R1.6 by name (3 different paraphrases) and asked for behavioral invariants instead of synthesizing |
+| R2 | 3 / 3 = 100% | No Write before approval |
+| R3 | n/a | No drafting happened — model asked instead |
+| R5 | 3 / 3 = 100% | No CLI probing |
+
+### Final post-R1.6 landing rates across the whole verification cycle
+
+Combining the n=9 first verification batch and the n=3 R1.6 batch:
+
+| Rule | n=12 total | Notes |
+| --- | --- | --- |
+| **R1** | D1 3/3, D5 3/3, D2 post-R1.6 3/3 → **9/9 = 100% on the prompts tested under their final contract** | (Earlier D2 0/3 was on pre-R1.6 cache; superseded by R1.6 verification.) |
+| R2 | 12/12 = 100% | unchanged |
+| R3 | 3/3 = 100% when drafting | unchanged from first verification batch |
+| R4 | 1/3 = 33% when drafting | unchanged — stays advisory |
+| R5 | 12/12 = 100% | unchanged |
+
+### Decisions taken on 2026-05-20T18:15Z
+
+1. **R1.6 verified.** Refactor soft spot closed. R1 effective rate is
+   100% on the verification prompts under their final contract
+   (D1+D5+D2-with-R1.6).
+2. **Plan + log marked CLOSED.** The cycle has produced a complete
+   set of valid measurements. The contract is internally consistent
+   and ships with the documented rates.
+3. **R4 remains advisory.** No new data; 33% rate stands.
+4. **No further batches planned.** Optional corroboration (D8/D9/D10
+   routing tests, C1/C2 held-out variants, B drafting-metric n=3 on
+   the lscmd positive case) would tighten confidence but is not
+   blocking. Documented in the plan as deferred follow-up work.
+
+### Final cycle status
+
+- **R1 (advisory + R1.6 refactor tightening): 100%** across all
+  tested prompts under the final contract.
+- **R2 (no Write before approval, hard): 100%**.
+- **R3 (canonical schema, hard — re-promoted): 100% when drafting**.
+- **R4 (pre-preview validate, advisory): 33% when drafting**.
+- **R5 (no CLI probing, hard): 100%**.
+- **Post-write `bakeoff validate` (Go CLI, unconditional): catches
+  any remaining schema drift before any provider run.**
+
+Across all 12 verification trials, **zero provider runs launched on
+invalid drafts** and the model never wrote a file before approval.
+The cycle's drafting-phase safety chain is empirically validated.
+
+---
+
 ## B — Provider dogfood patch inspection
 
 Status: **DONE** (2026-05-20)
