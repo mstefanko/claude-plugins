@@ -2,17 +2,27 @@ package validatecmd
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/apperror"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/repocontext"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
 	"github.com/spf13/cobra"
 )
 
 type ValidateOptions struct {
 	WorkOrder string
+}
+
+type ContextOptions struct {
+	WorkOrder    string
+	Provider     string
+	NoRepoLayout bool
 }
 
 func NewCmdValidate(f commands.Factory, runF func(context.Context, *ValidateOptions) error) *cobra.Command {
@@ -31,6 +41,28 @@ func NewCmdValidate(f commands.Factory, runF func(context.Context, *ValidateOpti
 			return runF(cmd.Context(), opts)
 		},
 	}
+	cmd.AddCommand(newCmdValidateContext(f, nil))
+	return cmd
+}
+
+func newCmdValidateContext(f commands.Factory, runF func(context.Context, *ContextOptions) error) *cobra.Command {
+	opts := &ContextOptions{}
+	cmd := &cobra.Command{
+		Use:           "context WORK_ORDER",
+		Short:         "preview injected prompt context",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		Args:          commands.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			opts.WorkOrder = args[0]
+			if runF == nil {
+				return runValidateContext(cmd.Context(), f, opts)
+			}
+			return runF(cmd.Context(), opts)
+		},
+	}
+	cmd.Flags().StringVar(&opts.Provider, "provider", "", "preview one provider id")
+	cmd.Flags().BoolVar(&opts.NoRepoLayout, "no-repo-layout", false, "suppress generated repo layout preview")
 	return cmd
 }
 
@@ -38,6 +70,10 @@ func runValidate(_ context.Context, f commands.Factory, opts *ValidateOptions) e
 	wo, err := workorder.Load(opts.WorkOrder)
 	if err != nil {
 		return commands.WrapValidation(err)
+	}
+	root, err := os.Getwd()
+	if err != nil {
+		return &apperror.RuntimeError{Err: err}
 	}
 	streams := f.Streams()
 	streams.Printf("valid work order\n")
@@ -53,17 +89,91 @@ func runValidate(_ context.Context, f commands.Factory, opts *ValidateOptions) e
 		streams.Printf("    - %s: %s %s (%s, %s)\n", provider.ID, provider.Backend, provider.Model, provider.Scope, provider.Effort)
 	}
 	streams.Printf("  judge:   %s %s (%s)\n", wo.Judge.Backend, wo.Judge.Model, wo.Judge.Effort)
-	for _, warning := range validateWarnings(wo) {
+	for _, warning := range validateWarnings(root, wo) {
 		streams.Printf("warning: %s\n", warning)
 	}
 	return nil
 }
 
-func validateWarnings(wo *workorder.WorkOrder) []string {
-	if wo == nil || wo.Build == nil {
-		return nil
+func runValidateContext(_ context.Context, f commands.Factory, opts *ContextOptions) error {
+	wo, err := workorder.Load(opts.WorkOrder)
+	if err != nil {
+		return commands.WrapValidation(err)
 	}
+	root, err := os.Getwd()
+	if err != nil {
+		return &apperror.RuntimeError{Err: err}
+	}
+	providers, err := selectedProviders(wo, opts.Provider)
+	if err != nil {
+		return commands.WrapValidation(err)
+	}
+	streams := f.Streams()
+	streams.Printf("context root: %s\n", root)
+	for _, warning := range validateWarnings(root, wo) {
+		streams.Printf("warning: %s\n", warning)
+	}
+	streams.Printf("\n<context>\n%s\n</context>\n", wo.Background)
+	layoutBlock := ""
+	if anySelectedReceivesLayout(wo, providers, opts.NoRepoLayout) {
+		layoutBlock, err = repocontext.BuildLayoutBlock(root)
+		if err != nil {
+			return err
+		}
+		if layoutBlock != "" {
+			streams.Printf("\n%s\n", layoutBlock)
+		}
+	}
+	streams.Printf("\nproviders:\n")
+	for _, provider := range providers {
+		layoutEligible := repocontext.ParticipantReceivesLayout(wo.ScopePolicy, provider, opts.NoRepoLayout)
+		if layoutEligible && layoutBlock != "" {
+			streams.Printf("  - %s: receives <context>, <repo_layout> (scope: %s)\n", provider.ID, provider.Scope)
+		} else if layoutEligible {
+			streams.Printf("  - %s: receives <context>; <repo_layout> enabled but no entries were generated (scope: %s)\n", provider.ID, provider.Scope)
+		} else {
+			streams.Printf("  - %s: receives <context>; does not receive <repo_layout> (scope: %s)\n", provider.ID, provider.Scope)
+		}
+	}
+	return nil
+}
+
+func selectedProviders(wo *workorder.WorkOrder, providerID string) ([]workorder.Participant, error) {
+	if providerID == "" {
+		return wo.Providers, nil
+	}
+	for _, provider := range wo.Providers {
+		if provider.ID == providerID {
+			return []workorder.Participant{provider}, nil
+		}
+	}
+	return nil, workorder.Validationf("unknown provider id %q", providerID)
+}
+
+func anySelectedReceivesLayout(wo *workorder.WorkOrder, providers []workorder.Participant, disabled bool) bool {
+	for _, provider := range providers {
+		if repocontext.ParticipantReceivesLayout(wo.ScopePolicy, provider, disabled) {
+			return true
+		}
+	}
+	return false
+}
+
+func validateWarnings(root string, wo *workorder.WorkOrder) []string {
 	var warnings []string
+	pathWarnings, err := repocontext.ValidateProsePaths(root, wo)
+	if err == nil {
+		for _, warning := range pathWarnings {
+			message := fmt.Sprintf("%s references %q which does not exist under <context-root>", warning.Field, warning.Token)
+			if len(warning.Suggestions) > 0 {
+				message += "; did you mean one of: " + strings.Join(warning.Suggestions, ", ") + "?"
+			}
+			warnings = append(warnings, message)
+		}
+	}
+	if wo == nil || wo.Build == nil {
+		return warnings
+	}
 	for _, verifier := range wo.Build.Verify {
 		if verifier.Kind != "metric" {
 			continue

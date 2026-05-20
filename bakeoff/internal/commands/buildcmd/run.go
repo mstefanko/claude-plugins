@@ -16,6 +16,7 @@ import (
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/fsutil"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/ledger"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/manifest"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/repocontext"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/runnerenv"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/summary"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
@@ -196,7 +197,11 @@ func RunBuild(ctx context.Context, f commands.Factory, opts *BuildOptions) error
 			f.Streams().Printf("[%s] launching in worktree...\n", participant.ID)
 		}
 	}
-	providerRuns, err := runBuildProviders(ctx, f, wo, repo, runDir, baseline, worktreePaths, capabilities, opts.KeepWorktrees, effectiveQuiet)
+	repoLayoutBlock, err := buildRepoLayoutBlock(wo, opts.NoRepoLayout)
+	if err != nil {
+		return &apperror.RuntimeError{Err: err}
+	}
+	providerRuns, err := runBuildProviders(ctx, f, wo, repo, runDir, baseline, worktreePaths, capabilities, opts.KeepWorktrees, effectiveQuiet, repoLayoutBlock, opts.NoRepoLayout)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return err
@@ -241,6 +246,17 @@ func RunBuild(ctx context.Context, f commands.Factory, opts *BuildOptions) error
 		return err
 	}
 	return buildExitError(exitCode, "build failed")
+}
+
+func buildRepoLayoutBlock(wo *workorder.WorkOrder, disabled bool) (string, error) {
+	if !repocontext.AnyParticipantReceivesLayout(wo, disabled) {
+		return "", nil
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	return repocontext.BuildLayoutBlock(cwd)
 }
 
 func finalizeBuildRun(ctx context.Context, f commands.Factory, opts *BuildOptions, wo *workorder.WorkOrder, repo buildworkspace.Repository, runDir string, runID string, startedAt string, workerResults map[string]map[string]any, decision map[string]any, baseline buildverify.Result, providerRuns []providerRun, metrics []buildverify.MetricComparison, timings []buildPhaseTiming, exitCode int, humanOutput bool) error {

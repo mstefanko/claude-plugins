@@ -16,12 +16,13 @@ import (
 )
 
 type RerunOptions struct {
-	SourceRunID string
-	Out         string
-	NewRunID    string
-	Quiet       bool
-	NoTriage    bool
-	JudgeOnly   bool
+	SourceRunID  string
+	Out          string
+	NewRunID     string
+	Quiet        bool
+	NoTriage     bool
+	JudgeOnly    bool
+	NoRepoLayout bool
 }
 
 var (
@@ -52,6 +53,7 @@ func NewCmdRerun(f commands.Factory, runF func(context.Context, *RerunOptions) e
 	cmd.Flags().BoolVar(&opts.Quiet, "quiet", false, "suppress provider heartbeat lines")
 	cmd.Flags().BoolVar(&opts.NoTriage, "no-triage", false, "skip automatic triage for code-review runs")
 	cmd.Flags().BoolVar(&opts.JudgeOnly, "judge-only", false, "retry only the failed research judge using existing provider artifacts")
+	cmd.Flags().BoolVar(&opts.NoRepoLayout, "no-repo-layout", false, "suppress generated repo layout context")
 	return cmd
 }
 
@@ -77,10 +79,11 @@ func runRerun(ctx context.Context, f commands.Factory, opts *RerunOptions) error
 		}
 		f.Streams().Printf("note: build rerun runs against the current source tree, not the original run's snapshot\n")
 		return runBuild(ctx, f, &buildcmd.BuildOptions{
-			WorkOrder: workOrderPath,
-			Out:       opts.Out,
-			RunID:     opts.NewRunID,
-			Quiet:     opts.Quiet,
+			WorkOrder:    workOrderPath,
+			Out:          opts.Out,
+			RunID:        opts.NewRunID,
+			Quiet:        opts.Quiet,
+			NoRepoLayout: opts.NoRepoLayout,
 		})
 	}
 	if opts.JudgeOnly {
@@ -103,6 +106,7 @@ func runRerun(ctx context.Context, f commands.Factory, opts *RerunOptions) error
 		RunID:              opts.NewRunID,
 		Quiet:              opts.Quiet,
 		NoTriage:           opts.NoTriage,
+		NoRepoLayout:       opts.NoRepoLayout,
 		ReplaySourceRunDir: sourceRun,
 	})
 }

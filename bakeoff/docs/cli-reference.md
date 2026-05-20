@@ -32,6 +32,7 @@ Recognized `/bakeoff:run` flags:
 | `--quiet` | research, build | Suppress heartbeat lines. |
 | `--keep-worktrees` | build only | Retain build worktrees for debugging. |
 | `--no-triage` | research only | Skip automatic triage for code-review runs. |
+| `--no-repo-layout` | research, build | Suppress generated `<repo_layout>` prompt context. |
 
 Mode-specific flags stop execution when they are supplied for the wrong final
 type. Existing work-order paths are validated first, then `type: "build"`
@@ -109,10 +110,19 @@ Flags:
 
 ```text
 bakeoff validate WORK_ORDER
+bakeoff validate context WORK_ORDER [--provider ID] [--no-repo-layout]
 ```
 
 Loads JSON or JSONC, validates schema fields, prints the mode, facet, budgets,
 scope policy, providers, and judge, then exits without running providers.
+Validation also warns when `goal` or `background` mention path-like tokens that
+do not exist under the current invocation directory.
+
+`bakeoff validate context` previews the prompt context blocks providers would
+receive from the current invocation directory. It prints the resolved context
+root, validation warnings, the author `<context>` block, any scoped
+`<repo_layout>` block, and per-provider notes. Use `--provider <id>` to preview
+one provider.
 
 ## `bakeoff research`
 
@@ -136,6 +146,7 @@ Flags:
 | `--diff` | Include a bounded unified patch in generated review context. |
 | `--changed-files` | Include changed-file context against the base ref. |
 | `--json` | Emit a final JSON summary. |
+| `--no-repo-layout` | Suppress generated `<repo_layout>` prompt context. |
 
 Review context is generated only when `--base`, `--diff`, or `--changed-files`
 is set. The generated context includes metadata, diffstat, and changed files;
@@ -161,6 +172,7 @@ Flags:
 | `--quiet` | Suppress provider and verifier heartbeat lines. |
 | `--json` | Emit a final JSON summary. |
 | `--keep-worktrees` | Retain build worktrees for debugging. |
+| `--no-repo-layout` | Suppress generated `<repo_layout>` prompt context. |
 
 Build work orders require at least one `kind: "gate"` verifier. Metric
 verifiers are optional. A provider patch is eligible only after a successful
@@ -184,6 +196,7 @@ Flags:
 | `--quiet` | Suppress provider heartbeat lines. |
 | `--no-triage` | Skip automatic triage for code-review research reruns. |
 | `--judge-only` | Retry only a failed research judge using durable provider artifacts from the source run. |
+| `--no-repo-layout` | Suppress generated `<repo_layout>` prompt context for replayed provider runs. |
 
 `--judge-only` is only for research runs whose providers completed and whose
 judge has durable failed-attempt evidence in `decision.json` or

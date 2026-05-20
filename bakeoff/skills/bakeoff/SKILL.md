@@ -175,7 +175,8 @@ CLI mode. Use it only for natural-language review requests that explicitly ask
 for separate lenses or separate review passes. Plain review remains one normal
 `type: "gather"` work order with `facet.id: "code-review"`.
 
-Trigger multi-lens only for wording such as:
+Trigger multi-lens only for review-shaped requests where the wording clearly
+asks for multiple review passes. Candidate wording includes:
 
 - `multi-lens`;
 - `review swarm`;
@@ -187,7 +188,10 @@ Trigger multi-lens only for wording such as:
 Do not trigger multi-lens just because a normal review names several concerns.
 For example, "review this for security and tests" drafts one review with those
 concerns in the shared focus. "review this with security and tests as separate
-lenses" drafts two lens runs.
+lenses" drafts two lens runs. Do not trigger when `swarm` describes the code, a
+team, a plugin, a bug, or any domain object rather than a Bakeoff workflow. If
+"review swarm" is ambiguous, ask whether the user wants separate lens runs
+before drafting.
 
 Run the task-fit gate first. If the target is not bounded by a branch, PR,
 diff, file set, or local-change scope, show the usual "this may not need
@@ -269,10 +273,11 @@ This will run <N> separate review runs:
 Each run asks the same two reviewers to inspect the same change from one lens,
 then merges and verifies that lens's findings.
 
-Cost note: this is about <N>x a normal review. With the current 900s default
-budget, each lens can reserve up to about 45 minutes worst-case (reviewers,
-merge, verification). <N> lenses can therefore reserve up to about
-<computed-total> minutes worst-case, though typical runs may finish sooner.
+Cost note: this is about <N>x a normal review. With the configured
+<budget-seconds> second budget, each lens can reserve up to about
+<per-lens-minutes> minutes worst-case (reviewers, merge, verification). <N>
+lenses can therefore reserve up to about <computed-total> minutes worst-case,
+though typical runs may finish sooner.
 
 Verification is on for each lens by default. Synthesis is not automatic; after
 the runs finish I will summarize the lens results and ask whether you want one
@@ -282,41 +287,74 @@ Write, validate, and run these one after another? Reply `write and run`, reply
 `show` to print the full JSON, or tell me what to change.
 ```
 
-If a non-default `budgets.wall_clock_seconds` is used, compute worst-case as
-one worker phase plus one merge phase plus one verification phase per lens when
-triage is enabled. The two provider reviews run in parallel, so do not
-double-count the worker phase. If `--no-triage` is set, omit the verification
-phase and state that findings will be raw and unverified. Full JSON may be
-shown after `show` only when the combined draft fits the 120-line / 10 KB
-preview budget; otherwise offer `show <lens>` or ask for approval to write the
-files.
+Compute the displayed worst-case from `budgets.wall_clock_seconds`: one worker
+phase, one merge phase, and one verification phase per lens when triage is
+enabled. The two provider reviews run in parallel, so do not double-count the
+worker phase. For the default 900-second budget with triage enabled, this is
+45 minutes per lens. If `--no-triage` is set, omit the verification phase,
+state that findings will be raw and unverified, and use two phases in the
+estimate. Full JSON may be shown after `show` only when the combined draft fits
+the 120-line / 10 KB preview budget.
 
 Require explicit `write and run` approval before writing or executing
-multi-lens files. After approval, write every lens file, validate all files
-before running any, and run them sequentially with existing commands:
+multi-lens files. For multi-lens, `yes`, `approve`, or `run it` is not enough;
+reply by asking for exact `write and run` approval because multiple files and
+runs are involved. If the combined JSON is too long, list the available
+lens-specific show commands such as `show security` and `show performance`. If
+the user replies `show <lens>` with a selected lens label or slug, print only
+that lens's JSON and then repeat the multi-lens approval question.
+
+After approval, write every lens file, validate all files before running any,
+and run them sequentially with existing commands:
 
 ```text
-bakeoff research <lens-work-order> --run-id <base>.<lens> [--out <dir>] [--base <ref>] [--diff] [--changed-files] [--quiet] [--no-triage]
+bakeoff research <lens-work-order> --run-id <base>.<lens> [--out <dir>] [--base <ref>] [--diff] [--changed-files] [--quiet] [--no-triage] [--no-repo-layout]
 ```
 
 Continue after exit `0`. Treat exit `3` as a completed but unusual research
 handoff if it occurs, and mark that lens untriaged unless triage artifacts
 exist. Stop on validation failure, exit `1`, exit `2`, exit `4`, exit `130`,
-interruption, or command failure. Summarize completed and failed lenses before
-asking whether to continue.
+interruption, or command failure.
+
+On a stopped multi-lens sequence, show a partial-progress block with completed
+lenses, run ids, report paths, triage states, the stopped lens and failure
+reason, remaining lenses, and whether a partial summary file was written. Ask:
+
+```text
+Continue with the remaining lenses? Reply `continue lenses`, or tell me what
+to change.
+```
 
 After the lens runs finish, read each run's `report.md`, `decision.json`,
 `triage/final.json`, `triage/triage.md`, and
 `triage/source_finding_filter.json` when present. Write a plugin-created
 summary file to `<out>/<base>.multi-lens-summary.md`, applying the same numeric
-collision policy to the summary stem. The summary and final response must
-include each lens, run id, report path, triage path/state, run status, triage
-counts when available (`real_issue`, `needs_repro`, evidence gaps, false
-positives, deferred, documented, and ignored items), the most actionable
-findings grouped by lens, duplicate or overlapping themes, clean lenses,
-caveats for untriaged or failed runs, `bakeoff show` commands, and the
-persisted summary path. If triage is disabled, missing, or only recommended,
-say findings are raw and unverified.
+collision policy to the summary stem. Use sections in this order:
+
+```text
+# Multi-Lens Review Summary
+
+Summary file: <path>
+
+## Runs
+## Triage Counts
+## Most Actionable
+## Overlap
+## Clean Lenses
+## Caveats
+## Next Commands
+## Optional Synthesis
+```
+
+The summary and final response must include each lens, run id, report path,
+triage path/state, run status, triage counts when available (`real_issue`,
+`needs_repro`, evidence gaps, false positives, deferred, documented, and
+ignored items), the most actionable findings grouped by lens, duplicate or
+overlapping themes, clean lenses, caveats for untriaged or failed runs,
+`bakeoff show` commands, and the persisted summary path. If triage is disabled,
+missing, or only recommended, say findings are raw and unverified. If some
+lenses failed or were skipped, label the file and final response as a partial
+multi-lens summary.
 
 Do not synthesize automatically. Ask: "Want a synthesis pass that dedupes these
 verified lens results into one prioritized fix plan?" If the user accepts,

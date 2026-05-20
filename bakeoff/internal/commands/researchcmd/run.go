@@ -23,6 +23,7 @@ import (
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/manifest"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/prompt"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/provider"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/repocontext"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/report"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/reviewcontext"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/runner"
@@ -128,7 +129,11 @@ func RunResearch(ctx context.Context, f commands.Factory, opts *ResearchOptions)
 		f.Streams().Printf("review context: replayed from %s\n", opts.ReplaySourceRunDir)
 	}
 
-	workerResults, err := runWorkers(ctx, f, wo, runDir, effectiveQuiet, humanOutput)
+	repoLayoutBlock, err := buildRepoLayoutBlockForRun(wo, opts.NoRepoLayout)
+	if err != nil {
+		return &apperror.RuntimeError{Err: err}
+	}
+	workerResults, err := runWorkers(ctx, f, wo, runDir, effectiveQuiet, humanOutput, repoLayoutBlock, opts.NoRepoLayout)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return err
@@ -391,7 +396,18 @@ func finalizeResearchRun(ctx context.Context, f commands.Factory, opts researchF
 	return nil
 }
 
-func runWorkers(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder, runDir string, quiet bool, humanOutput bool) (map[string]map[string]any, error) {
+func buildRepoLayoutBlockForRun(wo *workorder.WorkOrder, disabled bool) (string, error) {
+	if !repocontext.AnyParticipantReceivesLayout(wo, disabled) {
+		return "", nil
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	return repocontext.BuildLayoutBlock(cwd)
+}
+
+func runWorkers(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder, runDir string, quiet bool, humanOutput bool, repoLayoutBlock string, noRepoLayout bool) (map[string]map[string]any, error) {
 	capabilities := map[string]provider.ScopeCapabilities{}
 	if wo.ScopePolicy.Enforcement != "advisory" {
 		backendSet := map[string]bool{}
@@ -419,7 +435,7 @@ func runWorkers(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder
 		index := index
 		participant := providerParticipant
 		group.Go(func() error {
-			result, err := runOneWorker(groupCtx, f, wo, participant, runDir, cwd, capabilities, quiet)
+			result, err := runOneWorker(groupCtx, f, wo, participant, runDir, cwd, capabilities, quiet, repoLayoutBlock, noRepoLayout)
 			if err != nil {
 				if errors.Is(err, context.Canceled) {
 					return err
@@ -451,12 +467,12 @@ func runWorkers(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder
 	return results, nil
 }
 
-func runOneWorker(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder, participant workorder.Participant, runDir string, cwd string, capabilities map[string]provider.ScopeCapabilities, quiet bool) (map[string]any, error) {
+func runOneWorker(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder, participant workorder.Participant, runDir string, cwd string, capabilities map[string]provider.ScopeCapabilities, quiet bool, repoLayoutBlock string, noRepoLayout bool) (map[string]any, error) {
 	providerDir := filepath.Join(runDir, "providers", participant.ID)
 	if err := os.MkdirAll(providerDir, 0o700); err != nil {
 		return nil, err
 	}
-	workerPrompt, err := prompt.BuildWorkerPrompt(wo, participant)
+	workerPrompt, err := prompt.BuildWorkerPromptWithRepoLayout(wo, participant, participantRepoLayout(wo, participant, repoLayoutBlock, noRepoLayout))
 	if err != nil {
 		return nil, err
 	}
@@ -495,6 +511,10 @@ func runOneWorker(ctx context.Context, f commands.Factory, wo *workorder.WorkOrd
 		return nil, err
 	}
 	return result, nil
+}
+
+func participantRepoLayout(wo *workorder.WorkOrder, participant workorder.Participant, repoLayoutBlock string, disabled bool) string {
+	return repocontext.LayoutBlockForParticipant(wo.ScopePolicy, participant, repoLayoutBlock, disabled)
 }
 
 func printWorkerResult(f commands.Factory, providerID string, result map[string]any) {

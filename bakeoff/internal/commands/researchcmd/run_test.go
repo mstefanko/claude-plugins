@@ -262,6 +262,36 @@ JSON
 	}
 }
 
+func TestRunResearchJudgeOnlyMissingProviderArtifactDoesNotCreateRetryRun(t *testing.T) {
+	root := t.TempDir()
+	outDir := filepath.Join(root, "runs")
+	sourceRun := filepath.Join(outDir, "source")
+	writeJudgeOnlySourceRun(t, sourceRun, "gather", "exit_error")
+	if err := os.Remove(filepath.Join(sourceRun, "providers", "codex", "final.json")); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	factory := researchTestFactory{streams: output.NewStreams(&out, &errOut)}
+	err := RunResearchJudgeOnly(context.Background(), factory, &ResearchJudgeOnlyOptions{
+		SourceRunDir: sourceRun,
+		SourceRunID:  "source",
+		Out:          outDir,
+		RunID:        "retry",
+		Quiet:        true,
+		NoTriage:     true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "provider codex final.json is required") {
+		t.Fatalf("expected missing provider artifact error, got %v\nstdout:\n%s\nstderr:\n%s", err, out.String(), errOut.String())
+	}
+	if _, statErr := os.Stat(filepath.Join(outDir, "retry")); !os.IsNotExist(statErr) {
+		t.Fatalf("retry run was created before preflight completed: %v", statErr)
+	}
+	if _, statErr := os.Lstat(filepath.Join(outDir, "latest")); !os.IsNotExist(statErr) {
+		t.Fatalf("latest was updated before preflight completed: %v", statErr)
+	}
+}
+
 func TestRunResearchJudgeOnlyRunsAutoTriageForCodeReview(t *testing.T) {
 	root := t.TempDir()
 	fakeBin := filepath.Join(root, "bin")

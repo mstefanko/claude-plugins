@@ -62,7 +62,7 @@ func TestLoadWorkOrderDefaultsAndSummary(t *testing.T) {
 	if wo.Budgets.HeartbeatSeconds != 60 || wo.Budgets.OutputCapGraceSeconds != 10 || wo.Budgets.MaxOutputOverrunBytes != 2000 {
 		t.Fatalf("budget defaults not applied: %#v", wo.Budgets)
 	}
-	if wo.ScopePolicy.Enforcement != "best_effort" {
+	if wo.ScopePolicy.Enforcement != "best_effort" || wo.ScopePolicy.RepoLayout != "auto" {
 		t.Fatalf("scope policy default not applied: %#v", wo.ScopePolicy)
 	}
 	if got := FormatBudgetSummary(wo.Budgets); got != "3s wall, 2000 bytes out, 10s cap grace" {
@@ -96,6 +96,25 @@ func TestFacetValidationNormalizesAndRejectsUnsafeText(t *testing.T) {
 	_, err = Validate(data)
 	if err == nil || !strings.Contains(err.Error(), "facet.id is reserved") {
 		t.Fatalf("expected reserved facet id error, got %v", err)
+	}
+}
+
+func TestScopePolicyRepoLayoutValidation(t *testing.T) {
+	data := validWorkOrder()
+	data["scope_policy"] = map[string]any{"enforcement": "best_effort", "repo_layout": "off"}
+	wo, err := Validate(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wo.ScopePolicy.RepoLayout != "off" {
+		t.Fatalf("repo layout policy = %#v", wo.ScopePolicy)
+	}
+
+	data = validWorkOrder()
+	data["scope_policy"] = map[string]any{"enforcement": "best_effort", "repo_layout": "sometimes"}
+	_, err = Validate(data)
+	if err == nil || !strings.Contains(err.Error(), "scope_policy.repo_layout must be one of") {
+		t.Fatalf("expected repo_layout validation error, got %v", err)
 	}
 }
 

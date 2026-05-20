@@ -18,6 +18,7 @@ type ResearchOptions struct {
 	Diff               bool
 	ChangedFiles       bool
 	JSON               bool
+	NoRepoLayout       bool
 	ReplaySourceRunDir string
 }
 
@@ -56,5 +57,6 @@ func NewCmdResearch(f commands.Factory, runF func(context.Context, *ResearchOpti
 	cmd.Flags().BoolVar(&opts.Diff, "diff", false, "include a bounded unified patch in generated review context")
 	cmd.Flags().BoolVar(&opts.ChangedFiles, "changed-files", false, "include changed-file context against the base ref")
 	cmd.Flags().BoolVar(&opts.JSON, "json", false, "emit a final JSON summary")
+	cmd.Flags().BoolVar(&opts.NoRepoLayout, "no-repo-layout", false, "suppress generated repo layout context")
 	return cmd
 }

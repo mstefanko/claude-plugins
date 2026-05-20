@@ -22,6 +22,9 @@ const (
 	VerifierBaselineMustPass = "must_pass"
 	VerifierBaselineMayFail  = "may_fail"
 	VerifierBaselineMustFail = "must_fail"
+
+	ScopeRepoLayoutAuto = "auto"
+	ScopeRepoLayoutOff  = "off"
 )
 
 var (
@@ -31,6 +34,7 @@ var (
 	modes               = []string{"gather", "compare", "analyze", "build"}
 	initKinds           = []string{"gather", "compare", "analyze", "review", "build"}
 	scopeEnforcements   = []string{"advisory", "best_effort", "required"}
+	repoLayoutPolicies  = []string{ScopeRepoLayoutAuto, ScopeRepoLayoutOff}
 	backends            = []string{"claude", "codex"}
 	scopes              = []string{"codebase", "web", "mixed"}
 	efforts             = []string{"low", "medium", "high", "xhigh"}
@@ -116,6 +120,7 @@ type Budgets struct {
 
 type ScopePolicy struct {
 	Enforcement string `json:"enforcement"`
+	RepoLayout  string `json:"repo_layout,omitempty"`
 }
 
 type BuildSpec struct {
@@ -606,9 +611,10 @@ func validateBudgets(value any) (Budgets, error) {
 
 func validateScopePolicy(value any) (ScopePolicy, error) {
 	if value == nil {
-		return ScopePolicy{Enforcement: "best_effort"}, nil
+		return ScopePolicy{Enforcement: "best_effort", RepoLayout: "auto"}, nil
 	}
 	enforcement := ""
+	repoLayout := "auto"
 	switch typed := value.(type) {
 	case string:
 		enforcement = typed
@@ -621,13 +627,23 @@ func validateScopePolicy(value any) (ScopePolicy, error) {
 				enforcement = fmt.Sprint(raw)
 			}
 		}
+		if raw, ok := typed["repo_layout"]; ok {
+			if s, ok := raw.(string); ok {
+				repoLayout = s
+			} else {
+				repoLayout = fmt.Sprint(raw)
+			}
+		}
 	default:
 		return ScopePolicy{}, Validationf("scope_policy must be an object or one of: advisory, best_effort, required")
 	}
 	if !contains(scopeEnforcements, enforcement) {
 		return ScopePolicy{}, Validationf("scope_policy.enforcement must be one of: %s (got %s)", strings.Join(scopeEnforcements, ", "), pyRepr(enforcement))
 	}
-	return ScopePolicy{Enforcement: enforcement}, nil
+	if !contains(repoLayoutPolicies, repoLayout) {
+		return ScopePolicy{}, Validationf("scope_policy.repo_layout must be one of: %s (got %s)", strings.Join(repoLayoutPolicies, ", "), pyRepr(repoLayout))
+	}
+	return ScopePolicy{Enforcement: enforcement, RepoLayout: repoLayout}, nil
 }
 
 func validateBuildSpec(value any) (*BuildSpec, error) {

@@ -227,7 +227,7 @@ Slash commands:
 
 - `/bakeoff:setup` — build or update the bundled Bakeoff Go CLI in persistent plugin data.
 - `/bakeoff:quickstart` — check CLI, local readiness, and provider auth/session state.
-- `/bakeoff:run <path or request> [--run-id ID] [--out runs] [--quiet] [--keep-worktrees] [--no-triage]` — validate and run, or draft from natural language.
+- `/bakeoff:run <path or request> [--run-id ID] [--out runs] [--quiet] [--keep-worktrees] [--no-triage] [--no-repo-layout]` — validate and run, or draft from natural language.
 - `/bakeoff:inspect [latest or run-id]` — open existing reports, decisions, triage, handoff.
 - `/bakeoff:doctor [--skip-auth-probe] [--build] [--quiet]` — readiness check. `--build` runs live edit probes.
 - `/bakeoff:uninstall` — remove plugin state, then guide manual plugin uninstall.

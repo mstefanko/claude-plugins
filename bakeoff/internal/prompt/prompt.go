@@ -21,6 +21,10 @@ var scopeInstructions = map[string]string{
 }
 
 func BuildWorkerPrompt(wo *workorder.WorkOrder, provider workorder.Participant) (string, error) {
+	return BuildWorkerPromptWithRepoLayout(wo, provider, "")
+}
+
+func BuildWorkerPromptWithRepoLayout(wo *workorder.WorkOrder, provider workorder.Participant, repoLayout string) (string, error) {
 	base, err := fixturePrompt(fmt.Sprintf("worker-%s-%s.txt", wo.Type, workerFixtureBackend(provider)))
 	if err != nil {
 		return "", err
@@ -36,6 +40,7 @@ func BuildWorkerPrompt(wo *workorder.WorkOrder, provider workorder.Participant) 
 	text := base
 	text = replaceTagInner(text, questionTag, wo.Goal)
 	text = replaceTagInner(text, "context", wo.Background)
+	text = insertAfterTag(text, "context", repoLayout)
 	text = replaceTagInner(text, "scope", scope)
 	text = replaceBlock(text, fixtureFacetBlock(), RenderFacetBlock(wo.Facet))
 	text = strings.Replace(text, fixtureWorkerFacetRules(), RenderWorkerFacetRules(wo.Facet), 1)
@@ -344,6 +349,20 @@ func replaceBlock(text string, old string, replacement string) string {
 		return text
 	}
 	return strings.Replace(text, old, replacement, 1)
+}
+
+func insertAfterTag(text string, tag string, block string) string {
+	block = strings.TrimSpace(block)
+	if block == "" {
+		return text
+	}
+	closeTag := "</" + tag + ">"
+	start := strings.Index(text, closeTag)
+	if start == -1 {
+		return text
+	}
+	insertAt := start + len(closeTag)
+	return text[:insertAt] + "\n\n" + block + text[insertAt:]
 }
 
 func fixtureFacetBlock() string {

@@ -42,7 +42,7 @@ The fastest way to start is the examples directory:
 | `providers` | Exactly two provider participants. |
 | `judge` | Judge participant; backend/model pair must differ from each provider. |
 | `budgets` | Wall-clock, output, heartbeat, and output-cap settings. |
-| `scope_policy` | `advisory`, `best_effort`, or `required`. Defaults to `best_effort` when omitted. |
+| `scope_policy` | `advisory`, `best_effort`, or `required`, or an object with `enforcement` and optional `repo_layout`. Defaults to `best_effort` with repo layout enabled when omitted. |
 | `facet` | Optional task filter, commonly used for code review. |
 | `build` | Required only when `type: "build"`. |
 
@@ -50,6 +50,22 @@ Provider participants require `id`, `backend`, and `model`; provider `scope`
 defaults to `mixed` when omitted. Valid backends are `claude` and `codex`.
 Valid scopes are `codebase`, `web`, and `mixed`. Build providers cannot use
 `web` scope.
+
+When repo layout is enabled, Bakeoff injects a small generated `<repo_layout>`
+orientation block only for providers with `scope: "codebase"` or
+`scope: "mixed"`. It is derived from the current invocation directory, scoped
+by `git ls-files` when available, and never sent to `scope: "web"` providers.
+Disable it per work order with:
+
+```json
+"scope_policy": { "enforcement": "best_effort", "repo_layout": "off" }
+```
+
+`bakeoff validate` emits warning-level checks for path-like references in
+`goal` and `background` that do not exist under the current invocation
+directory. Use `bakeoff validate context <work-order>` to preview the author
+`<context>` block, any generated `<repo_layout>` block, and each provider's
+effective context view before spending provider time.
 
 ## Model Names
 

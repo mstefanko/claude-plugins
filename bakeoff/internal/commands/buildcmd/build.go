@@ -15,6 +15,7 @@ type BuildOptions struct {
 	Quiet         bool
 	JSON          bool
 	KeepWorktrees bool
+	NoRepoLayout  bool
 }
 
 func NewCmdBuild(f commands.Factory, runF func(context.Context, *BuildOptions) error) *cobra.Command {
@@ -39,5 +40,6 @@ func NewCmdBuild(f commands.Factory, runF func(context.Context, *BuildOptions) e
 	cmd.Flags().BoolVar(&opts.Quiet, "quiet", false, "suppress provider and verifier heartbeat lines")
 	cmd.Flags().BoolVar(&opts.JSON, "json", false, "emit a final JSON summary")
 	cmd.Flags().BoolVar(&opts.KeepWorktrees, "keep-worktrees", false, "retain build worktrees for debugging")
+	cmd.Flags().BoolVar(&opts.NoRepoLayout, "no-repo-layout", false, "suppress generated repo layout context")
 	return cmd
 }

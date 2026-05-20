@@ -1,6 +1,6 @@
 ---
 description: Draft, validate, and run Bakeoff work orders
-argument-hint: "<work-order-path | request> [--run-id ID] [--out runs] [--base REF] [--diff] [--changed-files] [--quiet] [--keep-worktrees] [--no-triage]"
+argument-hint: "<work-order-path | request> [--run-id ID] [--out runs] [--base REF] [--diff] [--changed-files] [--quiet] [--keep-worktrees] [--no-triage] [--no-repo-layout]"
 allowed-tools: Read, Write, Edit, Glob, Grep, Bash(${CLAUDE_PLUGIN_ROOT}/scripts/bakeoff-ensure-cli:*), Bash(${CLAUDE_PLUGIN_ROOT}/bin/bakeoff validate:*), Bash(${CLAUDE_PLUGIN_ROOT}/bin/bakeoff research:*), Bash(${CLAUDE_PLUGIN_ROOT}/bin/bakeoff build:*), Bash(${CLAUDE_PLUGIN_ROOT}/bin/bakeoff rerun:*), Bash(bakeoff validate:*), Bash(bakeoff research:*), Bash(bakeoff build:*), Bash(bakeoff rerun:*), Bash(git status:*), Bash(git diff:*), Bash(git rev-parse:*)
 ---
 
@@ -36,6 +36,7 @@ Recognized flags:
 - `--quiet`
 - `--keep-worktrees`
 - `--no-triage`
+- `--no-repo-layout`
 
 Remove recognized flags from the request before classification. Unknown flags
 are errors unless the user clearly intended them as natural language text.
@@ -48,6 +49,7 @@ Route flags by final type:
   `bakeoff research`;
 - pass `--keep-worktrees` only to `bakeoff build`;
 - pass `--no-triage` only to `bakeoff research`;
+- pass `--no-repo-layout` to either `bakeoff research` or `bakeoff build`;
 - stop before execution when a mode-specific flag is supplied for the wrong
   final type.
 
@@ -197,7 +199,8 @@ ask for separate lenses or separate review passes. Do not add
 Plain review remains one normal `type: "gather"` work order with
 `facet.id: "code-review"`.
 
-Trigger phrases include:
+Trigger phrases are candidates only when the request is review-shaped and the
+phrase is being used to request multiple review passes. They include:
 
 - `multi-lens`
 - `review swarm`
@@ -209,6 +212,9 @@ Trigger phrases include:
 Do not trigger multi-lens just because a normal review mentions multiple
 concerns. "review this for security and tests" drafts one normal review.
 "review this with security and tests as separate lenses" drafts two lens runs.
+Do not trigger when `swarm` describes the code, a team, a plugin, a bug, or any
+domain object rather than a Bakeoff workflow. If "review swarm" is ambiguous,
+ask whether the user wants separate lens runs before drafting.
 
 Run the task-fit gate before lens selection. If the review target is not
 bounded by a branch, PR, diff, file set, or local changes, stop with the usual
@@ -286,10 +292,11 @@ This will run <N> separate review runs:
 Each run asks the same two reviewers to inspect the same change from one lens,
 then merges and verifies that lens's findings.
 
-Cost note: this is about <N>x a normal review. With the current 900s default
-budget, each lens can reserve up to about 45 minutes worst-case (reviewers,
-merge, verification). <N> lenses can therefore reserve up to about
-<computed-total> minutes worst-case, though typical runs may finish sooner.
+Cost note: this is about <N>x a normal review. With the configured
+<budget-seconds> second budget, each lens can reserve up to about
+<per-lens-minutes> minutes worst-case (reviewers, merge, verification). <N>
+lenses can therefore reserve up to about <computed-total> minutes worst-case,
+though typical runs may finish sooner.
 
 Verification is on for each lens by default. Synthesis is not automatic; after
 the runs finish I will summarize the lens results and ask whether you want one
@@ -299,30 +306,49 @@ Write, validate, and run these one after another? Reply `write and run`, reply
 `show` to print the full JSON, or tell me what to change.
 ```
 
-When budgets are not the 900-second research default, compute the worst-case
-from `wall_clock_seconds`: one worker phase, one merge phase, and one
-verification phase per lens when triage is enabled. The two provider reviews
-run in parallel, so do not double-count the worker phase. If `--no-triage` is
-set, omit the verification phase and state that findings will be raw and
-unverified.
+Compute the displayed worst-case from `budgets.wall_clock_seconds`: one worker
+phase, one merge phase, and one verification phase per lens when triage is
+enabled. The two provider reviews run in parallel, so do not double-count the
+worker phase. For the default 900-second budget with triage enabled, this is
+45 minutes per lens. If `--no-triage` is set, omit the verification phase,
+state that findings will be raw and unverified, and use two phases in the
+estimate.
 
-Use `write and run` as the multi-lens approval phrase. If the user replies
+Use `write and run` as the multi-lens approval phrase. For multi-lens, `yes`,
+`approve`, or `run it` is not enough; reply by asking for exact `write and run`
+approval because multiple files and runs are involved. If the user replies
 `show`, print full JSON only when the combined draft fits the existing
-120-line / 10 KB budget; otherwise offer `show <lens>` or ask for approval to
-write the files.
+120-line / 10 KB budget. If it does not fit, list the available lens-specific
+show commands such as `show security` and `show performance`. If the user
+replies `show <lens>` with a selected lens label or slug, print only that
+lens's JSON and then repeat the multi-lens approval question.
 
 After approval, write all lens files, validate every file, and only then run
 the lens runs sequentially. Route every lens through `bakeoff research`:
 
 ```text
-bakeoff research <lens-work-order> --run-id <base>.<lens> [--out <dir>] [--base <ref>] [--diff] [--changed-files] [--quiet] [--no-triage]
+bakeoff research <lens-work-order> --run-id <base>.<lens> [--out <dir>] [--base <ref>] [--diff] [--changed-files] [--quiet] [--no-triage] [--no-repo-layout]
 ```
 
 Continue after exit `0`. Treat exit `3` as a completed but unusual research
 handoff only if it occurs; mark the lens untriaged unless triage artifacts
 exist. Stop on validation failure, exit `1`, exit `2`, exit `4`, exit `130`,
-interruption, or command failure. Summarize completed and failed lenses before
-asking whether to continue.
+interruption, or command failure.
+
+On a stopped multi-lens sequence, show a partial-progress block with:
+
+- completed lenses, run ids, report paths, and triage states;
+- the stopped lens, command, exit code or failure reason, and any artifact paths
+  that exist;
+- remaining lenses not yet run;
+- whether a partial summary file was written.
+
+Ask before continuing remaining lenses:
+
+```text
+Continue with the remaining lenses? Reply `continue lenses`, or tell me what
+to change.
+```
 
 After all completed lens runs finish, read artifacts when present:
 
@@ -333,14 +359,47 @@ After all completed lens runs finish, read artifacts when present:
 - `triage/source_finding_filter.json`
 
 Write a markdown summary to `<out>/<base>.multi-lens-summary.md`, applying the
-same numeric collision policy as lens run ids. The summary and final response
-must include each lens, run id, report path, triage path/state, run status,
-triage counts when available (`real_issue`, `needs_repro`, evidence gaps, false
-positives, deferred, documented, and ignored items), most actionable findings
-grouped by lens, overlapping themes, clean lenses, caveats for untriaged or
-failed runs, `bakeoff show` commands, and the persisted summary path. If triage
-was disabled, artifacts are missing, or triage was only recommended, say
-findings are raw and unverified.
+same numeric collision policy as lens run ids. Use this section layout:
+
+```text
+# Multi-Lens Review Summary
+
+Summary file: <path>
+
+## Runs
+...
+
+## Triage Counts
+...
+
+## Most Actionable
+...
+
+## Overlap
+...
+
+## Clean Lenses
+...
+
+## Caveats
+...
+
+## Next Commands
+...
+
+## Optional Synthesis
+...
+```
+
+The summary and final response must include each lens, run id, report path,
+triage path/state, run status, triage counts when available (`real_issue`,
+`needs_repro`, evidence gaps, false positives, deferred, documented, and
+ignored items), most actionable findings grouped by lens, overlapping themes,
+clean lenses, caveats for untriaged or failed runs, `bakeoff show` commands,
+and the persisted summary path. If triage was disabled, artifacts are missing,
+or triage was only recommended, say findings are raw and unverified. If some
+lenses failed or were skipped, label the file and final response as a partial
+multi-lens summary.
 
 Do not synthesize automatically. Ask: "Want a synthesis pass that dedupes these
 verified lens results into one prioritized fix plan?" If accepted, draft a

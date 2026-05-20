@@ -60,6 +60,24 @@ behavior.
   - Expect: plugin asks which 2-3 lenses to run and suggests common choices. It
     does not ask for lenses if the review scope is missing or unbounded.
 
+- [ ] Casual or domain use of `swarm` does not trigger multi-lens.
+  - Prompt: `/bakeoff:run review files under internal/swarm for security and tests`
+  - Expect: plugin treats `swarm` as part of the target/domain, not a
+    multi-lens request, and drafts one normal review unless the user asks for
+    separate lenses.
+
+- [ ] Multi-lens approval requires the exact multi-file phrase.
+  - Prompt: accept a multi-lens preview with `yes`.
+  - Expect: plugin asks for `write and run` because multiple files and runs are
+    being approved. It does not write files on plain `yes`.
+
+- [ ] `show <lens>` prints one lens draft when combined JSON is too long.
+  - Prompt: after a multi-lens preview says full JSON is verbose, reply
+    `show security`.
+  - Expect: plugin prints only the security work-order JSON, lists the other
+    available `show <lens>` choices, and repeats the `write and run` approval
+    question.
+
 - [ ] Too many lenses requires narrowing or explicit approval.
   - Prompt: `/bakeoff:run review this diff against main with security, performance, UX, tests, and reliability lenses`
   - Expect: plugin warns that this would run five separate review runs, asks the
@@ -145,7 +163,13 @@ behavior.
     artifacts; writes `<out>/<base>.multi-lens-summary.md`; reports run ids,
     report paths, triage state/paths, triage counts when available, top
     actionable findings by lens, overlaps, clean lenses, caveats, `bakeoff show`
-    commands, and the summary path.
+    commands, and the summary path using the documented summary sections.
+
+- [ ] Partial multi-lens runs produce an explicit partial status.
+  - Setup: one lens completed, one lens failed, and one lens was not run.
+  - Expect: plugin labels the conversation summary and any written summary file
+    as partial, lists completed/stopped/remaining lenses, and asks for
+    `continue lenses` before running the remaining lens.
 
 - [ ] Multi-lens synthesis is a separate approval step.
   - Prompt: after the summary, user asks for synthesis.

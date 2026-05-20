@@ -97,7 +97,7 @@ func TestCommandOptions(t *testing.T) {
 			got = &copy
 			return nil
 		})
-		err := execute(cmd, "work.json", "--out", "ledger", "--run-id", "run-1", "--force", "--quiet", "--no-triage", "--base", "main", "--diff", "--changed-files", "--json")
+		err := execute(cmd, "work.json", "--out", "ledger", "--run-id", "run-1", "--force", "--quiet", "--no-triage", "--base", "main", "--diff", "--changed-files", "--json", "--no-repo-layout")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -112,6 +112,7 @@ func TestCommandOptions(t *testing.T) {
 			Diff:         true,
 			ChangedFiles: true,
 			JSON:         true,
+			NoRepoLayout: true,
 		}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("got %#v, want %#v", got, want)
@@ -124,7 +125,7 @@ func TestCommandOptions(t *testing.T) {
 			got = &copy
 			return nil
 		})
-		err := execute(cmd, "work.json", "--out", "ledger", "--run-id", "run-1", "--force", "--quiet", "--json", "--keep-worktrees")
+		err := execute(cmd, "work.json", "--out", "ledger", "--run-id", "run-1", "--force", "--quiet", "--json", "--keep-worktrees", "--no-repo-layout")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -136,6 +137,7 @@ func TestCommandOptions(t *testing.T) {
 			Quiet:         true,
 			JSON:          true,
 			KeepWorktrees: true,
+			NoRepoLayout:  true,
 		}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("got %#v, want %#v", got, want)
@@ -148,10 +150,10 @@ func TestCommandOptions(t *testing.T) {
 			got = &copy
 			return nil
 		})
-		if err := execute(cmd, "source", "--out", "ledger", "--run-id", "next", "--quiet", "--no-triage", "--judge-only"); err != nil {
+		if err := execute(cmd, "source", "--out", "ledger", "--run-id", "next", "--quiet", "--no-triage", "--judge-only", "--no-repo-layout"); err != nil {
 			t.Fatal(err)
 		}
-		want := &reruncmd.RerunOptions{SourceRunID: "source", Out: "ledger", NewRunID: "next", Quiet: true, NoTriage: true, JudgeOnly: true}
+		want := &reruncmd.RerunOptions{SourceRunID: "source", Out: "ledger", NewRunID: "next", Quiet: true, NoTriage: true, JudgeOnly: true, NoRepoLayout: true}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("got %#v, want %#v", got, want)
 		}
