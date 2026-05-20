@@ -1190,6 +1190,132 @@ and it would fix the most visible drafting friction.
 
 ---
 
+## Methodology Correction: Plugin Cache Contamination (2026-05-20T17:30Z)
+
+**Critical finding raised by the operator and confirmed by audit.**
+
+Bakeoff is installed as a Claude Code plugin. Plugin contracts
+(`commands/run.md`, `skills/bakeoff/SKILL.md`, `bakeoff/CLAUDE.md`)
+are read from `~/.claude/plugins/cache/mstefanko-plugins/bakeoff/
+<commit-sha>/`, **not from the marketplace source tree at
+`~/.claude/plugins/marketplaces/mstefanko-plugins/bakeoff/`**.
+
+During the 2026-05-20 cycle, contract edits were applied to the
+marketplace source tree. Those edits do not take effect in fresh
+Claude Code sessions until the operator pushes the source changes
+AND Claude Code refreshes the plugin cache (which happens on next
+session start or via explicit plugin update).
+
+### Cache contents vs batch timing
+
+Per cache-directory mtimes and git log:
+
+| Cache dir | Commit | Mtime | Has invariants? | Lines |
+| --- | --- | --- | ---: | ---: |
+| `0.1.0` | (semver, oldest) | 2026-05-19 15:04 | 0 | 260 |
+| `da917a8cdd07` | post-0.1.0 | 2026-05-19 15:37 | 0 | 260 |
+| `8fa3e9135a90` | "postmortem" | 2026-05-19 16:34 | 0 | 283 |
+| `c669aab32c53` | "judge retry + tightening" | 2026-05-19 17:14 | 0 | 295 |
+| `e00adb9243ea` | "multilens swarm" | 2026-05-19 20:08 | 0 | 519 |
+| `ec8633550cb1` | older | 2026-05-19 20:08 | 0 | 260 |
+| `1b581621d9cf` | "readme" | 2026-05-19 20:26 | 0 | 522 |
+| `2257a6c91ca0` | "tightening" | 2026-05-19 20:26 | 0 | 556 |
+| `0c8f2f8c9b59` | "recent run list" | **2026-05-20 12:21** | 0 | 569 |
+| `419d1194a769` | "r1-r5" (this cycle's first push) | **2026-05-20 13:05** | **1** | 900 |
+
+Screenshot timestamps (from CleanShot filenames):
+
+| Batch | Screenshots | Time | Cache active during batch |
+| --- | --- | --- | --- |
+| Batch 1 (R1 baseline) | images 1-11 | 11:00 | `0c8f2f8c9b59` (pre-cycle) |
+| Batch 2 (R1.1-R1.4) | images 17-19 | 12:07 | `0c8f2f8c9b59` (pre-cycle) |
+| Batch 3 (R1.5) | images 20-22 | 12:18 | `0c8f2f8c9b59` (pre-cycle) |
+| Batch 4 (post-rollback) | images 23-26 | 13:04 | `0c8f2f8c9b59` (pre-cycle) |
+| **Plugin re-cached** | | **13:05** | `419d1194a769` becomes active |
+| C+ R3/R4 demotion | (source-only) | ~17:15 | NOT cached as of audit |
+
+**Net consequence: every dogfood batch in this cycle ran against the
+same pre-R1-R5 baseline contract.** The contract amendments I landed
+during the session were not read by any fresh session. The batches
+do not measure what the experiment design claimed they measured.
+
+### What is invalidated
+
+1. **R1 0/9 landing rate** — measured the baseline contract's
+   response to missing-field prompts, not R1 enforcement.
+2. **R3 ~33% landing rate** — measured the baseline contract's
+   provider/judge default behavior, not R3's canonical-skeleton
+   enforcement.
+3. **R4 ~27% landing rate** — measured the baseline's validate
+   timing, not R4's pre-preview validate enforcement.
+4. **"R1.5 harmed R3/R4" hypothesis** — R1.5 was never in cache.
+5. **"Rollback didn't restore R3/R4" finding** — nothing was
+   actually rolled back from the model's perspective.
+6. **Cross-batch trajectory claims** — every batch saw the same
+   contract; "trajectory" is just trial-to-trial variance.
+
+### What survives
+
+1. **R2 100% landing rate** — true for the baseline contract.
+   This was always going to hold regardless of amendments because
+   the baseline already covers preview-then-approve flow.
+2. **R5 100% landing rate** — almost certainly an accident in the
+   baseline contract, since the embedded backends list was an
+   amendment. The model probably already "knew" `claude`/`codex`
+   from training and the baseline contract.
+3. **Validation audit** (5 on-disk work orders, 4/5 clean) —
+   static file analysis; cache-independent. Valid.
+4. **Schema-drift repair-surface audit** (13 distinct repairs) —
+   static JSON analysis. Valid.
+5. **B's provider dogfood** (4 min 1 s, claude winner, judge-basis,
+   2-pass agreement) — the build pipeline measurement used the
+   `bin/bakeoff` binary directly and the hand-repaired work order.
+   The build-side conclusions stand. The *drafting* side of B is
+   contaminated.
+
+### What is left to do
+
+1. **Verification trial against cache `419d1194a769`** (which now
+   contains the R1-R5 + R1 demotion + R1.5 rollback amendments
+   from the operator's first push — but not the C+ R3/R4
+   demotion which is source-only at HEAD `75bb97e`).
+2. Depending on verification result:
+   - **If amendments matter**: re-run the batches with proper
+     methodology (push amendment, wait for cache refresh, verify
+     cache, then run trial). Update conclusions.
+   - **If amendments do not matter**: cycle conclusion stands;
+     update the plan to note that the original conclusion was
+     correct but the data was incidentally collected against the
+     baseline rather than the intended amendments.
+
+### What "proper methodology" would have looked like
+
+For every batch:
+
+```sh
+# 1. Edit source
+$ vi commands/run.md skills/bakeoff/SKILL.md
+
+# 2. Commit + push
+$ git add commands/run.md skills/bakeoff/SKILL.md
+$ git commit -m "Land Rx amendment"
+$ git push
+
+# 3. Restart Claude Code so it re-caches the plugin
+#    (or trigger an explicit plugin refresh in the UI)
+
+# 4. Verify cache contains the change
+$ NEWEST=$(ls -dt ~/.claude/plugins/cache/mstefanko-plugins/bakeoff/*/ | head -1)
+$ grep -c "<distinctive phrase from amendment>" "$NEWEST/commands/run.md"
+# expect: 1+ — confirm the amendment is actually loaded
+
+# 5. Only now run the fresh-session trial
+```
+
+Add this checklist to any future dogfood plan.
+
+---
+
 ## B — Provider dogfood patch inspection
 
 Status: **DONE** (2026-05-20)
