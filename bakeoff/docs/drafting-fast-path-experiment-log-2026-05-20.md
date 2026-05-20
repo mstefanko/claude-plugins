@@ -1770,3 +1770,53 @@ drafted JSON was schema-fictional in **13 independent ways**. The
 plan's Risk: Drafted JSON Is Not Schema-Valid section needs the
 repair-surface count cited explicitly, and Definition Of Done needs
 a "pre-preview validate is mandatory" line, not a "should land" line.
+
+---
+
+## Plan / Contract Review Sweep (2026-05-20T18:53Z)
+
+Two review agents audited
+`docs/drafting-phase-speedups-implementation-plan-2026-05-20.md` against this
+log and the final contract files. Both reviewers agreed the evidence direction
+was sound, but the plan still mixed final clean-cache conclusions with stale
+mid-cycle implementation guidance.
+
+### Review verdict
+
+Status: **needs tightening → patched**
+
+The stale parts were implementation-facing, not just historical:
+
+- R1 was described both as hard-forbid / 0% enforceable and as final
+  advisory + R1.6 verified.
+- R4 was described as mandatory even though final clean rate is 2/5 = 40%.
+- v1 fast path was build-only in one section but review/research/compare
+  fast-path examples remained elsewhere.
+- The original E prompt was still written as a batched-exploration proof even
+  though the final E result showed it now trips R1 anti-synthesis first.
+- The first-PR DoD still carried the unsupported ≤30 s blocker despite clean B
+  trials landing at 40 s and 52 s inside the A baseline envelope.
+
+### Edits landed
+
+- Updated the plan's final cycle summary and DoD so the authoritative landing
+  rates are: R1 100% on tested final-contract prompts, R2 19/19, R3 5/5 when
+  drafting happens, R4 2/5, R5 19/19.
+- Marked ≤30 s as a deferred speed target, not a first-PR ship gate.
+- Changed R4 plan language to advisory, with post-write `bakeoff validate` as
+  the enforced safety gate.
+- Kept v1 fast path explicitly build-only and deferred gather/review/compare
+  skeleton expansion.
+- Replaced the obsolete E protocol with a future fact-lookup prompt that has an
+  explicit verifier and asks for test-style background.
+- Moved plugin-cache SHA verification into formal experiment/DoD guidance.
+- Updated `commands/run.md` and `skills/bakeoff/SKILL.md` to remove the stale
+  "0/9 / not achievable" R1 paragraph and to make R4 action wording advisory.
+
+### Supersession note
+
+The schema-drift audit above correctly quantifies the 13-repair failure surface,
+but its final sentence predates the clean-cache R4 evidence. The current
+conclusion is: R3 strict build skeleton is mandatory; R4 pre-preview validate is
+advisory; post-write `bakeoff validate` is the enforced gate before any
+provider run.

@@ -116,19 +116,16 @@ path, careful path, split, multi-lens). They are not fast-path-specific.
 If the request omits any of the following, the model **should** prefer
 asking the missing question(s) verbatim over synthesizing a default.
 
-**This is advisory guidance, not an enforced invariant.** Three
-contract amendments (R1, R1.1-R1.4 mechanical checklist, R1.5
-mandatory output marker) over nine dogfood trials produced a 0/9
-landing rate — see
+**This is prompt-level guidance, not a Go-side semantic gate.** The
+clean final-contract dogfood showed the checklist and R1.6 refactor
+edge case work on the tested prompt shapes — see
 [drafting-fast-path-experiment-log-2026-05-20.md](../docs/drafting-fast-path-experiment-log-2026-05-20.md).
-Prompt-layer enforcement of "ask, don't synthesize" is not achievable
-with this contract; the model frames goal+scope requests as
-fast-path-eligible and fills in missing fields plausibly. The
-operator's preview-then-approve flow is the actual safety net.
+The operator's preview-then-approve flow remains the safety net for
+untested wording variants.
 
-The guidance below is still worth following — synthesized AC and
-verifiers degrade provider-run quality even when the JSON validates —
-but a response that synthesizes a field is not a contract violation.
+The guidance below is worth following: synthesized AC and verifiers
+degrade provider-run quality even when the JSON validates. If a field
+is missing, ask rather than filling in a plausible default.
 
 Non-synthesizable fields:
 
@@ -199,7 +196,7 @@ synthesized version ("existing tests pass", "round-trip equality")
 looks reasonable. The user knows the invariants that matter; the
 model is guessing.
 
-#### Anti-Synthesis Patterns (Examples Of Contract Failure)
+#### Anti-Synthesis Patterns (Examples To Avoid)
 
 The following are **NOT** acceptance criteria — they are scope or
 verifier restatements that synthesize the missing AC:
@@ -765,10 +762,10 @@ When all conditions hold, take the fast-path action:
    missing, perform exactly one batched read/search pass that answers
    all drafting questions at once. Sequential probes are a fast-path
    violation.
-5. **Internally validate the in-memory JSON via `bakeoff validate`**
+5. **Prefer internally validating the in-memory JSON via `bakeoff validate`**
    (see [Pre-Preview Internal Validate](#pre-preview-internal-validate)).
-   If validation fails, repair using the canonical skeleton and
-   re-validate until it passes.
+   If validation runs and fails, repair using the canonical skeleton and
+   re-validate until it passes before previewing.
 6. Show the compact preview with default-aware lines. Non-default values
    must appear inline (do not hide them behind a "default" label).
 7. Wait for the same approval phrase as the current single-work-order flow:
