@@ -43,9 +43,8 @@ routes to `bakeoff build`; `gather`, `compare`, and `analyze` route to
 `bakeoff research`.
 
 `/bakeoff:history` is a Claude plugin convenience command. It calls
-`bakeoff ls --json`, sorts by `finished_at`, reads displayed runs'
-`work-order.json` files for a short goal summary, and prints the latest 10 runs
-by default. Recognized flags:
+`bakeoff ls --history --limit <N>` so the CLI owns run sorting, limiting, and
+summary extraction. It prints the latest 10 runs by default. Recognized flags:
 
 | Flag | Meaning |
 | --- | --- |
@@ -311,6 +310,9 @@ Flags:
 | `--json` | Emit a manifest-backed JSON listing. |
 | `--facet <id>` | Filter by facet id. |
 | `--triage-state <state>` | Filter by `no`, `dry_run`, `yes`, or `stale`. |
+| `--type <type>` | Filter by `gather`, `compare`, `analyze`, or `build`. |
+| `--limit <n>` | Limit rows after filtering. With `--history`, default is `10`; without it, no limit is applied unless this flag is set. |
+| `--history` | Emit a compact recent-run history table with `work-order.json` summaries for displayed rows. Cannot be combined with `--json`. |
 
 ## `bakeoff runs verify`
 

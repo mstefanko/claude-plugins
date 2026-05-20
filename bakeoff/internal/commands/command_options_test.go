@@ -257,10 +257,25 @@ func TestCommandOptions(t *testing.T) {
 			got = &copy
 			return nil
 		})
-		if err := execute(cmd, "--out", "ledger", "--json", "--facet", "code-review", "--triage-state", "yes"); err != nil {
+		if err := execute(cmd, "--out", "ledger", "--json", "--facet", "code-review", "--triage-state", "yes", "--type", "gather", "--limit", "5"); err != nil {
 			t.Fatal(err)
 		}
-		want := &lscmd.LsOptions{Out: "ledger", JSON: true, Facet: "code-review", TriageState: "yes"}
+		want := &lscmd.LsOptions{Out: "ledger", JSON: true, Facet: "code-review", TriageState: "yes", Type: "gather", Limit: 5, LimitSet: true}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("got %#v, want %#v", got, want)
+		}
+	})
+	t.Run("ls history", func(t *testing.T) {
+		var got *lscmd.LsOptions
+		cmd := lscmd.NewCmdLs(testFactory(), func(_ context.Context, opts *lscmd.LsOptions) error {
+			copy := *opts
+			got = &copy
+			return nil
+		})
+		if err := execute(cmd, "--history", "--limit", "3"); err != nil {
+			t.Fatal(err)
+		}
+		want := &lscmd.LsOptions{Out: "runs", History: true, Limit: 3, LimitSet: true}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("got %#v, want %#v", got, want)
 		}

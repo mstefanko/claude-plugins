@@ -48,73 +48,30 @@ than `1`. Keep the error short and show the supported shape:
 
 ## Flow
 
-1. Run the manifest-backed list command:
+1. Run the CLI-rendered history command:
 
    ```bash
-   "${CLAUDE_PLUGIN_ROOT}/bin/bakeoff" ls --json [--out <dir>] [--facet <id>] [--triage-state <state>]
+   "${CLAUDE_PLUGIN_ROOT}/bin/bakeoff" ls --history --limit <limit> [--out <dir>] [--facet <id>] [--triage-state <state>] [--type <type>]
    ```
 
-   Pass only `--out`, `--facet`, and `--triage-state` through to the CLI.
-   Apply `--type` locally after parsing the JSON.
+   Pass `--out`, `--facet`, `--triage-state`, and `--type` through to the CLI.
+   The CLI owns manifest scanning, `finished_at` sorting, limiting, summary
+   extraction, and Markdown-table rendering. Do not parse `bakeoff ls --json`,
+   read `work-order.json`, inspect provider prompts, or re-render rows in the
+   model unless the user asks for a custom view the CLI cannot produce.
 
-2. Parse the JSON response. It has this shape:
-
-   ```json
-   {"schema_version":1,"out_dir":"runs","runs":[]}
-   ```
-
-3. Sort rows by parsed `finished_at` descending. Accept RFC3339 values with
-   either `Z` or an offset such as `+00:00`. Put missing or unparseable
-   timestamps after dated rows. Tie-break by `run_id` descending.
-
-4. Apply the `--type` filter when present, then limit the result count.
-
-5. For each displayed row only, resolve the run directory:
-
-   - if `manifest_path` is present, use its parent directory;
-   - else if `report_path` is present, use its parent directory;
-   - else use `<out_dir>/<run_id>`.
-
-6. Read `<run-dir>/work-order.json` when present. Use the first non-empty value
-   from:
-
-   - `goal`;
-   - `background`;
-   - first string entry in a `background` array.
-
-   Collapse whitespace and truncate the summary to about 100 characters. Do
-   not read provider prompts by default; they are generated artifacts and can be
-   very long.
-
-7. Render a compact Markdown table:
-
-   ```text
-   | finished | run id | type | facet | decision | triage | summary |
-   ```
-
-   Use `-` for missing facet or summary. Use a local datetime style for
-   readability when that is easy; otherwise preserve the stored timestamp.
-
-8. End with a short next-action hint:
-
-   ```text
-   Open one with `/bakeoff:inspect <run-id>`.
-   ```
+2. Return the CLI output directly. Keep the final response short; the table is
+   the answer.
 
 ## Empty And Error States
 
-If the list is empty, say:
+If the list is empty, the CLI prints:
 
 ```text
 No Bakeoff runs found under <out-dir>.
 ```
 
-If no rows remain after filters, name the filters and say no matching runs were
-found.
+If no rows remain after filters, the CLI reports no matching runs.
 
-If `work-order.json` is missing or invalid for a row, still show the row with
-summary `-`. Do not fail the whole command.
-
-If the `bakeoff ls --json` output is truncated or cannot be parsed, stop and
-ask the user to narrow the query with `--out`, `--facet`, `--triage-state`, or
-`--type`; do not present a partial history as authoritative.
+If the command fails with an unknown `--history`, `--limit`, or `--type` flag,
+tell the user to run `/bakeoff:setup` so the bundled CLI is rebuilt or updated.
