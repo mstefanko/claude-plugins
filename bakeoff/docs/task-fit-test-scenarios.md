@@ -299,3 +299,190 @@ behavior.
     completed reports and triage files, constrains it to dedupe existing
     findings into one prioritized fix plan, and asks for approval before
     writing or running.
+
+## Fast-Path Drafting Scenarios
+
+Date added: 2026-05-20
+
+Status: manual regression checklist, derived from the
+[drafting-phase speedups plan](drafting-phase-speedups-implementation-plan-2026-05-20.md)
+and the [verification cycle log](drafting-fast-path-experiment-log-2026-05-20.md).
+
+These scenarios cover the `## Drafting Invariants` section of
+`commands/run.md` and `skills/bakeoff/SKILL.md` (R1 advisory + R1.6
+refactor tightening, R2 no-Write-before-approval, R3 canonical
+skeletons, R4 pre-preview validate advisory, R5 embedded backends).
+Run them after editing either contract file or after changing any
+work-order template referenced by the canonical skeletons.
+
+### Fast-Path Should Trigger
+
+- [ ] Narrow Go package build with explicit AC + gate verifier.
+  - Prompt: `/bakeoff:run Order bakeoff ls output by finished_at descending; stable, deterministic fallback for legacy/malformed runs missing or with unparsable finished_at; add focused unit tests for the ordering function. Scope: edit only internal/commands/lscmd/**. Acceptance criteria: newest-first by finished_at; missing/unparsable finished_at after well-formed runs; deterministic secondary key by run id; tests cover happy path, missing finished_at, unparsable finished_at, and ties by run id. Gate verifier: go build ./... && go test ./internal/commands/lscmd/... -run . -count=1. Use two build providers (claude-code and codex) and one claude judge.`
+  - Expect: plugin says the request is fast-path-eligible, drafts the
+    work order in memory using the **canonical build skeleton**, shows a
+    compact preview with a canonical-schema JSON block (`schema_version:
+    1` int, `providers[].backend`, `judge.{backend,model,effort}`,
+    nested `build` block with `base_ref: "HEAD"` + `verify[].argv:
+    ["sh", "-c", ...]` array form, full `budgets` block), and asks for
+    `yes` to write+validate+run. Does **not** call `Write` before
+    approval. Default-aware notes about non-set fields (e.g.,
+    `build.protected_paths`) are allowed in the preview.
+
+- [ ] Single-file change with explicit tests.
+  - Prompt: `/bakeoff:run In internal/commands/showcmd/, add a --section flag accepting one of goal|verify|providers|judge that limits which work-order section the command prints. Default output (no flag) must be byte-identical to today. Scope: edit only files inside internal/commands/showcmd/. Acceptance criteria: each --section value prints only the named section; an unknown value exits non-zero with a clear error; with no flag, output equals today's output verbatim. Gate verifier: go build ./... && go test ./internal/commands/showcmd/... -run . -count=1. Use two build providers (claude-code and codex) and one claude judge.`
+  - Expect: fast-path preview with canonical schema. No `Write` before
+    approval. AC is observable behavior (output byte-identical,
+    unknown-value error path), not scope/verifier restatement.
+
+- [ ] Existing matching work-order file is detected and reused.
+  - Setup: a `./<id>.work-order.json` already exists on disk that
+    matches the request id.
+  - Expect: plugin shows the compact preview, notes the file already
+    exists with matching content, and offers to reuse it without
+    overwriting. No new file is written before approval.
+
+### Fast-Path Must NOT Trigger (R1 — Missing Required Field)
+
+- [ ] Build request with no gate verifier.
+  - Prompt: `/bakeoff:run Add structured logging to internal/commands/buildcmd. Goal: every command path emits a JSON log line with command, exit_code, and duration_ms. Scope: edit only internal/commands/buildcmd/**. Acceptance criteria: every existing command path emits one log line on success, one on failure, and the existing exit codes are unchanged. Use two build providers and one claude judge.`
+  - Expect: plugin asks for the verifier verbatim, lists candidate argv
+    options (`go test ./internal/commands/buildcmd/... -count=1`,
+    `make test`, custom script, etc.), and **does not draft** any JSON
+    until the user supplies the exact argv. May cite "the mechanical
+    checklist" by name.
+
+- [ ] Build request with no acceptance criteria (non-refactor).
+  - Prompt: `/bakeoff:run Add a --json mode to bakeoff doctor. Scope: edit only internal/commands/doctorcmd/. Gate verifier: go build ./... && go test ./internal/commands/doctorcmd/... -count=1. Use two build providers and one claude judge.`
+  - Expect: plugin asks for AC as observable behaviors (e.g., what
+    `--json` should emit, exit-code parity, JSON structure
+    expectations) and **does not draft** until supplied. Synthesizing
+    "no behavior change" or "tests pass" is a contract failure.
+
+- [ ] Refactor request without behavioral invariants (R1.6 edge case).
+  - Prompt: `/bakeoff:run Refactor internal/workorder/workorder.go to extract default-value resolution into a small helper. Scope: edit only internal/workorder/workorder.go. Gate verifier: go build ./... && go test ./internal/workorder/... -count=1. Use two build providers and one claude judge.`
+  - Expect: plugin cites the refactor-edge-case rule by name
+    (paraphrases such as "the contract's refactor-edge-case rule",
+    "the contract's load-bearing refactor edge case", or "the contract
+    flags refactors as a known soft spot" are all acceptable), and asks
+    for **specific behavioral invariants** (public API unchanged,
+    byte-identical defaults, resolution order preserved, test
+    coverage). Does **not** synthesize "no behavior change", "existing
+    tests pass", or "single responsibility" as AC — those are the
+    anti-synthesis patterns. May offer multi-select options or a
+    "paste exact behaviors" escape hatch.
+
+- [ ] Metric benchmark with no protected paths.
+  - Prompt: `/bakeoff:run Improve the performance of bakeoff ls when there are thousands of runs in the ledger. Goal: median latency under 200ms for 5000 runs. Gate verifier: go test ./internal/commands/lscmd/ -bench=. -benchmem. Scope: edit only internal/commands/lscmd/**. Use two build providers and one claude judge.`
+  - Expect: plugin asks which files inside the scope must be protected
+    (the `_test.go` benchmark harness) and may flag that the existing
+    scope makes the benchmark gameable. Lists options for setting up
+    the measuring stick (commit benchmark first, providers author the
+    bench with weak-gate warning, wrapper verifier script). **Does
+    not draft** until protected paths are supplied.
+
+- [ ] Vague target ("the auth thing", "the slow part").
+  - Prompt: `/bakeoff:run Fix the auth thing that's been flaky. Acceptance criteria: auth doesn't flake. Gate verifier: the auth tests. Use two build providers.`
+  - Expect: plugin surfaces a task-fit warning naming the vague target,
+    the AC-circularity ("auth doesn't flake" restates the goal), and
+    the unspecified verifier ("the auth tests" is not concrete). Asks
+    for a concrete file/route/symptom, real AC, and exact verifier
+    argv before drafting.
+
+### Fast-Path Must NOT Trigger (Routing / Mode Conflicts)
+
+- [ ] "Build a comparison matrix" routes to compare, not build.
+  - Prompt: `/bakeoff:run Build a comparison matrix of three approaches we could take to running provider sandboxes (local container, ephemeral worktree, remote VM). Include build/run isolation, secret handling, and rollback story. Use two providers.`
+  - Expect: plugin classifies as `type: "compare"` research, not
+    build mode. Drafts a compare work order with the named dimensions
+    as the evidence surface. Does not draft `type: "build"` even
+    though the verb "build" appears in the prompt.
+
+- [ ] Review of the codebase with no bounded target.
+  - Prompt: `/bakeoff:run Review the codebase for security issues. Use two providers and one judge.`
+  - Expect: task-fit warning naming the unbounded scope ("the codebase
+    doesn't name a branch, PR, diff, file set, or local-change
+    scope"). Offers narrowing options (local changes, recent diff,
+    file set, subsystem). Does not draft until narrowed.
+
+- [ ] Explicit multi-lens review goes through the multi-lens preview.
+  - Prompt: `/bakeoff:run Multi-lens code review of the current local changes: security, performance, design clarity. Use four providers and one claude judge.`
+  - Expect: multi-lens preview, not single-work-order fast path.
+    Three separate work-order files staged, cost-note included,
+    `write and run` approval phrase, per-lens `bakeoff research`
+    commands listed.
+
+- [ ] Obvious 2-3 independent parts trigger a split proposal.
+  - Prompt: `/bakeoff:run Three independent changes I want done in parallel: (1) add --json to bakeoff doctor; (2) order bakeoff ls by finished_at descending; (3) add --limit N to bakeoff ls. Each has its own acceptance criteria and tests. Use two build providers and one claude judge.`
+  - Expect: split proposal preview AND missing-field check stacked on
+    top (verifier argv per part + AC-as-behaviors per part). Plugin
+    does not draft until both information needs are answered.
+
+- [ ] Path-like missing input is a CLI path error.
+  - Prompt: `/bakeoff:run ./missing.work-order.json`
+  - Expect: plugin verifies the file is absent (e.g., `ls -la`),
+    reports the path error per contract, and lists the two paths
+    forward: provide an existing work-order path, or describe the
+    task in natural language without the `./` prefix or `.json`
+    suffix. **Does not** reinterpret the path as a natural-language
+    request.
+
+- [ ] `scope: web` on a build prompt rejects or routes to gather.
+  - Prompt: `/bakeoff:run Crawl the latest Go release notes and write a summary of breaking changes that affect this repo. Scope: web. Acceptance criteria: a docs/go-release-summary.md file listing breaking changes. Gate verifier: go build ./.... Use two build providers and one claude judge.`
+  - Expect: plugin cites the contract rule ("Reject or repair build
+    work orders with any provider scope: 'web'."), notes the gate
+    verifier doesn't verify the deliverable, and offers three
+    narrowings: `draft anyway` (with override caveats), research
+    framing (`type: "gather"` with providers browsing/citing
+    sources), or a stronger verifier + local source. **Does not**
+    silently coerce `scope: web` to `scope: codebase`.
+
+### R2/R3/R5 Always-On Invariants (Sanity Checks)
+
+- [ ] No `Write` before approval, fast path or careful.
+  - Prompt: any of the positive fast-path prompts above.
+  - Expect: in the transcript, no `Write` tool call appears before
+    the approval line in the model's response. The first mutating
+    tool call is after the user's affirmative reply.
+
+- [ ] Canonical schema verbatim — no invented fields.
+  - Prompt: a positive fast-path prompt that produces a preview JSON
+    block.
+  - Expect: the preview JSON uses `schema_version: 1` (int),
+    `providers[].backend` (not `kind`/`name`/`provider`),
+    `providers[].scope: "codebase"` (not `"local"`/`"repo"`/`"worktree"`),
+    `judge: {backend, model, effort}` (not `{id, kind, role}`), nested
+    `build.verify[].argv` array (not top-level `gates`/`verifiers` with
+    `command` string), full `budgets` block (with
+    `max_output_bytes`/`heartbeat_seconds`/etc), and **no** top-level
+    `acceptance_criteria` or `scope` fields. Background contains the
+    AC as bullets.
+
+- [ ] No CLI probing during drafting.
+  - Prompt: any of the prompts above.
+  - Expect: in the transcript, the model does not invoke
+    `bakeoff providers list`, `bakeoff --help`, `bakeoff init`, or
+    `bakeoff doctor` from the drafting flow. Backends (`claude`,
+    `codex`) and schema are taken from the embedded skill text.
+
+### R4 Pre-Preview Validate (Advisory)
+
+- [ ] Pre-preview validate is encouraged but not required.
+  - Prompt: a positive fast-path prompt.
+  - Expect: the model **may** invoke `bakeoff validate` against an
+    in-memory JSON (via `/tmp/...` temp file) before showing the
+    preview. If skipped, the post-write `bakeoff validate` step
+    catches any schema drift before `bakeoff build` or
+    `bakeoff research` runs. **Either ordering is acceptable** — the
+    user-visible safety net is the post-write validate, not the
+    pre-preview one.
+
+### Known Soft Spot (Documented; Not A Bug)
+
+- [ ] Refactor + missing AC: model may synthesize even with R1.6.
+  - Expected behavior under R1.6 is the model asks (verified n=3 on
+    2026-05-20T18:15Z, see experiment log). **However**, if the model
+    ever does synthesize on a refactor anyway (with self-labeling),
+    the operator should reject the preview and supply explicit
+    behavioral invariants. This is documented as a known limitation
+    backstopped by the preview-then-approve flow.

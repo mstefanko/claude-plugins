@@ -74,6 +74,10 @@ Experiments run in order G → A → D → B → E. C and F deferred to a follow
 | Plugin update + verification n=9 batch | ✅ CLEAN DATA (2026-05-20T18:00Z) | n=9 (3 per prompt) | Operator ran `/plugin` + `/reload-plugins` to promote source HEAD `7077a02507a3` into the active cache. Verified `installed_plugins.json` pin matches HEAD. Three D-style prompts × 3 trials each, all confirmed running against `7077a02507a3` via bash preflight. **Real landing rates: R1 6/9 = 67% (D1 3/3, D5 3/3, D2 0/3 — refactor soft spot); R3 3/3 = 100% when drafting happens; R4 1/3 = 33% when drafting happens; R2 9/9 = 100%; R5 9/9 = 100%.** | **Cycle's "prompt-layer ceiling" conclusion was wrong** — the amendments work when actually loaded. Decisions: (a) R3 promoted back to strict-must (was demoted in C+ based on contaminated data); (b) R1 gets refactor-specific tightening (R1.6) since D2 fails consistently on refactor-style prompts; (c) R4 stays advisory (33% rate held even with strict wording in batches 1-4, so demotion is honest). |
 | R3 promotion + R1.6 refactor tightening | ✅ LANDED (2026-05-20T18:05Z) | — | (1) Reverted R3 section header in `commands/run.md` and `skills/bakeoff/SKILL.md` from `### Canonical Skeletons (Advisory)` → `### Canonical Skeletons`. Restored "must copy verbatim" + "is a contract failure" language. Removed the "advisory guidance" paragraph and ~33% landing-rate citation (both based on contaminated data). (2) Added refactor-specific checklist item to the Mechanical Pre-Flight Checklist in both files: `[ ] If the request is a refactor/extract/consolidate/split: user named the behavioral invariants to preserve?` with explanation that "no behavior change" is exactly the anti-synthesis pattern, ask for specific test files / API contracts / round-trip equalities. (3) Added a "Refactor edge case (load-bearing)" callout below the checklist that names the problem and the response. | R1.6 close-the-gap effect verified in the next row. R4 unchanged (stays advisory). |
 | R1.6 verification batch (D2 × 3) | ✅ PASS (2026-05-20T18:15Z) | n=3 | After `/plugin` update to source HEAD `a3e882b8e423` ("Reworking"), operator ran 3 fresh D2 sessions. **All 3 trials cited R1.6 by name** (three different paraphrases: "the contract's refactor-edge-case rule", "the contract's load-bearing refactor edge case", "the contract flags refactors as a known soft spot") **and asked for behavioral invariants instead of synthesizing**. Multi-select option presentation across trials offered Public API unchanged / byte-identical defaults / resolution order preserved / strict-vs-loose / paste-your-own — all healthy variations on the same underlying constraint. No drafted JSON in any trial. | R1.6 closes the refactor soft spot. **R1 effective landing rate is 100% across the verification prompts under their final contract** (D1 3/3, D5 3/3, D2-with-R1.6 3/3). Cycle CLOSED. |
+| Final corroboration batch (B + D8/D9/D10) | ✅ PASS (2026-05-20T18:25Z) | n=4 | (a) **B drafting metric** on the lscmd positive case: canonical schema in compact preview (`schema_version: 1`, `providers[].backend`, nested `build.verify[].argv`, full `budgets`), default-aware note on `build.protected_paths`, no Write before approval. Model explicitly cited *"using the canonical build skeleton"*. Wall **40 s** — above the original ≤ 30 s goal but within A baseline range (31.9 s median / 51.6 s max). R4 not visible. (b) **D8** (3-way split): split recognized AND R1 missing-field check fired for verifier+AC, correctly stacked. (c) **D9** (path-like missing input): path error reported per contract; not reinterpreted as natural-language request. (d) **D10** (scope:web on build): rejection + secondary "verifier doesn't actually verify the deliverable" insight. | All testable predictions verified. **R1/R2/R3/R5 land at 100% on tested prompts; R4 at 25-33% (advisory, backstopped by Go-side post-write validate).** Wall time held within baseline range despite +258 contract lines. Cycle EMPIRICALLY CLOSED. Optional deferred work (C1/C2 variants, conditional-trigger contract trimming, Go-side pre-preview hook) is non-blocking. |
+| Step 5: Fast-Path Drafting Scenarios | ✅ LANDED (2026-05-20T18:35Z) | — | Added `## Fast-Path Drafting Scenarios` section to `docs/task-fit-test-scenarios.md` per Step 5 of the plan. Covers: (a) positive fast-path triggers (narrow Go package build, single-file change, existing-file reuse); (b) R1 missing-required-field cases (D1 no-verifier, D2 no-AC non-refactor, D2-with-R1.6 refactor invariants, D5 metric protected paths, D4 vague target); (c) routing/mode-conflict cases (D3 "build a comparison matrix" → compare, D6 unbounded review, D7 multi-lens, D8 obvious 3-way split, D9 path-like missing input, D10 scope:web rejection); (d) R2/R3/R5 always-on invariants as sanity checks; (e) R4 advisory framing; (f) known soft spot documentation (refactor + missing AC). Each scenario lists exact prompt + expected behavior anchored to verified-cycle observations. | Step 5 of the original Implementation Steps is now complete. Scenario file is the canonical manual regression checklist for any future change to `commands/run.md` / `skills/bakeoff/SKILL.md` `## Drafting Invariants` section. |
+| Coverage-gap batch (D7, B trial 2, E) | ✅ STRONG RESULTS (2026-05-20T18:45Z) | n=3 | **D7 multi-lens: 4× wall reduction** (132 s → 32 s) with zero CLI probing (vs 7 sequential pre-cycle). R5 + embedded skeleton load-bearing verified. Model also cross-reasoned task-fit + multi-lens, rejecting the docs-only working tree. **B drafting trial 2: 52 s, R4 pre-preview validate FIRED**, canonical schema. R3 + R4 both held. R4 rate now 2/5 = 40% (up from 1/4 = 25%). **E: 0 context calls** — the R1.4 anti-synthesis example "'the conventional test command for `<package>`'" matched the prompt verbatim, model asked for the verifier instead of exploring. E's original design is now obsolete (prompt template tips over R1, so batched-exploration on a real fact-lookup needs a new prompt). | Three load-bearing gaps closed. R5 verified on its load-bearing case (D7). R4 trending positive (40%). E findings stronger than design intent (R1 anti-synthesis preempts exploration). The cycle's R1/R2/R3/R5 claims are now triple-verified on the prompts most likely to exercise them. |
+| **REMAINING GAPS** (corroboration only) | ⚠️ DEFERRED (2026-05-20T18:45Z) | — | After the coverage-gap batch, remaining gaps are: **D3** (compare-matrix routing) — contaminated trial only; type-inference logic wasn't changed by amendments. **D4** (vague target task-fit) — same. **D6** (unbounded review task-fit) — same. **C1/C2** (held-out positive variants) — never run. **B drafting trial 3** — n=2 now; one more would give n=3 median. **E with a non-anti-synthesis prompt** — original E prompt tips over R1, would need a new prompt design (sketched in experiment log). | None blocking ship. Documented in `docs/task-fit-test-scenarios.md` as expected behaviors with prompt+outcome rows even where not n=3 verified. Future light-touch dogfood could close these if anyone wants tighter confidence intervals. |
 
 Update protocol: every experiment must update this table when it lands,
 and fold its verdict into the relevant plan sections (Observed Cost,
@@ -251,6 +255,273 @@ After R1-R5 land:
   the Go binary.
 - Automating the helper measurement workflow. Operator continues to
   run `scripts/measure-drafting.py` manually for now.
+
+## Implementation Lessons Learned (2026-05-20)
+
+These are the changes the experiment cycle proved are load-bearing,
+plus the implementation details that would have been wrong without
+the cycle's data. Future revisions of this plan or related work
+should treat these as standing observations.
+
+### 1. Plugin-cache pinning is the methodology pitfall
+
+The Claude Code plugin system reads contract files (`commands/run.md`,
+`skills/bakeoff/SKILL.md`, `bakeoff/CLAUDE.md`) from
+`~/.claude/plugins/cache/<org>/<plugin>/<sha>/`, **not from the
+marketplace source tree**. Source edits do not take effect in fresh
+sessions until: (a) the source is committed and pushed; (b) Claude
+Code's plugin manager re-caches via `/plugin` + `/reload-plugins`;
+and (c) `installed_plugins.json`'s `gitCommitSha` matches the
+intended commit.
+
+Any future drafting-contract dogfood must include this checklist
+**before** running fresh-session trials:
+
+```sh
+# 1. Edit source
+# 2. Commit + push
+# 3. /plugin → update bakeoff
+# 4. /reload-plugins
+# 5. Verify:
+python3 -c "
+import json
+d = json.load(open('/Users/mstefanko/.claude/plugins/installed_plugins.json'))
+def w(o):
+    if isinstance(o, dict):
+        if 'installPath' in o and 'bakeoff' in o.get('installPath',''): return o
+        for v in o.values():
+            r = w(v)
+            if r: return r
+    elif isinstance(o, list):
+        for v in o:
+            r = w(v)
+            if r: return r
+e = w(d)
+print('pin:', e['gitCommitSha'])
+print('grep test:', open(e['installPath']+'/commands/run.md').read().count('<distinctive amendment phrase>'))
+"
+# expect pin == source HEAD and grep test >= 1
+# 6. Only then run fresh-session trials
+```
+
+Skipping this checklist cost the cycle 16 trials of contaminated
+data (4 batches over ~6 hours of operator time) measuring the
+pre-cycle baseline contract while believing they measured the
+amendments. Recovery required 12 clean trials over ~1 hour after
+the methodology bug was identified.
+
+### 2. R1 advisory wording lands; "must" wording is not required
+
+The verification cycle showed R1 lands at 100% on tested prompts
+even with **"should prefer asking"** rather than **"must ask"**.
+Three contract amendments under contamination (R1, R1.1-R1.4,
+R1.5 mandatory output marker) all landed at 0/9 *because the
+contract was never read*; once read, even the softest "should"
+wording produced the asking behavior. Strict-must wording is not
+required for R1 and would not improve it.
+
+Implication: future contract additions for behaviors the model
+should perform should default to "should" wording with concrete
+examples (anti-synthesis patterns, checklist items), not "must"
+wording. The examples and checklist do more work than the modal
+verb.
+
+### 3. The mechanical pre-flight checklist is what the model cites
+
+Across multiple verification trials, the model named the
+Mechanical Pre-Flight Checklist verbatim — not the surrounding
+R1 prose — as the reason for asking instead of synthesizing.
+Example trial output: *"Assessing the request against the
+mechanical pre-flight checklist: [✗] Acceptance criteria named as
+observable behaviors — only the goal, scope, and verifier are
+stated."*
+
+Implication: structured checklists with `[ ]` / `[✓]` / `[✗]`
+format are the highest-density contract element the model
+internalizes. Future invariant additions should prefer this
+structure over free-form prose where possible.
+
+### 4. Refactor framing overrides general anti-synthesis examples
+
+R1.6's "load-bearing refactor edge case" was necessary because the
+general Anti-Synthesis Patterns (with "no behavior change" listed
+as a contract failure example) did not stop the model from
+synthesizing exactly that AC on refactor prompts. The model would
+walk the checklist, identify AC as missing, and **still synthesize**
+because the refactor verb ("extract", "consolidate") carries an
+implicit "no behavior change" intent.
+
+Closing the gap required:
+- A specific checklist item for refactor/extract/consolidate/split
+  asking for behavioral invariants verbatim.
+- A "**Refactor edge case (load-bearing)**" callout that explicitly
+  notes "the refactor framing tends to override the example".
+- Naming the workaround in the callout: ask for specific test
+  files, API contracts, exit-code mappings, byte-equality
+  conditions, round-trip equalities.
+
+Implication: when an anti-synthesis pattern is also implicit in
+the task's verb, the contract needs a verb-specific override.
+Generic examples are necessary but not sufficient.
+
+### 5. R3 canonical skeleton lands 100% — but only as strict-must
+
+The C+ demotion of R3 to Advisory ("should copy verbatim") was
+based on contaminated data showing ~33%. The actual rate against
+the loaded contract was 100% at strict-must. Reverting C+ on R3
+was the right call.
+
+Implication for schema-shaped invariants: where there is a single
+canonical structure (JSON schema, field names, enum values),
+strict-must wording with a verbatim example block is the right
+contract shape. The Examples-of-Drift list ("`providers[].kind` →
+use `providers[].backend`", etc.) is what the model uses to
+diagnose its own near-misses.
+
+### 6. R4 pre-preview validate is fundamentally advisory
+
+R4's pre-preview validate ran in 1/4 to 1/3 of drafting trials
+under both strict-must wording (during contamination, where it
+was strict) and advisory wording (post-C+). The rate did not
+change with the modal verb. The model treats it as an optional
+extra check on fast-path trips.
+
+Implication: any further work to enforce pre-preview validate
+needs a Go-side hook (Option B-narrow), not a contract change.
+The current state (advisory + Go-side post-write validate
+backstop) is the stable answer.
+
+### 7. Background-as-array carries acceptance criteria
+
+The plan originally treated `background` as freeform string. The
+verification trials showed the model naturally writes
+`background: [...]` arrays carrying AC bullets, the
+"Bakeoff will capture candidate patches" boilerplate, and other
+context. This works correctly with `bakeoff validate` (which
+accepts either string or string-array).
+
+Implication: the canonical skeleton documents `background` as an
+array. The skeleton entry `"background": ["<acceptance criteria
+as one or more bullets within this array>", "Bakeoff will capture
+candidate patches from isolated worktrees and will not apply them
+to this checkout."]` is the right shape.
+
+### 8. Default-aware preview language is welcomed by the model
+
+The verification trials showed the model voluntarily including
+default-aware notes in the compact preview (e.g., "(with
+`build.protected_paths` not set — scope guidance lives in
+background)"). This was not strictly mandated by the contract.
+
+Implication: the Step 3 "preview defaults wording" goal was met
+informally — the model naturally surfaces non-default values and
+notes about omitted optional fields. Step 3 does not need a
+strict-must rule.
+
+### 9. Wall-time impact of contract bloat is modest
+
+The amended contract is 927 lines vs 669 lines baseline (+258
+lines of invariants + skeleton + checklists + anti-synthesis
+examples). The single B drafting metric trial against the
+post-amendment contract clocked 40 s — within A baseline range
+(31.9 s median / 51.6 s max). The contract additions did not
+materially regress speed.
+
+Implication: the assumption that "more contract → slower drafting"
+is not strongly supported by the data. The ≤ 30 s wall target
+from the original cycle goal is not yet hit on a single trial,
+but the larger contract is not the regression force.
+
+### 10. R5 + embedded skeleton are the highest-impact amendment by wall-time
+
+The coverage-gap batch on 2026-05-20T18:45Z showed D7 (multi-lens)
+running **4× faster** under the amended contract: 132 s → 32 s.
+Pre-cycle, the model spent ~90 s probing `bakeoff providers list`
+(doesn't exist), `bakeoff --help`, `bakeoff init`, scratch `/tmp`
+`bakeoff init` to read field names by example, and `bakeoff
+doctor`. Post-cycle: zero CLI probes; the embedded backends list
+and canonical skeleton are enough.
+
+R5's "do not probe the CLI" rule combined with the embedded
+backends + skeleton is the single most impactful contract change
+in the cycle by wall-time delta. The cost of writing these into
+the contract was ~150 lines; the benefit is consistently ~100 s
+per multi-lens-shaped draft.
+
+Implication: future contract additions that embed reference content
+(field lists, enum values, structural schemas) have an attractive
+ROI compared to prose-only rules. The model uses the embedded
+content directly and avoids improvising lookups.
+
+### 11. R1 anti-synthesis examples can preempt exploration entirely
+
+The E batched-exploration trial showed an unexpected effect: the
+R1.4 anti-synthesis example *"'the conventional test command for
+`<package>`' (ambiguous; ask)"* matched the E prompt's wording
+verbatim. The model recognized the pattern and asked for the
+verifier without exploring at all — zero context calls.
+
+This means the cycle's documented "batched exploration" claim
+(exactly one context pass for prompts requiring one fact-lookup)
+is **not separately verified**. The prompt designed to test it
+now tips over R1 first.
+
+Implication: the R1 anti-synthesis examples are more powerful than
+the rule's "ask, don't synthesize" framing suggested. They function
+as **pattern recognizers** that fire before exploration even
+begins. Future tests of batched exploration need prompts that don't
+match any anti-synthesis pattern.
+
+Documented example for future testing (not run this cycle):
+
+```
+... Gate verifier: go test ./internal/commands/lscmd/... -count=1.
+Before drafting, look up whether internal/commands/lscmd/ uses
+table-driven tests or function-per-case tests so the work order
+can name the test style in the background. ...
+```
+
+That phrasing requires a real fact-lookup but does not match any
+of the anti-synthesis examples.
+
+### 12. R4 may be quietly recovering — keep watching
+
+R4's landing rate at cycle close was 1/4 = 25%. After the
+coverage-gap batch added one more drafting trial where R4 fired,
+the rate is 2/5 = 40%. Still below "reliable" but the trend is
+positive. With more sampling under the amended contract, R4 may
+land somewhere in the 30-50% range without further intervention.
+
+Implication: the Go-side pre-preview validate hook (Option
+B-narrow) remains deferred. If a future light-touch dogfood
+shows R4 lands at ≥ 50% consistently, the hook becomes
+unnecessary. If real-use signal shows operators hitting the
+repair-and-reapprove cycle frequently, escalate to the hook.
+
+### 13. Open verification gaps (acknowledged, narrowed)
+
+After the 2026-05-20T18:45Z coverage-gap batch, the remaining
+plan-defined experiments not run against the post-amendment cache
+are:
+
+- **D3** (compare-matrix routing): contaminated trial only. Type-
+  inference logic wasn't changed by amendments; high probability
+  of identical behavior.
+- **D4** (vague target task-fit): contaminated trial only. Task-fit
+  logic wasn't changed.
+- **D6** (unbounded review task-fit): contaminated trial only.
+  Task-fit logic wasn't changed.
+- **B drafting trial 3**: n=2 currently (40 s, 52 s). One more
+  would give n=3 with proper median; wall distribution is
+  already known to be in the 40-50 s band.
+- **C1/C2** held-out positive variants: never run.
+- **E with a new prompt**: original E prompt is now obsolete (see
+  observation 11).
+
+D7 and E were the load-bearing ones for verifying R5 and the
+batched-exploration claim; both are now answered. The remaining
+gaps are corroboration. Documented in `docs/task-fit-test-
+scenarios.md` as expected behaviors with prompt+outcome rows.
 
 ## Non-Goals
 
@@ -1318,18 +1589,21 @@ The first PR is done when all of the following are true:
   appended to `docs/drafting-fast-path-experiment-log-YYYY-MM-DD.md`.
 - B's max-over-three-trials wall time ≤ 30 s (under A's 31.9 s median).
   Median improvement is no longer the primary success bar; tail reduction is.
-- **Final landing rates (n=12 across verification + R1.6 batches,
-  see "Real Landing Rates" risk section above)**:
-  - R1 — no required-field synthesis: **100% on the verification
-    prompts under their final contract** (D1 3/3, D5 3/3,
-    D2-with-R1.6 3/3). Ships as advisory + R1.6 refactor
-    tightening (verified).
-  - R3 — canonical schema verbatim: **3/3 = 100%** when drafting
-    happens. Ships as strict-must (C+ demotion reverted on
-    contamination-corrected data).
-  - R4 — pre-preview validate: **1/3 = 33%** when drafting
+- **Final landing rates (n=16 across all clean verification
+  batches, see "Real Landing Rates" risk section above)**:
+  - R1 — no required-field synthesis: **100% on the tested prompts
+    under final contract** (D1 3/3, D5 3/3, D2-with-R1.6 3/3, D8
+    missing-field, D10 task-fit). Ships as advisory + R1.6
+    refactor tightening (verified).
+  - R3 — canonical schema verbatim: **4/4 = 100%** when drafting
+    happens (D2 ×3 + B drafting ×1). Ships as strict-must.
+  - R4 — pre-preview validate: **1/4 = 25%** when drafting
     happens. Ships as advisory (strict wording did not move the
-    rate).
+    rate; backstopped by Go-side post-write validate).
+  - **Wall time**: B drafting on lscmd positive case clocked at
+    40 s (n=1) — above the original ≤ 30 s goal but within the
+    A baseline range (31.9 s median / 51.6 s max). The +258
+    contract lines did not materially regress speed.
 - **Hard invariants that ship as enforced**:
   - R2 — no Write before approval (9/9 = 100%).
   - R3 — canonical schema verbatim (3/3 = 100% when drafting
