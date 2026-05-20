@@ -332,9 +332,11 @@ Repeat until validation passes, then show the preview.
 **This is advisory guidance, not an enforced invariant.** Cross-batch
 dogfood data showed pre-preview validate lands at ~27% — the model
 skips this step when it has framed the request as fast-path-eligible.
-The safety net is the post-write `bakeoff validate` step (#7 below),
-which runs unconditionally before `bakeoff build` or `bakeoff
-research` and catches fictional schema before any provider runs.
+Softening this rule trades fewer prompt obligations for occasional
+user-visible repair-and-reapprove cycles. The safety net is the
+post-write `bakeoff validate` step (#7 below), which runs
+unconditionally before `bakeoff build` or `bakeoff research` and
+catches fictional schema before any provider runs.
 
 User-visible flow:
 
@@ -342,7 +344,7 @@ User-visible flow:
 2. build the JSON in memory from the user's request plus skeleton
    defaults;
 3. **(should)** internal `bakeoff validate` → repair if needed → re-validate;
-4. show the compact preview (with the validated JSON);
+4. show the compact preview (validated when step 3 ran);
 5. wait for approval;
 6. write the file to the working directory;
 7. on-disk `bakeoff validate` (**enforced** safety gate);
@@ -760,8 +762,9 @@ When all conditions hold, take the fast-path action:
    backends are embedded in [Available Backends](#available-backends);
    do not probe the CLI to discover them. If one fact is genuinely
    missing, perform exactly one batched read/search pass that answers
-   all drafting questions at once. Sequential probes are a fast-path
-   violation.
+   all drafting questions at once. In context-mode sessions, that pass
+   means one `ctx_batch_execute` call; do not approximate it with chained
+   Bash/Read/Grep calls. Sequential probes are a fast-path violation.
 5. **Prefer internally validating the in-memory JSON via `bakeoff validate`**
    (see [Pre-Preview Internal Validate](#pre-preview-internal-validate)).
    If validation runs and fails, repair using the canonical skeleton and
