@@ -133,6 +133,8 @@ Then Bakeoff runs triage automatically. Triage checks each finding for actionabi
 
 `--base` and `--diff` capture read-only git context. `--no-triage` skips the automatic triage step for review runs. See [examples/review.work-order.json](examples/review.work-order.json) for the facet shape; field-level reference is in [docs/work-orders.md](docs/work-orders.md).
 
+To run multiple lenses, say so explicitly: `/bakeoff:run review this diff against main with security, performance, and UX as separate lenses`. Bakeoff previews one normal review run per lens; reply `write and run` to write the files and run them sequentially.
+
 Plain review stays one run, even when you mention several concerns. If you explicitly ask for separate lenses, such as security plus performance plus UX, `/bakeoff:run` drafts one normal review work order per lens, keeps triage on for each lens unless disabled, runs them sequentially after `write and run` approval, and writes `runs/<base>.multi-lens-summary.md`. Synthesis into one prioritized fix plan is a separate follow-up approval, not an automatic hidden step.
 
 After a run, open `runs/<run-id>/report.md` first. Then open `runs/<run-id>/triage/triage.md`, unless you used `--no-triage`.
