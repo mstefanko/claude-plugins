@@ -169,10 +169,7 @@ repo-discoverable, or user-owned before proposing values or asking questions.
     not "the build". A real verifier is exact argv the user typed:
     `go test ./internal/foo/... -run . -count=1`, `make test`,
     `bundle exec rspec spec/auth_spec.rb`. If the answer is NO, the fast
-    path does not apply. In the careful flow, if the request names or
-    strongly implies a repo target, perform one narrowly targeted read-only
-    batched context pass to propose a verifier with evidence; otherwise ask
-    the user for the exact verifier.)
+    path does not apply.)
 
 [ ] User named acceptance criteria as observable behaviors?
     (Not "edits stay in scope" — that is scope restatement.
@@ -202,6 +199,11 @@ repo-discoverable, or user-owned before proposing values or asking questions.
     or round-trip equalities that must hold. Refactors hide
     missing AC inside the verb; ask anyway.)
 ```
+
+When the verifier checkbox is NO, the careful flow depends on the missing-value
+classification. If the request names or strongly implies a repo target, perform
+one narrowly targeted read-only batched context pass to propose a verifier with
+evidence; otherwise ask the user for the exact verifier.
 
 Proposal is not approval. A verifier, edit boundary, or protected path found
 during repo exploration may be used to generate a read-only preview, but it is
@@ -787,6 +789,9 @@ Take the careful drafting flow instead: explore once for repo-discoverable
 missing fields, ask one targeted question for user-owned missing fields, and
 stop when the missing value cannot be determined safely. Sequential repo probes
 remain a failure of exploration discipline.
+Fallback exploration produces a proposal, not approval: any verifier, edit
+boundary, or protected path discovered here may support a preview only, and
+still requires the normal approval phrase before writing or running.
 
 - missing acceptance criteria for build mode;
 - missing gate verifier for build mode;

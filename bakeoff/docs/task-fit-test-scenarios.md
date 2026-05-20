@@ -380,7 +380,7 @@ work-order template referenced by the canonical skeletons.
     exists with matching content, and offers to reuse it without
     overwriting. No new file is written before approval.
 
-### Fast-Path Must NOT Trigger (R1 — Missing Required Field)
+### Fast-Path Fallback Routing (R1 — Missing Required Field)
 
 - [ ] Build request with no gate verifier.
   - Prompt: `/bakeoff:run Add structured logging to internal/commands/buildcmd. Goal: every command path emits a JSON log line with command, exit_code, and duration_ms. Scope: edit only internal/commands/buildcmd/**. Acceptance criteria: every existing command path emits one log line on success, one on failure, and the existing exit codes are unchanged. Use two build providers and one claude judge.`
