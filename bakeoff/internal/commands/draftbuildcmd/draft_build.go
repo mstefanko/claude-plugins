@@ -42,11 +42,12 @@ func NewCmdDraftBuild(f commands.Factory, runF func(context.Context, *DraftBuild
 		SilenceErrors: true,
 		Args:          commands.ExactArgs(0),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if _, err := parseGateFlags(opts.Gates); err != nil {
+			gates, err := parseGateFlags(opts.Gates)
+			if err != nil {
 				return commands.WrapValidation(err)
 			}
 			if runF == nil {
-				return runDraftBuild(cmd.Context(), f, opts)
+				return runDraftBuild(cmd.Context(), f, opts, gates)
 			}
 			return runF(cmd.Context(), opts)
 		},
@@ -67,11 +68,7 @@ func NewCmdDraftBuild(f commands.Factory, runF func(context.Context, *DraftBuild
 	return cmd
 }
 
-func runDraftBuild(_ context.Context, f commands.Factory, opts *DraftBuildOptions) error {
-	gates, err := parseGateFlags(opts.Gates)
-	if err != nil {
-		return commands.WrapValidation(err)
-	}
+func runDraftBuild(_ context.Context, f commands.Factory, opts *DraftBuildOptions, gates []workorder.GateDraft) error {
 	doc, err := workorder.DraftBuild(workorder.BuildDraftOptions{
 		ID:                   opts.ID,
 		Goal:                 opts.Goal,
@@ -100,6 +97,7 @@ func runDraftBuild(_ context.Context, f commands.Factory, opts *DraftBuildOption
 
 func parseGateFlags(values []string) ([]workorder.GateDraft, error) {
 	out := make([]workorder.GateDraft, 0, len(values))
+	seen := map[string]int{}
 	for i, value := range values {
 		index := strings.Index(value, "=")
 		if index < 0 {
@@ -113,6 +111,10 @@ func parseGateFlags(values []string) ([]workorder.GateDraft, error) {
 		if command == "" {
 			return nil, workorder.Validationf("--gate[%d] command must be non-empty", i)
 		}
+		if previous, ok := seen[id]; ok {
+			return nil, workorder.Validationf("--gate[%d] id %q duplicates --gate[%d]", i, id, previous)
+		}
+		seen[id] = i
 		out = append(out, workorder.GateDraft{ID: id, Command: command})
 	}
 	return out, nil

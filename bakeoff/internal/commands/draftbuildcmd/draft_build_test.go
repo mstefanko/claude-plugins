@@ -54,7 +54,7 @@ func TestRunDraftBuildPrintsValidatedJSONOnly(t *testing.T) {
 		Acceptance: []string{"The emitted JSON validates."},
 		Scopes:     []string{"internal/commands/draftbuildcmd"},
 		Gates:      []string{"tests=go test ./internal/commands/draftbuildcmd"},
-	})
+	}, []workorder.GateDraft{{ID: "tests", Command: "go test ./internal/commands/draftbuildcmd"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestRunDraftBuildInvalidInputSurfacesValidationError(t *testing.T) {
 		Goal:   "Reject missing acceptance.",
 		Scopes: []string{"internal/commands/draftbuildcmd"},
 		Gates:  []string{"tests=go test ./internal/commands/draftbuildcmd"},
-	})
+	}, []workorder.GateDraft{{ID: "tests", Command: "go test ./internal/commands/draftbuildcmd"}})
 	var validation *apperror.ValidationError
 	if !errors.As(err, &validation) || !strings.Contains(err.Error(), "acceptance") {
 		t.Fatalf("expected validation error mentioning acceptance, got %T %v", err, err)
@@ -91,6 +91,36 @@ func TestRunDraftBuildInvalidInputSurfacesValidationError(t *testing.T) {
 	if out.String() != "" || errOut.String() != "" {
 		t.Fatalf("unexpected output stdout=%q stderr=%q", out.String(), errOut.String())
 	}
+}
+
+func TestParseGateFlags(t *testing.T) {
+	t.Run("rejects missing separator", func(t *testing.T) {
+		_, err := parseGateFlags([]string{"foo"})
+		if err == nil || !strings.Contains(err.Error(), "<id>=<command>") {
+			t.Fatalf("expected missing separator error, got %v", err)
+		}
+	})
+	t.Run("rejects whitespace command", func(t *testing.T) {
+		_, err := parseGateFlags([]string{"tests=   "})
+		if err == nil || !strings.Contains(err.Error(), "command must be non-empty") {
+			t.Fatalf("expected empty command error, got %v", err)
+		}
+	})
+	t.Run("splits on first equals", func(t *testing.T) {
+		gates, err := parseGateFlags([]string{"tests=go test -count=1"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(gates) != 1 || gates[0].ID != "tests" || gates[0].Command != "go test -count=1" {
+			t.Fatalf("gates = %#v", gates)
+		}
+	})
+	t.Run("rejects duplicate ids", func(t *testing.T) {
+		_, err := parseGateFlags([]string{"tests=go test ./...", " tests = go test ./internal/..."})
+		if err == nil || !strings.Contains(err.Error(), `--gate[1] id "tests" duplicates --gate[0]`) {
+			t.Fatalf("expected duplicate id error, got %v", err)
+		}
+	})
 }
 
 func decodeDraftOutput(t *testing.T, text string) map[string]any {
