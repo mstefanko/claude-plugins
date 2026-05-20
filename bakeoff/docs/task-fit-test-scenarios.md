@@ -70,6 +70,44 @@ behavior.
     asks for any missing required build fields such as a gate verifier. There
     is no task-fit flag or persistent opt-out.
 
+- [ ] Duplicate acknowledged explores discoverable missing build fields.
+  - Prompt: `/bakeoff:run Implement bakeoff ls ordering by finished_at
+    descending, with stable fallback for legacy/malformed runs, and add focused
+    tests.`, then reply `draft anyway` to the duplicate or weak-fit warning.
+  - Expect: plugin treats the warning as satisfied for that turn only, performs
+    one narrowly targeted read-only repo pass over the `ls` command, nearby
+    tests, and existing work-order history, proposes a verifier and edit
+    boundary with evidence, states that proposal is not approval, shows the
+    normal preview approval prompt, and writes nothing before approval.
+
+- [ ] Ambiguous verifier target asks after exploration.
+  - Prompt: `/bakeoff:run Fix the auth tests flaking in CI.`
+  - Expect: plugin performs at most one narrowly targeted read-only repo pass
+    if auth-related packages or test commands are findable. If multiple
+    verifier scopes are plausible, it asks the user to choose among them and
+    drafts nothing.
+
+- [ ] Refactor missing behavioral invariants asks the user.
+  - Prompt: `/bakeoff:run Refactor default-value resolution in the build
+    command. Keep the existing verifier command if you can find it.`
+  - Expect: plugin may explore once to propose a verifier, but it still asks
+    for the behavioral invariants to preserve. It does not synthesize
+    acceptance criteria as "no behavior change" or "existing tests pass".
+
+- [ ] Metric benchmark names harness but omits protected paths.
+  - Prompt: `/bakeoff:run Optimize ledger import performance using the
+    benchmark harness in internal/ledger/ledger_test.go.`
+  - Expect: plugin explores once for the benchmark command and measuring-stick
+    files. If discoverable, it proposes protected paths with evidence before
+    preview; if not, it asks for the benchmark command and protected paths. It
+    does not draft a metric verifier with unprotected harness or fixture files.
+
+- [ ] Missing acceptance criteria with a named package asks for behavior.
+  - Prompt: `/bakeoff:run Improve validation errors in internal/commands/validatecmd.`
+  - Expect: plugin may inspect the named package for relevant tests or examples,
+    but it asks for observable acceptance criteria and does not treat existing
+    tests as the user's desired behavior.
+
 - [ ] Re-narrowing after a task-fit warning re-runs the check.
   - Prompt: `/bakeoff:run improve this`, then after the weak-fit warning reply
     `narrow it to: review the diff against main for security issues`.
@@ -346,11 +384,12 @@ work-order template referenced by the canonical skeletons.
 
 - [ ] Build request with no gate verifier.
   - Prompt: `/bakeoff:run Add structured logging to internal/commands/buildcmd. Goal: every command path emits a JSON log line with command, exit_code, and duration_ms. Scope: edit only internal/commands/buildcmd/**. Acceptance criteria: every existing command path emits one log line on success, one on failure, and the existing exit codes are unchanged. Use two build providers and one claude judge.`
-  - Expect: plugin asks for the verifier verbatim, lists candidate argv
-    options (`go test ./internal/commands/buildcmd/... -count=1`,
-    `make test`, custom script, etc.), and **does not draft** any JSON
-    until the user supplies the exact argv. May cite "the mechanical
-    checklist" by name.
+  - Expect: fast path does not trigger. Because the prompt names a package,
+    plugin performs one narrowly targeted read-only pass over
+    `internal/commands/buildcmd`, nearby tests, and command conventions, then
+    proposes a verifier with evidence. If one verifier is clearly strongest, it
+    may use that proposal in a read-only preview; if multiple are plausible, it
+    asks the user to choose. It writes nothing before normal approval.
 
 - [ ] Build request with no acceptance criteria (non-refactor).
   - Prompt: `/bakeoff:run Add a --json mode to bakeoff doctor. Scope: edit only internal/commands/doctorcmd/. Gate verifier: go build ./... && go test ./internal/commands/doctorcmd/... -count=1. Use two build providers and one claude judge.`
@@ -374,12 +413,13 @@ work-order template referenced by the canonical skeletons.
 
 - [ ] Metric benchmark with no protected paths.
   - Prompt: `/bakeoff:run Improve the performance of bakeoff ls when there are thousands of runs in the ledger. Goal: median latency under 200ms for 5000 runs. Gate verifier: go test ./internal/commands/lscmd/ -bench=. -benchmem. Scope: edit only internal/commands/lscmd/**. Use two build providers and one claude judge.`
-  - Expect: plugin asks which files inside the scope must be protected
-    (the `_test.go` benchmark harness) and may flag that the existing
-    scope makes the benchmark gameable. Lists options for setting up
-    the measuring stick (commit benchmark first, providers author the
-    bench with weak-gate warning, wrapper verifier script). **Does
-    not draft** until protected paths are supplied.
+  - Expect: fast path does not trigger. Plugin performs one narrowly targeted
+    read-only pass to identify benchmark harness, fixture, golden, or generated
+    expected-output files. If found, it proposes protected paths with evidence
+    and may use them in a read-only preview; if not found, it asks for the
+    measuring-stick files or a verifier setup choice. It does not draft a metric
+    verifier with unprotected harness or fixture files, and writes nothing
+    before approval.
 
 - [ ] Vague target ("the auth thing", "the slow part").
   - Prompt: `/bakeoff:run Fix the auth thing that's been flaky. Acceptance criteria: auth doesn't flake. Gate verifier: the auth tests. Use two build providers.`

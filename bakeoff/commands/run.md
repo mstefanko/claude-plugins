@@ -124,8 +124,13 @@ The operator's preview-then-approve flow remains the safety net for
 untested wording variants.
 
 The guidance below is worth following: synthesized AC and verifiers
-degrade provider-run quality even when the JSON validates. If a field
-is missing, ask rather than filling in a plausible default.
+degrade provider-run quality even when the JSON validates.
+
+If a required field is missing, first classify it as explicit,
+repo-discoverable, or user-owned. Do not silently fill a plausible default.
+For repo-discoverable fields, perform one narrowly targeted, read-only batched
+context pass, propose the value with evidence, and wait for normal preview
+approval before writing or running. For user-owned fields, ask directly.
 
 Non-synthesizable fields:
 
@@ -134,6 +139,16 @@ Non-synthesizable fields:
 - metric verifier protected paths (when the request asks for a benchmark);
 - edit scope when no file, package, route, diff, or local-change scope
   is named.
+
+Repo-discoverable means the user's request names or strongly implies a target
+whose verifier, edit boundary, or protected measuring files can be found by
+read-only repository inspection. Exploration may inspect package/test layout,
+existing work orders, relevant command code, Make targets, benchmark harnesses,
+and nearby fixtures. It must not dump broad file contents, full diffs, large
+logs, generated artifacts, or unrelated search results into the transcript.
+User-owned means the value depends on product intent or desired behavior, such
+as acceptance criteria, refactor invariants, ambiguous base refs, or secret/auth
+material.
 
 This rule supersedes any "infer silently" or "use sensible defaults"
 language elsewhere in this file. Synthesis-friendly defaults are limited
@@ -145,16 +160,19 @@ canonical skeletons below.
 
 Before deciding fast-path eligibility, walk this checklist verbatim.
 **Every checkbox must be YES**; if any is NO, the fast path does not
-apply — take the careful flow and ask for the missing field verbatim.
+apply. Take the careful flow and classify the missing value as explicit,
+repo-discoverable, or user-owned before proposing values or asking questions.
 
 ```text
 [ ] User named the verifier command verbatim?
     (Not "the conventional test command for X", not "the auth tests",
     not "the build". A real verifier is exact argv the user typed:
     `go test ./internal/foo/... -run . -count=1`, `make test`,
-    `bundle exec rspec spec/auth_spec.rb`. If you would have to
-    invent the verifier from package name or convention, the answer
-    is NO.)
+    `bundle exec rspec spec/auth_spec.rb`. If the answer is NO, the fast
+    path does not apply. In the careful flow, if the request names or
+    strongly implies a repo target, perform one narrowly targeted read-only
+    batched context pass to propose a verifier with evidence; otherwise ask
+    the user for the exact verifier.)
 
 [ ] User named acceptance criteria as observable behaviors?
     (Not "edits stay in scope" — that is scope restatement.
@@ -184,6 +202,12 @@ apply — take the careful flow and ask for the missing field verbatim.
     or round-trip equalities that must hold. Refactors hide
     missing AC inside the verb; ask anyway.)
 ```
+
+Proposal is not approval. A verifier, edit boundary, or protected path found
+during repo exploration may be used to generate a read-only preview, but it is
+not a user-supplied field and does not authorize writing or running. Show the
+proposal with evidence and wait for the normal approval phrase before creating
+the work-order file.
 
 **Refactor edge case (load-bearing):** Refactor and extract requests
 trigger a known soft spot. The model sees an explicit verifier, an
@@ -366,6 +390,8 @@ command, regression test, or benchmark) in the response so the user knows what
 would satisfy the requirement. Combine the task-fit warning and any
 missing-field ask in one response when both apply, rather than chaining them
 across turns.
+The phrase `draft anyway` only clears the task-fit or duplicate-work warning
+for the current turn; it does not waive required build fields.
 The task-fit warning is not permission to answer directly. Stop at the warning
 until the user narrows or confirms; after confirmation, continue through the
 Bakeoff draft, validate, and run flow. Do not answer directly unless the user
@@ -756,8 +782,11 @@ When all conditions hold, take the fast-path action:
 
 Full JSON remains available with `show` at any point.
 
-**Fast-path fallback rules.** Do not fast-path; take the careful drafting
-flow (or ask one targeted question) when any of these are true:
+**Fast-path fallback rules.** Do not fast-path when any of these are true.
+Take the careful drafting flow instead: explore once for repo-discoverable
+missing fields, ask one targeted question for user-owned missing fields, and
+stop when the missing value cannot be determined safely. Sequential repo probes
+remain a failure of exploration discipline.
 
 - missing acceptance criteria for build mode;
 - missing gate verifier for build mode;
