@@ -172,6 +172,19 @@ Use `build` when verification can actually help: performance work, robustness fi
 
 Minimum build work order: `type: "build"`, two `codebase` providers, and at least one `kind: "gate"` verifier. If verifier scripts or fixtures must not be edited, list them in `build.protected_paths`; patches that touch protected paths become ineligible.
 
+When the id, goal, acceptance criteria, edit scope, and gate command are already
+known, `bakeoff draft-build` prints validated build JSON to stdout without
+writing a file:
+
+```sh
+bakeoff draft-build \
+  --id cache-invalidation-fix \
+  --goal "Fix stale cache invalidation" \
+  --acceptance "Stale cache entries are invalidated after writes." \
+  --scope "internal/cache" \
+  --gate "tests=go test ./internal/cache -run TestInvalidation -count=1"
+```
+
 See [examples/build.work-order.json](examples/build.work-order.json) for the full shape and [docs/work-orders.md](docs/work-orders.md) for field reference.
 
 If there is a canonical winner, the handoff patch is `runs/<run-id>/providers/<winner>/build/diff.patch`.
@@ -237,13 +250,13 @@ Slash commands:
 - `/bakeoff:doctor [--skip-auth-probe] [--build] [--quiet]` — readiness check. `--build` runs live edit probes.
 - `/bakeoff:uninstall` — remove plugin state, then guide manual plugin uninstall.
 
-Core CLI: `bakeoff validate`, `bakeoff research`, `bakeoff build`, `bakeoff rerun`, `bakeoff ls`, `bakeoff show`, `bakeoff triage`, `bakeoff doctor`. Full reference in [docs/cli-reference.md](docs/cli-reference.md).
+Core CLI: `bakeoff draft-build`, `bakeoff validate`, `bakeoff research`, `bakeoff build`, `bakeoff rerun`, `bakeoff ls`, `bakeoff show`, `bakeoff triage`, `bakeoff doctor`. Full reference in [docs/cli-reference.md](docs/cli-reference.md).
 
 ## Configuration
 
 The work order is the main configuration file for a run. It carries the mode, providers, scope, budgets, verifiers, protected paths, and output caps.
 
-Most users do not write work orders by hand. When you run `/bakeoff:run ...` with a natural-language request, Claude drafts the work order, shows a compact review preview, and waits for approval before running it. You can reply `show` to print the full JSON before approving, or pass an existing work-order file when you want exact control.
+Most users do not write work orders by hand. When you run `/bakeoff:run ...` with a natural-language request, Claude drafts the work order, shows a compact review preview, and waits for approval before running it. Build fast-path drafts use `bakeoff draft-build` to generate validated stdout JSON before the preview. You can reply `show` to print the full JSON before approving, or pass an existing work-order file when you want exact control.
 
 See [docs/work-orders.md](docs/work-orders.md) for the full work-order reference.
 

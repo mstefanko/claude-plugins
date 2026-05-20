@@ -1,7 +1,7 @@
 ---
 description: Draft, validate, and run Bakeoff work orders
 argument-hint: "<work-order-path | request> [--run-id ID] [--out runs] [--base REF] [--diff] [--changed-files] [--quiet] [--keep-worktrees] [--no-triage] [--no-repo-layout]"
-allowed-tools: Read, Write, Edit, Glob, Grep, Bash(${CLAUDE_PLUGIN_ROOT}/scripts/bakeoff-ensure-cli:*), Bash(${CLAUDE_PLUGIN_ROOT}/bin/bakeoff validate:*), Bash(${CLAUDE_PLUGIN_ROOT}/bin/bakeoff research:*), Bash(${CLAUDE_PLUGIN_ROOT}/bin/bakeoff build:*), Bash(${CLAUDE_PLUGIN_ROOT}/bin/bakeoff rerun:*), Bash(bakeoff validate:*), Bash(bakeoff research:*), Bash(bakeoff build:*), Bash(bakeoff rerun:*), Bash(git status:*), Bash(git diff:*), Bash(git rev-parse:*)
+allowed-tools: Read, Write, Edit, Glob, Grep, Bash(${CLAUDE_PLUGIN_ROOT}/scripts/bakeoff-ensure-cli:*), Bash(${CLAUDE_PLUGIN_ROOT}/bin/bakeoff draft-build:*), Bash(${CLAUDE_PLUGIN_ROOT}/bin/bakeoff validate:*), Bash(${CLAUDE_PLUGIN_ROOT}/bin/bakeoff research:*), Bash(${CLAUDE_PLUGIN_ROOT}/bin/bakeoff build:*), Bash(${CLAUDE_PLUGIN_ROOT}/bin/bakeoff rerun:*), Bash(bakeoff draft-build:*), Bash(bakeoff validate:*), Bash(bakeoff research:*), Bash(bakeoff build:*), Bash(bakeoff rerun:*), Bash(git status:*), Bash(git diff:*), Bash(git rev-parse:*)
 ---
 
 # /bakeoff:run
@@ -230,6 +230,9 @@ prompt. The preview is read-only. The first mutating tool call must come
 or `write and run` for split/multi-lens). This applies to fast path and
 careful path equally.
 
+`bakeoff draft-build` is pre-approval safe: it is read-only and writes only the
+validated JSON draft to stdout. It does not create or modify a work-order file.
+
 ### Available Backends
 
 Available provider backends: `claude` (Claude Code) and `codex` (Codex
@@ -243,59 +246,24 @@ drafting flow:
 - `bakeoff init` (writes a TODO template; never run from drafting);
 - `bakeoff doctor` (operator-only diagnostic);
 - scratch `mkdir /tmp/...` followed by `bakeoff init` (forbidden — use
-  the embedded skeletons below).
+  `bakeoff draft-build` for build drafts and the documented examples below for
+  non-build drafts).
 
 If the user names an unknown backend, ask one clarification question;
 do not improvise.
 
 ### Canonical Skeletons
 
-The model **must** copy field names and structure verbatim from the
-canonical skeleton for the resolved work-order type. Inventing or
-renaming fields is a contract failure. Substitute only the angle-bracket
-placeholders. Do not omit other fields. Do not add fields not in the
-skeleton. If unsure of a default, copy the skeleton value verbatim.
+For build fast-path drafts, do **not** hand-copy a full JSON skeleton. Run
+`bakeoff draft-build` with the extracted id, goal, acceptance criteria, edit
+scope, gate verifier, and any optional base/protected paths. Use the emitted
+JSON as the preview source. The command owns the canonical build shape,
+provider/judge defaults, budgets, `build.verify[].argv`, and self-validation
+before stdout.
 
-**Build skeleton:**
-
-```json
-{
-  "schema_version": 1,
-  "id": "<kebab-id>",
-  "type": "build",
-  "goal": "<one-sentence implementation goal>",
-  "background": [
-    "<acceptance criteria as one or more bullets within this array>",
-    "Bakeoff will capture candidate patches from isolated worktrees and will not apply them to this checkout."
-  ],
-  "providers": [
-    { "id": "claude", "backend": "claude", "model": "sonnet", "scope": "codebase", "effort": "high" },
-    { "id": "codex", "backend": "codex", "model": "gpt-5.5", "scope": "codebase", "effort": "high" }
-  ],
-  "scope_policy": { "enforcement": "best_effort" },
-  "judge": { "backend": "claude", "model": "opus", "effort": "xhigh" },
-  "build": {
-    "base_ref": "HEAD",
-    "comparison_goal": "Prefer the patch that satisfies the acceptance criteria with the smallest maintainable change.",
-    "verify": [
-      {
-        "id": "<verifier-id>",
-        "kind": "gate",
-        "argv": ["sh", "-c", "<verifier-command>"],
-        "wall_clock_seconds": 300,
-        "max_output_bytes": 60000
-      }
-    ]
-  },
-  "budgets": {
-    "wall_clock_seconds": 1200,
-    "max_output_bytes": 80000,
-    "heartbeat_seconds": 60,
-    "output_cap_grace_seconds": 10,
-    "max_output_overrun_bytes": 80000
-  }
-}
-```
+`draft-build` supports gate verifier drafting first. Metric verifier drafts,
+generated fixtures, and protected benchmark harnesses still use the careful
+manual path.
 
 **Gather / code-review skeleton:** see `examples/gather.work-order.json`
 and `examples/review.work-order.json`; same provider/judge/budgets
@@ -305,7 +273,8 @@ for review-shaped requests.
 **Compare skeleton:** see `examples/compare.work-order.json`; same
 provider/judge/budgets shape; `type: "compare"`; no `build` block.
 
-Common drift patterns to avoid (all observed in 2026-05-20 dogfood):
+For non-build and manual build drafts, copy field names and structure from the
+examples. Common drift patterns to avoid:
 
 - `providers[].kind` — use `providers[].backend`.
 - `providers[].role` — does not exist; remove.
@@ -323,10 +292,14 @@ Common drift patterns to avoid (all observed in 2026-05-20 dogfood):
 
 ### Pre-Preview Internal Validate (Advisory)
 
-After building the work-order JSON in memory and before showing the
-preview, the model **should** internally invoke `bakeoff validate`
-against the JSON (write to a temp file if needed). If validation
-fails, repair the JSON using the canonical skeleton and re-validate.
+For build fast-path drafts, `bakeoff draft-build` self-validates before writing
+JSON to stdout. No extra temp-file `bakeoff validate` is needed before the
+preview; use the emitted JSON directly.
+
+For non-build drafts and manual build drafts, after building the work-order
+JSON in memory and before showing the preview, the model **should** internally
+invoke `bakeoff validate` against the JSON (write to a temp file if needed). If
+validation fails, repair the JSON using the examples above and re-validate.
 Repeat until validation passes, then show the preview.
 
 **This is advisory guidance, not an enforced invariant.** Cross-batch
@@ -341,10 +314,11 @@ catches fictional schema before any provider runs.
 User-visible flow:
 
 1. preflight (`bakeoff-ensure-cli --check`);
-2. build the JSON in memory from the user's request plus skeleton
-   defaults;
-3. **(should)** internal `bakeoff validate` → repair if needed → re-validate;
-4. show the compact preview (validated when step 3 ran);
+2. build fast path: run `bakeoff draft-build` and capture stdout JSON;
+3. other drafts: **(should)** internal `bakeoff validate` → repair if needed
+   → re-validate;
+4. show the compact preview (`draft-build` output is already validated; other
+   drafts are validated when step 3 ran);
 5. wait for approval;
 6. write the file to the working directory;
 7. on-disk `bakeoff validate` (**enforced** safety gate);
@@ -751,12 +725,10 @@ When all conditions hold, take the fast-path action:
 
 1. Run the mandatory CLI preflight (`scripts/bakeoff-ensure-cli --check`).
 2. Parse flags and mode.
-3. Build the work-order draft from the supplied user text plus the
-   canonical build skeleton (see [Canonical Skeletons](#canonical-skeletons)).
-   Substitute only `<placeholder>` values. Do **not** invent fields, do
-   **not** rename `backend`/`scope`/`build.verify`/etc., do **not**
-   restate `build.patch_max_bytes` — let Go validation apply the
-   default.
+3. Run `bakeoff draft-build` with the extracted id, goal, acceptance criteria,
+   scope, gate verifier, and optional base/protected paths. Use the emitted
+   JSON as the draft. Do **not** invent missing acceptance criteria, scope, or
+   verifier commands just to satisfy the flags.
 4. **Do not perform repo exploration** unless the supplied target or
    verifier cannot be rendered into the work order without it. Available
    backends are embedded in [Available Backends](#available-backends);
@@ -765,10 +737,9 @@ When all conditions hold, take the fast-path action:
    all drafting questions at once. In context-mode sessions, that pass
    means one `ctx_batch_execute` call; do not approximate it with chained
    Bash/Read/Grep calls. Sequential probes are a fast-path violation.
-5. **Prefer internally validating the in-memory JSON via `bakeoff validate`**
-   (see [Pre-Preview Internal Validate](#pre-preview-internal-validate)).
-   If validation runs and fails, repair using the canonical skeleton and
-   re-validate until it passes before previewing.
+5. Treat `draft-build` failure as a drafting error: ask for the missing or
+   invalid value rather than hand-authoring around it. The command validates
+   before stdout (see [Pre-Preview Internal Validate](#pre-preview-internal-validate)).
 6. Show the compact preview with default-aware lines. Non-default values
    must appear inline (do not hide them behind a "default" label).
 7. Wait for the same approval phrase as the current single-work-order flow:
@@ -835,7 +806,7 @@ Resolve conflicts conservatively:
 Ask only for missing required pieces:
 
 - build: implementation goal, acceptance criteria, at least one gate verifier,
-  and any non-`HEAD` base ref;
+  explicit edit boundary, and any non-`HEAD` base ref;
 - research: missing scope, target, or enough context to cite evidence.
 
 For review-shaped requests, gather read-only git context when useful:
@@ -855,6 +826,10 @@ Draft clean JSON, not a TODO template. Include explicit `schema_version`, `id`,
 `type`, `goal`, `background`, `providers`, `judge`, `budgets`, and
 `scope_policy.enforcement: "best_effort"`. Reject or repair build work orders
 with any provider `scope: "web"`.
+
+For build fast-path drafts, the clean JSON comes from `bakeoff draft-build`.
+Manual JSON drafting is reserved for non-build types and build cases that need
+metric verifier fields or careful path discovery.
 
 Before approval, show a compact review preview instead of dumping raw JSON by
 default. Include the id and type, planned file path, providers, judge, budget,

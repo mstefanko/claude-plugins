@@ -18,6 +18,11 @@ The fastest way to start is the examples directory:
 - [examples/review.work-order.json](../examples/review.work-order.json)
 - [examples/build.work-order.json](../examples/build.work-order.json)
 
+For build work orders with known extracted inputs, `bakeoff draft-build` can
+print validated approval-ready JSON to stdout without writing a file. It is
+different from `bakeoff init build`, which writes a TODO template meant for
+manual editing.
+
 ## Runtime Types
 
 | Type | Purpose |
@@ -149,6 +154,22 @@ Build work orders require a `build` object.
 | `patch_max_bytes` | Positive max captured patch size. Defaults to `100000`; max is `5000000`. |
 | `protected_paths` | Optional repository-relative scripts, data, fixtures, golden files, or expected outputs that provider patches must not change. |
 | `verify` | Non-empty verifier list with at least one gate verifier. |
+
+`bakeoff draft-build` covers the common gate-verifier shape first:
+
+```sh
+bakeoff draft-build \
+  --id lscmd-finished-at-ordering \
+  --goal "Order ls output by finished_at descending" \
+  --acceptance "Rows are sorted by finished_at descending." \
+  --scope "internal/commands/lscmd" \
+  --gate "tests=go test ./internal/commands/lscmd -run TestLsOrder -count=1"
+```
+
+Required flags are `--id`, `--goal`, at least one `--acceptance`, at least one
+`--scope`, and at least one `--gate <id>=<command>`. Repeat `--background` for
+extra context and `--protected-path` for verifier scripts or fixtures providers
+must not edit. Metric verifier drafting remains manual for now.
 
 Verifier fields:
 
@@ -301,6 +322,9 @@ Metric verifier with protected harness paths:
 
 `/bakeoff:run` drafts clean JSON from natural language. It does not call
 `bakeoff init` for generated drafts and does not inherit TODO placeholders.
+For straightforward build requests with explicit acceptance criteria, scope,
+and gate verifier, the plugin uses `bakeoff draft-build` as the stdout-only
+draft source before previewing or asking for approval.
 
 The plugin shows a compact review preview before approval. The preview includes
 the planned file path, core settings, goal, brief background summary, and run

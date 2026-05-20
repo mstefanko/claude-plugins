@@ -22,7 +22,9 @@ place.
 language drafts show a compact review preview, include full JSON inline only
 when it stays readable, and wait for an explicit approval such as `yes`,
 `approve`, or `run it` before the plugin writes or runs anything. Reply `show`
-to print verbose JSON before approving.
+to print verbose JSON before approving. Straightforward build drafts use
+`bakeoff draft-build` internally so canonical build JSON is generated and
+validated before preview.
 
 Recognized `/bakeoff:run` flags:
 
@@ -101,7 +103,7 @@ bakeoff [-h] [--version]
 Subcommands:
 
 ```text
-init, validate, research, build, rerun, triage, runs, ls, show, doctor
+init, draft-build, validate, research, build, rerun, triage, runs, ls, show, doctor
 ```
 
 ## `bakeoff init`
@@ -119,6 +121,44 @@ Flags:
 | Flag | Meaning |
 | --- | --- |
 | `--force` | Overwrite an existing template file. |
+
+## `bakeoff draft-build`
+
+```text
+bakeoff draft-build --id ID --goal TEXT --acceptance TEXT --scope TEXT --gate ID=COMMAND [flags]
+```
+
+Prints one validated `type: "build"` work order to stdout and writes nothing
+to disk. Use `init build` when you want a human TODO template file; use
+`draft-build` when extracted build inputs are already known and you want
+approval-ready JSON.
+
+Required repeatable flags:
+
+| Flag | Meaning |
+| --- | --- |
+| `--id <slug>` | Work-order id and suggested filename stem. |
+| `--goal <text>` | One-sentence implementation goal. |
+| `--acceptance <text>` | Observable acceptance criterion. At least one required. |
+| `--scope <text>` | Edit boundary such as a file, package, route, or narrow scope. At least one required. |
+| `--gate <id>=<command>` | Gate verifier command. At least one required. |
+
+Optional flags include `--base-ref`, repeatable `--background`, repeatable
+`--protected-path`, `--comparison-goal`, `--budget-wall-seconds`,
+`--budget-max-output-bytes`, `--gate-wall-seconds`, and
+`--gate-max-output-bytes`. Gate commands are emitted as `["sh", "-c",
+"<command>"]`. Metric verifier drafting remains manual for now.
+
+Example:
+
+```sh
+bakeoff draft-build \
+  --id lscmd-finished-at-ordering \
+  --goal "Order ls output by finished_at descending" \
+  --acceptance "Rows are sorted by finished_at descending." \
+  --scope "internal/commands/lscmd" \
+  --gate "tests=go test ./internal/commands/lscmd -run TestLsOrder -count=1"
+```
 
 ## `bakeoff validate`
 

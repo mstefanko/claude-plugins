@@ -5,12 +5,14 @@ import (
 	"context"
 	"os/exec"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/buildinfo"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/buildcmd"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/doctorcmd"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/draftbuildcmd"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/initcmd"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/lscmd"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/reruncmd"
@@ -88,6 +90,66 @@ func TestCommandOptions(t *testing.T) {
 		want := &validatecmd.ValidateOptions{WorkOrder: "work.json"}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("got %#v, want %#v", got, want)
+		}
+	})
+	t.Run("draft-build", func(t *testing.T) {
+		var got *draftbuildcmd.DraftBuildOptions
+		cmd := draftbuildcmd.NewCmdDraftBuild(testFactory(), func(_ context.Context, opts *draftbuildcmd.DraftBuildOptions) error {
+			copy := *opts
+			copy.Acceptance = append([]string(nil), opts.Acceptance...)
+			copy.Scopes = append([]string(nil), opts.Scopes...)
+			copy.Background = append([]string(nil), opts.Background...)
+			copy.Gates = append([]string(nil), opts.Gates...)
+			copy.ProtectedPaths = append([]string(nil), opts.ProtectedPaths...)
+			got = &copy
+			return nil
+		})
+		err := execute(cmd,
+			"--id", "draft-build-options",
+			"--goal", "Draft a build work order.",
+			"--acceptance", "Rows sort by name, then time.",
+			"--acceptance", "Errors stay readable.",
+			"--scope", "internal/commands/lscmd",
+			"--scope", "docs, examples",
+			"--background", "Keep commas, please.",
+			"--protected-path", "scripts/bench-json",
+			"--base-ref", "main",
+			"--comparison-goal", "Prefer the simplest green patch.",
+			"--budget-wall-seconds", "1",
+			"--budget-max-output-bytes", "2",
+			"--gate-wall-seconds", "3",
+			"--gate-max-output-bytes", "4",
+			"--gate", "tests=go test ./..., -run TestDraft",
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := &draftbuildcmd.DraftBuildOptions{
+			ID:                   "draft-build-options",
+			Goal:                 "Draft a build work order.",
+			Acceptance:           []string{"Rows sort by name, then time.", "Errors stay readable."},
+			Scopes:               []string{"internal/commands/lscmd", "docs, examples"},
+			Background:           []string{"Keep commas, please."},
+			Gates:                []string{"tests=go test ./..., -run TestDraft"},
+			ProtectedPaths:       []string{"scripts/bench-json"},
+			BaseRef:              "main",
+			ComparisonGoal:       "Prefer the simplest green patch.",
+			BudgetWallSeconds:    1,
+			BudgetMaxOutputBytes: 2,
+			GateWallSeconds:      3,
+			GateMaxOutputBytes:   4,
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("got %#v, want %#v", got, want)
+		}
+	})
+	t.Run("draft-build invalid gate", func(t *testing.T) {
+		cmd := draftbuildcmd.NewCmdDraftBuild(testFactory(), func(_ context.Context, opts *draftbuildcmd.DraftBuildOptions) error {
+			return nil
+		})
+		err := execute(cmd, "--gate", "missing-separator")
+		if err == nil || !strings.Contains(err.Error(), "<id>=<command>") {
+			t.Fatalf("expected invalid gate syntax error, got %v", err)
 		}
 	})
 	t.Run("research", func(t *testing.T) {

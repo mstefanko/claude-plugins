@@ -9,6 +9,7 @@ import (
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/buildcmd"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/doctorcmd"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/draftbuildcmd"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/initcmd"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/lscmd"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/reruncmd"
@@ -40,13 +41,14 @@ Run ` + "`bakeoff doctor`" + ` to check.
 `
 
 const rootHelp = `usage: bakeoff [-h] [--version]
-               {init,validate,research,build,rerun,triage,runs,ls,show,doctor} ...
+               {init,draft-build,validate,research,build,rerun,triage,runs,ls,show,doctor} ...
 
 Tiny research bakeoff harness.
 
 positional arguments:
-  {init,validate,research,build,rerun,triage,runs,ls,show,doctor}
+  {init,draft-build,validate,research,build,rerun,triage,runs,ls,show,doctor}
     init                write an example work order
+    draft-build         print a validated build work order
     validate            validate and dry-run a work order
     research            run a research bakeoff
     build               run a competitive build bakeoff
@@ -111,6 +113,7 @@ func NewRootCommand(f *Factory) *cobra.Command {
 	})
 	root.AddCommand(
 		initcmd.NewCmdInit(f, nil),
+		draftbuildcmd.NewCmdDraftBuild(f, nil),
 		validatecmd.NewCmdValidate(f, nil),
 		researchcmd.NewCmdResearch(f, nil),
 		buildcmd.NewCmdBuild(f, nil),
