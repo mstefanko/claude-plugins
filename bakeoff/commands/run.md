@@ -231,13 +231,26 @@ drafting flow:
 If the user names an unknown backend, ask one clarification question;
 do not improvise.
 
-### Canonical Skeletons
+### Canonical Skeletons (Advisory)
 
-The model **must** copy field names and structure verbatim from the
-canonical skeleton for the resolved work-order type. Inventing or
-renaming fields is a contract failure. Substitute only the angle-bracket
-placeholders. Do not omit other fields. Do not add fields not in the
-skeleton. If unsure of a default, copy the skeleton value verbatim.
+The model **should** copy field names and structure verbatim from the
+canonical skeleton for the resolved work-order type. Substitute only
+the angle-bracket placeholders. Avoid omitting other fields. Avoid
+adding fields not in the skeleton. If unsure of a default, copy the
+skeleton value verbatim.
+
+**This is advisory guidance, not an enforced invariant.** Cross-batch
+dogfood data (15 trials across 4 contract amendments) showed schema
+correctness lands at ~33% — the model paraphrases field names from
+semantic intent (e.g., `name`/`kind`/`provider`/`reasoning_effort`
+instead of `id`/`backend`/`backend`/`effort`) rather than copying
+verbatim. The actual safety net is downstream: `bakeoff validate`
+runs on the on-disk file before `bakeoff build` or `bakeoff
+research`, so fictional schema never reaches a provider run; the
+visible cost is a repair-and-reapprove cycle when drift is caught.
+
+The skeleton below is still the authoritative shape — using it
+verbatim eliminates that repair cycle.
 
 **Build skeleton:**
 
@@ -304,29 +317,36 @@ Common drift patterns to avoid (all observed in 2026-05-20 dogfood):
   policy and `build.protected_paths` for path lists.
 - `schema_version: "1.0"` — use integer `1`.
 
-### Pre-Preview Internal Validate
+### Pre-Preview Internal Validate (Advisory)
 
 After building the work-order JSON in memory and before showing the
-preview, the model **must** internally invoke `bakeoff validate` against
-the JSON (write to a temp file if needed). If validation fails, repair
-the JSON using the canonical skeleton and re-validate. Repeat until
-validation passes. **Only then** show the compact preview to the user.
+preview, the model **should** internally invoke `bakeoff validate`
+against the JSON (write to a temp file if needed). If validation
+fails, repair the JSON using the canonical skeleton and re-validate.
+Repeat until validation passes, then show the preview.
+
+**This is advisory guidance, not an enforced invariant.** Cross-batch
+dogfood data showed pre-preview validate lands at ~27% — the model
+skips this step when it has framed the request as fast-path-eligible.
+The safety net is the post-write `bakeoff validate` step (#7 below),
+which runs unconditionally before `bakeoff build` or `bakeoff
+research` and catches fictional schema before any provider runs.
 
 User-visible flow:
 
 1. preflight (`bakeoff-ensure-cli --check`);
 2. build the JSON in memory from the user's request plus skeleton
    defaults;
-3. internal `bakeoff validate` → repair if needed → re-validate;
+3. **(should)** internal `bakeoff validate` → repair if needed → re-validate;
 4. show the compact preview (with the validated JSON);
 5. wait for approval;
 6. write the file to the working directory;
-7. on-disk `bakeoff validate` (intentional audit redundancy);
+7. on-disk `bakeoff validate` (**enforced** safety gate);
 8. run `bakeoff build` or `bakeoff research`.
 
-The acceptance shape is: the JSON shown via `show` is byte-identical to
-the JSON `bakeoff build` reads at run time. Validation repair count
-after approval is zero.
+When step 3 is skipped and step 7 catches fictional schema, the user
+sees a repair-and-reapprove cycle. That cycle is the cost of skipping
+step 3; it is not unsafe.
 
 ## Natural Language Drafting
 

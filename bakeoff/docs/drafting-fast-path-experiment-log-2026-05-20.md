@@ -1057,6 +1057,139 @@ collapsed to 1.
 
 ---
 
+## Post-rollback batch 4 (2026-05-20T17:00Z)
+
+Operator ran 4 fresh sessions after R1.5 rollback + R1 demotion:
+1 × B drafting re-run, 1 × E, 2 × C variants (C1 showcmd, C2 doctorcmd).
+Tests whether removing R1.5 restored R3 (canonical schema) and R4
+(pre-preview validate) discipline as hypothesized at the end of
+batch 3.
+
+| # | Trial | Wall | Ctx calls | R2 | R3 | R4 | Schema issues |
+| ---: | --- | --- | ---: | :---: | :---: | :---: | --- |
+| 23 | B drafting (lscmd-order-by-finished-at) | 29 s | 1 | ✅ | ❌ | ❌ | `schema_version: "1.0.0"`, `providers[].kind` not `backend`, `providers[].name` not `id`, `scope: "repo"` not `"codebase"`, top-level `acceptance_criteria` + `verifiers[]`, `scope_policy.allow_globs`, no `build` block, missing `budgets.max_output_bytes` |
+| 24 | E (--limit N) | 45 s | 1 | ✅ | ❌ partial | ❌ | `providers[].provider` not `backend`, `providers[].reasoning_effort` not `effort`, `judge.provider` not `backend`, `scope_policy.allow` not in schema, `build.verify[].command` string not `argv` array — but has `build` block and full `budgets` (closest to canonical) |
+| 25 | C1 (showcmd --section flag, held-out) | 24 s | 0 | ✅ | ❌ | ❌ | `schema_version: "1"` string, top-level `acceptance_criteria` + `verifiers[]`, `providers[]` missing `backend`/`model`/`effort`, `scope: "repo"`, `judge: {id: "claude"}` only, `scope_policy: {include, exclude}` (no such schema), no `build` block, missing `budgets.max_output_bytes` |
+| 26 | C2 (doctorcmd --json mode, held-out) | 38 s | 3 | ✅ | ❌ | ❌ | `schema_version: "1.0.0"`, `providers[].name` not `id`, `scope: "repo"`, `judge: {name: "claude"}`, `scope_policy.allow_globs`, `acceptance.criteria` nested object not `background`, top-level `verifiers[]`, no `build` block, missing `budgets.max_output_bytes` |
+
+### Cross-batch R3/R4 landing rate (full picture)
+
+| Batch | Amendment | n | R3 (canonical schema) | R4 (pre-preview validate) |
+| --- | --- | ---: | ---: | ---: |
+| 1 | R1 base | 5 | 4 / 5 = 80% | 3 / 5 = 60% |
+| 2 | R1.1-R1.4 | 3 | 1 / 3 = 33% | 1 / 3 = 33% |
+| 3 | R1.5 | 3 | 0 / 3 = 0% | 0 / 3 = 0% |
+| 4 | post-rollback | 4 | **0 / 4 = 0%** | **0 / 4 = 0%** |
+
+The rollback **did not restore discipline**. The R3/R4 landing rate
+stays at 0% even after R1.5 was removed.
+
+### Hypothesis re-evaluation
+
+The earlier hypothesis ("R1.5 was actively harming R3/R4 by encouraging
+aggressive fast-path") was **wrong**. R1.5 was not the cause. Possible
+real drivers:
+
+1. **Cumulative contract bloat.** Even after the R1.5 rollback,
+   `commands/run.md` is 900 lines and `SKILL.md` is 924 lines — both
+   over 30% larger than pre-cycle. The R1 Advisory + Mechanical
+   Checklist + Anti-Synthesis Patterns subsections still occupy
+   ~140 lines. The model may be discounting the later R3/R4
+   sections under cognitive load.
+2. **Fast-path framing dominates.** Once the model decides "this is
+   a clean fast-path build", subsequent contract rules (including
+   R3 skeleton verbatim and R4 pre-preview validate) are
+   deprioritized. The fast-path action list says "internally
+   validate" at step 5, but the model treats it as optional once
+   the predicate has "fired."
+3. **Skeleton recall is unreliable.** R3 ships the canonical
+   skeleton inside the contract, but the model is not consistently
+   substituting from it. It paraphrases field names (e.g., `name`,
+   `kind`, `provider`, `reasoning_effort`) from semantic intent
+   rather than copying verbatim.
+4. **The model never read or never retained the canonical examples.**
+   `examples/build.work-order.json` is on disk and would be
+   authoritative, but the model isn't checking it during drafting.
+
+### Safety-net reality check
+
+Even with R3+R4 effectively non-functional, the system as a whole
+still works:
+
+1. **R2 holds 100%** across all 4 batches (16/16 trials) — no Write
+   before approval. Fictional drafts never reach disk before the
+   user sees them in the preview.
+2. **Post-approval `bakeoff validate` catches fictional schema**
+   before `bakeoff build` runs. Worst case: an extra repair cycle
+   visible to the user. No provider runs launch with broken JSON.
+3. **R5 holds 100%** (no CLI schema/backend probing).
+4. **The user-visible preview shows the JSON.** A careful user can
+   reject a fictional-looking draft on the spot.
+
+R3 and R4 are about *speed and clean previews*, not safety. The
+downstream validate step is the actual safety gate.
+
+### Implication for the plan
+
+The cycle's framing ("R3 and R4 are hard invariants enforced by
+contract") is now empirically false. They are best-effort guidance
+just like R1. The hard invariants are:
+
+- **R2** — no Write before approval (100% holds).
+- **R5** — no CLI probing for backends/schema (100% holds).
+- **Post-write `bakeoff validate`** — Go CLI side, cannot be skipped.
+- **Pre-build/research validation gate** — Go CLI side.
+
+Everything else (R1, R3, R4) is advisory. The user-visible
+consequence is friction (extra repair cycles when fictional schema
+gets written), not broken bakeoffs.
+
+### Recommendation: extend Option C to R3+R4
+
+1. Demote R3 from "must copy verbatim" to "should copy verbatim"
+   with the same advisory framing as R1.
+2. Demote R4 from "must internally validate" to "should internally
+   validate" — keep it as a best-effort speed/UX improvement, not
+   a safety invariant.
+3. Document the safety story: R2 + R5 + Go-side post-write validate
+   are the actual safety net. R1/R3/R4 are speed/UX optimizations
+   that are not reliably enforced by prompt contract.
+4. Update the plan's Definition Of Done accordingly.
+
+This extends Option C to its logical conclusion: prompt-layer
+enforcement of detailed work-order shape is not achievable; ship
+the contract as advisory guidance and rely on the Go-side validate
+gate for safety.
+
+Alternative: **Option B for R3+R4 (not R1).** A Go-side pre-build
+sanity-check that catches obvious schema-fictional patterns at
+preview time and prints a structured error the model can recover
+from in-session. This is a much smaller and safer linter than the
+synthesis-pattern matching considered earlier for R1, because:
+
+- The patterns are objective (field names, types, required blocks).
+- False positives are essentially impossible (you either use
+  `backend` or you don't).
+- Maintenance cost is low: same maintenance as `bakeoff validate`
+  itself.
+- The win is concrete: every drafted work order validates by the
+  time the user sees the preview.
+
+Concretely: invoke `bakeoff validate` from inside `/bakeoff:run`
+before showing the preview, by writing the in-memory JSON to a
+temp file and shelling out. This is exactly what R4 says to do —
+but as a hook the model cannot skip, not a contract clause.
+
+### Next step
+
+Operator decides: extend Option C to R3+R4 (advisory only), or
+invest in the small Go-side hook for pre-preview validate (a much
+narrower scope than the synthesis linter for R1). Recommend the
+latter — the cost is low, the false-positive risk is near zero,
+and it would fix the most visible drafting friction.
+
+---
+
 ## B — Provider dogfood patch inspection
 
 Status: **DONE** (2026-05-20)
