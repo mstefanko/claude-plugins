@@ -70,6 +70,13 @@ behavior.
     asks for any missing required build fields such as a gate verifier. There
     is no task-fit flag or persistent opt-out.
 
+- [ ] Re-narrowing after a task-fit warning re-runs the check.
+  - Prompt: `/bakeoff:run improve this`, then after the weak-fit warning reply
+    `narrow it to: review the diff against main for security issues`.
+  - Expect: plugin re-runs the task-fit check on the narrowed prompt, finds it
+    is no longer a weak fit, and proceeds to normal review drafting without
+    requiring `draft anyway`.
+
 - [ ] Weak-fit warning does not also propose a split.
   - Prompt: `/bakeoff:run format these files and update the changelog`
   - Expect: plugin asks for task-fit confirmation or narrowing first, and does
@@ -86,6 +93,13 @@ behavior.
   - Expect: plugin treats it as explicit approval, writes one work-order file,
     validates it, and runs `bakeoff research`. It does not infer a split or
     multi-lens run from the phrase.
+
+- [ ] Single work-order approval accepts plain affirmatives.
+  - Prompt: accept a single work-order preview with `yes`, `y`, `approve`, or
+    `run it`.
+  - Expect: plugin treats each as explicit approval, writes one work-order
+    file, validates, and runs. This differs from split and multi-lens, which
+    both require the exact `write and run` phrase.
 
 - [ ] Multiple review concerns without separate-lens wording stay single-run.
   - Prompt: `/bakeoff:run review this diff against main for security and tests`
@@ -141,9 +155,12 @@ behavior.
     directly.
 
 - [ ] Two independent research goals trigger a split proposal.
-  - Prompt: `/bakeoff:run research where receipt dedupe happens and compare SQLite FTS vs Tantivy for product search`
+  - Prompt: `/bakeoff:run research where receipt dedupe happens in
+    internal/import and compare SQLite FTS vs Tantivy for product search using
+    files under internal/search`
   - Expect: plugin proposes exactly two independent work orders, asks for
-    `split`, and does not show JSON until the split is accepted.
+    `split`, and does not show JSON until the split is accepted. Task-fit
+    does not fire because each part names its own scope and evidence surface.
 
 - [ ] Sequential multi-step request does not trigger a split proposal.
   - Prompt: `/bakeoff:run analyze the failing import first, then use that answer to design the fix`
@@ -152,9 +169,12 @@ behavior.
 
 - [ ] Split preview is scan-friendly and explicit.
   - Prompt: accept the independent two-part split.
-  - Expect: plugin shows a one-line summary above each JSON block, lists
-    filenames like `./<base>.part-1.work-order.json`, lists the commands to run,
-    and asks for `write and run` approval.
+  - Expect: plugin shows a compact preview row for each part with id, type,
+    goal, providers, and judge; lists filenames like
+    `./<base>.part-1.work-order.json`; lists the commands to run; and asks for
+    `write and run` approval. Full JSON blocks appear only when the combined
+    draft fits the 120-line / 10 KB preview budget; otherwise the plugin says
+    the JSON is verbose and lists `show part-N` choices.
 
 - [ ] Split approval requires the exact multi-file phrase.
   - Prompt: accept a split preview with `yes`.
@@ -167,11 +187,34 @@ behavior.
   - Expect: plugin uses names such as `base.part-1-2`; it does not use date
     suffixes or overwrite existing files.
 
+- [ ] Split with user-supplied `--run-id` appends `.part-N` to that run id.
+  - Prompt: accept a two-part split for a prompt that included
+    `--run-id custom-base`.
+  - Expect: plugin uses run ids `custom-base.part-1` and `custom-base.part-2`,
+    work-order ids and filenames matching, and applies the same collision
+    policy after appending `.part-N`.
+
+- [ ] Editing one part of a split draft re-shows the full set.
+  - Prompt: accept a two-part split preview, then reply
+    `change part 2 to use codex only`.
+  - Expect: plugin updates part 2, shows the final set again for all parts
+    with the same preview rules, and asks for `write and run` approval again.
+    It does not carry forward the prior approval.
+
+- [ ] `show part-N` prints one split part when combined JSON is too long.
+  - Prompt: after a split preview says full JSON is verbose, reply
+    `show part-1`.
+  - Expect: plugin prints only the part-1 work-order JSON, lists the other
+    available `show part-N` choices, and repeats the `write and run` approval
+    question.
+
 - [ ] Split validation failure stops before execution.
   - Setup: make part 2 invalid during command review.
   - Expect: plugin validates all parts before running any; on validation error,
-    it reports the failing file and error, repairs the JSON, and shows the full
-    final set again before asking for exact `write and run` approval.
+    it reports the failing file and error, repairs the JSON, and shows the
+    final set again with the same preview rules (compact rows plus JSON only
+    when the combined draft is small enough) before asking for exact
+    `write and run` approval.
 
 - [ ] Split execution continues after exit `3`.
   - Setup: part 1 completes with exit `3`.
@@ -194,6 +237,23 @@ behavior.
   - Expect: final response reports each run independently and avoids "overall
     winner", merged patch, merged answer, or cross-run synthesis unless the user
     asks separately.
+
+- [ ] Mixed-type splits route mode-specific flags per part.
+  - Prompt: accept a two-part split where part 1 is `build` and part 2 is
+    `gather`, with `--keep-worktrees --base main --diff` in the original
+    invocation.
+  - Expect: plugin passes `--keep-worktrees` only to the build part, passes
+    `--base` and `--diff` only to the gather part, and stops before execution
+    if a mode-specific flag is supplied for the wrong final type on any part.
+
+- [ ] Ordered gate sequence runs task-fit, then multi-lens, then clean-split.
+  - Prompt: `/bakeoff:run improve the API` (a vague request).
+  - Expect: plugin surfaces the task-fit warning first and does not propose a
+    multi-lens run or split in the same response. After the user narrows the
+    request to one that explicitly asks for multi-lens review, plugin shows
+    the multi-lens preview without first proposing a generic split. After the
+    user narrows the request to two independent research goals, plugin shows
+    the clean-split proposal.
 
 - [ ] Multi-lens validation failure stops before execution.
   - Setup: make one generated lens work order invalid during command review.

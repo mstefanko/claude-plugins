@@ -106,6 +106,228 @@ Then route by `type`:
 Do not run `bakeoff research` for `type: "build"`, and do not run
 `bakeoff build` for research-shaped work orders.
 
+## Drafting Invariants
+
+These invariants apply to **every** natural-language drafting path (fast
+path, careful path, split, multi-lens). They are not fast-path-specific.
+
+### Required-Field Synthesis Guidance (Advisory)
+
+If the request omits any of the following, the model **should** prefer
+asking the missing question(s) verbatim over synthesizing a default.
+
+**This is advisory guidance, not an enforced invariant.** Three
+contract amendments (R1, R1.1-R1.4 mechanical checklist, R1.5
+mandatory output marker) over nine dogfood trials produced a 0/9
+landing rate — see
+[drafting-fast-path-experiment-log-2026-05-20.md](../docs/drafting-fast-path-experiment-log-2026-05-20.md).
+Prompt-layer enforcement of "ask, don't synthesize" is not achievable
+with this contract; the model frames goal+scope requests as
+fast-path-eligible and fills in missing fields plausibly. The
+operator's preview-then-approve flow is the actual safety net.
+
+The guidance below is still worth following — synthesized AC and
+verifiers degrade provider-run quality even when the JSON validates —
+but a response that synthesizes a field is not a contract violation.
+
+Non-synthesizable fields:
+
+- build acceptance criteria;
+- build gate verifier (the command and its pass condition);
+- metric verifier protected paths (when the request asks for a benchmark);
+- edit scope when no file, package, route, diff, or local-change scope
+  is named.
+
+This rule supersedes any "infer silently" or "use sensible defaults"
+language elsewhere in this file. Synthesis-friendly defaults are limited
+to: provider pair, judge, budgets, `scope_policy.enforcement`,
+`build.base_ref` when omitted, and the JSON-skeleton field shapes in the
+canonical skeletons below.
+
+#### Mechanical Pre-Flight Checklist
+
+Before deciding fast-path eligibility, walk this checklist verbatim.
+**Every checkbox must be YES**; if any is NO, the fast path does not
+apply — take the careful flow and ask for the missing field verbatim.
+
+```text
+[ ] User named the verifier command verbatim?
+    (Not "the conventional test command for X", not "the auth tests",
+    not "the build". A real verifier is exact argv the user typed:
+    `go test ./internal/foo/... -run . -count=1`, `make test`,
+    `bundle exec rspec spec/auth_spec.rb`. If you would have to
+    invent the verifier from package name or convention, the answer
+    is NO.)
+
+[ ] User named acceptance criteria as observable behaviors?
+    (Not "edits stay in scope" — that is scope restatement.
+    Not "go build succeeds" / "go test passes" — those are verifier
+    restatements. Not "no observable behavior change" — that is
+    vacuous. Not "the helper has a single responsibility" — that
+    is a style preference. Real AC describe observable outputs,
+    error conditions, ordering, boundary values, or invariants the
+    verifier can test.)
+
+[ ] User named the edit boundary?
+    (File, package, route, diff, or local-change scope — not
+    "the auth thing", not "the slow part".)
+
+[ ] If the request asks for a metric benchmark: user named
+    protected paths?
+    (Files the providers must not edit — the measuring stick.
+    A benchmark request without protected paths is not fast-path
+    eligible; ask for the metric harness path and direction.)
+```
+
+#### Anti-Synthesis Patterns (Examples Of Contract Failure)
+
+The following are **NOT** acceptance criteria — they are scope or
+verifier restatements that synthesize the missing AC:
+
+- "Edits are confined to `<scope>`." (scope restatement)
+- "`go build ./...` succeeds." (verifier restatement)
+- "`go test ./...` passes." (verifier restatement)
+- "No observable behavior change." (vacuous — no asserted behavior)
+- "The helper has a single responsibility." (style preference, not
+  testable behavior)
+- "Default-value resolution is consolidated." (restatement of the goal,
+  not a behavior the verifier can check)
+
+The following are **NOT** verifier commands — they are placeholders
+the model must NOT fill in:
+
+- "the conventional test command for `<package>`" (ambiguous; ask)
+- "the auth tests" (ambiguous; ask)
+- "the build" (ambiguous; ask)
+- `go test ./internal/<pkg>/...` invented from package name when the
+  user did not provide it (synthesis from convention)
+
+When you catch yourself writing one of these, stop and ask the user
+for the real value instead.
+
+### No Write Before Approval
+
+No `Write`, `Edit`, or file-mutating tool call may precede the approval
+prompt. The preview is read-only. The first mutating tool call must come
+*after* the user's affirmative reply (`yes`, `y`, `approve`, `run it`,
+or `write and run` for split/multi-lens). This applies to fast path and
+careful path equally.
+
+### Available Backends
+
+Available provider backends: `claude` (Claude Code) and `codex` (Codex
+CLI). Available judge backends: `claude`. The model **must not** probe
+the CLI to discover backends or schema. The following commands are
+**not** drafting-time discovery tools and must not be run from the
+drafting flow:
+
+- `bakeoff providers list` (does not exist);
+- `bakeoff --help` (canonical info is in this file and the skill);
+- `bakeoff init` (writes a TODO template; never run from drafting);
+- `bakeoff doctor` (operator-only diagnostic);
+- scratch `mkdir /tmp/...` followed by `bakeoff init` (forbidden — use
+  the embedded skeletons below).
+
+If the user names an unknown backend, ask one clarification question;
+do not improvise.
+
+### Canonical Skeletons
+
+The model **must** copy field names and structure verbatim from the
+canonical skeleton for the resolved work-order type. Inventing or
+renaming fields is a contract failure. Substitute only the angle-bracket
+placeholders. Do not omit other fields. Do not add fields not in the
+skeleton. If unsure of a default, copy the skeleton value verbatim.
+
+**Build skeleton:**
+
+```json
+{
+  "schema_version": 1,
+  "id": "<kebab-id>",
+  "type": "build",
+  "goal": "<one-sentence implementation goal>",
+  "background": [
+    "<acceptance criteria as one or more bullets within this array>",
+    "Bakeoff will capture candidate patches from isolated worktrees and will not apply them to this checkout."
+  ],
+  "providers": [
+    { "id": "claude", "backend": "claude", "model": "sonnet", "scope": "codebase", "effort": "high" },
+    { "id": "codex", "backend": "codex", "model": "gpt-5.5", "scope": "codebase", "effort": "high" }
+  ],
+  "scope_policy": { "enforcement": "best_effort" },
+  "judge": { "backend": "claude", "model": "opus", "effort": "xhigh" },
+  "build": {
+    "base_ref": "HEAD",
+    "comparison_goal": "Prefer the patch that satisfies the acceptance criteria with the smallest maintainable change.",
+    "verify": [
+      {
+        "id": "<verifier-id>",
+        "kind": "gate",
+        "argv": ["sh", "-c", "<verifier-command>"],
+        "wall_clock_seconds": 300,
+        "max_output_bytes": 60000
+      }
+    ]
+  },
+  "budgets": {
+    "wall_clock_seconds": 1200,
+    "max_output_bytes": 80000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 80000
+  }
+}
+```
+
+**Gather / code-review skeleton:** see `examples/gather.work-order.json`
+and `examples/review.work-order.json`; same provider/judge/budgets
+shape; `type: "gather"`; no `build` block; `facet.id: "code-review"`
+for review-shaped requests.
+
+**Compare skeleton:** see `examples/compare.work-order.json`; same
+provider/judge/budgets shape; `type: "compare"`; no `build` block.
+
+Common drift patterns to avoid (all observed in 2026-05-20 dogfood):
+
+- `providers[].kind` — use `providers[].backend`.
+- `providers[].role` — does not exist; remove.
+- `providers[].scope: "local"` — use `"codebase"`.
+- `providers[].backend: "claude-code"` — use `"claude"`. The id is
+  `claude-code` but the backend value is `claude`.
+- `judge: {id, kind, role}` — use `judge: {backend, model, effort}`.
+- Top-level `gates[]` — use nested `build.verify[]`.
+- `verify[].command: "..."` string — use `verify[].argv: [...]` array.
+- Top-level `acceptance_criteria` — does not exist; criteria belong in
+  `background` (string or string-array).
+- Top-level `scope` — does not exist; use `scope_policy.enforcement` for
+  policy and `build.protected_paths` for path lists.
+- `schema_version: "1.0"` — use integer `1`.
+
+### Pre-Preview Internal Validate
+
+After building the work-order JSON in memory and before showing the
+preview, the model **must** internally invoke `bakeoff validate` against
+the JSON (write to a temp file if needed). If validation fails, repair
+the JSON using the canonical skeleton and re-validate. Repeat until
+validation passes. **Only then** show the compact preview to the user.
+
+User-visible flow:
+
+1. preflight (`bakeoff-ensure-cli --check`);
+2. build the JSON in memory from the user's request plus skeleton
+   defaults;
+3. internal `bakeoff validate` → repair if needed → re-validate;
+4. show the compact preview (with the validated JSON);
+5. wait for approval;
+6. write the file to the working directory;
+7. on-disk `bakeoff validate` (intentional audit redundancy);
+8. run `bakeoff build` or `bakeoff research`.
+
+The acceptance shape is: the JSON shown via `show` is byte-identical to
+the JSON `bakeoff build` reads at run time. Validation repair count
+after approval is zero.
+
 ## Natural Language Drafting
 
 Existing work-order paths do not enter this flow. For natural-language input,
@@ -114,7 +336,8 @@ run the task-fit check before silent type inference or JSON drafting.
 If the request is a weak fit, stop and warn instead of drafting. Use the phrase
 "this may not need Bakeoff" and name the reason:
 
-- mechanical edits or formatter-only work;
+- purely mechanical or formatter-only work (compound prompts that mix
+  formatter-only parts with non-formatter intent do not trigger this category);
 - build requests with no meaningful verifier or acceptance criterion;
 - vague requests without a target, scope, or evidence standard;
 - review requests without a bounded branch, PR, diff, file set, or local-change
@@ -132,11 +355,17 @@ and when there is a verifier, scope, or citation standard. Reply `draft anyway`
 to continue with Bakeoff, or tell me how to narrow it.
 ```
 
-The warning is advisory. A clear same-turn phrase such as `draft anyway` or
-"run Bakeoff anyway" satisfies it for that turn only. Do not add a task-fit
-flag or persistent opt-out. If the user narrows the request, re-run the check.
+The warning is advisory. The phrase `draft anyway` in the user's reply
+satisfies it for that turn only; this is the only accepted opt-out phrase. Do
+not add a task-fit flag or persistent opt-out. If the user narrows the
+request, re-run the check on the narrowed prompt.
 Task-fit confirmation does not waive required work-order fields; for example,
-build mode still needs a gate verifier before a valid work order can run.
+build mode still needs a gate verifier before a valid work order can run. For
+build weak-fit prompts, name concrete verifier examples (a project test
+command, regression test, or benchmark) in the response so the user knows what
+would satisfy the requirement. Combine the task-fit warning and any
+missing-field ask in one response when both apply, rather than chaining them
+across turns.
 The task-fit warning is not permission to answer directly. Stop at the warning
 until the user narrows or confirms; after confirmation, continue through the
 Bakeoff draft, validate, and run flow. Do not answer directly unless the user
@@ -167,12 +396,15 @@ another result. Reply `split` to draft separate work orders, or tell me to keep
 it as one.
 ```
 
-If the user declines the split, continue with one normal work order if the task
-is otherwise valid. If the user accepts, draft every part separately. Before
-writing anything, show a compact review preview for each part, then list all
-filenames and commands. Include the full JSON blocks only when the combined
-draft is still readable: at most 120 lines and at most 10 KB. For longer split
-drafts, say the full JSON is verbose and can be printed with `show`.
+If the user declines the split (replies `keep it as one`, `no`, or similar),
+continue with one normal work order if task-fit has already passed and all
+required fields are present. If the user accepts (replies `split` or
+equivalent), draft every part separately. Before writing anything, show a
+compact review preview for each part, then list all filenames and commands.
+Include the full JSON blocks only when the combined draft is still readable:
+at most 120 lines and at most 10 KB. For longer split drafts, say the full
+JSON is verbose and list available `show part-N` choices (for example
+`show part-1`, `show part-2`) alongside the all-parts `show` command.
 
 ```text
 Draft work orders:
@@ -198,7 +430,9 @@ continue, reply `show` to print the full JSON, or tell me what to change.
 One approval covers only the currently shown set. If the user changes any part,
 show the final set again with the same preview rules before asking for
 approval. If the user replies `show`, print the full JSON for every part and
-ask the same approval question again.
+ask the same approval question again. If the user replies `show part-N` with a
+specific part, print only that part's JSON and repeat the multi-file
+`write and run` approval question.
 Require exact `write and run` approval before writing or executing split files.
 For splits, `yes`, `approve`, or `run it` is not enough; reply by asking for
 exact `write and run` approval because multiple files and runs are involved.
@@ -223,9 +457,12 @@ Route each part by its own `type`: `build` uses
 Apply the same mode-specific flag routing to each part. Continue after exit
 `0`, `3`, or `4`; exit `4` is a decision-incomplete handoff with durable
 provider artifacts and should include the judge-only rerun recommendation when
-applicable. Stop on exit `1`, `2`, `130`, interruption, or command failure,
-summarize completed parts and the failed part, and ask before running any
-remaining parts.
+applicable. Split runs continue after exit `4` because each part is
+independent and cheap to keep going; multi-lens runs stop on exit `4` because
+each lens is higher-cost and a decision-incomplete handoff is worth inspecting
+before spending more lens budget. Stop on exit `1`, `2`, `130`, interruption,
+or command failure, summarize completed parts and the failed part, and ask
+before running any remaining parts.
 
 Summarize split runs independently. Do not produce an overall winner, merged
 patch, merged answer, or cross-run synthesis unless the user asks for that as a
@@ -456,8 +693,100 @@ and `needs_repro` items, preserve source lens and run id, merge duplicates only
 when evidence and changed behavior match, and produce one prioritized
 remediation plan.
 
-For one-work-order drafting, infer the work-order shape silently unless the
-ambiguity changes safety or cost.
+For one-work-order drafting, first try the **obvious one-work-order fast
+path** below. If any predicate condition fails, fall through to the careful
+type-routing and missing-field rules that follow — those rules are the
+authoritative silent-inference logic when the fast path does not apply.
+
+### Obvious One-Work-Order Fast Path
+
+Build mode only in v1. Skip cautious exploration and go from preflight
+straight to preview when **all** of the following hold:
+
+1. The request clearly maps to exactly one build work order.
+2. Required fields are present in the user's text:
+   - implementation goal;
+   - acceptance criteria;
+   - at least one gate verifier (a concrete command-line invocation);
+   - an explicit edit boundary: file, directory, package, route, or scope
+     expression;
+   - base ref, when the user names a non-`HEAD` base.
+3. The gate verifier is explicit enough to copy into the work order without
+   guessing.
+4. No metric verifier, protected verifier fixture, benchmark harness, golden
+   file, or generated expected-output artifact requires path discovery.
+5. No requested split, multi-lens review, broad synthesis, or sequential plan
+   is present.
+6. No mode-specific flag conflict is present.
+7. The request does not mention external web research, does not require
+   `scope: web`, and does not need secrets or provider auth material.
+
+When all conditions hold, take the fast-path action:
+
+1. Run the mandatory CLI preflight (`scripts/bakeoff-ensure-cli --check`).
+2. Parse flags and mode.
+3. Build the work-order draft from the supplied user text plus the
+   canonical build skeleton (see [Canonical Skeletons](#canonical-skeletons)).
+   Substitute only `<placeholder>` values. Do **not** invent fields, do
+   **not** rename `backend`/`scope`/`build.verify`/etc., do **not**
+   restate `build.patch_max_bytes` — let Go validation apply the
+   default.
+4. **Do not perform repo exploration** unless the supplied target or
+   verifier cannot be rendered into the work order without it. Available
+   backends are embedded in [Available Backends](#available-backends);
+   do not probe the CLI to discover them. If one fact is genuinely
+   missing, perform exactly one batched read/search pass that answers
+   all drafting questions at once. Sequential probes are a fast-path
+   violation.
+5. **Internally validate the in-memory JSON via `bakeoff validate`**
+   (see [Pre-Preview Internal Validate](#pre-preview-internal-validate)).
+   If validation fails, repair using the canonical skeleton and
+   re-validate until it passes.
+6. Show the compact preview with default-aware lines. Non-default values
+   must appear inline (do not hide them behind a "default" label).
+7. Wait for the same approval phrase as the current single-work-order flow:
+   `yes`, `y`, `approve`, or `run it`. The stricter `write and run` phrase
+   is for split or multi-lens flows only — do not adopt it here.
+8. **Do not write the work-order file or call any tool that mutates the
+   working tree until the user approves** (see [No Write Before
+   Approval](#no-write-before-approval)). This applies even after the
+   internal validate has passed — the on-disk write waits for the
+   user's affirmative reply.
+9. After approval, write the file, run on-disk `bakeoff validate` as an
+   audit-redundancy check (the result should match the pre-preview
+   validate), then run `bakeoff build`.
+
+Full JSON remains available with `show` at any point.
+
+**Fast-path fallback rules.** Do not fast-path; take the careful drafting
+flow (or ask one targeted question) when any of these are true:
+
+- missing acceptance criteria for build mode;
+- missing gate verifier for build mode;
+- unclear edit boundary or package/route/file scope;
+- uncertain type — "build a report/comparison/matrix" wording may mean
+  research or compare mode, not build;
+- metric benchmark request without explicit metric command, direction, or
+  protected measuring files;
+- verifier commands that appear to depend on generated fixtures, snapshots,
+  goldens, or harness files providers must not edit;
+- requested split or multi-lens review;
+- review requests without a bounded branch, PR, diff, file set, or
+  local-change scope;
+- analyze/RCA requests without symptom, log, reproduction, trace, file set,
+  incident, or command to inspect;
+- path-like missing input — if the user typed a path that does not exist,
+  surface a CLI path error; do not reinterpret as natural language;
+- unknown flags or mode-specific flag conflicts;
+- non-`HEAD` base ambiguity;
+- build providers with `scope: web`;
+- a request that would require secrets or provider auth material in the
+  work order.
+
+Review, research, analyze, and compare requests continue to use the careful
+flow regardless of how complete the request looks. Lifting the build-only
+limit on the fast path requires a follow-up plan after build dogfood proves
+the predicate safe.
 
 - implementation candidates, competing patches, "build this", "fix this and
   compare", or "pick a winning patch" -> `type: "build"`;
@@ -521,7 +850,9 @@ replies ambiguously, revise or clarify and show the updated preview before
 writing.
 
 After approval, write only `./<id>.work-order.json`, applying the collision
-policy from the shared skill. Never overwrite an existing work-order file
+policy from the shared skill: if the filename exists, append the smallest
+numeric suffix (`./<id>-2.work-order.json`, `./<id>-3.work-order.json`, ...)
+and do not use date suffixes. Never overwrite an existing work-order file
 unless the user explicitly asks.
 
 Run:

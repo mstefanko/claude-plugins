@@ -60,3 +60,21 @@ When spawning subagents (Agent/Task tool), the routing block is automatically in
 | `ctx stats` | Call the `ctx_stats` MCP tool and display the full output verbatim |
 | `ctx doctor` | Call the `ctx_doctor` MCP tool, run the returned shell command, display as checklist |
 | `ctx upgrade` | Call the `ctx_upgrade` MCP tool, run the returned shell command, display as checklist |
+
+## Bakeoff drafting (`/bakeoff:run`) invariants
+
+The full contract lives in `commands/run.md` and `skills/bakeoff/SKILL.md`.
+Two invariants are load-bearing enough to repeat here:
+
+- **One batched context pass.** If `/bakeoff:run` drafting needs local
+  context (file paths, verifier conventions, schema, available
+  backends), use ONE `ctx_batch_execute` call covering all questions.
+  Sequential `Bash` / `Read` / `Grep` probes during drafting are a
+  contract violation. Available backends (`claude`, `codex`) and the
+  canonical work-order skeletons are embedded in the skill — do **not**
+  probe the CLI (`bakeoff providers list`, `bakeoff --help`,
+  `bakeoff init`, `bakeoff doctor`) to discover them.
+- **No `Write` before approval.** Drafting must show the compact
+  preview, wait for affirmative reply (`yes` / `approve` / `run it` for
+  single, `write and run` for split/multi-lens), and only then issue
+  the file-mutating tool call.
