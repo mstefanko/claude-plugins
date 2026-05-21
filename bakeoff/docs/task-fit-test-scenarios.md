@@ -497,11 +497,12 @@ paths, and stay within the normal `/bakeoff:run` preview and approval flow.
     missing or corrupt.
   - Simulated completed-run state: run id `cont-missing-decision`, artifacts at
     `runs/cont-missing-decision/report.md`; `decision.json` cannot be parsed.
-  - Expected recommendation text: no continuation line, or `Recommended next
-    step for cont-missing-decision: inspect or verify the run artifacts. I
-    could not trust the decision artifact.`
-  - Forbidden recommendation text: any recommendation inferred from report
-    prose alone.
+  - Expected recommendation text: no continuation recommendation line appears.
+    The normal run summary may separately suggest inspecting or verifying
+    artifacts because the decision artifact could not be trusted.
+  - Forbidden recommendation text: `Recommended next step for
+    cont-missing-decision`, or any recommendation inferred from report prose
+    alone.
   - Approval behavior when drafted: no follow-up work order is drafted from
     these artifacts.
 
@@ -514,11 +515,14 @@ paths, and stay within the normal `/bakeoff:run` preview and approval flow.
     `/tmp/example-runs/cont-custom-out/decision.json`.
   - Expected recommendation text: `Recommended next step for cont-custom-out:
     draft an implementation plan from this run. I inspected report and decision
-    artifacts at /tmp/example-runs/cont-custom-out/...`
+    artifacts at /tmp/example-runs/cont-custom-out/report.md and
+    /tmp/example-runs/cont-custom-out/decision.json.`
   - Forbidden recommendation text: `runs/cont-custom-out/report.md`,
     `runs/cont-custom-out/decision.json`, or any fabricated default run path.
   - Approval behavior when drafted: the follow-up work order cites the exact
-    `/tmp/example-runs/cont-custom-out/...` artifact paths in `background`.
+    `/tmp/example-runs/cont-custom-out/report.md` and
+    `/tmp/example-runs/cont-custom-out/decision.json` artifact paths in
+    `background`.
 
 - [ ] Research exit `4` may recommend judge-only rerun.
   - Source artifact summary: research-shaped work order; `decision.json` is

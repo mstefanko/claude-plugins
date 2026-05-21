@@ -498,14 +498,13 @@ Route each part by its own `type`: `build` uses
 `bakeoff build`; `gather`, `compare`, and `analyze` use `bakeoff research`.
 Apply the same mode-specific flag routing to each part. Continue after exit
 `0`, `3`, or `4`; exit `4` is a decision-incomplete handoff with durable
-provider artifacts and should include the judge-only rerun recommendation only
-for research runs when applicable. Split runs continue after exit `4` because
-each part is
-independent and cheap to keep going; multi-lens runs stop on exit `4` because
-each lens is higher-cost and a decision-incomplete handoff is worth inspecting
-before spending more lens budget. Stop on exit `1`, `2`, `130`, interruption,
-or command failure, summarize completed parts and the failed part, and ask
-before running any remaining parts.
+provider artifacts. Include the judge-only rerun recommendation only for
+research runs when applicable. Split runs continue after exit `4` because each
+part is independent and cheap to keep going; multi-lens runs stop on exit `4`
+because each lens is higher-cost and a decision-incomplete handoff is worth
+inspecting before spending more lens budget. Stop on exit `1`, `2`, `130`,
+interruption, or command failure, summarize completed parts and the failed
+part, and ask before running any remaining parts.
 
 Summarize split runs independently. Do not produce an overall winner, merged
 patch, merged answer, or cross-run synthesis unless the user asks for that as a
