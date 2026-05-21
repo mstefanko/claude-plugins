@@ -252,6 +252,9 @@ func renderProviderStatusTable(decision map[string]any) []string {
 		if kind := jsonutil.StringValue(status["stderr_kind"]); kind != "" && kind != "none" {
 			notes = append(notes, "stderr kind: "+kind)
 		}
+		if kind := jsonutil.StringValue(status["failure_kind"]); kind != "" {
+			notes = append(notes, "failure kind: "+kind)
+		}
 		if path := jsonutil.StringValue(status["stderr_path"]); path != "" {
 			notes = append(notes, "stderr: `"+path+"`")
 		}

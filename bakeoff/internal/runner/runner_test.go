@@ -197,6 +197,45 @@ func TestRunProviderReportsStderrTruncationWithoutFailingSuccess(t *testing.T) {
 	}
 }
 
+func TestPromptSizeErrorBoundaries(t *testing.T) {
+	if got := promptSizeError(strings.Repeat("x", MaxPromptBytes-1)); got != "" {
+		t.Fatalf("below cap error = %q", got)
+	}
+	if got := promptSizeError(strings.Repeat("x", MaxPromptBytes)); got != "" {
+		t.Fatalf("at cap error = %q", got)
+	}
+	got := promptSizeError(strings.Repeat("x", MaxPromptBytes+1))
+	if !strings.Contains(got, "prompt too large: 1000001 bytes exceeds 1000000 byte limit") {
+		t.Fatalf("above cap error = %q", got)
+	}
+}
+
+func TestRunProviderRejectsOversizedPromptBeforeLaunch(t *testing.T) {
+	sentinel := filepath.Join(t.TempDir(), "invoked")
+	result := RunProvider(context.Background(), Options{
+		Argv:    helperArgv("write-sentinel", sentinel),
+		Env:     helperEnv(),
+		Prompt:  strings.Repeat("x", MaxPromptBytes+1),
+		Budgets: Budgets{WallClockSeconds: 3, MaxOutputBytes: 2000},
+	})
+	if result.Status != StatusExitError {
+		t.Fatalf("status = %s", result.Status)
+	}
+	if !strings.Contains(result.Stderr, "prompt too large: 1000001 bytes exceeds 1000000 byte limit") {
+		t.Fatalf("stderr = %q", result.Stderr)
+	}
+	if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
+		t.Fatalf("provider was launched; sentinel stat err = %v", err)
+	}
+}
+
+func TestRunCommandAllowsEmptyPrompt(t *testing.T) {
+	result := RunCommand(context.Background(), helperOptions("final", Budgets{WallClockSeconds: 3, MaxOutputBytes: 2000}))
+	if result.Status != StatusOK {
+		t.Fatalf("status = %s stderr=%q", result.Status, result.Stderr)
+	}
+}
+
 func TestRunProviderReportsClosedStdinDiagnostic(t *testing.T) {
 	result := RunProvider(context.Background(), Options{
 		Argv:    helperArgv("close-stdin"),
@@ -421,6 +460,11 @@ func TestHelperProcess(t *testing.T) {
 	case "close-stdin":
 		_ = os.Stdin.Close()
 		os.Exit(7)
+	case "write-sentinel":
+		if err := os.WriteFile(args[1], []byte("invoked\n"), 0o644); err != nil {
+			panic(err)
+		}
+		fmt.Print(`<final_json>{"ok": true}</final_json>`)
 	case "quiet":
 		fmt.Print(`<final_json>{"status":"complete"}</final_json>`)
 		time.Sleep(5 * time.Second)

@@ -17,6 +17,7 @@ import (
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/buildinfo"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/output"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/provider"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/runner"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
 )
 
@@ -187,6 +188,144 @@ exit 2
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRunResearchOversizedPromptRecordsFailureWithoutLaunchingProvider(t *testing.T) {
+	root := t.TempDir()
+	fakeBin := filepath.Join(root, "bin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := filepath.Join(root, "provider-invoked")
+	fakeScript := `#!/bin/sh
+case " $* " in
+  *" --version "*) printf '%s fake\n' "$(basename "$0")"; exit 0 ;;
+  *" --help "*) printf '%s\n' '--allowedTools --disallowedTools --sandbox workspace-write --disable --output-last-message'; exit 0 ;;
+esac
+printf 'invoked:%s\n' "$(basename "$0")" >> "$BAKEOFF_SENTINEL"
+cat >/dev/null
+cat <<'JSON'
+<final_json>{"status":"complete","claims":[],"conflicts":[],"unknowns":[],"recommended_next_checks":[]}</final_json>
+JSON
+`
+	writeExecutable(t, filepath.Join(fakeBin, "claude"), fakeScript)
+	writeExecutable(t, filepath.Join(fakeBin, "codex"), fakeScript)
+	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("BAKEOFF_SENTINEL", sentinel)
+
+	workOrderPath := filepath.Join(root, "work-order.json")
+	if err := workorder.WriteJSONAtomic(workOrderPath, map[string]any{
+		"schema_version": 1,
+		"id":             "oversized-prompt",
+		"type":           "gather",
+		"goal":           "Gather a fact.",
+		"background":     strings.Repeat("x", runner.MaxPromptBytes+1),
+		"providers": []map[string]any{
+			{"id": "claude", "backend": "claude", "model": "claude-test", "scope": "codebase"},
+			{"id": "codex", "backend": "codex", "model": "codex-test", "scope": "web"},
+		},
+		"scope_policy": map[string]any{"enforcement": "advisory"},
+		"judge":        map[string]any{"backend": "claude", "model": "judge-test"},
+		"budgets":      map[string]any{"wall_clock_seconds": 3, "max_output_bytes": 20000, "heartbeat_seconds": 0},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	outDir := filepath.Join(root, "runs")
+	factory := researchTestFactory{streams: output.NewStreams(&out, &errOut)}
+	err := RunResearch(context.Background(), factory, &ResearchOptions{WorkOrder: workOrderPath, Out: outDir, RunID: "oversized-prompt", Quiet: true, NoTriage: true})
+	if err == nil {
+		t.Fatalf("expected RunResearch to fail for oversized prompts\nstdout:\n%s\nstderr:\n%s", out.String(), errOut.String())
+	}
+	if _, statErr := os.Stat(sentinel); !os.IsNotExist(statErr) {
+		t.Fatalf("provider binary was launched; sentinel stat err = %v", statErr)
+	}
+
+	runDir := filepath.Join(outDir, "oversized-prompt")
+	status := readTestJSON(t, filepath.Join(runDir, "providers", "claude", "status.json"))
+	if status["failure_kind"] != "prompt_too_large" {
+		t.Fatalf("provider status failure_kind = %#v", status)
+	}
+	decisionDoc := readTestJSON(t, filepath.Join(runDir, "decision.json"))
+	providerStatuses := decisionDoc["provider_statuses"].(map[string]any)
+	claudeDecision := providerStatuses["claude"].(map[string]any)
+	if claudeDecision["failure_kind"] != "prompt_too_large" {
+		t.Fatalf("decision provider failure_kind = %#v", claudeDecision)
+	}
+	manifestDoc := readTestJSON(t, filepath.Join(runDir, "manifest.json"))
+	providers := manifestDoc["providers"].(map[string]any)
+	claudeManifest := providers["claude"].(map[string]any)
+	if claudeManifest["failure_kind"] != "prompt_too_large" {
+		t.Fatalf("manifest provider failure_kind = %#v", claudeManifest)
+	}
+	reportText := string(mustReadFile(t, filepath.Join(runDir, "report.md")))
+	if !strings.Contains(reportText, "failure kind: prompt_too_large") {
+		t.Fatalf("report missing failure kind:\n%s", reportText)
+	}
+}
+
+func TestRunResearchClassifiedJudgeFailureKeepsJudgeErrorKind(t *testing.T) {
+	root := t.TempDir()
+	fakeBin := filepath.Join(root, "bin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fakeScript := `#!/bin/sh
+case " $* " in
+  *" --version "*) printf '%s fake\n' "$(basename "$0")"; exit 0 ;;
+  *" --help "*) printf '%s\n' '--allowedTools --disallowedTools --sandbox workspace-write --disable --output-last-message'; exit 0 ;;
+esac
+prompt=$(cat)
+case "$prompt" in
+  *"deduplication and conflict-flagging judge"*)
+    printf '%s\n' 'rate_limit_error: retry later' >&2
+    exit 9
+    ;;
+esac
+cat <<'JSON'
+<final_json>{"status":"complete","claims":[{"id":"C-001","claim":"Provider claim.","evidence":["fake:1"],"confidence":"high"}],"conflicts":[],"unknowns":[],"recommended_next_checks":[]}</final_json>
+JSON
+`
+	writeExecutable(t, filepath.Join(fakeBin, "claude"), fakeScript)
+	writeExecutable(t, filepath.Join(fakeBin, "codex"), fakeScript)
+	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	workOrderPath := filepath.Join(root, "work-order.json")
+	if err := workorder.WriteJSONAtomic(workOrderPath, map[string]any{
+		"schema_version": 1,
+		"id":             "judge-rate-limit",
+		"type":           "gather",
+		"goal":           "Gather a fact.",
+		"background":     "Judge failure classification smoke.",
+		"providers": []map[string]any{
+			{"id": "claude", "backend": "claude", "model": "claude-test", "scope": "codebase"},
+			{"id": "codex", "backend": "codex", "model": "codex-test", "scope": "web"},
+		},
+		"scope_policy": map[string]any{"enforcement": "advisory"},
+		"judge":        map[string]any{"backend": "claude", "model": "judge-test"},
+		"budgets":      map[string]any{"wall_clock_seconds": 3, "max_output_bytes": 20000, "heartbeat_seconds": 0},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	outDir := filepath.Join(root, "runs")
+	factory := researchTestFactory{streams: output.NewStreams(&out, &errOut)}
+	err := RunResearch(context.Background(), factory, &ResearchOptions{WorkOrder: workOrderPath, Out: outDir, RunID: "judge-rate-limit", Quiet: true, NoTriage: true})
+	if err == nil {
+		t.Fatalf("expected RunResearch to fail for judge error\nstdout:\n%s\nstderr:\n%s", out.String(), errOut.String())
+	}
+
+	runDir := filepath.Join(outDir, "judge-rate-limit")
+	judgeStatus := readTestJSON(t, filepath.Join(runDir, "judge", "status.json"))
+	if judgeStatus["failure_kind"] != "rate_or_quota_limited" || judgeStatus["judge_error_kind"] != "rate_or_quota_limited" {
+		t.Fatalf("judge status missing classified kinds: %#v", judgeStatus)
+	}
+	decisionDoc := readTestJSON(t, filepath.Join(runDir, "decision.json"))
+	if decisionDoc["judge_error_kind"] != "rate_or_quota_limited" {
+		t.Fatalf("decision judge_error_kind = %#v", decisionDoc["judge_error_kind"])
 	}
 }
 

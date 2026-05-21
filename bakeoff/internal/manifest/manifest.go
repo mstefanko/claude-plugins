@@ -242,7 +242,7 @@ func providerSummaries(meta map[string]any, decision map[string]any) map[string]
 		if value, ok := statusInfo["final_json_source"]; ok {
 			entry["final_json_source"] = value
 		}
-		for _, key := range []string{"exit_code", "output_bytes", "stderr_truncated", "stdout_truncated", "stdout_observed_bytes", "stderr_observed_bytes", "scope_enforcement", "stderr_path"} {
+		for _, key := range []string{"exit_code", "output_bytes", "stderr_truncated", "stdout_truncated", "stdout_observed_bytes", "stderr_observed_bytes", "failure_kind", "scope_enforcement", "stderr_path"} {
 			if value, ok := statusInfo[key]; ok {
 				entry[key] = value
 			}

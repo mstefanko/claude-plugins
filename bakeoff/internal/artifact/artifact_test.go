@@ -19,6 +19,7 @@ func TestStatusWithoutPayloadOmitsLargeFields(t *testing.T) {
 		"final_json":        map[string]any{"claims": []any{}},
 		"stdout_bytes":      12,
 		"stderr_kind":       "transport_noise",
+		"failure_kind":      "api_transient",
 		"scope_enforcement": map[string]any{"policy": "best_effort"},
 	})
 
@@ -36,6 +37,9 @@ func TestStatusWithoutPayloadOmitsLargeFields(t *testing.T) {
 	}
 	if status["stderr_kind"] != "transport_noise" {
 		t.Fatalf("stderr_kind missing from status: %#v", status)
+	}
+	if status["failure_kind"] != "api_transient" {
+		t.Fatalf("failure_kind missing from status: %#v", status)
 	}
 }
 
@@ -83,6 +87,27 @@ func TestResultMapClassifiesStderrKind(t *testing.T) {
 	empty := ResultMap(runner.Result{Status: runner.StatusOK})
 	if empty["stderr_kind"] != "none" {
 		t.Fatalf("empty stderr kind = %#v", empty["stderr_kind"])
+	}
+}
+
+func TestResultMapClassifiesFailureKindOnlyForConfidentFailures(t *testing.T) {
+	failed := ResultMap(runner.Result{Status: runner.StatusExitError, Stderr: "rate_limit_error: retry later"})
+	if failed["failure_kind"] != "rate_or_quota_limited" {
+		t.Fatalf("failed failure_kind = %#v", failed["failure_kind"])
+	}
+	guard := ResultMap(runner.Result{Status: runner.StatusExitError, Stderr: "prompt too large: 1000001 bytes exceeds 1000000 byte limit"})
+	if guard["failure_kind"] != "prompt_too_large" {
+		t.Fatalf("prompt guard failure_kind = %#v", guard["failure_kind"])
+	}
+
+	ambiguous := ResultMap(runner.Result{Status: runner.StatusExitError, Stderr: "fatal"})
+	if _, ok := ambiguous["failure_kind"]; ok {
+		t.Fatalf("ambiguous failure_kind should be absent: %#v", ambiguous)
+	}
+
+	success := ResultMap(runner.Result{Status: runner.StatusOK, Stderr: "rate_limit_error: ignored because provider succeeded"})
+	if _, ok := success["failure_kind"]; ok {
+		t.Fatalf("success failure_kind should be absent: %#v", success)
 	}
 }
 

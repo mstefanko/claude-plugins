@@ -616,9 +616,9 @@ func runSingleJudge(ctx context.Context, f commands.Factory, wo *workorder.WorkO
 		FinalMessagePath: lastMessage,
 	}))
 	if !artifact.ProviderSucceeded(result) {
-		status := jsonutil.StringValue(result["status"])
-		exitCode, _ := result["exit_code"].(*int)
-		result["judge_error_kind"] = runner.ClassifyJudgeError(status, exitCode, jsonutil.StringValue(result["stdout"]), jsonutil.StringValue(result["stderr"]))
+		if kind := jsonutil.StringValue(result["failure_kind"]); kind != "" {
+			result["judge_error_kind"] = kind
+		}
 	}
 	if err := artifact.WriteJudgeArtifacts(judgeDir, label, result); err != nil {
 		return nil, err

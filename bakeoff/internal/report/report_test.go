@@ -167,6 +167,26 @@ func TestRenderProviderStatusShowsStderrKind(t *testing.T) {
 	}
 }
 
+func TestRenderProviderStatusShowsFailureKind(t *testing.T) {
+	text := Render(
+		&workorder.WorkOrder{ID: "sample", Type: "gather"},
+		map[string]any{
+			"mode":          "gather",
+			"decision_kind": "both_failed",
+			"judge_ran":     false,
+			"provider_statuses": map[string]any{
+				"claude": map[string]any{"status": "exit_error", "failure_kind": "auth_or_permission", "stderr_path": "providers/claude/stderr.txt"},
+			},
+		},
+		map[string]map[string]any{},
+		map[string]map[string]any{},
+		RenderOptions{},
+	)
+	if !strings.Contains(text, "failure kind: auth_or_permission") {
+		t.Fatalf("report missing failure kind:\n%s", text)
+	}
+}
+
 func TestRenderFailedJudgeShowsStatusAndProviderClaims(t *testing.T) {
 	text := Render(
 		&workorder.WorkOrder{

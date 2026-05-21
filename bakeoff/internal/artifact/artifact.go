@@ -50,6 +50,11 @@ func ResultMap(result runner.Result) map[string]any {
 	if result.RepairArtifacts != nil {
 		out["repair_artifacts"] = result.RepairArtifacts
 	}
+	if !ProviderSucceeded(out) {
+		if kind := runner.ClassifyFailure(result.Status, result.ExitCode, result.Stdout, result.Stderr); kind != "" {
+			out["failure_kind"] = kind
+		}
+	}
 	out["stderr_kind"] = StderrKind(out)
 	return out
 }
@@ -69,6 +74,7 @@ func StatusWithoutPayload(result map[string]any) map[string]any {
 		"stderr_truncated",
 		"final_json_source",
 		"stderr_kind",
+		"failure_kind",
 		"judge_error_kind",
 	} {
 		if value, ok := result[key]; ok {

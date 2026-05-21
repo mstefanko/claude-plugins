@@ -31,6 +31,7 @@ const (
 	DefaultMaxOutputBytes      = 60000
 	DefaultHeartbeatSeconds    = 60
 	DefaultKillGrace           = time.Second
+	MaxPromptBytes             = 1000000
 	StatusOK                   = runstatus.OK
 	StatusOKAfterFormatRetry   = runstatus.OKAfterFormatRetry
 	StatusTimeout              = runstatus.Timeout
@@ -214,6 +215,9 @@ func runProcess(ctx context.Context, opts Options, requireFinalJSON bool) Result
 		_ = os.MkdirAll(filepathDir(opts.FinalMessagePath), 0o700)
 		_ = os.Remove(opts.FinalMessagePath)
 	}
+	if message := promptSizeError(opts.Prompt); message != "" {
+		return state.status(StatusExitError, nil, "", message, nil, "")
+	}
 
 	cmd := exec.CommandContext(ctx, opts.Argv[0], opts.Argv[1:]...)
 	if opts.CWD != "" {
@@ -351,6 +355,14 @@ func runProcess(ctx context.Context, opts Options, requireFinalJSON bool) Result
 		return state.statusWithSource(StatusSchemaError, exitCode, stdoutText, stderrText, nil, finalJSONSource)
 	}
 	return state.statusWithSource(StatusOK, exitCode, stdoutText, stderrText, finalJSON, finalJSONSource)
+}
+
+func promptSizeError(prompt string) string {
+	size := len([]byte(prompt))
+	if size <= MaxPromptBytes {
+		return ""
+	}
+	return fmt.Sprintf("prompt too large: %d bytes exceeds %d byte limit", size, MaxPromptBytes)
 }
 
 func RunProviderWithFormatRetry(ctx context.Context, opts Options) Result {
