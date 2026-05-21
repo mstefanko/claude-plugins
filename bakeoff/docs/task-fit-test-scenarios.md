@@ -30,7 +30,7 @@ behavior.
 - [ ] Missing path-like input is a path error only.
   - Prompt: `/bakeoff:run docs/does-not-exist.work-order.json`
   - Expect: plugin reports the missing path-like input and does not reinterpret
-    the prompt as natural language or answer inline.
+    the prompt as natural language or answer the task directly.
 
 - [ ] Empty request asks for input.
   - Prompt: `/bakeoff:run`
@@ -132,7 +132,7 @@ behavior.
 
 - [ ] Re-narrowing after a task-fit warning re-runs the check.
   - Prompt: `/bakeoff:run improve this`, then after the weak-fit warning reply
-    `narrow it to: review the diff against main for security issues`.
+    `review the diff against main for security issues`.
   - Expect: plugin re-runs the task-fit check on the narrowed prompt, finds it
     is no longer a weak fit, and proceeds to normal review drafting without
     requiring `draft anyway`.

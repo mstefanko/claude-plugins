@@ -58,9 +58,9 @@ stop and ask for confirmation instead of silently drafting. This is advisory,
 not a hard block: the phrase `draft anyway` in the user's reply satisfies the
 warning for that turn. `draft anyway` is the only accepted opt-out phrase. Do
 not add a flag, persistent preference, or "never warn me again" state.
-The warning does not permit an inline answer. After a task-fit warning, do not
+The warning does not permit a direct answer. After a task-fit warning, do not
 answer the task directly unless the user explicitly asks to abandon Bakeoff and
-answer inline.
+wants a normal direct response.
 
 Use this wording shape:
 
@@ -102,14 +102,15 @@ Better Bakeoff shapes:
 2. <label> - fixes <missing lens or decision>. Goal: <goal>. Output: <evidence/output shape>.
 ```
 
-Use the deterministic-evidence repair menu only when the likely answer is
-stable fact listing, counting, or diffstat-style evidence from one obvious
-evidence path and the user has not provided a decision lens. If the prompt
-includes criteria where independent readers may reasonably disagree, such as
-behavior impact, compatibility risk, maintainability, or upstreamability, draft
-normally. If a borderline compare lacks a decision lens but also lacks one
-obvious deterministic evidence path, use the existing generic task-fit warning
-rather than the repair menu.
+Do not warn solely because a task is small or straightforward. Use the
+deterministic-evidence repair menu only when the likely answer is stable fact
+listing, counting, or diffstat-style evidence from one obvious evidence path
+and the user has not provided a decision lens. If the prompt includes criteria
+where independent readers may reasonably disagree, such as behavior impact,
+compatibility risk, maintainability, or upstreamability, draft normally. If a
+borderline compare lacks a decision lens but also lacks one obvious
+deterministic evidence path, use the existing generic task-fit warning rather
+than the repair menu.
 
 Show the repair menu at most once for the current weak-fit turn. Show one or
 two rewrites. Never show a third rewrite. Each rewrite must state what it
@@ -127,8 +128,8 @@ selected rewrite as the revised request; re-run task fit once; and do not show
 another repair menu immediately. Mechanical repair guidance does not waive
 required build fields.
 
-Do not warn solely because a request is small or straightforward. Warn only
-when Bakeoff is likely to add cost, ambiguity, or risk without better evidence.
+For other weak-fit cases, warn only when Bakeoff is likely to add cost,
+ambiguity, or risk without better evidence.
 For build weak-fit prompts, name concrete verifier examples (a project test
 command, regression test, or benchmark) in the response so the user knows what
 would satisfy the requirement. Combine the task-fit warning and any

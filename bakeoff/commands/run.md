@@ -455,7 +455,7 @@ fields, separate the choices instead of bundling them into one unclear
 The task-fit warning is not permission to answer directly. Stop at the warning
 until the user narrows or confirms; after confirmation, continue through the
 Bakeoff draft, validate, and run flow. Do not answer directly unless the user
-explicitly asks to abandon Bakeoff and answer inline.
+explicitly asks to abandon Bakeoff and wants a normal direct response.
 
 After task fit passes or is confirmed, check for explicit multi-lens review
 requests before the generic clean-split check. Do not propose a split or
