@@ -70,6 +70,12 @@ Codex install: this checkout ships `.codex-plugin/plugin.json`; verify the curre
 
 Natural-language requests draft a work order, show a compact review preview, and wait for explicit approval before writing or running. Short drafts include the full JSON inline; longer drafts show the planned work-order file and let you reply `show` to print the JSON before approving. For large requests, the plugin may suggest 2-3 separate work orders when the split is clean; each part is still a normal Bakeoff run. Explicit multi-lens review works the same way: it drafts separate normal review runs, then writes a short summary file after they finish. Sample work orders live in `examples/` (`gather`, `compare`, `analyze`, `review`, `build`).
 
+After a run finishes, `/bakeoff:run` may recommend one next normal work order
+when the artifacts make it obvious, such as drafting an implementation plan
+from a research report or inspecting a selected build patch. It can also say
+that no follow-up Bakeoff run is recommended. Follow-up work still uses the
+same preview, validation, and approval flow; there is no automatic chaining.
+
 Generated work orders use Claude model aliases (`sonnet`, `opus`) so defaults stay current; use full model ids in the work order to pin exact versions.
 
 ## Research
@@ -236,7 +242,7 @@ runs/<run-id>/
 | `4` | Decision incomplete: judge failed or did not converge; provider artifacts are durable. |
 | `130` | Interrupted. |
 
-Exit `3` is a completed handoff with no canonical winner — not a launcher failure. Exit `4` means retrying the judge with `bakeoff rerun <run-id> --judge-only` is usually the right next step when both providers succeeded. See [docs/artifacts-and-ledger.md](docs/artifacts-and-ledger.md).
+Exit `3` is a completed handoff with no canonical winner — not a launcher failure. For research runs, exit `4` means retrying the judge with `bakeoff rerun <run-id> --judge-only` is usually the right next step when both providers succeeded. Build runs do not support judge-only rerun today; inspect diagnostics or rerun the full build when warranted. See [docs/artifacts-and-ledger.md](docs/artifacts-and-ledger.md).
 
 ## Commands
 

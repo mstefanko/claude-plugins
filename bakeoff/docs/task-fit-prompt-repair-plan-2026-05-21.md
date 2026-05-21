@@ -8,7 +8,7 @@ Status: tightened implementation plan with external-pattern review
 
 Tighten the task-fit improvement to one narrow behavior: when a request is
 mostly deterministic evidence extraction plus thin interpretation, warn that
-Bakeoff is probably low-value and show one or two labeled higher-value Bakeoff
+Bakeoff is probably low-value and show up to two labeled higher-value Bakeoff
 rewrites.
 
 Keep the existing generic task-fit warning for other weak-fit cases. The repair
@@ -45,19 +45,10 @@ validated plugin pattern.
 
 ## External Pattern Check
 
-Do not rely on the failed `swarm-do` plugin as validation for this plan. A
-follow-up search of external or non-`swarm-do` plugin material found enough
-corroboration for the core principles:
-
-- advisory warnings are preferable to blocking when fit is questionable;
-- repair guidance should preserve user intent and avoid inventing requirements;
-- if a grounded repair cannot be derived, ask a concrete clarification instead;
-- deterministic lookups, exact searches, and small reads are weak fits for agent
-  orchestration unless synthesis or decision value is added;
-- suggested alternatives should be meaningfully distinct, with labels and
-  tradeoffs, not cosmetic variants.
-
-The exact `draft anyway` phrase, the one-or-two rewrite cap, selected-rewrite
+Do not rely on the failed `swarm-do` plugin as validation. External plugin
+patterns support advisory warnings, grounded repair-or-clarify behavior,
+avoiding agent orchestration for deterministic lookups, and distinct labeled
+alternatives; the exact `draft anyway` phrase, two-rewrite cap, selected-rewrite
 follow-up handling, and mirrored contract wording remain Bakeoff-specific
 contract choices.
 
@@ -97,6 +88,22 @@ If the prompt includes criteria where independent readers may reasonably
 disagree, such as behavior impact, compatibility risk, maintainability, or
 upstreamability, draft normally.
 
+Examples that should warn:
+
+- compare two forks and report how many commits/files changed;
+- count changed files, changed lines, or commits between two refs;
+- summarize a diffstat or "what changed" from one obvious repo comparison.
+
+Examples that should draft normally:
+
+- compare two forks for behavior impact, regression risk, or upstreamability;
+- decide which fork changes are safe to upstream and how to split them;
+- assess maintenance cost or compatibility risk from cited change groups.
+
+If a borderline compare lacks a decision lens but also lacks one obvious
+deterministic evidence path, use the existing generic task-fit warning rather
+than this repair menu.
+
 ## Wording Shape
 
 For deterministic-evidence weak-fit prompts only, use this compact alternate
@@ -115,8 +122,7 @@ Better Bakeoff shapes:
 
 Rules:
 
-- Show one or two rewrites by default. A third rewrite is allowed only when it is
-  clearly distinct and still keeps the warning compact.
+- Show one or two rewrites. Never show a third rewrite.
 - Each rewrite must state what it fixes, the revised goal, and the expected
   evidence or output shape.
 - Rewrites may reshape the task for Bakeoff, but they must preserve the user's
@@ -126,11 +132,13 @@ Rules:
   Ask one targeted narrowing question instead.
 - Do not perform the direct one-pass answer from inside `/bakeoff:run` unless
   the user explicitly abandons Bakeoff in ordinary language.
-- Do not emit a second repair menu for the immediate follow-up. If the user picks
-  a rewrite by number/label or supplies a revised prompt, re-run task fit on that
-  revised prompt and proceed normally if it passes. If it still fails task fit or
-  required fields, ask one targeted clarification rather than showing another
-  repair menu.
+- After showing this menu, listen for an immediate reply of `1`, `2`, or a clear
+  rewrite label. Treat that selection as the revised natural-language request and
+  re-run task fit once.
+- Do not emit a second repair menu for the immediate follow-up. If the selected
+  rewrite or revised prompt still fails task fit or required fields, ask one
+  targeted clarification or use the existing generic warning path rather than
+  showing another repair menu.
 - Number and label replies are local selections from the displayed menu, not new
   reserved phrases.
 
@@ -166,20 +174,31 @@ reply.
 
 In `## Natural Language Drafting`:
 
-- add the deterministic-evidence weak-fit bullet to the weak-case list;
-- keep the current generic weak-fit wording for existing weak-fit categories;
-- add the compact alternate wording shape above for deterministic-evidence
-  weak-fit prompts only;
-- add the wording rules above, including the one-turn repair-menu cap;
+- add the deterministic-evidence weak-fit bullet to the existing weak-fit list,
+  immediately after the `highly sequential planning` bullet and before
+  `Recommended wording:`;
+- keep the current `Recommended wording:` block for existing weak-fit categories;
+- add the compact alternate wording shape and selected-rewrite handling
+  immediately after the generic `Recommended wording:` block and before the
+  paragraph beginning `The warning is advisory.`;
+- include the one-turn repair-menu cap and two-rewrite hard cap;
 - keep the existing `draft anyway` semantics and inline-answer prohibition;
 - state that mechanical repair guidance does not waive required build fields.
 
 ### `skills/bakeoff/SKILL.md`
 
-Mirror the same trigger, compact alternate wording shape, and rules under
-`## Task Fit And Clean Splits`. The skill file should not summarize or reinterpret
-the command file differently, and it should preserve the generic warning for
-other weak-fit cases.
+Under `## Task Fit And Clean Splits`:
+
+- add the deterministic-evidence weak-fit bullet to the existing weak-fit list,
+  immediately after the `highly sequential planning` bullet and before `Do not
+  warn solely because a request is small or straightforward.`;
+- keep the current `Use this wording shape:` block for existing weak-fit
+  categories;
+- add the compact alternate wording shape and selected-rewrite handling
+  immediately after the weak-fit list and before `Do not warn solely because a
+  request is small or straightforward.`;
+- preserve the generic warning for other weak-fit cases and mirror the command
+  file's mechanical-repair rules.
 
 ### `docs/task-fit-test-scenarios.md`
 
@@ -217,32 +236,21 @@ that behavior is already covered by the existing checklist.
 
 ## Acceptance Criteria
 
-- The implemented change touches only prompt/docs surfaces: `commands/run.md`,
-  `skills/bakeoff/SKILL.md`, and `docs/task-fit-test-scenarios.md`.
-- The deterministic-evidence alternate warning wording is added consistently in
-  both contract files; the generic weak-fit warning remains in place for other
-  weak-fit categories.
-- `draft anyway` remains the only reserved task-fit opt-out phrase.
-- The implementation does not introduce `answer inline` or any other new magic
-  reply.
-- The deterministic fork-diff prompt above warns instead of drafting.
-- The warning contains no more than two default rewrites, unless a third is
-  clearly distinct and compact.
-- Each rewrite is labeled and includes what it fixes, a revised goal, and an
-  output or evidence shape.
-- Each rewrite preserves the user's stated intent and does not invent missing
-  requirements, repositories, criteria, or success measures.
-- When the prompt is too vague to ground a rewrite, the plugin asks one targeted
-  narrowing question instead of inventing options.
-- A selected rewrite is treated as a narrowed prompt and does not trigger a
-  second repair menu in the immediate next turn.
-- An interpretive compare with explicit criteria drafts normally and does not
-  trigger the deterministic-evidence repair menu.
-- Multi-lens review continues to run task fit before lens selection and inherits
-  the updated warning when task fit fails.
-- Existing task-fit, required-field, split, and multi-lens checklist rows remain
-  present; the new scenarios are additive.
-- No Go CLI tests are required for this prompt-only change.
+- Only prompt/docs surfaces change: `commands/run.md`,
+  `skills/bakeoff/SKILL.md`, and `docs/task-fit-test-scenarios.md`; no Go CLI
+  tests are required.
+- Both contract files add the same deterministic-evidence weak-fit trigger,
+  alternate warning shape, selected-rewrite handling, and two-rewrite hard cap
+  while preserving the generic warning for other weak-fit cases; a mechanical
+  drift check confirms those task-fit blocks still match on these points.
+- `draft anyway` remains the only reserved task-fit opt-out phrase; no `answer
+  inline`, `narrow it to:`, or other magic reply is introduced.
+- The deterministic fork-diff prompt warns instead of drafting, with grounded
+  rewrites that preserve user intent and do not invent requirements.
+- Selecting `1`, `2`, or a clear label treats that rewrite as the narrowed prompt
+  and does not show a second repair menu on the immediate follow-up.
+- The interpretive compare scenario drafts normally, and existing task-fit,
+  required-field, split, and multi-lens checklist rows remain present.
 
 ## Non-Goals
 
@@ -256,7 +264,7 @@ that behavior is already covered by the existing checklist.
 ## Risks
 
 - **Warning fatigue:** long repair menus can make users reflexively type
-  `draft anyway`. Mitigation: cap default rewrites at two and drop the repeated
+  `draft anyway`. Mitigation: hard-cap rewrites at two and drop the repeated
   rubric paragraph.
 - **Over-warning legitimate compare tasks:** "what changed" can be mechanical,
   but compare prompts with behavior, risk, maintainability, or upstreamability
@@ -275,5 +283,8 @@ that behavior is already covered by the existing checklist.
 1. Update `commands/run.md`.
 2. Mirror the same wording in `skills/bakeoff/SKILL.md`.
 3. Add the three manual scenarios to `docs/task-fit-test-scenarios.md`.
-4. Dogfood the fork-diff prompt and the interpretive-compare prompt, then trim
+4. Run a mechanical drift check comparing the task-fit blocks in `commands/run.md`
+   and `skills/bakeoff/SKILL.md` for the deterministic-evidence trigger,
+   alternate wording, selected-rewrite handling, and two-rewrite hard cap.
+5. Dogfood the fork-diff prompt and the interpretive-compare prompt, then trim
    the wording if the repair warning exceeds the compact shape above.

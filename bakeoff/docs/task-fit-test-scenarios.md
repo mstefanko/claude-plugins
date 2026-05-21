@@ -264,8 +264,8 @@ behavior.
 - [ ] Split execution continues after exit `4`.
   - Setup: part 1 completes with exit `4`.
   - Expect: plugin treats exit `4` as a decision-incomplete handoff with durable
-    provider artifacts, recommends `bakeoff rerun <run-id> --judge-only` when
-    applicable, and proceeds to part 2.
+    provider artifacts, recommends `bakeoff rerun <run-id> --judge-only` only
+    for research runs when applicable, and proceeds to part 2.
 
 - [ ] Split execution stops on real failures or interruption.
   - Setup: part 1 exits `1`, `2`, or `130`.
@@ -339,6 +339,215 @@ behavior.
     completed reports and triage files, constrains it to dedupe existing
     findings into one prioritized fix plan, and asks for approval before
     writing or running.
+
+## Continuation Recommendation Scenarios
+
+Date added: 2026-05-21
+
+Status: manual regression checklist, derived from the
+[artifact-aware continuation plan](artifact-aware-continuation-implementation-plan-2026-05-21.md).
+
+These scenarios cover the optional post-run recommendation in
+`commands/run.md` and `skills/bakeoff/SKILL.md`. They are fixture-style
+artifact summaries, not committed run directories. Every recommendation must
+name the source run id, name the inspected artifact class (`report`,
+`decision`, `triage`, `diagnostics`, or `patch`), preserve exact artifact
+paths, and stay within the normal `/bakeoff:run` preview and approval flow.
+
+- [ ] `cont-research-plan` recommends planning, not build.
+  - Source artifact summary: `work-order.json.type=gather`;
+    `decision.json` is parseable; provider statuses are `ok`; `report.md`
+    converges on one product/code direction but names no verifier, edit scope,
+    or acceptance criteria.
+  - Simulated completed-run state: run id `cont-research-plan`, artifacts at
+    `runs/cont-research-plan/report.md` and
+    `runs/cont-research-plan/decision.json`.
+  - Expected recommendation text: `Recommended next step for
+    cont-research-plan: draft an implementation plan from this run. I inspected
+    report and decision artifacts; the direction is clear, but build is
+    premature without an implementation boundary and verifier.`
+  - Forbidden recommendation text: `continue`, `build next`, or any build
+    work-order preview.
+  - Approval behavior when drafted: the planning follow-up is a normal
+    `type: "analyze"` work order citing the report and decision paths in
+    `background`; it must be previewed, validated, and approved before running.
+
+- [ ] `cont-research-compare` recommends compare with named options.
+  - Source artifact summary: `work-order.json.type=gather`;
+    `decision.json` is parseable; provider statuses are `ok`; `report.md`
+    leaves two named options unresolved.
+  - Simulated completed-run state: run id `cont-research-compare`, artifacts
+    at `runs/cont-research-compare/report.md` and
+    `runs/cont-research-compare/decision.json`.
+  - Expected recommendation text: `Recommended next step for
+    cont-research-compare: compare <option A> vs <option B>. I inspected
+    report and decision artifacts; the research found two viable approaches and
+    did not resolve the tradeoff.`
+  - Forbidden recommendation text: `build`, `Want to continue?`, or a generic
+    continuation prompt without option names.
+  - Approval behavior when drafted: the follow-up is a normal `type: "compare"`
+    work order that previews named options and criteria before approval.
+
+- [ ] `cont-research-stop` stops or omits continuation.
+  - Source artifact summary: `work-order.json.type=gather`;
+    `decision.json` is parseable; provider statuses are `ok`; `report.md`
+    answers the user's question completely and no action is requested.
+  - Simulated completed-run state: run id `cont-research-stop`, artifacts at
+    `runs/cont-research-stop/report.md` and
+    `runs/cont-research-stop/decision.json`.
+  - Expected recommendation text: `Recommended next step for
+    cont-research-stop: no follow-up Bakeoff run recommended. I inspected
+    report and decision artifacts; the answer is complete and no obvious next
+    work order follows.`
+  - Forbidden recommendation text: `continue`, `draft another run`, or any
+    blind funnel into more Bakeoff work.
+  - Approval behavior when drafted: none; no work order is drafted.
+
+- [ ] `cont-compare-plan` recommends a winner-centered plan.
+  - Source artifact summary: `work-order.json.type=compare`;
+    `decision.json.canonical_winner` is non-null; provider statuses are `ok`;
+    integration details, edit boundary, or verifier remain open.
+  - Simulated completed-run state: run id `cont-compare-plan`, artifacts at
+    `runs/cont-compare-plan/report.md` and
+    `runs/cont-compare-plan/decision.json`.
+  - Expected recommendation text: `Recommended next step for
+    cont-compare-plan: draft an implementation plan around <winner>. I
+    inspected report and decision artifacts; the comparison picked a direction,
+    but implementation details still need design.`
+  - Forbidden recommendation text: `draft a build work order` when verifier or
+    edit scope is absent.
+  - Approval behavior when drafted: the follow-up is a normal
+    `type: "analyze"` planning work order with the winner and prior artifact
+    paths in `background`.
+
+- [ ] `cont-review-build-ready` may draft build for approval.
+  - Source artifact summary: `work-order.json.type=gather` with
+    `facet.id=code-review`; triage artifacts are current; at least one item in
+    `triage/final.json` has `classification: "real_issue"`,
+    `recommended_action: "fix_now"`, concrete supporting evidence, and narrow
+    scope.
+  - Simulated completed-run state: run id `cont-review-build-ready`, artifacts
+    at `runs/cont-review-build-ready/report.md`,
+    `runs/cont-review-build-ready/decision.json`, and
+    `runs/cont-review-build-ready/triage/final.json`; the follow-up request
+    supplies or repo exploration clearly discovers acceptance criteria and a
+    verifier command.
+  - Expected recommendation text: `Recommended next step for
+    cont-review-build-ready: draft a build work order for approval for the
+    triaged finding. I inspected decision and triage artifacts; the issue is
+    current, actionable, and narrow, and the follow-up has a verifier.`
+  - Forbidden recommendation text: any `bakeoff build` command or file write
+    before preview approval.
+  - Approval behavior when drafted: the build follow-up must pass all normal
+    missing-field checks and require explicit single-work-order approval before
+    writing or running.
+
+- [ ] `cont-review-raw` recommends inspect first.
+  - Source artifact summary: `work-order.json.type=gather` with
+    `facet.id=code-review`; triage is missing, disabled, failed, or stale.
+  - Simulated completed-run state: run id `cont-review-raw`, artifacts at
+    `runs/cont-review-raw/report.md` and
+    `runs/cont-review-raw/decision.json`; no current
+    `triage/final.json` is available.
+  - Expected recommendation text: `Recommended next step for cont-review-raw:
+    inspect this review before drafting build work. I inspected decision and
+    triage artifacts; current actionable triage is not available.`
+  - Forbidden recommendation text: `draft a build work order` from raw
+    findings.
+  - Approval behavior when drafted: no build work order is drafted unless the
+    user explicitly overrides and supplies the normal build-required fields.
+
+- [ ] `cont-build-winner` recommends selected patch inspection or review.
+  - Source artifact summary: `work-order.json.type=build`;
+    `decision.json.canonical_winner` is non-null; selected provider has a
+    `build/diff.patch` artifact.
+  - Simulated completed-run state: run id `cont-build-winner`, artifacts at
+    `runs/cont-build-winner/decision.json`,
+    `runs/cont-build-winner/diagnostics.json`, and
+    `runs/cont-build-winner/providers/claude/build/diff.patch`.
+  - Expected recommendation text: `Recommended next step for
+    cont-build-winner: inspect or review the selected patch. I inspected
+    decision, diagnostics, and patch artifacts; this build already selected a
+    winner, so Bakeoff should not apply or rebuild it automatically.`
+  - Forbidden recommendation text: `apply`, `merge`, `commit`, `open a PR`, or
+    `run another build`.
+  - Approval behavior when drafted: a review follow-up is a normal
+    `type: "gather"` work order with `facet.id: "code-review"` and a bounded
+    patch/diff scope; applying the patch is not part of continuation.
+
+- [ ] `cont-build-unresolved` does not select an arbitrary patch.
+  - Source artifact summary: `work-order.json.type=build`;
+    `decision.json.canonical_winner` is null; exit code is `3`; provider patch
+    artifacts may exist.
+  - Simulated completed-run state: run id `cont-build-unresolved`, artifacts at
+    `runs/cont-build-unresolved/decision.json` and
+    `runs/cont-build-unresolved/diagnostics.json`.
+  - Expected recommendation text: `Recommended next step for
+    cont-build-unresolved: inspect diagnostics, or run a full build rerun if
+    the verifier/provider evidence warrants it. I inspected decision and
+    diagnostics artifacts; there is no selected patch.`
+  - Forbidden recommendation text: `bakeoff rerun cont-build-unresolved
+    --judge-only`, `selected patch`, or treating any provider patch as the
+    winner.
+  - Approval behavior when drafted: no selected-patch review is drafted unless
+    a canonical winner exists.
+
+- [ ] `cont-missing-decision` omits continuation.
+  - Source artifact summary: `report.md` is readable, but `decision.json` is
+    missing or corrupt.
+  - Simulated completed-run state: run id `cont-missing-decision`, artifacts at
+    `runs/cont-missing-decision/report.md`; `decision.json` cannot be parsed.
+  - Expected recommendation text: no continuation line, or `Recommended next
+    step for cont-missing-decision: inspect or verify the run artifacts. I
+    could not trust the decision artifact.`
+  - Forbidden recommendation text: any recommendation inferred from report
+    prose alone.
+  - Approval behavior when drafted: no follow-up work order is drafted from
+    these artifacts.
+
+- [ ] `cont-custom-out` preserves custom output paths.
+  - Source artifact summary: completed gather run under custom
+    `--out /tmp/example-runs`; `decision.json` is parseable and recommends a
+    planning follow-up.
+  - Simulated completed-run state: run id `cont-custom-out`, artifacts at
+    `/tmp/example-runs/cont-custom-out/report.md` and
+    `/tmp/example-runs/cont-custom-out/decision.json`.
+  - Expected recommendation text: `Recommended next step for cont-custom-out:
+    draft an implementation plan from this run. I inspected report and decision
+    artifacts at /tmp/example-runs/cont-custom-out/...`
+  - Forbidden recommendation text: `runs/cont-custom-out/report.md`,
+    `runs/cont-custom-out/decision.json`, or any fabricated default run path.
+  - Approval behavior when drafted: the follow-up work order cites the exact
+    `/tmp/example-runs/cont-custom-out/...` artifact paths in `background`.
+
+- [ ] Research exit `4` may recommend judge-only rerun.
+  - Source artifact summary: research-shaped work order; `decision.json` is
+    parseable; all providers are `ok` or `ok_after_format_retry`; structured
+    judge status failed or did not converge.
+  - Simulated completed-run state: run id `cont-research-exit-4`, exit code
+    `4`, artifacts at `runs/cont-research-exit-4/decision.json`.
+  - Expected recommendation text: `Recommended next step for
+    cont-research-exit-4: rerun the research judge only. I inspected the
+    decision artifact; providers succeeded but the judge did not complete.`
+  - Forbidden recommendation text: build advice or report-prose-only
+    diagnosis.
+  - Approval behavior when drafted: no work order is drafted; the suggested
+    command is `bakeoff rerun cont-research-exit-4 --judge-only`.
+
+- [ ] Build exit `4` must not recommend judge-only rerun.
+  - Source artifact summary: `work-order.json.type=build`; exit code `4`;
+    `decision.json` and `diagnostics.json` are present.
+  - Simulated completed-run state: run id `cont-build-exit-4`, artifacts at
+    `runs/cont-build-exit-4/decision.json` and
+    `runs/cont-build-exit-4/diagnostics.json`.
+  - Expected recommendation text: `Recommended next step for
+    cont-build-exit-4: inspect diagnostics, or run a full build rerun if the
+    structured evidence warrants it. I inspected decision and diagnostics
+    artifacts; build judge-only rerun is not supported.`
+  - Forbidden recommendation text: `bakeoff rerun cont-build-exit-4
+    --judge-only`.
+  - Approval behavior when drafted: no build follow-up is drafted from exit
+    `4` alone.
 
 ## Fast-Path Drafting Scenarios
 

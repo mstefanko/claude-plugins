@@ -498,8 +498,9 @@ Route each part by its own `type`: `build` uses
 `bakeoff build`; `gather`, `compare`, and `analyze` use `bakeoff research`.
 Apply the same mode-specific flag routing to each part. Continue after exit
 `0`, `3`, or `4`; exit `4` is a decision-incomplete handoff with durable
-provider artifacts and should include the judge-only rerun recommendation when
-applicable. Split runs continue after exit `4` because each part is
+provider artifacts and should include the judge-only rerun recommendation only
+for research runs when applicable. Split runs continue after exit `4` because
+each part is
 independent and cheap to keep going; multi-lens runs stop on exit `4` because
 each lens is higher-cost and a decision-incomplete handoff is worth inspecting
 before spending more lens budget. Stop on exit `1`, `2`, `130`, interruption,
@@ -916,6 +917,9 @@ with the same rules, and revalidate only after approval.
 
 ## Execution And Summary
 
+Keep this section in sync with `skills/bakeoff/SKILL.md` ->
+`## Artifact Summary Contract`.
+
 Default interactive runs keep CLI heartbeats. Use `--json --quiet` only when
 the user asks for quiet or machine-readable output.
 
@@ -924,15 +928,18 @@ a completed run with unresolved disagreement, not a launcher failure. Exit `4`
 means the decision is incomplete because the judge failed or did not converge;
 provider artifacts are durable.
 
-When exit `4` is paired with all providers reporting `ok` or
-`ok_after_format_retry` and a failed judge status, make the first recommended
-next action:
+For research runs only, when exit `4` is paired with structured artifacts
+showing all providers reported `ok` or `ok_after_format_retry` and the judge
+failed or did not converge, make the first recommended next action:
 
 ```bash
 bakeoff rerun <run-id> --judge-only
 ```
 
 Mention a normal full `bakeoff rerun <run-id>` only as a secondary option.
+Do not recommend judge-only rerun for build runs; inspect `decision.json`,
+`diagnostics.json`, selected provider artifacts, or suggest a full build rerun
+when structured evidence warrants it.
 
 The final response must include:
 
@@ -944,6 +951,48 @@ The final response must include:
 - for build runs, the selected patch artifact only when
   `decision.json.canonical_winner` is non-null:
   `<out>/<run-id>/providers/<winner>/build/diff.patch`.
+
+The final response may include at most one continuation recommendation when
+the completed or decision-incomplete artifacts support a clear next normal work
+order. Keep it short, name the source run id, name the inspected artifact
+class, and preserve exact artifact paths from the run summary, including custom
+`--out` directories. Post-run recommendations are session-scoped; cross-session
+continuation needs user-supplied artifact paths or an explicit
+`/bakeoff:inspect` or `/bakeoff:history` lookup first.
+
+Do not offer continuation when artifacts are missing, unreadable, outside
+allowed paths, or unsafe to trust as source context. Do not infer a
+recommendation from `report.md` prose when `decision.json` is missing or
+unparseable. If the artifacts are ambiguous, omit the recommendation or suggest
+inspect/verify instead. Do not attempt prompt-only stale-decision detection;
+use existing triage state for review staleness and otherwise downgrade to
+inspect/verify when unsure.
+
+Allowed recommendation shapes are stop, inspect, judge-only rerun for research,
+draft an implementation plan, gather/research, compare, review, or draft a
+build work order for approval. User-facing "draft an implementation plan" maps
+to a normal `type: "analyze"` work order. Review maps to `type: "gather"` with
+`facet.id: "code-review"`.
+
+For research, compare, and analyze runs, do not default directly to build
+unless the artifacts identify a tiny, concrete code change with obvious
+acceptance criteria and verifier readiness. Prefer drafting an implementation
+plan when the direction is clear but the implementation boundary or verifier
+still needs design.
+
+For review runs, recommend build only when current triage marks a narrow
+finding actionable and the follow-up request supplies or the repo clearly
+exposes acceptance criteria and a verifier command. If triage is missing,
+stale, failed, or disabled, recommend inspect before build and name the triage
+state that needs attention.
+
+For build runs, prefer inspecting or reviewing the selected patch when
+`decision.json.canonical_winner` is non-null. If no canonical winner exists,
+say there is no selected patch and recommend inspecting diagnostics or a full
+build rerun only when structured evidence supports it. Do not chain into
+another build, apply patches, create issues, create branches, commit, push,
+open PRs, synthesize a third patch, or edit source files based on provider
+output unless the user makes a separate explicit request.
 
 Stop after the Bakeoff handoff. Do not apply patches, create issues, create
 branches, commit, push, open PRs, synthesize a third patch, or edit source files

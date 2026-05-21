@@ -924,6 +924,10 @@ ready.
 
 ## Artifact Summary Contract
 
+Keep this section in sync with `commands/run.md` -> `## Execution And Summary`.
+Both files define the user-facing run handoff and post-run recommendation
+contract.
+
 For every completed or decision-incomplete run, summarize:
 
 - run id;
@@ -941,10 +945,64 @@ Exit code `3` means a completed run with unresolved disagreement. Treat it as a
 completed Bakeoff handoff, not as a launcher failure.
 
 Exit code `4` means the decision is incomplete because the judge failed or did
-not converge, while provider artifacts are durable. When all providers are
-`ok` or `ok_after_format_retry` and the judge status failed, recommend
+not converge, while provider artifacts are durable. For research runs only,
+when structured artifacts show all providers are `ok` or
+`ok_after_format_retry` and the judge failed or did not converge, recommend
 `bakeoff rerun <run-id> --judge-only` first. A full
-`bakeoff rerun <run-id>` is secondary.
+`bakeoff rerun <run-id>` is secondary. Build runs do not support judge-only
+rerun today; direct the user to inspect `decision.json`/`diagnostics.json` or
+run a full build rerun when the structured evidence warrants it.
+
+## Continuation Advisor
+
+After a completed or decision-incomplete `/bakeoff:run`, you may include at
+most one short artifact-aware next-step recommendation. Do not offer blind
+continuation, create a `/bakeoff:continue` flow, or invent a second approval
+path; any follow-up is drafted through the normal `/bakeoff:run` preview,
+validation, and approval flow.
+
+Read the completed run's artifacts before recommending a next step. The advisor
+may rely on only stable structured signals:
+
+- parseable `decision.json`;
+- `decision.json.mode`;
+- `decision.json.decision_kind`;
+- `decision.json.provider_statuses[*].status`;
+- `work-order.json.type`;
+- `work-order.json.facet.id` when present, especially `code-review`;
+- nullable `decision.json.canonical_winner` only when recommending winner or
+  selected-patch inspection;
+- triage state and `triage/final.json` classifications/actions only when
+  current according to existing triage state;
+- build verifier/gate status only when surfaced by structured `decision.json`,
+  `diagnostics.json`, or manifest fields.
+
+`report.md` may explain the recommendation, but it must not override missing or
+contradictory structured decision signals. If `decision.json` is missing,
+unparseable, outside allowed paths, or too ambiguous to trust, omit the
+recommendation or suggest inspect/verify instead of inferring from report prose.
+Do not attempt prompt-only stale-decision detection; use existing triage state
+for review staleness and otherwise downgrade to inspect/verify when unsure.
+
+Preserve exact artifact paths surfaced by the just-completed run summary,
+including custom `--out` directories. Never assume `runs/<run-id>` unless that
+exact path was surfaced. Post-run recommendations are session-scoped;
+cross-session continuation needs user-supplied paths or a normal
+`/bakeoff:inspect`/`/bakeoff:history` lookup first.
+
+Use existing work-order shapes only. User-facing "draft an implementation
+plan" maps to a normal `type: "analyze"` work order. Review remains
+`type: "gather"` with `facet.id: "code-review"`. Prefer an implementation plan
+between research and build unless the implementation is tiny, concrete, and
+verifier-obvious.
+
+Review-to-build advice requires actionable, current triage plus
+user-supplied or repo-discovered acceptance criteria and verifier command.
+Triage does not provide a verifier field. Build continuation is strict: prefer
+inspecting or reviewing the selected patch, and preserve all build drafting
+invariants, filename/run-id collision policy, Competitive Build Handoff, and
+Permission Semantics. Do not apply, merge, synthesize, commit, open a PR, or
+chain into another build automatically.
 
 ## Permission Semantics
 

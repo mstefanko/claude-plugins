@@ -10,6 +10,15 @@ drafting workflow, not a work-order schema feature: each lens is a normal
 `gather` work order with the standard `code-review` facet and lens-specific
 focus/include/exclude text.
 
+Continuation is not a work-order schema feature either. When a completed run's
+artifacts suggest a useful next step, the plugin may recommend another normal
+work order, but it does not create a batch, sequence, or continuation metadata
+schema. A planning follow-up is just `type: "analyze"` with the prior report
+and decision paths cited in `background`; a review follow-up is still
+`type: "gather"` with `facet.id: "code-review"`; and a build follow-up must
+provide the usual acceptance criteria, edit scope, verifier, and protected-path
+constraints.
+
 The fastest way to start is the examples directory:
 
 - [examples/gather.work-order.json](../examples/gather.work-order.json)
