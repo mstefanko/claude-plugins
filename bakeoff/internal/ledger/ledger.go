@@ -11,6 +11,7 @@ import (
 
 var runIDRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
+// Test hook only; tests that replace this must not run in parallel.
 var latestSymlink = os.Symlink
 
 func MakeRunID(now time.Time, suffix string) string {
@@ -70,34 +71,21 @@ func UpdateLatest(outDir string, runID string) error {
 func writeLatestAtomic(outDir string, runID string) error {
 	latest := filepath.Join(outDir, "latest")
 
-	symlinkTemp, err := os.CreateTemp(outDir, ".latest.*.tmp")
+	symlinkTempDir, err := os.MkdirTemp(outDir, ".latest.*.tmp")
 	if err != nil {
 		return err
 	}
-	symlinkTempPath := symlinkTemp.Name()
-	if err := symlinkTemp.Close(); err != nil {
-		_ = os.Remove(symlinkTempPath)
-		return err
-	}
-	if err := os.Remove(symlinkTempPath); err != nil {
-		return err
-	}
-	cleanupSymlinkTemp := true
 	defer func() {
-		if cleanupSymlinkTemp {
-			_ = os.Remove(symlinkTempPath)
-		}
+		_ = os.RemoveAll(symlinkTempDir)
 	}()
+	symlinkTempPath := filepath.Join(symlinkTempDir, "latest")
 
 	if err := latestSymlink(runID, symlinkTempPath); err == nil {
 		if err := os.Rename(symlinkTempPath, latest); err != nil {
 			return err
 		}
-		cleanupSymlinkTemp = false
 		return nil
 	}
-	_ = os.Remove(symlinkTempPath)
-	cleanupSymlinkTemp = false
 
 	fileTemp, err := os.CreateTemp(outDir, ".latest.*.tmp")
 	if err != nil {
