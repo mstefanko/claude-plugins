@@ -16,6 +16,7 @@ import (
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/fsutil"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/ledger"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/manifest"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/prompt"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/repocontext"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/runnerenv"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/summary"
@@ -213,9 +214,11 @@ func RunBuild(ctx context.Context, f commands.Factory, opts *BuildOptions) error
 	}
 	workerResults := map[string]map[string]any{}
 	verifyResults := map[string]buildverify.Result{}
+	promptTrims := []prompt.TrimRecord{}
 	for _, run := range providerRuns {
 		workerResults[run.ID] = run.WorkerResult
 		verifyResults[run.ID] = run.Verify
+		promptTrims = append(promptTrims, run.PromptTrims...)
 		timings = append(timings, run.PhaseTiming)
 		if humanOutput {
 			printBuildProviderResult(f, run)
@@ -229,18 +232,21 @@ func RunBuild(ctx context.Context, f commands.Factory, opts *BuildOptions) error
 		if humanOutput {
 			f.Streams().Printf("[judge] verifier evidence inconclusive; running swapped build judge...\n")
 		}
-		var err error
-		var judgeTimings []buildPhaseTiming
-		judgeResults, pass1Order, pass2Order, judgeTimings, err = runBuildJudgePhase(ctx, f, wo, baseline, providerRuns, metricComparisons, runDir, effectiveQuiet, humanOutput)
+		judgePhase, err := runBuildJudgePhase(ctx, f, wo, baseline, providerRuns, metricComparisons, runDir, effectiveQuiet, humanOutput)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return err
 			}
 			return &apperror.RuntimeError{Err: err}
 		}
-		timings = append(timings, judgeTimings...)
+		judgeResults = judgePhase.JudgeResults
+		pass1Order = judgePhase.Pass1Order
+		pass2Order = judgePhase.Pass2Order
+		timings = append(timings, judgePhase.Timings...)
+		promptTrims = append(promptTrims, judgePhase.PromptTrims...)
 	}
 	decision, exitCode := resolveBuildDecision(wo, workerResults, providerRuns, baseline, metricComparisons, judgeResults, pass1Order, pass2Order)
+	commands.AttachPromptTrim(decision, promptTrims)
 	timings = append(timings, finishPhase("build_total", "", "", overallStarted))
 	if err := finalizeBuildRun(ctx, f, opts, wo, repo, runDir, runID, startedAt, workerResults, decision, baseline, providerRuns, metricComparisons, timings, exitCode, humanOutput); err != nil {
 		return err

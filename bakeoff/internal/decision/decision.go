@@ -10,6 +10,20 @@ import (
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
 )
 
+const (
+	StalledAtProviders      = "providers"
+	StalledAtBaselineVerify = "baseline_verify"
+	StalledAtProviderVerify = "provider_verify"
+	StalledAtJudge          = "judge"
+	StalledAtSelection      = "selection"
+)
+
+func SetStalledAt(decision map[string]any, stage string) {
+	if strings.TrimSpace(stage) != "" {
+		decision["stalled_at"] = stage
+	}
+}
+
 func Base(wo *workorder.WorkOrder, workerResults map[string]map[string]any) map[string]any {
 	statuses := map[string]any{}
 	for _, provider := range wo.Providers {
@@ -33,6 +47,7 @@ func BothFailed(wo *workorder.WorkOrder, workerResults map[string]map[string]any
 	out["judge_ran"] = false
 	out["canonical_winner"] = nil
 	out["caveats"] = []string{"both providers failed; judge skipped"}
+	SetStalledAt(out, StalledAtProviders)
 	return out
 }
 
@@ -82,6 +97,7 @@ func GatherStructuredUnion(wo *workorder.WorkOrder, workerResults map[string]map
 			out["judge_error_kind"] = kind
 		}
 		out["caveats"] = []string{"gather judge failed with " + status}
+		SetStalledAt(out, StalledAtJudge)
 		return out, judgeResults, 4
 	}
 	return out, judgeResults, 0
@@ -121,6 +137,7 @@ func ResolveCompare(base map[string]any, judgeResults map[string]map[string]any,
 	preserved := MergeItems(PreservedCompareMaterial(pass1, pass1Order), PreservedCompareMaterial(pass2, pass2Order))
 	out["decision_kind"] = "tie"
 	out["caveats"] = []string{"position swap did not produce a stable winner"}
+	SetStalledAt(out, StalledAtSelection)
 	if len(preserved) > 0 {
 		out["kept_from_nonwinner"] = preserved
 	}
@@ -246,6 +263,7 @@ func ResolveBuild(input BuildResolutionInput) (map[string]any, int) {
 	if len(captured) == 0 {
 		out["decision_kind"] = "both_failed"
 		out["caveats"] = appendCaveat(out["caveats"], "no provider produced an eligible captured patch")
+		SetStalledAt(out, StalledAtProviders)
 		return out, 1
 	}
 	if len(captured) == 1 {
@@ -258,11 +276,13 @@ func ResolveBuild(input BuildResolutionInput) (map[string]any, int) {
 		}
 		out["decision_kind"] = "both_failed_verification"
 		out["caveats"] = appendCaveat(out["caveats"], "the only provider with an eligible patch failed required gate verifiers")
+		SetStalledAt(out, StalledAtProviderVerify)
 		return out, 1
 	}
 	if len(gatePassed) == 0 {
 		out["decision_kind"] = "both_failed_verification"
 		out["caveats"] = appendCaveat(out["caveats"], "no provider passed required gate verifiers")
+		SetStalledAt(out, StalledAtProviderVerify)
 		return out, 1
 	}
 	if len(gatePassed) == 1 {
@@ -276,6 +296,7 @@ func ResolveBuild(input BuildResolutionInput) (map[string]any, int) {
 		out["selection_basis"] = "identical_patch"
 		out["canonical_winner"] = nil
 		out["caveats"] = appendCaveat(out["caveats"], "captured patches were identical after normalization")
+		SetStalledAt(out, StalledAtSelection)
 		return out, 3
 	}
 
@@ -291,6 +312,7 @@ func ResolveBuild(input BuildResolutionInput) (map[string]any, int) {
 	if len(input.JudgeResults) == 0 {
 		out["decision_kind"] = "tie"
 		out["caveats"] = appendCaveat(out["caveats"], "both providers passed gates, but metric evidence was inconclusive and build judge was not run")
+		SetStalledAt(out, StalledAtSelection)
 		return out, 3
 	}
 
@@ -319,6 +341,7 @@ func ResolveBuild(input BuildResolutionInput) (map[string]any, int) {
 	}
 	out["decision_kind"] = "tie"
 	out["caveats"] = appendCaveat(out["caveats"], "position swap did not produce a stable build winner")
+	SetStalledAt(out, StalledAtSelection)
 	return out, 3
 }
 

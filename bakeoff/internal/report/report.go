@@ -73,6 +73,9 @@ func renderOutcome(wo *workorder.WorkOrder, decision map[string]any, workerResul
 		"Mode: `" + mode + "`",
 		"Decision: `" + kind + "`",
 	}
+	if stalledAt := jsonutil.StringValue(decision["stalled_at"]); stalledAt != "" {
+		lines = append(lines, "Stalled at: `"+stalledAt+"`")
+	}
 	if wo.Facet != nil && strings.TrimSpace(wo.Facet.ID) != "" {
 		lines = append(lines, "Facet: `"+wo.Facet.ID+"`")
 		if wo.Facet.Focus != "" {
@@ -134,6 +137,9 @@ func decisionAudit(decision map[string]any) []string {
 	}
 	if kind := jsonutil.StringValue(decision["judge_error_kind"]); kind != "" {
 		lines = append(lines, "- Judge error kind: `"+kind+"`")
+	}
+	if stalledAt := jsonutil.StringValue(decision["stalled_at"]); stalledAt != "" {
+		lines = append(lines, "- Stalled at: `"+stalledAt+"`")
 	}
 	if winner := jsonutil.StringValue(decision["canonical_winner"]); winner != "" {
 		lines = append(lines, "- Canonical winner: `"+winner+"`")

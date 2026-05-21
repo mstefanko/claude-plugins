@@ -40,6 +40,7 @@ func runBuildProviders(ctx context.Context, f commands.Factory, wo *workorder.Wo
 					WorkerResult:        runresult.InternalError(err),
 					ProviderArtifactDir: filepath.Join(runDir, "providers", participant.ID),
 					IneligibleReasons:   []string{err.Error()},
+					PromptTrims:         run.PromptTrims,
 				}
 				if mkdirErr := os.MkdirAll(run.ProviderArtifactDir, 0o700); mkdirErr != nil {
 					return mkdirErr
@@ -97,6 +98,10 @@ func runOneBuildProvider(ctx context.Context, f commands.Factory, wo *workorder.
 	if err != nil {
 		return run, err
 	}
+	trimResult := prompt.TrimContextToBudget(workerPrompt, runner.MaxPromptBytes, "worker:"+participant.ID)
+	commands.LogPromptTrim(f, trimResult)
+	workerPrompt = trimResult.Text
+	run.PromptTrims = commands.TrimRecords(trimResult)
 	if err := workorder.WriteTextAtomic(filepath.Join(providerDir, "prompt.txt"), workerPrompt); err != nil {
 		return run, err
 	}

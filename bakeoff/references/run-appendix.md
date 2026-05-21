@@ -3,6 +3,11 @@
 Optional templates and bulky tables for the `bakeoff-run` skill. Load only the
 section needed for the active drafting state.
 
+Run decisions may include `stalled_at` (blocked runtime stage) and
+`prompt_trim.dropped[]` (low-priority prompt context sections omitted before
+provider launch); treat both as operator-visible audit metadata, not work-order
+schema fields.
+
 ## Task-Fit Repair Menu
 
 ```text

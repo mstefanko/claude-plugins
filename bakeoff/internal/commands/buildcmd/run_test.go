@@ -17,6 +17,7 @@ import (
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/buildworkspace"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/output"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/provider"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/runner"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/runnerenv"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
 )
@@ -127,6 +128,23 @@ func TestRenderBuildReportOutcomeAndSingleSelectionBasis(t *testing.T) {
 	}
 	if strings.Index(report, "## Outcome") > strings.Index(report, "## Baseline Verification") {
 		t.Fatalf("outcome should be first substantive report section:\n%s", report)
+	}
+}
+
+func TestRenderBuildReportShowsStalledAt(t *testing.T) {
+	report := renderBuildReport(
+		&workorder.WorkOrder{ID: "build-report"},
+		"build-run",
+		"runs",
+		filepath.Join(t.TempDir(), "run"),
+		map[string]any{"decision_kind": "tie", "selection_basis": "none", "stalled_at": "selection"},
+		buildverify.Result{GatesPassed: true},
+		nil,
+		nil,
+		buildDiagnostics{},
+	)
+	if !strings.Contains(report, "Stalled at: `selection`") {
+		t.Fatalf("report missing stalled_at:\n%s", report)
 	}
 }
 
@@ -262,6 +280,39 @@ func TestRunBuildMutatesIsolatedWorktreesAndCapturesPatches(t *testing.T) {
 		if strings.Contains(reportText, forbidden) {
 			t.Fatalf("report should not include apply instructions %q:\n%s", forbidden, reportText)
 		}
+	}
+}
+
+func TestRunBuildOversizedBackgroundTrimsWorkerPrompt(t *testing.T) {
+	repoDir := initBuildGitRepo(t)
+	root := t.TempDir()
+	workOrderPath := filepath.Join(root, "build.work-order.json")
+	writeBuildWorkOrder(t, workOrderPath, "build-trim", 100000, nil)
+	data := readJSONFile(t, workOrderPath)
+	data["background"] = strings.Repeat("x", runner.MaxPromptBytes+1)
+	if err := workorder.WriteJSONAtomic(workOrderPath, data); err != nil {
+		t.Fatal(err)
+	}
+	outDir := filepath.Join(root, "runs")
+	out, errOut, err := runBuildTest(t, repoDir, workOrderPath, outDir, BuildOptions{RunID: "build-trim", Quiet: true, JSON: true})
+	if err != nil {
+		t.Fatalf("build failed after prompt trim: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
+	}
+	runDir := filepath.Join(outDir, "build-trim")
+	decision := readJSONFile(t, filepath.Join(runDir, "decision.json"))
+	if !strings.Contains(fmt.Sprint(decision["prompt_trim"]), "worker:claude") || !strings.Contains(fmt.Sprint(decision["prompt_trim"]), "context") {
+		t.Fatalf("decision missing prompt trim: %#v", decision)
+	}
+	if !strings.Contains(errOut, "prompt_trim: prompt=worker:claude dropped=context") {
+		t.Fatalf("stderr missing prompt trim notice:\n%s", errOut)
+	}
+	promptData, readErr := os.ReadFile(filepath.Join(runDir, "providers", "claude", "prompt.txt"))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	promptText := string(promptData)
+	if !strings.Contains(promptText, "<context>\n</context>") || strings.Contains(promptText, strings.Repeat("x", 64)) {
+		t.Fatalf("provider prompt was not trimmed:\n%s", promptText[:min(len(promptText), 200)])
 	}
 }
 
@@ -489,6 +540,9 @@ func TestRunBuildBothProtectedPathViolationsUseBothFailed(t *testing.T) {
 	if decision["decision_kind"] != "both_failed" || decision["selection_basis"] != "none" || decision["canonical_winner"] != nil {
 		t.Fatalf("decision = %#v", decision)
 	}
+	if decision["stalled_at"] != "providers" {
+		t.Fatalf("stalled_at = %#v", decision["stalled_at"])
+	}
 	if strings.Contains(fmt.Sprint(decision), "both_ineligible") {
 		t.Fatalf("should not add a new decision kind for protected paths: %#v", decision)
 	}
@@ -515,6 +569,9 @@ func TestRunBuildIdenticalCapturedPatchesTieWithoutJudge(t *testing.T) {
 	decision := readJSONFile(t, filepath.Join(runDir, "decision.json"))
 	if decision["decision_kind"] != "tie" || decision["selection_basis"] != "identical_patch" || decision["judge_ran"] != false {
 		t.Fatalf("decision = %#v", decision)
+	}
+	if decision["stalled_at"] != "selection" {
+		t.Fatalf("stalled_at = %#v", decision["stalled_at"])
 	}
 	if _, err := os.Stat(filepath.Join(runDir, "judge", "result-pass1.json")); !os.IsNotExist(err) {
 		t.Fatalf("judge should not run for identical patches, stat err=%v", err)
@@ -575,6 +632,9 @@ test -f README.md
 	if decision["decision_kind"] != "both_failed_verification" || decision["selection_basis"] != "none" || decision["canonical_winner"] != nil {
 		t.Fatalf("decision = %#v", decision)
 	}
+	if decision["stalled_at"] != "provider_verify" {
+		t.Fatalf("stalled_at = %#v", decision["stalled_at"])
+	}
 }
 
 func TestRunBuildMetricInconclusiveFallsBackToJudge(t *testing.T) {
@@ -616,6 +676,9 @@ func TestRunBuildJudgeDisagreementExitsThree(t *testing.T) {
 	if decision["decision_kind"] != "tie" || decision["selection_basis"] != "none" || decision["canonical_winner"] != nil {
 		t.Fatalf("decision = %#v", decision)
 	}
+	if decision["stalled_at"] != "selection" {
+		t.Fatalf("stalled_at = %#v", decision["stalled_at"])
+	}
 }
 
 func TestRunBuildJudgeFailureDoesNotResolveAsJudgeRun(t *testing.T) {
@@ -634,6 +697,9 @@ func TestRunBuildJudgeFailureDoesNotResolveAsJudgeRun(t *testing.T) {
 	decision := readJSONFile(t, filepath.Join(outDir, "judge-fails", "decision.json"))
 	if decision["judge_ran"] != false || decision["selection_basis"] != "none" {
 		t.Fatalf("decision = %#v", decision)
+	}
+	if decision["stalled_at"] != "judge" {
+		t.Fatalf("stalled_at = %#v", decision["stalled_at"])
 	}
 	caveats, _ := decision["caveats"].([]any)
 	if len(caveats) == 0 || !strings.Contains(fmt.Sprint(caveats), "build judge failed") {
@@ -754,6 +820,9 @@ func TestRunBuildBaselineFailureSkipsProviders(t *testing.T) {
 	if decision["decision_kind"] != "baseline_failed" {
 		t.Fatalf("decision = %#v", decision)
 	}
+	if decision["stalled_at"] != "baseline_verify" {
+		t.Fatalf("stalled_at = %#v", decision["stalled_at"])
+	}
 	if _, err := os.Stat(filepath.Join(runDir, "providers", "claude")); !os.IsNotExist(err) {
 		t.Fatalf("providers should not be launched, stat err=%v", err)
 	}
@@ -775,6 +844,9 @@ func TestRunBuildBaselineMustFailPassSurpriseSkipsProviders(t *testing.T) {
 	decision := readJSONFile(t, filepath.Join(runDir, "decision.json"))
 	if decision["decision_kind"] != "baseline_expectation_failed" {
 		t.Fatalf("decision = %#v", decision)
+	}
+	if decision["stalled_at"] != "baseline_verify" {
+		t.Fatalf("stalled_at = %#v", decision["stalled_at"])
 	}
 	caveats := fmt.Sprint(decision["caveats"])
 	if !strings.Contains(caveats, "expected baseline `must_fail`, observed `passed`") {

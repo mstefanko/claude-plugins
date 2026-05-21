@@ -133,7 +133,7 @@ func RunResearch(ctx context.Context, f commands.Factory, opts *ResearchOptions)
 	if err != nil {
 		return &apperror.RuntimeError{Err: err}
 	}
-	workerResults, err := runWorkers(ctx, f, wo, runDir, effectiveQuiet, humanOutput, repoLayoutBlock, opts.NoRepoLayout)
+	workerResults, promptTrims, err := runWorkers(ctx, f, wo, runDir, effectiveQuiet, humanOutput, repoLayoutBlock, opts.NoRepoLayout)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return err
@@ -163,13 +163,17 @@ func RunResearch(ctx context.Context, f commands.Factory, opts *ResearchOptions)
 		}
 		decisionDoc = decision.SingleProviderOnly(wo, workerResults, survivor)
 	} else {
-		decisionDoc, judgeResults, exitCode, err = runJudgePhase(ctx, f, wo, workerResults, runDir, effectiveQuiet, humanOutput)
+		judgePhase, err := runJudgePhase(ctx, f, wo, workerResults, runDir, effectiveQuiet, humanOutput)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return err
 			}
 			return &apperror.RuntimeError{Err: err}
 		}
+		decisionDoc = judgePhase.Decision
+		judgeResults = judgePhase.JudgeResults
+		exitCode = judgePhase.ExitCode
+		promptTrims = append(promptTrims, judgePhase.PromptTrims...)
 	}
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -184,6 +188,7 @@ func RunResearch(ctx context.Context, f commands.Factory, opts *ResearchOptions)
 		DecisionDoc:    decisionDoc,
 		JudgeResults:   judgeResults,
 		ExitCode:       exitCode,
+		PromptTrims:    promptTrims,
 		NoTriage:       opts.NoTriage,
 		JSON:           opts.JSON,
 		Quiet:          effectiveQuiet,
@@ -253,13 +258,16 @@ func RunResearchJudgeOnly(ctx context.Context, f commands.Factory, opts *Researc
 	if fsutil.FileExists(filepath.Join(runDir, "review-context.md")) {
 		f.Streams().Printf("review context: replayed from %s\n", opts.SourceRunDir)
 	}
-	decisionDoc, judgeResults, exitCode, err := runJudgePhase(ctx, f, wo, workerResults, runDir, effectiveQuiet, true)
+	judgePhase, err := runJudgePhase(ctx, f, wo, workerResults, runDir, effectiveQuiet, true)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return err
 		}
 		return &apperror.RuntimeError{Err: err}
 	}
+	decisionDoc := judgePhase.Decision
+	judgeResults := judgePhase.JudgeResults
+	exitCode := judgePhase.ExitCode
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -273,6 +281,7 @@ func RunResearchJudgeOnly(ctx context.Context, f commands.Factory, opts *Researc
 		DecisionDoc:    decisionDoc,
 		JudgeResults:   judgeResults,
 		ExitCode:       exitCode,
+		PromptTrims:    judgePhase.PromptTrims,
 		NoTriage:       opts.NoTriage,
 		Quiet:          effectiveQuiet,
 		HumanOutput:    true,
@@ -295,6 +304,7 @@ type researchFinalizeOptions struct {
 	DecisionDoc    map[string]any
 	JudgeResults   map[string]map[string]any
 	ExitCode       int
+	PromptTrims    []prompt.TrimRecord
 	NoTriage       bool
 	JSON           bool
 	Quiet          bool
@@ -305,6 +315,7 @@ type researchFinalizeOptions struct {
 
 func finalizeResearchRun(ctx context.Context, f commands.Factory, opts researchFinalizeOptions) error {
 	exitCode := opts.ExitCode
+	commands.AttachPromptTrim(opts.DecisionDoc, opts.PromptTrims)
 	if err := workorder.WriteJSONAtomic(filepath.Join(opts.RunDir, "decision.json"), opts.DecisionDoc); err != nil {
 		return &apperror.RuntimeError{Err: err}
 	}
@@ -407,7 +418,7 @@ func buildRepoLayoutBlockForRun(wo *workorder.WorkOrder, disabled bool) (string,
 	return repocontext.BuildLayoutBlock(cwd)
 }
 
-func runWorkers(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder, runDir string, quiet bool, humanOutput bool, repoLayoutBlock string, noRepoLayout bool) (map[string]map[string]any, error) {
+func runWorkers(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder, runDir string, quiet bool, humanOutput bool, repoLayoutBlock string, noRepoLayout bool) (map[string]map[string]any, []prompt.TrimRecord, error) {
 	capabilities := map[string]provider.ScopeCapabilities{}
 	if wo.ScopePolicy.Enforcement != "advisory" {
 		backendSet := map[string]bool{}
@@ -424,6 +435,7 @@ func runWorkers(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder
 	type pair struct {
 		id     string
 		result map[string]any
+		trims  []prompt.TrimRecord
 	}
 	pairs := make([]pair, len(wo.Providers))
 	if humanOutput {
@@ -435,7 +447,7 @@ func runWorkers(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder
 		index := index
 		participant := providerParticipant
 		group.Go(func() error {
-			result, err := runOneWorker(groupCtx, f, wo, participant, runDir, cwd, capabilities, quiet, repoLayoutBlock, noRepoLayout)
+			result, trims, err := runOneWorker(groupCtx, f, wo, participant, runDir, cwd, capabilities, quiet, repoLayoutBlock, noRepoLayout)
 			if err != nil {
 				if errors.Is(err, context.Canceled) {
 					return err
@@ -449,35 +461,41 @@ func runWorkers(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder
 					return writeErr
 				}
 			}
-			pairs[index] = pair{id: participant.ID, result: result}
+			pairs[index] = pair{id: participant.ID, result: result, trims: trims}
 			return nil
 		})
 	}
 	if err := group.Wait(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	promptTrims := []prompt.TrimRecord{}
 	for _, item := range pairs {
 		results[item.id] = item.result
+		promptTrims = append(promptTrims, item.trims...)
 	}
 	if humanOutput {
 		for _, item := range pairs {
 			printWorkerResult(f, item.id, item.result)
 		}
 	}
-	return results, nil
+	return results, promptTrims, nil
 }
 
-func runOneWorker(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder, participant workorder.Participant, runDir string, cwd string, capabilities map[string]provider.ScopeCapabilities, quiet bool, repoLayoutBlock string, noRepoLayout bool) (map[string]any, error) {
+func runOneWorker(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder, participant workorder.Participant, runDir string, cwd string, capabilities map[string]provider.ScopeCapabilities, quiet bool, repoLayoutBlock string, noRepoLayout bool) (map[string]any, []prompt.TrimRecord, error) {
 	providerDir := filepath.Join(runDir, "providers", participant.ID)
 	if err := os.MkdirAll(providerDir, 0o700); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	workerPrompt, err := prompt.BuildWorkerPromptWithRepoLayout(wo, participant, participantRepoLayout(wo, participant, repoLayoutBlock, noRepoLayout))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	trimResult := prompt.TrimContextToBudget(workerPrompt, runner.MaxPromptBytes, "worker:"+participant.ID)
+	commands.LogPromptTrim(f, trimResult)
+	workerPrompt = trimResult.Text
+	promptTrims := commands.TrimRecords(trimResult)
 	if err := workorder.WriteTextAtomic(filepath.Join(providerDir, "prompt.txt"), workerPrompt); err != nil {
-		return nil, err
+		return nil, promptTrims, err
 	}
 	finalMessagePath := ""
 	if participant.Backend == "codex" {
@@ -491,9 +509,9 @@ func runOneWorker(ctx context.Context, f commands.Factory, wo *workorder.WorkOrd
 	if err != nil {
 		result := scope.ScopeErrorResult(err, participant, wo.ScopePolicy, cwd)
 		if writeErr := artifact.WriteProviderArtifacts(providerDir, result); writeErr != nil {
-			return nil, writeErr
+			return nil, promptTrims, writeErr
 		}
-		return result, nil
+		return result, promptTrims, nil
 	}
 	defer scope.Cleanup(scopeExecution.CleanupPaths)
 	result := artifact.ResultMap(runner.RunProviderWithFormatRetry(ctx, runner.Options{
@@ -508,9 +526,9 @@ func runOneWorker(ctx context.Context, f commands.Factory, wo *workorder.WorkOrd
 	}))
 	result["scope_enforcement"] = scopeExecution.Metadata
 	if err := artifact.WriteProviderArtifacts(providerDir, result); err != nil {
-		return nil, err
+		return nil, promptTrims, err
 	}
-	return result, nil
+	return result, promptTrims, nil
 }
 
 func participantRepoLayout(wo *workorder.WorkOrder, participant workorder.Participant, repoLayoutBlock string, disabled bool) string {
@@ -521,29 +539,37 @@ func printWorkerResult(f commands.Factory, providerID string, result map[string]
 	f.Streams().Printf("[%s] %s %vs %v bytes\n", providerID, result["status"], result["wall_seconds"], result["output_bytes"])
 }
 
-func runJudgePhase(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder, workerResults map[string]map[string]any, runDir string, quiet bool, humanOutput bool) (map[string]any, map[string]map[string]any, int, error) {
+type judgePhaseResult struct {
+	Decision     map[string]any
+	JudgeResults map[string]map[string]any
+	ExitCode     int
+	PromptTrims  []prompt.TrimRecord
+}
+
+func runJudgePhase(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder, workerResults map[string]map[string]any, runDir string, quiet bool, humanOutput bool) (judgePhaseResult, error) {
 	mode := wo.Type
 	providerIDs := []string{wo.Providers[0].ID, wo.Providers[1].ID}
 	base := decision.Base(wo, workerResults)
 	if mode == "gather" {
 		order := map[string]string{"A": providerIDs[0], "B": providerIDs[1]}
-		judgeResult, err := runSingleJudge(ctx, f, wo, workerResults, order, runDir, "gather", quiet, humanOutput)
+		judgeResult, trims, err := runSingleJudge(ctx, f, wo, workerResults, order, runDir, "gather", quiet, humanOutput)
 		if err != nil {
-			return nil, nil, 0, err
+			return judgePhaseResult{}, err
 		}
 		decisionDoc, judgeResults, exitCode := decision.GatherStructuredUnion(wo, workerResults, judgeResult)
-		return decisionDoc, judgeResults, exitCode, nil
+		return judgePhaseResult{Decision: decisionDoc, JudgeResults: judgeResults, ExitCode: exitCode, PromptTrims: trims}, nil
 	}
 	pass1Order := map[string]string{"A": providerIDs[0], "B": providerIDs[1]}
 	pass2Order := map[string]string{"A": providerIDs[1], "B": providerIDs[0]}
-	pass1, err := runSingleJudge(ctx, f, wo, workerResults, pass1Order, runDir, "pass1", quiet, humanOutput)
+	pass1, pass1Trims, err := runSingleJudge(ctx, f, wo, workerResults, pass1Order, runDir, "pass1", quiet, humanOutput)
 	if err != nil {
-		return nil, nil, 0, err
+		return judgePhaseResult{}, err
 	}
-	pass2, err := runSingleJudge(ctx, f, wo, workerResults, pass2Order, runDir, "pass2", quiet, humanOutput)
+	pass2, pass2Trims, err := runSingleJudge(ctx, f, wo, workerResults, pass2Order, runDir, "pass2", quiet, humanOutput)
 	if err != nil {
-		return nil, nil, 0, err
+		return judgePhaseResult{}, err
 	}
+	promptTrims := append(pass1Trims, pass2Trims...)
 	judgeResults := map[string]map[string]any{"pass1": jsonutil.FinalJSONMap(pass1), "pass2": jsonutil.FinalJSONMap(pass2)}
 	if !artifact.ProviderSucceeded(pass1) || !artifact.ProviderSucceeded(pass2) {
 		decisionDoc := cloneMap(base)
@@ -558,7 +584,8 @@ func runJudgePhase(ctx context.Context, f commands.Factory, wo *workorder.WorkOr
 			decisionDoc["judge_error_kind"] = kind
 		}
 		decisionDoc["caveats"] = []string{fmt.Sprintf("judge failed: pass1=%s, pass2=%s", pass1["status"], pass2["status"])}
-		return decisionDoc, judgeResults, 4, nil
+		decision.SetStalledAt(decisionDoc, decision.StalledAtJudge)
+		return judgePhaseResult{Decision: decisionDoc, JudgeResults: judgeResults, ExitCode: 4, PromptTrims: promptTrims}, nil
 	}
 	if mode == "compare" {
 		decisionDoc := decision.ResolveCompare(base, judgeResults, pass1Order, pass2Order)
@@ -566,28 +593,32 @@ func runJudgePhase(ctx context.Context, f commands.Factory, wo *workorder.WorkOr
 		if decisionDoc["decision_kind"] == "tie" {
 			exitCode = 3
 		}
-		return decisionDoc, judgeResults, exitCode, nil
+		return judgePhaseResult{Decision: decisionDoc, JudgeResults: judgeResults, ExitCode: exitCode, PromptTrims: promptTrims}, nil
 	}
-	return decision.ResolveAnalyze(base, workerResults, judgeResults, pass1Order, pass2Order, providerIDs), judgeResults, 0, nil
+	return judgePhaseResult{Decision: decision.ResolveAnalyze(base, workerResults, judgeResults, pass1Order, pass2Order, providerIDs), JudgeResults: judgeResults, ExitCode: 0, PromptTrims: promptTrims}, nil
 }
 
-func runSingleJudge(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder, workerResults map[string]map[string]any, orderMap map[string]string, runDir string, label string, quiet bool, humanOutput bool) (map[string]any, error) {
+func runSingleJudge(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder, workerResults map[string]map[string]any, orderMap map[string]string, runDir string, label string, quiet bool, humanOutput bool) (map[string]any, []prompt.TrimRecord, error) {
 	workerA := jsonutil.FinalJSONMap(workerResults[orderMap["A"]])
 	workerB := jsonutil.FinalJSONMap(workerResults[orderMap["B"]])
 	judgePrompt, err := prompt.BuildJudgePrompt(wo, workerA, workerB, "")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	trimResult := prompt.TrimContextToBudget(judgePrompt, runner.MaxPromptBytes, "judge:"+label)
+	commands.LogPromptTrim(f, trimResult)
+	judgePrompt = trimResult.Text
+	promptTrims := commands.TrimRecords(trimResult)
 	judgeDir := filepath.Join(runDir, "judge")
 	if err := os.MkdirAll(judgeDir, 0o700); err != nil {
-		return nil, err
+		return nil, promptTrims, err
 	}
 	promptPath := filepath.Join(judgeDir, "prompt.txt")
 	if label != "gather" {
 		promptPath = filepath.Join(judgeDir, "prompt-"+label+".txt")
 	}
 	if err := workorder.WriteTextAtomic(promptPath, judgePrompt); err != nil {
-		return nil, err
+		return nil, promptTrims, err
 	}
 	lastMessage := ""
 	if wo.Judge.Backend == "codex" {
@@ -600,7 +631,7 @@ func runSingleJudge(ctx context.Context, f commands.Factory, wo *workorder.WorkO
 	cwd, _ := os.Getwd()
 	argv, err := provider.BuildParticipantArgv(wo.Judge, cwd, nil, lastMessage, commands.CodexOutputLastMessageSupported(ctx, f, wo.Judge))
 	if err != nil {
-		return nil, err
+		return nil, promptTrims, err
 	}
 	if humanOutput {
 		f.Streams().Printf("[judge:%s] running...\n", label)
@@ -617,12 +648,12 @@ func runSingleJudge(ctx context.Context, f commands.Factory, wo *workorder.WorkO
 	}))
 	artifact.PreserveJudgeErrorKind(result)
 	if err := artifact.WriteJudgeArtifacts(judgeDir, label, result); err != nil {
-		return nil, err
+		return nil, promptTrims, err
 	}
 	if humanOutput {
 		f.Streams().Printf("[judge:%s] %s %vs\n", label, result["status"], result["wall_seconds"])
 	}
-	return result, nil
+	return result, promptTrims, nil
 }
 
 func firstJudgeErrorKind(results ...map[string]any) string {

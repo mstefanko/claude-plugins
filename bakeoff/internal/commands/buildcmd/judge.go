@@ -57,7 +57,15 @@ func identicalEligiblePatchDigests(runs []providerRun) bool {
 	return len(digests) == 2 && digests[0] == digests[1]
 }
 
-func runBuildJudgePhase(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder, baseline buildverify.Result, runs []providerRun, metrics []buildverify.MetricComparison, runDir string, quiet bool, humanOutput bool) (map[string]map[string]any, map[string]string, map[string]string, []buildPhaseTiming, error) {
+type buildJudgePhaseResult struct {
+	JudgeResults map[string]map[string]any
+	Pass1Order   map[string]string
+	Pass2Order   map[string]string
+	Timings      []buildPhaseTiming
+	PromptTrims  []prompt.TrimRecord
+}
+
+func runBuildJudgePhase(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder, baseline buildverify.Result, runs []providerRun, metrics []buildverify.MetricComparison, runDir string, quiet bool, humanOutput bool) (buildJudgePhaseResult, error) {
 	providerIDs := []string{wo.Providers[0].ID, wo.Providers[1].ID}
 	byProvider := map[string]providerRun{}
 	for _, run := range runs {
@@ -65,36 +73,46 @@ func runBuildJudgePhase(ctx context.Context, f commands.Factory, wo *workorder.W
 	}
 	pass1Order := map[string]string{"A": providerIDs[0], "B": providerIDs[1]}
 	pass2Order := map[string]string{"A": providerIDs[1], "B": providerIDs[0]}
-	pass1, pass1Timing, err := runSingleBuildJudge(ctx, f, wo, baseline, byProvider, metrics, pass1Order, runDir, "pass1", quiet, humanOutput)
+	pass1, pass1Timing, pass1Trims, err := runSingleBuildJudge(ctx, f, wo, baseline, byProvider, metrics, pass1Order, runDir, "pass1", quiet, humanOutput)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return buildJudgePhaseResult{}, err
 	}
-	pass2, pass2Timing, err := runSingleBuildJudge(ctx, f, wo, baseline, byProvider, metrics, pass2Order, runDir, "pass2", quiet, humanOutput)
+	pass2, pass2Timing, pass2Trims, err := runSingleBuildJudge(ctx, f, wo, baseline, byProvider, metrics, pass2Order, runDir, "pass2", quiet, humanOutput)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return buildJudgePhaseResult{}, err
 	}
 	judgeResults := map[string]map[string]any{"pass1": jsonutil.FinalJSONMap(pass1), "pass2": jsonutil.FinalJSONMap(pass2)}
 	if !artifact.ProviderSucceeded(pass1) || !artifact.ProviderSucceeded(pass2) {
 		judgeResults["_failure"] = map[string]any{"pass1_status": pass1["status"], "pass2_status": pass2["status"]}
 	}
-	return judgeResults, pass1Order, pass2Order, []buildPhaseTiming{pass1Timing, pass2Timing}, nil
+	return buildJudgePhaseResult{
+		JudgeResults: judgeResults,
+		Pass1Order:   pass1Order,
+		Pass2Order:   pass2Order,
+		Timings:      []buildPhaseTiming{pass1Timing, pass2Timing},
+		PromptTrims:  append(pass1Trims, pass2Trims...),
+	}, nil
 }
 
-func runSingleBuildJudge(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder, baseline buildverify.Result, runs map[string]providerRun, metrics []buildverify.MetricComparison, orderMap map[string]string, runDir string, label string, quiet bool, humanOutput bool) (map[string]any, buildPhaseTiming, error) {
+func runSingleBuildJudge(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder, baseline buildverify.Result, runs map[string]providerRun, metrics []buildverify.MetricComparison, orderMap map[string]string, runDir string, label string, quiet bool, humanOutput bool) (map[string]any, buildPhaseTiming, []prompt.TrimRecord, error) {
 	phaseStarted := time.Now()
 	sharedEvidence := buildJudgeSharedEvidence(runDir, baseline, metrics)
 	workerA := buildJudgePayload(runDir, runs[orderMap["A"]])
 	workerB := buildJudgePayload(runDir, runs[orderMap["B"]])
 	judgePrompt, err := prompt.BuildJudgePromptWithEvidence(wo, sharedEvidence, workerA, workerB, "build")
 	if err != nil {
-		return nil, buildPhaseTiming{}, err
+		return nil, buildPhaseTiming{}, nil, err
 	}
+	trimResult := prompt.TrimContextToBudget(judgePrompt, runner.MaxPromptBytes, "judge:"+label)
+	commands.LogPromptTrim(f, trimResult)
+	judgePrompt = trimResult.Text
+	promptTrims := commands.TrimRecords(trimResult)
 	judgeDir := filepath.Join(runDir, "judge")
 	if err := os.MkdirAll(judgeDir, 0o700); err != nil {
-		return nil, buildPhaseTiming{}, err
+		return nil, buildPhaseTiming{}, promptTrims, err
 	}
 	if err := workorder.WriteTextAtomic(filepath.Join(judgeDir, "prompt-"+label+".txt"), judgePrompt); err != nil {
-		return nil, buildPhaseTiming{}, err
+		return nil, buildPhaseTiming{}, promptTrims, err
 	}
 	lastMessage := ""
 	if wo.Judge.Backend == "codex" {
@@ -103,7 +121,7 @@ func runSingleBuildJudge(ctx context.Context, f commands.Factory, wo *workorder.
 	cwd, _ := os.Getwd()
 	argv, err := provider.BuildParticipantArgv(wo.Judge, cwd, nil, lastMessage, commands.CodexOutputLastMessageSupported(ctx, f, wo.Judge))
 	if err != nil {
-		return nil, buildPhaseTiming{}, err
+		return nil, buildPhaseTiming{}, promptTrims, err
 	}
 	if humanOutput {
 		f.Streams().Printf("[judge:%s] running...\n", label)
@@ -120,12 +138,12 @@ func runSingleBuildJudge(ctx context.Context, f commands.Factory, wo *workorder.
 	}))
 	artifact.PreserveJudgeErrorKind(result)
 	if err := artifact.WriteJudgeArtifacts(judgeDir, label, result); err != nil {
-		return nil, buildPhaseTiming{}, err
+		return nil, buildPhaseTiming{}, promptTrims, err
 	}
 	if humanOutput {
 		f.Streams().Printf("[judge:%s] %s %vs\n", label, result["status"], result["wall_seconds"])
 	}
-	return result, finishPhase("judge", "", label, phaseStarted), nil
+	return result, finishPhase("judge", "", label, phaseStarted), promptTrims, nil
 }
 
 func buildJudgeSharedEvidence(runDir string, baseline buildverify.Result, metrics []buildverify.MetricComparison) map[string]any {

@@ -31,7 +31,7 @@ func buildSummary(repo buildworkspace.Repository, runDir string, runID string, o
 		}
 		providers[run.ID] = entry
 	}
-	return map[string]any{
+	out := map[string]any{
 		"schema_version":   1,
 		"command":          "build",
 		"status":           buildCommandStatus(exitCode),
@@ -51,6 +51,10 @@ func buildSummary(repo buildworkspace.Repository, runDir string, runID string, o
 		"artifacts":        buildArtifactPaths(runDir),
 		"next":             ledger.BakeoffShowCommand(runID, outDir, ""),
 	}
+	if stalledAt, _ := decision["stalled_at"].(string); stalledAt != "" {
+		out["stalled_at"] = stalledAt
+	}
+	return out
 }
 
 func buildCommandStatus(exitCode int) string {

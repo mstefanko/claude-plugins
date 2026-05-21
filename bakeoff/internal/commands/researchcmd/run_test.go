@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -191,7 +192,7 @@ exit 2
 	}
 }
 
-func TestRunResearchOversizedPromptRecordsFailureWithoutLaunchingProvider(t *testing.T) {
+func TestRunResearchOversizedBackgroundTrimsBeforeProviderLaunch(t *testing.T) {
 	root := t.TempDir()
 	fakeBin := filepath.Join(root, "bin")
 	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
@@ -204,7 +205,15 @@ case " $* " in
   *" --help "*) printf '%s\n' '--allowedTools --disallowedTools --sandbox workspace-write --disable --output-last-message'; exit 0 ;;
 esac
 printf 'invoked:%s\n' "$(basename "$0")" >> "$BAKEOFF_SENTINEL"
-cat >/dev/null
+prompt=$(cat)
+case "$prompt" in
+  *"deduplication and conflict-flagging judge"*)
+    cat <<'JSON'
+<final_json>{"merged_claims":[],"conflicts":[],"unknowns_union":[]}</final_json>
+JSON
+    exit 0
+    ;;
+esac
 cat <<'JSON'
 <final_json>{"status":"complete","claims":[],"conflicts":[],"unknowns":[],"recommended_next_checks":[]}</final_json>
 JSON
@@ -236,29 +245,92 @@ JSON
 	outDir := filepath.Join(root, "runs")
 	factory := researchTestFactory{streams: output.NewStreams(&out, &errOut)}
 	err := RunResearch(context.Background(), factory, &ResearchOptions{WorkOrder: workOrderPath, Out: outDir, RunID: "oversized-prompt", Quiet: true, NoTriage: true})
+	if err != nil {
+		t.Fatalf("RunResearch returned error after trimming oversized background: %v\nstdout:\n%s\nstderr:\n%s", err, out.String(), errOut.String())
+	}
+	sentinelText := string(mustReadFile(t, sentinel))
+	if !strings.Contains(sentinelText, "invoked:claude") || !strings.Contains(sentinelText, "invoked:codex") {
+		t.Fatalf("providers were not launched after trim: %q", sentinelText)
+	}
+
+	runDir := filepath.Join(outDir, "oversized-prompt")
+	decisionDoc := readTestJSON(t, filepath.Join(runDir, "decision.json"))
+	trim, _ := decisionDoc["prompt_trim"].(map[string]any)
+	if !strings.Contains(fmt.Sprint(trim), "worker:claude") || !strings.Contains(fmt.Sprint(trim), "context") {
+		t.Fatalf("decision missing prompt trim record: %#v", decisionDoc)
+	}
+	if !strings.Contains(errOut.String(), "prompt_trim: prompt=worker:claude dropped=context") {
+		t.Fatalf("stderr missing prompt trim notice:\n%s", errOut.String())
+	}
+	promptText := string(mustReadFile(t, filepath.Join(runDir, "providers", "claude", "prompt.txt")))
+	if !strings.Contains(promptText, "<context>\n</context>") || strings.Contains(promptText, strings.Repeat("x", 64)) {
+		t.Fatalf("provider prompt was not trimmed:\n%s", promptText[:min(len(promptText), 200)])
+	}
+}
+
+func TestRunResearchOversizedRequiredPromptStillRecordsTrimAndDoesNotLaunchProvider(t *testing.T) {
+	root := t.TempDir()
+	fakeBin := filepath.Join(root, "bin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := filepath.Join(root, "provider-invoked")
+	fakeScript := `#!/bin/sh
+case " $* " in
+  *" --version "*) printf '%s fake\n' "$(basename "$0")"; exit 0 ;;
+  *" --help "*) printf '%s\n' '--allowedTools --disallowedTools --sandbox workspace-write --disable --output-last-message'; exit 0 ;;
+esac
+printf 'invoked:%s\n' "$(basename "$0")" >> "$BAKEOFF_SENTINEL"
+cat >/dev/null
+cat <<'JSON'
+<final_json>{"status":"complete","claims":[],"conflicts":[],"unknowns":[],"recommended_next_checks":[]}</final_json>
+JSON
+`
+	writeExecutable(t, filepath.Join(fakeBin, "claude"), fakeScript)
+	writeExecutable(t, filepath.Join(fakeBin, "codex"), fakeScript)
+	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("BAKEOFF_SENTINEL", sentinel)
+
+	workOrderPath := filepath.Join(root, "work-order.json")
+	if err := workorder.WriteJSONAtomic(workOrderPath, map[string]any{
+		"schema_version": 1,
+		"id":             "oversized-required-prompt",
+		"type":           "gather",
+		"goal":           strings.Repeat("g", runner.MaxPromptBytes+1),
+		"background":     strings.Repeat("x", runner.MaxPromptBytes+1),
+		"providers": []map[string]any{
+			{"id": "claude", "backend": "claude", "model": "claude-test", "scope": "codebase"},
+			{"id": "codex", "backend": "codex", "model": "codex-test", "scope": "web"},
+		},
+		"scope_policy": map[string]any{"enforcement": "advisory"},
+		"judge":        map[string]any{"backend": "claude", "model": "judge-test"},
+		"budgets":      map[string]any{"wall_clock_seconds": 3, "max_output_bytes": 20000, "heartbeat_seconds": 0},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	outDir := filepath.Join(root, "runs")
+	factory := researchTestFactory{streams: output.NewStreams(&out, &errOut)}
+	err := RunResearch(context.Background(), factory, &ResearchOptions{WorkOrder: workOrderPath, Out: outDir, RunID: "oversized-required-prompt", Quiet: true, NoTriage: true})
 	if err == nil {
-		t.Fatalf("expected RunResearch to fail for oversized prompts\nstdout:\n%s\nstderr:\n%s", out.String(), errOut.String())
+		t.Fatalf("expected RunResearch to fail for oversized required prompt\nstdout:\n%s\nstderr:\n%s", out.String(), errOut.String())
 	}
 	if _, statErr := os.Stat(sentinel); !os.IsNotExist(statErr) {
 		t.Fatalf("provider binary was launched; sentinel stat err = %v", statErr)
 	}
 
-	runDir := filepath.Join(outDir, "oversized-prompt")
+	runDir := filepath.Join(outDir, "oversized-required-prompt")
 	status := readTestJSON(t, filepath.Join(runDir, "providers", "claude", "status.json"))
 	if status["failure_kind"] != "prompt_too_large" {
 		t.Fatalf("provider status failure_kind = %#v", status)
 	}
 	decisionDoc := readTestJSON(t, filepath.Join(runDir, "decision.json"))
-	providerStatuses := decisionDoc["provider_statuses"].(map[string]any)
-	claudeDecision := providerStatuses["claude"].(map[string]any)
-	if claudeDecision["failure_kind"] != "prompt_too_large" {
-		t.Fatalf("decision provider failure_kind = %#v", claudeDecision)
+	if decisionDoc["stalled_at"] != "providers" {
+		t.Fatalf("decision stalled_at = %#v", decisionDoc["stalled_at"])
 	}
-	manifestDoc := readTestJSON(t, filepath.Join(runDir, "manifest.json"))
-	providers := manifestDoc["providers"].(map[string]any)
-	claudeManifest := providers["claude"].(map[string]any)
-	if claudeManifest["failure_kind"] != "prompt_too_large" {
-		t.Fatalf("manifest provider failure_kind = %#v", claudeManifest)
+	if !strings.Contains(fmt.Sprint(decisionDoc["prompt_trim"]), "worker:claude") {
+		t.Fatalf("decision missing prompt trim record: %#v", decisionDoc)
 	}
 	reportText := string(mustReadFile(t, filepath.Join(runDir, "report.md")))
 	if !strings.Contains(reportText, "failure kind: prompt_too_large") {
@@ -326,6 +398,9 @@ JSON
 	decisionDoc := readTestJSON(t, filepath.Join(runDir, "decision.json"))
 	if decisionDoc["judge_error_kind"] != "rate_or_quota_limited" {
 		t.Fatalf("decision judge_error_kind = %#v", decisionDoc["judge_error_kind"])
+	}
+	if decisionDoc["stalled_at"] != "judge" {
+		t.Fatalf("decision stalled_at = %#v", decisionDoc["stalled_at"])
 	}
 }
 

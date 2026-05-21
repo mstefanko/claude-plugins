@@ -52,6 +52,7 @@ type ResearchSummary struct {
 	RunID           string                     `json:"run_id"`
 	RunDir          string                     `json:"run_dir"`
 	DecisionKind    any                        `json:"decision_kind"`
+	StalledAt       string                     `json:"stalled_at,omitempty"`
 	CanonicalWinner any                        `json:"canonical_winner"`
 	JudgeRan        bool                       `json:"judge_ran"`
 	Providers       map[string]ProviderSummary `json:"providers"`
@@ -221,6 +222,7 @@ func BuildResearch(runDir string, runID string, outDir string, decision map[stri
 		RunID:           runID,
 		RunDir:          runDir,
 		DecisionKind:    decision["decision_kind"],
+		StalledAt:       jsonutil.StringValue(decision["stalled_at"]),
 		CanonicalWinner: decision["canonical_winner"],
 		JudgeRan:        jsonutil.BoolValue(decision["judge_ran"]),
 		Providers:       providers,

@@ -13,6 +13,7 @@ import (
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/buildworkspace"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/jsonutil"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/prompt"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/runner"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
 )
@@ -39,6 +40,7 @@ type providerRun struct {
 	ScopeDiagnostics    buildScopeDiagnostics
 	ProtectedViolations []buildworkspace.ProtectedPathViolation
 	IneligibleReasons   []string
+	PromptTrims         []prompt.TrimRecord
 	Workspace           buildworkspace.WorkspaceMetadata
 	ProviderArtifactDir string
 	PhaseTiming         buildPhaseTiming

@@ -1,6 +1,9 @@
 package summary
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+)
 
 func TestProviderStatusSummaryCompactsFailure(t *testing.T) {
 	got := ProviderStatusSummary(map[string]any{
@@ -31,5 +34,17 @@ func TestCommandStatus(t *testing.T) {
 	}
 	if CommandStatus(1) != "failed" {
 		t.Fatal("exit 1 should be failed")
+	}
+}
+
+func TestBuildResearchIncludesStalledAt(t *testing.T) {
+	runDir := t.TempDir()
+	got := BuildResearch(runDir, "run-1", filepath.Dir(runDir), map[string]any{
+		"decision_kind": "both_failed",
+		"stalled_at":    "providers",
+		"judge_ran":     false,
+	}, map[string]map[string]any{}, 1, false, nil)
+	if got.StalledAt != "providers" {
+		t.Fatalf("stalled_at = %q", got.StalledAt)
 	}
 }

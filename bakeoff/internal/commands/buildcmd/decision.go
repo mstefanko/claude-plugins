@@ -36,6 +36,7 @@ func resolveBuildDecision(wo *workorder.WorkOrder, workerResults map[string]map[
 	decision, exitCode := decisionpkg.ResolveBuild(input)
 	if judgeFailure != nil {
 		decision["caveats"] = append(jsonutil.ListStrings(decision["caveats"]), fmt.Sprintf("build judge failed: pass1=%v, pass2=%v", judgeFailure["pass1_status"], judgeFailure["pass2_status"]))
+		decisionpkg.SetStalledAt(decision, decisionpkg.StalledAtJudge)
 		if exitCode == 3 {
 			exitCode = 1
 		}
@@ -319,7 +320,7 @@ func buildDecision(wo *workorder.WorkOrder, workerResults map[string]map[string]
 		}
 		providerBuild[run.ID] = entry
 	}
-	return map[string]any{
+	out := map[string]any{
 		"mode":               "build",
 		"decision_kind":      decisionKind,
 		"selection_basis":    selectionBasis,
@@ -332,4 +333,8 @@ func buildDecision(wo *workorder.WorkOrder, workerResults map[string]map[string]
 		"metric_comparisons": metrics,
 		"caveats":            caveats,
 	}
+	if decisionKind == "baseline_failed" || decisionKind == "baseline_expectation_failed" {
+		decisionpkg.SetStalledAt(out, decisionpkg.StalledAtBaselineVerify)
+	}
+	return out
 }

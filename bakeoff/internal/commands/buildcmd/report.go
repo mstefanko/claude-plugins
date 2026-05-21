@@ -22,6 +22,9 @@ func renderBuildReport(wo *workorder.WorkOrder, runID string, outDir string, run
 		"Mode: `build`",
 		"Decision: `" + jsonutil.StringValue(decision["decision_kind"]) + "`",
 	}
+	if stalledAt := jsonutil.StringValue(decision["stalled_at"]); stalledAt != "" {
+		lines = append(lines, "Stalled at: `"+stalledAt+"`")
+	}
 	if winner := jsonutil.StringValue(decision["canonical_winner"]); winner != "" {
 		lines = append(lines, "Winner: `"+winner+"`")
 	} else {

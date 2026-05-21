@@ -38,9 +38,9 @@ func BuildWorkerPromptWithRepoLayout(wo *workorder.WorkOrder, provider workorder
 		return "", fmt.Errorf("unsupported scope: %s", provider.Scope)
 	}
 	text := base
-	text = replaceTagInner(text, questionTag, wo.Goal)
-	text = replaceTagInner(text, "context", wo.Background)
-	text = insertAfterTag(text, "context", repoLayout)
+	text = replaceTagInnerEscaped(text, questionTag, wo.Goal)
+	text = replaceTagInnerEscaped(text, "context", wo.Background)
+	text = insertAfterTag(text, "context", escapeTaggedPromptBlock(repoLayout, "repo_layout"))
 	text = replaceTagInner(text, "scope", scope)
 	text = replaceBlock(text, fixtureFacetBlock(), RenderFacetBlock(wo.Facet))
 	text = strings.Replace(text, fixtureWorkerFacetRules(), RenderWorkerFacetRules(wo.Facet), 1)
@@ -80,12 +80,12 @@ func BuildJudgePromptWithEvidence(wo *workorder.WorkOrder, sharedEvidence any, w
 	text := base
 	text = replaceBlock(text, fixtureFacetBlock(), RenderFacetBlock(wo.Facet))
 	text = strings.Replace(text, fixtureJudgeFacetRules(actualMode), RenderJudgeFacetRules(wo.Facet, actualMode), 1)
-	text = replaceTagInner(text, "goal", wo.Goal)
-	text = replaceTagInner(text, "background", wo.Background)
+	text = replaceTagInnerEscaped(text, "goal", wo.Goal)
+	text = replaceTagInnerEscaped(text, "background", wo.Background)
 	text = replaceBlock(text, fixtureBuildSpecBlock(), RenderBuildSpecBlock(wo.Build))
-	text = replaceTagInner(text, "shared_build_evidence", sharedPayload)
-	text = replaceTagInner(text, judgeATag(actualMode), payloadA)
-	text = replaceTagInner(text, judgeBTag(actualMode), payloadB)
+	text = replaceTagInnerEscaped(text, "shared_build_evidence", sharedPayload)
+	text = replaceTagInnerEscaped(text, judgeATag(actualMode), payloadA)
+	text = replaceTagInnerEscaped(text, judgeBTag(actualMode), payloadB)
 	text = replaceBlock(text, fixtureRuntimeBudgetBlock(), RenderRuntimeBudgetBlock(wo.Budgets, "judge"))
 	return text, nil
 }
@@ -215,24 +215,24 @@ func RenderFacetBlock(facet *workorder.Facet) string {
 	}
 	lines := []string{
 		"<facet>",
-		"Facet id: " + facet.ID,
-		"Focus: " + facet.Focus,
+		"Facet id: " + escapePromptBlockBody(facet.ID),
+		"Focus: " + escapePromptBlockBody(facet.Focus),
 		"",
 		"This is a task focus, not a persona. Do not role-play. Apply the facet only after the work-order goal, scope, citation rules, and output schema.",
 		"",
 		"Include:",
 	}
 	for _, item := range facet.Include {
-		lines = append(lines, "- "+item)
+		lines = append(lines, "- "+escapePromptBlockBody(item))
 	}
 	if len(facet.Exclude) > 0 {
 		lines = append(lines, "", "Exclude:")
 		for _, item := range facet.Exclude {
-			lines = append(lines, "- "+item)
+			lines = append(lines, "- "+escapePromptBlockBody(item))
 		}
 	}
 	if facet.Notes != "" {
-		lines = append(lines, "", "Notes: "+facet.Notes)
+		lines = append(lines, "", "Notes: "+escapePromptBlockBody(facet.Notes))
 	}
 	lines = append(lines, "</facet>")
 	return strings.Join(lines, "\n")
@@ -254,24 +254,24 @@ func RenderBuildSpecBlock(spec *workorder.BuildSpec) string {
 	}
 	lines := []string{
 		"<build_spec>",
-		"Base ref: " + spec.BaseRef,
+		"Base ref: " + escapePromptBlockBody(spec.BaseRef),
 		fmt.Sprintf("Patch max bytes: %d", spec.PatchMaxBytes),
 	}
 	if spec.ComparisonGoal != "" {
-		lines = append(lines, "Comparison goal: "+spec.ComparisonGoal)
+		lines = append(lines, "Comparison goal: "+escapePromptBlockBody(spec.ComparisonGoal))
 	}
 	if len(spec.ProtectedPaths) > 0 {
 		lines = append(lines, "", "Protected paths:")
 		for _, protectedPath := range spec.ProtectedPaths {
-			lines = append(lines, "- "+protectedPath)
+			lines = append(lines, "- "+escapePromptBlockBody(protectedPath))
 		}
 	}
 	if len(spec.Verify) > 0 {
 		lines = append(lines, "", "Verifier commands:")
 		for _, verifier := range spec.Verify {
-			line := fmt.Sprintf("- %s (%s): %s; timeout=%ds; max_output=%d bytes", verifier.ID, verifier.Kind, strings.Join(verifier.Argv, " "), verifier.WallClockSeconds, verifier.MaxOutputBytes)
+			line := fmt.Sprintf("- %s (%s): %s; timeout=%ds; max_output=%d bytes", escapePromptBlockBody(verifier.ID), escapePromptBlockBody(verifier.Kind), escapePromptBlockBody(strings.Join(verifier.Argv, " ")), verifier.WallClockSeconds, verifier.MaxOutputBytes)
 			if verifier.Metric != nil {
-				line += fmt.Sprintf("; metric=%s direction=%s min_delta=%.3g%% noise_floor=%.3g%%", verifier.Metric.Name, verifier.Metric.Direction, verifier.Metric.MinDeltaPercent, verifier.Metric.NoiseFloorPercent)
+				line += fmt.Sprintf("; metric=%s direction=%s min_delta=%.3g%% noise_floor=%.3g%%", escapePromptBlockBody(verifier.Metric.Name), escapePromptBlockBody(verifier.Metric.Direction), verifier.Metric.MinDeltaPercent, verifier.Metric.NoiseFloorPercent)
 				if verifier.Metric.MinRuns > 1 {
 					line += fmt.Sprintf(" min_runs=%d", verifier.Metric.MinRuns)
 				}
@@ -325,7 +325,7 @@ func sortedJSON(value any) (string, error) {
 func replaceTagInner(text string, tag string, replacement string) string {
 	open := "<" + tag + ">"
 	closeTag := "</" + tag + ">"
-	start := strings.Index(text, open)
+	start := blockTagIndex(text, open)
 	if start == -1 {
 		return text
 	}
@@ -341,7 +341,54 @@ func replaceTagInner(text string, tag string, replacement string) string {
 	if contentEnd > contentStart && text[contentEnd-1] == '\n' {
 		contentEnd--
 	}
-	return text[:contentStart] + replacement + text[contentEnd:]
+	suffixStart := contentEnd
+	if replacement == "" && strings.HasPrefix(text[suffixStart:], "\n") {
+		suffixStart++
+	}
+	return text[:contentStart] + replacement + text[suffixStart:]
+}
+
+func replaceTagInnerEscaped(text string, tag string, replacement string) string {
+	return replaceTagInner(text, tag, escapePromptBlockBody(replacement))
+}
+
+func escapeTaggedPromptBlock(text string, tag string) string {
+	open := "<" + tag + ">"
+	closeTag := "</" + tag + ">"
+	start := blockTagIndex(text, open)
+	if start == -1 {
+		return text
+	}
+	contentStart := start + len(open)
+	if strings.HasPrefix(text[contentStart:], "\n") {
+		contentStart++
+	}
+	end := strings.Index(text[contentStart:], closeTag)
+	if end == -1 {
+		return text
+	}
+	contentEnd := contentStart + end
+	if contentEnd > contentStart && text[contentEnd-1] == '\n' {
+		contentEnd--
+	}
+	return text[:contentStart] + escapePromptBlockBody(text[contentStart:contentEnd]) + text[contentEnd:]
+}
+
+func blockTagIndex(text string, open string) int {
+	offset := 0
+	for {
+		index := strings.Index(text[offset:], open)
+		if index == -1 {
+			return -1
+		}
+		index += offset
+		lineStart := index == 0 || text[index-1] == '\n'
+		blockStart := strings.HasPrefix(text[index+len(open):], "\n")
+		if lineStart && blockStart {
+			return index
+		}
+		offset = index + len(open)
+	}
 }
 
 func replaceBlock(text string, old string, replacement string) string {

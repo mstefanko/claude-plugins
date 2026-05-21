@@ -43,6 +43,9 @@ func TestGatherStructuredUnionClassifiesFailedJudgeAsProviderUnionOnly(t *testin
 	if exitCode != 4 || decision["decision_kind"] != "provider_union_only" || decision["judge_completed"] != false || decision["judge_error_kind"] != "api_transient" {
 		t.Fatalf("decision=%#v exit=%d", decision, exitCode)
 	}
+	if decision["stalled_at"] != StalledAtJudge {
+		t.Fatalf("stalled_at = %#v", decision["stalled_at"])
+	}
 }
 
 func TestGatherStructuredUnionMarksSuccessfulJudgeComplete(t *testing.T) {
@@ -61,6 +64,28 @@ func TestGatherStructuredUnionMarksSuccessfulJudgeComplete(t *testing.T) {
 	if exitCode != 0 || decision["decision_kind"] != "structured_union" || decision["judge_completed"] != true {
 		t.Fatalf("decision=%#v exit=%d", decision, exitCode)
 	}
+	if _, ok := decision["stalled_at"]; ok {
+		t.Fatalf("successful gather should not set stalled_at: %#v", decision)
+	}
+}
+
+func TestResolveCompareTieSetsSelectionStall(t *testing.T) {
+	base := map[string]any{"mode": "compare", "provider_statuses": map[string]any{}}
+	decision := ResolveCompare(base, map[string]map[string]any{
+		"pass1": {"winner": "A", "rationale": "A"},
+		"pass2": {"winner": "A", "rationale": "A"},
+	}, map[string]string{"A": "claude", "B": "codex"}, map[string]string{"A": "codex", "B": "claude"})
+	if decision["decision_kind"] != "tie" || decision["stalled_at"] != StalledAtSelection {
+		t.Fatalf("decision = %#v", decision)
+	}
+}
+
+func TestBothFailedSetsProvidersStall(t *testing.T) {
+	wo := &workorder.WorkOrder{Type: "gather", Providers: []workorder.Participant{{ID: "claude"}, {ID: "codex"}}}
+	decision := BothFailed(wo, map[string]map[string]any{"claude": {"status": "exit_error"}, "codex": {"status": "exit_error"}})
+	if decision["stalled_at"] != StalledAtProviders {
+		t.Fatalf("decision = %#v", decision)
+	}
 }
 
 func TestResolveBuildSelectsGateWinner(t *testing.T) {
@@ -72,6 +97,35 @@ func TestResolveBuildSelectsGateWinner(t *testing.T) {
 		},
 	})
 	if exitCode != 0 || decision["decision_kind"] != "pick_winner" || decision["selection_basis"] != "gate" || decision["canonical_winner"] != "claude" {
+		t.Fatalf("decision=%#v exit=%d", decision, exitCode)
+	}
+	if _, ok := decision["stalled_at"]; ok {
+		t.Fatalf("successful winner should not set stalled_at: %#v", decision)
+	}
+}
+
+func TestResolveBuildNoCapturedPatchSetsProvidersStall(t *testing.T) {
+	decision, exitCode := ResolveBuild(BuildResolutionInput{
+		ProviderIDs: []string{"claude", "codex"},
+		ProviderStatuses: map[string]map[string]any{
+			"claude": {"patch_state": "provider_failed", "verify_state": "not_run"},
+			"codex":  {"patch_state": "provider_failed", "verify_state": "not_run"},
+		},
+	})
+	if exitCode != 1 || decision["decision_kind"] != "both_failed" || decision["stalled_at"] != StalledAtProviders {
+		t.Fatalf("decision=%#v exit=%d", decision, exitCode)
+	}
+}
+
+func TestResolveBuildProviderGateFailureSetsProviderVerifyStall(t *testing.T) {
+	decision, exitCode := ResolveBuild(BuildResolutionInput{
+		ProviderIDs: []string{"claude", "codex"},
+		ProviderStatuses: map[string]map[string]any{
+			"claude": {"patch_state": "patch_captured", "verify_state": "gate_failed"},
+			"codex":  {"patch_state": "patch_captured", "verify_state": "gate_failed"},
+		},
+	})
+	if exitCode != 1 || decision["decision_kind"] != "both_failed_verification" || decision["stalled_at"] != StalledAtProviderVerify {
 		t.Fatalf("decision=%#v exit=%d", decision, exitCode)
 	}
 }
@@ -140,6 +194,9 @@ func TestResolveBuildIdenticalPatchDigestTiesBeforeMetricsOrJudge(t *testing.T) 
 	if exitCode != 3 || decision["decision_kind"] != "tie" || decision["selection_basis"] != "identical_patch" || decision["canonical_winner"] != nil || decision["judge_ran"] != false {
 		t.Fatalf("decision=%#v exit=%d", decision, exitCode)
 	}
+	if decision["stalled_at"] != StalledAtSelection {
+		t.Fatalf("stalled_at = %#v", decision["stalled_at"])
+	}
 }
 
 func TestResolveBuildProtectedPathIneligibleUsesExistingFailureKind(t *testing.T) {
@@ -188,6 +245,9 @@ func TestResolveBuildJudgeDisagreementTies(t *testing.T) {
 	})
 	if exitCode != 3 || decision["decision_kind"] != "tie" || decision["canonical_winner"] != nil {
 		t.Fatalf("decision=%#v exit=%d", decision, exitCode)
+	}
+	if decision["stalled_at"] != StalledAtSelection {
+		t.Fatalf("stalled_at = %#v", decision["stalled_at"])
 	}
 	if decision["judge_ran"] != true || decision["judge_attempted"] != true || decision["judge_completed"] != true {
 		t.Fatalf("judge trio must be true even on swap-disagreement tie: %#v", decision)
