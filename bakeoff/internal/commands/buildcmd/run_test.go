@@ -309,6 +309,52 @@ func TestPatchIntegrityChecksUseBaseCommitWorktree(t *testing.T) {
 	}
 }
 
+func TestPatchIntegrityChecksAcceptRelativeRunDir(t *testing.T) {
+	ctx := context.Background()
+	repoDir := initBuildGitRepo(t)
+	repo, err := buildworkspace.ResolveRepository(ctx, repoDir, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent := t.TempDir()
+	t.Chdir(parent)
+	runDir := filepath.Join("runs", "rel")
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	worktreePath := filepath.Join(t.TempDir(), "provider")
+	if err := buildworkspace.CreateDetachedWorktree(ctx, repo, worktreePath); err != nil {
+		t.Fatal(err)
+	}
+	defer buildworkspace.CleanupWorktree(ctx, repo, worktreePath, false)
+
+	if err := os.WriteFile(filepath.Join(worktreePath, "README.md"), []byte("provider patch\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	captureDir := filepath.Join(runDir, "providers", "claude", "build")
+	capture, err := buildworkspace.CaptureChanges(ctx, buildworkspace.CaptureOptions{
+		WorktreePath:  worktreePath,
+		BaseCommit:    repo.BaseCommit,
+		OutputDir:     captureDir,
+		PatchMaxBytes: 100000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	checks := collectPatchIntegrityChecks(ctx, repo, runDir, []providerRun{{
+		ID:      "claude",
+		Capture: &capture,
+	}})
+	if len(checks) != 1 {
+		t.Fatalf("checks = %#v", checks)
+	}
+	check := checks[0]
+	if check.Status != "passed" {
+		t.Fatalf("relative runDir should still let git -C resolve the worktree: %#v", check)
+	}
+}
+
 func TestRunBuildUsesInvocationSubdirectory(t *testing.T) {
 	repoDir := initBuildGitRepo(t)
 	writeAndCommitFile(t, repoDir, "app/README.md", "app\n", 0o644)

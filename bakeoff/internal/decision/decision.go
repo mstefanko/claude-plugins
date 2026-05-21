@@ -297,6 +297,8 @@ func ResolveBuild(input BuildResolutionInput) (map[string]any, int) {
 	pass1 := input.JudgeResults["pass1"]
 	pass2 := input.JudgeResults["pass2"]
 	out["judge_ran"] = true
+	out["judge_attempted"] = true
+	out["judge_completed"] = true
 	out["order_maps"] = map[string]any{"pass1": input.Pass1Order, "pass2": input.Pass2Order}
 	out["judge_passes"] = map[string]any{
 		"pass1": JudgePassSummary(pass1, input.Pass1Order, "winner"),

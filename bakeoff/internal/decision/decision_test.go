@@ -93,6 +93,9 @@ func TestResolveBuildUsesStableSwappedJudgeWinner(t *testing.T) {
 	if exitCode != 0 || decision["selection_basis"] != "judge" || decision["canonical_winner"] != "claude" {
 		t.Fatalf("decision=%#v exit=%d", decision, exitCode)
 	}
+	if decision["judge_ran"] != true || decision["judge_attempted"] != true || decision["judge_completed"] != true {
+		t.Fatalf("judge trio not set on swap-winner path: %#v", decision)
+	}
 }
 
 func TestResolveBuildSelectsMetricWinner(t *testing.T) {
@@ -108,6 +111,12 @@ func TestResolveBuildSelectsMetricWinner(t *testing.T) {
 	})
 	if exitCode != 0 || decision["decision_kind"] != "pick_winner" || decision["selection_basis"] != "metric" || decision["canonical_winner"] != "codex" || decision["judge_ran"] != false {
 		t.Fatalf("decision=%#v exit=%d", decision, exitCode)
+	}
+	if _, ok := decision["judge_attempted"]; ok {
+		t.Fatalf("judge_attempted should be absent when metric short-circuits judge: %#v", decision)
+	}
+	if _, ok := decision["judge_completed"]; ok {
+		t.Fatalf("judge_completed should be absent when metric short-circuits judge: %#v", decision)
 	}
 }
 
@@ -179,5 +188,8 @@ func TestResolveBuildJudgeDisagreementTies(t *testing.T) {
 	})
 	if exitCode != 3 || decision["decision_kind"] != "tie" || decision["canonical_winner"] != nil {
 		t.Fatalf("decision=%#v exit=%d", decision, exitCode)
+	}
+	if decision["judge_ran"] != true || decision["judge_attempted"] != true || decision["judge_completed"] != true {
+		t.Fatalf("judge trio must be true even on swap-disagreement tie: %#v", decision)
 	}
 }

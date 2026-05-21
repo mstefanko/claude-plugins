@@ -213,7 +213,11 @@ func collectPatchIntegrityChecks(ctx context.Context, repo buildworkspace.Reposi
 		return nil
 	}
 
-	checkParent, err := os.MkdirTemp(runDir, ".patch-integrity-")
+	absRunDir, err := filepath.Abs(runDir)
+	if err != nil {
+		return patchIntegrityNotChecked(out, err)
+	}
+	checkParent, err := os.MkdirTemp(absRunDir, ".patch-integrity-")
 	if err != nil {
 		return patchIntegrityNotChecked(out, err)
 	}

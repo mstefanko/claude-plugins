@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "id": "lscmd-order-by-finished-at-2",
+  "type": "build",
+  "goal": "Order `bakeoff ls` output newest-first by `finished_at`, with a stable, deterministic fallback for legacy or malformed runs whose `finished_at` is missing or unparsable. Add focused unit tests for the ordering function.",
+  "background": [
+    "Today the `bakeoff ls` command in internal/commands/lscmd does not order runs by finished_at descending in a way that is robust to legacy or malformed ledger entries.",
+    "Acceptance criteria: (1) runs with well-formed finished_at appear newest-first; (2) runs with missing finished_at sort after all well-formed runs; (3) runs with unparsable finished_at sort after all well-formed runs (same bucket as missing); (4) ties on finished_at are broken deterministically by run id (lexicographic ascending); (5) ordering is implemented as a pure, testable function inside internal/commands/lscmd/**; (6) unit tests cover happy path, missing finished_at, unparsable finished_at, and run-id tiebreak.",
+    "All edits must stay inside internal/commands/lscmd/**. Bakeoff will capture candidate patches from isolated worktrees and will not apply them to this checkout."
+  ],
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "sonnet",
+      "scope": "codebase",
+      "effort": "high"
+    },
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "scope": "codebase",
+      "effort": "high"
+    }
+  ],
+  "scope_policy": {
+    "enforcement": "best_effort"
+  },
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "build": {
+    "base_ref": "HEAD",
+    "comparison_goal": "Prefer the patch that satisfies the acceptance criteria with the smallest maintainable change.",
+    "verify": [
+      {
+        "id": "build-and-lscmd-tests",
+        "kind": "gate",
+        "argv": ["sh", "-c", "go build ./... && go test ./internal/commands/lscmd/... -run . -count=1"],
+        "wall_clock_seconds": 300,
+        "max_output_bytes": 60000
+      }
+    ]
+  },
+  "budgets": {
+    "wall_clock_seconds": 1200,
+    "max_output_bytes": 80000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 80000
+  }
+}

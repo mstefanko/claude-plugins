@@ -105,9 +105,7 @@ func runLs(_ context.Context, f commands.Factory, opts *LsOptions) error {
 		}
 		rows = append(rows, row)
 	}
-	if opts.History || opts.LimitSet {
-		sortRowsByFinishedAt(rows)
-	}
+	sortRowsByFinishedAt(rows)
 	totalRows := len(rows)
 	if opts.History && !opts.LimitSet {
 		opts.Limit = 10
@@ -151,7 +149,7 @@ func sortRowsByFinishedAt(rows []map[string]any) {
 		if leftOK && !leftTime.Equal(rightTime) {
 			return leftTime.After(rightTime)
 		}
-		return jsonutil.StringValue(rows[i]["run_id"]) > jsonutil.StringValue(rows[j]["run_id"])
+		return jsonutil.StringValue(rows[i]["run_id"]) < jsonutil.StringValue(rows[j]["run_id"])
 	})
 }
 

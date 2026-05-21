@@ -119,6 +119,76 @@ func TestLimitAppliesAfterRecentSortForJSON(t *testing.T) {
 	}
 }
 
+func TestSortRowsByFinishedAt(t *testing.T) {
+	t.Run("happy path newest first", func(t *testing.T) {
+		rows := []map[string]any{
+			{"run_id": "old", "finished_at": "2026-05-19T10:00:00Z"},
+			{"run_id": "new", "finished_at": "2026-05-20T10:00:00Z"},
+			{"run_id": "mid", "finished_at": "2026-05-19T12:00:00Z"},
+		}
+		sortRowsByFinishedAt(rows)
+		wantOrder := []string{"new", "mid", "old"}
+		for i, want := range wantOrder {
+			if got := rows[i]["run_id"]; got != want {
+				t.Errorf("position %d: got %q, want %q", i, got, want)
+			}
+		}
+	})
+
+	t.Run("missing finished_at sorts last", func(t *testing.T) {
+		rows := []map[string]any{
+			{"run_id": "b-missing", "finished_at": ""},
+			{"run_id": "a-dated", "finished_at": "2026-05-20T10:00:00Z"},
+		}
+		sortRowsByFinishedAt(rows)
+		if rows[0]["run_id"] != "a-dated" || rows[1]["run_id"] != "b-missing" {
+			t.Errorf("got %v, %v; want a-dated, b-missing", rows[0]["run_id"], rows[1]["run_id"])
+		}
+	})
+
+	t.Run("unparsable finished_at sorts last", func(t *testing.T) {
+		rows := []map[string]any{
+			{"run_id": "b-bad", "finished_at": "not-a-date"},
+			{"run_id": "a-dated", "finished_at": "2026-05-20T10:00:00Z"},
+		}
+		sortRowsByFinishedAt(rows)
+		if rows[0]["run_id"] != "a-dated" || rows[1]["run_id"] != "b-bad" {
+			t.Errorf("got %v, %v; want a-dated, b-bad", rows[0]["run_id"], rows[1]["run_id"])
+		}
+	})
+
+	t.Run("tiebreak by run_id ascending", func(t *testing.T) {
+		ts := "2026-05-20T10:00:00Z"
+		rows := []map[string]any{
+			{"run_id": "z-run", "finished_at": ts},
+			{"run_id": "a-run", "finished_at": ts},
+			{"run_id": "m-run", "finished_at": ts},
+		}
+		sortRowsByFinishedAt(rows)
+		wantOrder := []string{"a-run", "m-run", "z-run"}
+		for i, want := range wantOrder {
+			if got := rows[i]["run_id"]; got != want {
+				t.Errorf("position %d: got %q, want %q", i, got, want)
+			}
+		}
+	})
+
+	t.Run("bad and missing both sort after dated, tiebreak ascending", func(t *testing.T) {
+		rows := []map[string]any{
+			{"run_id": "b-bad", "finished_at": "not-a-date"},
+			{"run_id": "a-missing"},
+			{"run_id": "c-dated", "finished_at": "2026-05-20T10:00:00Z"},
+		}
+		sortRowsByFinishedAt(rows)
+		if rows[0]["run_id"] != "c-dated" {
+			t.Errorf("position 0: got %v, want c-dated", rows[0]["run_id"])
+		}
+		if rows[1]["run_id"] != "a-missing" || rows[2]["run_id"] != "b-bad" {
+			t.Errorf("positions 1,2: got %v, %v; want a-missing, b-bad", rows[1]["run_id"], rows[2]["run_id"])
+		}
+	})
+}
+
 type runSpec struct {
 	ID         string
 	Type       string
