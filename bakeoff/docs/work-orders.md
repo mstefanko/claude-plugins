@@ -10,6 +10,14 @@ drafting workflow, not a work-order schema feature: each lens is a normal
 `gather` work order with the standard `code-review` facet and lens-specific
 focus/include/exclude text.
 
+Eligible generic non-build splits may be launched in parallel by the plugin,
+but that still does not change the schema. Each child is a normal
+`gather`, `compare`, or `analyze` work order and a normal `bakeoff research`
+run with an explicit run id. Parallel split summaries use those explicit run
+ids and do not rely on `latest`, because concurrent child starts make the
+convenience pointer nondeterministic. Splits that include `build` and
+multi-lens review remain sequential in the current plugin contract.
+
 Continuation is not a work-order schema feature either. When a completed run's
 artifacts suggest a useful next step, the plugin may recommend another normal
 work order, but it does not create a batch, sequence, or continuation metadata
@@ -351,6 +359,10 @@ When the plugin suggests a clean split, it shows a preview for each separate
 work order before approval, with full JSON inline only when the combined draft
 stays readable. The files remain ordinary single-work-order inputs such as
 `./<id>.part-1.work-order.json` and `./<id>.part-2.work-order.json`.
+For eligible 2-3 part non-build splits, the preview offers local `sequential`,
+`parallel`, and `show` choices. `parallel` writes and validates every file
+first, then launches all child research runs concurrently with `--json
+--quiet`; no generic `.split-summary.md` artifact is created.
 
 When the plugin drafts explicit multi-lens review, it uses readable lens stems
 instead of `.part-N`, such as `./review-auth.security.work-order.json` with

@@ -159,7 +159,7 @@ behavior.
     `run it`.
   - Expect: plugin treats each as explicit approval, writes one work-order
     file, validates, and runs. This differs from split and multi-lens, which
-    both require the exact `write and run` phrase.
+    require an explicit multi-file approval choice.
 
 - [ ] Multiple review concerns without separate-lens wording stay single-run.
   - Prompt: `/bakeoff:run review this diff against main for security and tests`
@@ -231,15 +231,33 @@ behavior.
   - Prompt: accept the independent two-part split.
   - Expect: plugin shows a compact preview row for each part with id, type,
     goal, providers, and judge; lists filenames like
-    `./<base>.part-1.work-order.json`; lists the commands to run; and asks for
-    `write and run` approval. Full JSON blocks appear only when the combined
-    draft fits the 120-line / 10 KB preview budget; otherwise the plugin says
-    the JSON is verbose and lists `show part-N` choices.
+    `./<base>.part-1.work-order.json`; lists the commands to run; and, because
+    both parts are non-build research work orders, offers local `sequential`,
+    `parallel`, and `show` choices with the parallel provider fanout cost note.
+    Full JSON blocks appear only when the combined draft fits the 120-line /
+    10 KB preview budget; otherwise the plugin says the JSON is verbose and
+    lists `show part-N` choices.
 
-- [ ] Split approval requires the exact multi-file phrase.
+- [ ] Split approval requires an explicit multi-file choice.
   - Prompt: accept a split preview with `yes`.
-  - Expect: plugin asks for `write and run` because multiple files and runs are
-    being approved. It does not write files on plain `yes`.
+  - Expect: plugin asks for an explicit displayed split approval choice
+    (`sequential`, `parallel`, or legacy `write and run` when applicable)
+    because multiple files and runs are being approved. It does not write files
+    on plain `yes`.
+
+- [ ] Existing generic split `write and run` remains sequential.
+  - Prompt: after an eligible non-build split preview offers `sequential`,
+    `parallel`, and `show`, reply `write and run`.
+  - Expect: plugin writes and validates all part files, then runs each child
+    one after another. It does not launch parallel fanout from the legacy
+    approval phrase.
+
+- [ ] `parallel` before an eligible split preview is not approval.
+  - Prompt: `/bakeoff:run compare two parallel indexing strategies for this repo using internal/search`
+  - Expect: plugin treats `parallel` as normal request text. It drafts or asks
+    for normal preview approval as appropriate, and does not write, validate,
+    or launch anything before a displayed eligible split preview offers the
+    local `parallel` choice.
 
 - [ ] Split filename and run-id collisions apply after `.part-N`.
   - Setup: assume `runs/base.part-1` and `base.part-1.work-order.json` already
@@ -258,14 +276,14 @@ behavior.
   - Prompt: accept a two-part split preview, then reply
     `change part 2 to use codex only`.
   - Expect: plugin updates part 2, shows the final set again for all parts
-    with the same preview rules, and asks for `write and run` approval again.
-    It does not carry forward the prior approval.
+    with the same preview rules, and asks for fresh split approval again. It
+    does not carry forward the prior approval.
 
 - [ ] `show part-N` prints one split part when combined JSON is too long.
   - Prompt: after a split preview says full JSON is verbose, reply
     `show part-1`.
   - Expect: plugin prints only the part-1 work-order JSON, lists the other
-    available `show part-N` choices, and repeats the `write and run` approval
+    available `show part-N` choices, and repeats the relevant split approval
     question.
 
 - [ ] Split validation failure stops before execution.
@@ -273,8 +291,23 @@ behavior.
   - Expect: plugin validates all parts before running any; on validation error,
     it reports the failing file and error, repairs the JSON, and shows the
     final set again with the same preview rules (compact rows plus JSON only
-    when the combined draft is small enough) before asking for exact
-    `write and run` approval.
+    when the combined draft is small enough) before asking for fresh split
+    approval.
+
+- [ ] Parallel split validates every file before launching children.
+  - Prompt: after an eligible three-part non-build split preview, reply
+    `parallel`.
+  - Expect: plugin writes all three files, validates every final file path, and
+    launches no children if any validation fails. If validation succeeds, it
+    launches all three `bakeoff research ... --json --quiet` children
+    concurrently with explicit collision-resolved run ids.
+
+- [ ] Parallel parent progress reports only child lifecycle state.
+  - Setup: one parallel child exits `0`, one exits `4`, and one exits `1` after
+    different durations.
+  - Expect: parent output reports launch count, running count, child completion
+    labels, and exit codes. It does not claim provider, judge, or triage phase
+    progress for quiet children.
 
 - [ ] Split execution continues after exit `3`.
   - Setup: part 1 completes with exit `3`.
@@ -298,6 +331,14 @@ behavior.
     winner", merged patch, merged answer, or cross-run synthesis unless the user
     asks separately.
 
+- [ ] Parallel split summaries use explicit run ids, never `latest`.
+  - Prompt: after a parallel split finishes.
+  - Expect: final response names each part, explicit run id, result class,
+    report path when present, decision kind when present, triage state when
+    relevant, `bakeoff show <run-id>`, and caveats for failed, unresolved, or
+    decision-incomplete parts. It states that `latest` may point to any one
+    child run nondeterministically and does not direct the user to `latest`.
+
 - [ ] Mixed-type splits route mode-specific flags per part.
   - Prompt: accept a two-part split where part 1 is `build` and part 2 is
     `gather`, with `--keep-worktrees --base main --diff` in the original
@@ -305,6 +346,7 @@ behavior.
   - Expect: plugin passes `--keep-worktrees` only to the build part, passes
     `--base` and `--diff` only to the gather part, and stops before execution
     if a mode-specific flag is supplied for the wrong final type on any part.
+    It does not offer `parallel` because a build part is present.
 
 - [ ] Ordered gate sequence runs task-fit, then multi-lens, then clean-split.
   - Prompt: `/bakeoff:run improve the API` (a vague request).
@@ -338,6 +380,12 @@ behavior.
   - Expect: plugin summarizes completed and failed lenses and asks before
     continuing. Exit `3`, if encountered, is marked as a completed unusual
     handoff and untriaged unless triage artifacts exist.
+
+- [ ] Specialized multi-lens review remains sequential.
+  - Prompt: after a three-lens review preview, reply `parallel`.
+  - Expect: plugin does not accept `parallel` for multi-lens review. It repeats
+    the sequential `write and run` approval requirement and does not launch
+    lens runs.
 
 - [ ] Completed multi-lens runs produce a persisted summary.
   - Prompt: after approved security/performance/UX lens runs finish.
@@ -691,7 +739,8 @@ work-order template referenced by the canonical skeletons.
   - Prompt: `/bakeoff:run Three independent changes I want done in parallel: (1) add --json to bakeoff doctor; (2) order bakeoff ls by finished_at descending; (3) add --limit N to bakeoff ls. Each has its own acceptance criteria and tests. Use two build providers and one claude judge.`
   - Expect: split proposal preview AND missing-field check stacked on
     top (verifier argv per part + AC-as-behaviors per part). Plugin
-    does not draft until both information needs are answered.
+    does not draft until both information needs are answered, and does not
+    treat the word "parallel" in the prompt as approval.
 
 - [ ] Path-like missing input is a CLI path error.
   - Prompt: `/bakeoff:run ./missing.work-order.json`

@@ -513,34 +513,69 @@ Write these files and run them one after another? Reply `write and run` to
 continue, reply `show` to print the full JSON, or tell me what to change.
 ```
 
+When the displayed generic split is eligible for parallel fanout, replace the
+final approval question with this local choice block:
+
+```text
+Choose how to run them:
+
+- `sequential` - write, validate, then run one after another.
+- `parallel` - write, validate, then run all <N> at once.
+- `show` - print the JSON before approving.
+
+Parallel cost note: <N> runs x <provider-count> providers can launch up to
+<N*provider-count> provider workers at once, followed by judge and any triage
+phases. Child output will be captured per run, and `latest` will point to one
+child run, not the group.
+```
+
+Parallel fanout is eligible only for the existing generic split path with 2-3
+parts, every part has `type` in `{gather, compare, analyze}`, every generated
+work order validates before launch, and every part has an explicit
+collision-free run id. Do not offer parallel for splits containing `build`, for
+more than three parts, or for the specialized multi-lens review path.
+
 One approval covers only the currently shown set. If the user changes any part,
 show the final set again with the same preview rules before asking for
 approval. If the user replies `show`, print the full JSON for every part and
 ask the same approval question again. If the user replies `show part-N` with a
-specific part, print only that part's JSON and repeat the multi-file
-`write and run` approval question.
-Require exact `write and run` approval before writing or executing split files.
-For splits, `yes`, `approve`, or `run it` is not enough; reply by asking for
-exact `write and run` approval because multiple files and runs are involved.
+specific part, print only that part's JSON and repeat the relevant multi-file
+approval question.
+
+For split approvals:
+
+- If the preview is not eligible for parallel fanout, require exact
+  `write and run` before writing or executing split files. For splits, `yes`,
+  `approve`, or `run it` is not enough; reply by asking for exact
+  `write and run` approval because multiple files and runs are involved.
+- If the preview is eligible for parallel fanout, only the currently displayed
+  preview can be approved. In that local preview context, `parallel` launches
+  parallel fanout; `sequential` or the existing `write and run` phrase writes,
+  validates, and runs the same files sequentially; `show` is not approval.
+  Outside that local preview, `parallel` is normal user text and must not
+  launch anything.
 
 For split work orders, derive one base slug from the original request. Append
 `.part-N` to each work-order `id`, filename, and supplied `--run-id` value. If
-no run id was supplied, let the CLI use the part work-order ids. If a
-work-order filename or run directory already exists, append the smallest numeric
-collision suffix after `.part-N` and use the same stem for both file and run id,
-such as `base.part-1-2.work-order.json` and `--run-id base.part-1-2`. Do not
-use date suffixes, and do not overwrite exact files unless the user explicitly
-asks.
+the user did not pass `--run-id`, use the work-order id stem as the explicit
+run id. If a work-order filename or run directory already exists, append the
+smallest numeric collision suffix after `.part-N` and use the same stem for
+both file and run id, such as `base.part-1-2.work-order.json` and
+`--run-id base.part-1-2`. Do not use date suffixes, do not rely on generated
+run ids for split execution, and do not overwrite exact files unless the user
+explicitly asks.
 
 After split approval, write all files, validate all files, and only then run
-the parts sequentially. If any validation fails, run no parts; surface the
-validation error verbatim, repair the affected JSON, show the final set again
-with the same preview rules, and ask for exact `write and run` approval again.
+the approved sequence or fanout. If any validation fails, run no parts; surface
+the validation error verbatim, repair the affected JSON, show the final set
+again with the same preview rules, and ask for fresh approval again.
 `bakeoff validate` warnings are advisory; preserve them in the summary when
 relevant, but do not stop the split sequence when validation exits successfully.
 Route each part by its own `type`: `build` uses
 `bakeoff build`; `gather`, `compare`, and `analyze` use `bakeoff research`.
-Apply the same mode-specific flag routing to each part. Continue after exit
+Apply the same mode-specific flag routing to each part.
+
+Sequential split execution keeps the existing behavior: continue after exit
 `0`, `3`, or `4`; exit `4` is a decision-incomplete handoff with durable
 provider artifacts. Include the judge-only rerun recommendation only for
 research runs when applicable. Split runs continue after exit `4` because each
@@ -550,10 +585,73 @@ inspecting before spending more lens budget. Stop on exit `1`, `2`, `130`,
 interruption, or command failure, summarize completed parts and the failed
 part, and ask before running any remaining parts.
 
+Parallel generic split execution launches every eligible child concurrently,
+up to the existing 3-part cap. Each child command is a normal quiet JSON
+research run:
+
+```text
+bakeoff research <work-order> --run-id <base>.<part> [--out <dir>] [flags] --json --quiet
+```
+
+Use the collision-resolved part slug as the child label, run id, filename stem,
+and summary identity. Never use `latest` in the parallel summary. Use one
+subshell per child, not `xargs -P` and not `eval`; construct commands from the
+already-known validated work-order paths, run ids, `--out`, and forwarded
+flags. Do not run the fanout script with `set -e`, because each child must
+write its exit file even when `bakeoff research` exits non-zero. Use this
+shape:
+
+```sh
+tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/bakeoff-parallel.XXXXXX") || exit 1
+
+start_child() {
+  label=$1
+  run_id=$2
+  work_order=$3
+  shift 3
+  (
+    "${CLAUDE_PLUGIN_ROOT}/bin/bakeoff" research "$work_order" \
+      --run-id "$run_id" "$@" --json --quiet
+    printf '%s\n' "$?" > "$tmpdir/$label.exit"
+  ) > "$tmpdir/$label.stdout" 2> "$tmpdir/$label.stderr" &
+  printf '%s\n' "$!" > "$tmpdir/$label.pid"
+}
+```
+
+Capture stdout and stderr separately for each child in temporary orchestration
+logs. Poll the `*.exit` files for child completion, print small parent progress
+updates on launch, completion, and at a bounded low-frequency interval while
+children are running, then `wait` for all recorded child pids before
+summarizing. Progress is limited to child process lifecycle state, such as:
+
+```text
+parallel bakeoff: launched 3 runs
+parallel bakeoff: running 3/3: architecture, security, ux
+parallel bakeoff: completed security exit=0; running 2/3
+parallel bakeoff: completed architecture exit=4; running 1/3
+parallel bakeoff: completed ux exit=0; summarizing
+```
+
+Do not claim provider, judge, or triage phase progress for child runs while
+they use `--json --quiet`. Once launched, wait for all children to settle; PR2
+does not attempt prompt-level cancellation.
+
+For parallel summaries, parse each captured JSON summary when present and fall
+back to run-dir artifact paths when JSON is missing. Use two result classes:
+`completed` for exit `0`, `3`, or `4`, and `failed` for exit `1`, `2`, `130`,
+launch failure, or missing required artifacts. For exit `3`, include the
+unresolved-disagreement caveat. For exit `4`, include the decision-incomplete
+caveat, durable artifact paths when present, and judge-only rerun guidance when
+applicable. Triage is an attribute, not a result class.
+
 Summarize split runs independently. Do not produce an overall winner, merged
 patch, merged answer, or cross-run synthesis unless the user asks for that as a
 separate follow-up. Multi-lens review has its own bounded summary rule below;
-generic split runs remain independent.
+generic split runs remain independent. Generic parallel split does not create a
+persisted `<out>/<base>.split-summary.md`; use the final conversation response
+with explicit run ids, result class, report path when present, decision kind
+when present, triage state when relevant, `bakeoff show <run-id>` commands, and
+caveats for failed, unresolved, or decision-incomplete parts.
 
 ## Multi-Lens Review
 

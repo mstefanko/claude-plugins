@@ -11,6 +11,8 @@ import (
 
 var runIDRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
+var latestSymlink = os.Symlink
+
 func MakeRunID(now time.Time, suffix string) string {
 	if suffix == "" {
 		suffix = fmt.Sprintf("%04x", now.UnixNano()&0xffff)
@@ -62,14 +64,71 @@ func UpdateLatest(outDir string, runID string) error {
 	if err := os.MkdirAll(outDir, 0o700); err != nil {
 		return err
 	}
+	return writeLatestAtomic(outDir, runID)
+}
+
+func writeLatestAtomic(outDir string, runID string) error {
 	latest := filepath.Join(outDir, "latest")
-	tmp := filepath.Join(outDir, ".latest.tmp")
-	_ = os.Remove(tmp)
-	if err := os.Symlink(runID, tmp); err == nil {
-		return os.Rename(tmp, latest)
+
+	symlinkTemp, err := os.CreateTemp(outDir, ".latest.*.tmp")
+	if err != nil {
+		return err
 	}
-	_ = os.Remove(latest)
-	return os.WriteFile(latest, []byte(runID+"\n"), 0o600)
+	symlinkTempPath := symlinkTemp.Name()
+	if err := symlinkTemp.Close(); err != nil {
+		_ = os.Remove(symlinkTempPath)
+		return err
+	}
+	if err := os.Remove(symlinkTempPath); err != nil {
+		return err
+	}
+	cleanupSymlinkTemp := true
+	defer func() {
+		if cleanupSymlinkTemp {
+			_ = os.Remove(symlinkTempPath)
+		}
+	}()
+
+	if err := latestSymlink(runID, symlinkTempPath); err == nil {
+		if err := os.Rename(symlinkTempPath, latest); err != nil {
+			return err
+		}
+		cleanupSymlinkTemp = false
+		return nil
+	}
+	_ = os.Remove(symlinkTempPath)
+	cleanupSymlinkTemp = false
+
+	fileTemp, err := os.CreateTemp(outDir, ".latest.*.tmp")
+	if err != nil {
+		return err
+	}
+	fileTempPath := fileTemp.Name()
+	cleanupFileTemp := true
+	defer func() {
+		if cleanupFileTemp {
+			_ = os.Remove(fileTempPath)
+		}
+	}()
+	if _, err := fileTemp.WriteString(runID + "\n"); err != nil {
+		_ = fileTemp.Close()
+		return err
+	}
+	if err := fileTemp.Sync(); err != nil {
+		_ = fileTemp.Close()
+		return err
+	}
+	if err := fileTemp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(fileTempPath, 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(fileTempPath, latest); err != nil {
+		return err
+	}
+	cleanupFileTemp = false
+	return nil
 }
 
 func ResolveRunDir(outDir string, runID string) (string, error) {

@@ -111,7 +111,7 @@ Add an optional field to failed result maps and compact statuses:
 ```json
 {
   "status": "exit_error",
-  "failure_kind": "rate_limited"
+  "failure_kind": "rate_or_quota_limited"
 }
 ```
 
@@ -120,6 +120,44 @@ Do not set `failure_kind` on successful results. Do not set
 
 Keep `judge_error_kind` for compatibility, but derive it from `failure_kind`
 when present.
+
+### Evidence and Checkability
+
+Each v1 kind must be backed by one of:
+
+- a structural Bakeoff runner status;
+- an existing Bakeoff classifier/test fixture;
+- a provider API error type or HTTP status documented by OpenAI or Claude; or
+- a Bakeoff-owned diagnostic string introduced by this plan.
+
+Do not add a kind only because it sounds plausible.
+
+External references checked:
+
+- OpenAI API error codes:
+  `https://platform.openai.com/docs/guides/error-codes`
+- Claude API errors:
+  `https://docs.anthropic.com/en/api/errors`
+
+| Kind | Evidence | Checkable predicate |
+| --- | --- | --- |
+| `missing_provider` | `runstatus.MissingProvider`; runner returns it for empty argv or `exec.ErrNotFound`. | `status == runner.StatusMissingProvider`. |
+| `timeout` | `runstatus.Timeout`; runner timeout tests; Claude docs list `504 timeout_error`; OpenAI docs list `APITimeoutError`. | `status == runner.StatusTimeout`, `timeout_error`, `api timeout`, `timed out`. |
+| `output_cap` | `runstatus.OutputCap`; runner output-cap tests and parity fixtures. | `status == runner.StatusOutputCap`. |
+| `prompt_too_large` | Existing classifier patterns `context_length`, `prompt is too long`, `max_tokens_exceeded`; this plan's runner guard; Claude docs list `413 request_too_large`. | exact context/request-too-large markers or the Bakeoff prompt guard text. |
+| `auth_or_permission` | OpenAI docs list 401 auth errors and permission-denied library errors; Claude docs list `authentication_error` and `permission_error`. | HTTP 401/403 markers paired with auth/permission wording, or exact `authentication_error`, `AuthenticationError`, `permission_error`, `PermissionDeniedError`, `invalid api key`, `incorrect api key`. |
+| `rate_or_quota_limited` | OpenAI docs list 429 rate-limit and quota errors; Claude docs list `429 rate_limit_error`. | HTTP 429, exact `rate_limit_error`, `RateLimitError`, `rate limit`, `current quota`, `quota`, `usage limit`, `insufficient credits`. |
+| `api_transient` | Existing classifier test covers observed `socket connection was closed unexpectedly`; OpenAI docs list 500/503 and `APIConnectionError`; Claude docs list `api_error` and `overloaded_error`. | HTTP 500/502/503/504/529, exact API/network transient markers. |
+| `schema_error` | Existing classifier output; `runstatus.SchemaError`; runner final JSON extraction and validation errors. | `status == runner.StatusSchemaError` or clear `<final_json>` parse/validation text. |
+
+The provider docs are not a promise about the exact CLI stderr text, so the
+implementation should prefer exact error-type strings and status-code markers
+over broad English words. For example, match `permission_error` or HTTP 403
+with an auth/permission phrase; do not match every line containing
+`forbidden`. Match OpenAI quota wording or HTTP 429; do not classify a generic
+`billing` line as rate limiting. Claude documents `billing_error`, but v1 should
+leave it unclassified rather than incorrectly folding payment problems into
+rate or quota exhaustion.
 
 ### Trimmed Kind Set
 
@@ -131,10 +169,10 @@ Use this initial high-signal set:
 | `timeout` | structural status or clear timeout text | Harness or provider timed out. |
 | `output_cap` | structural status | Harness output cap stopped or invalidated the run. |
 | `prompt_too_large` | clear context/input-size text or runner prompt guard | Prompt/context/input exceeded a size limit. |
-| `auth_required` | strict auth/permission text | Login, credentials, unauthorized, forbidden, or expired auth. |
-| `rate_limited` | strict 429/quota/billing text | Rate limit, quota, credits, billing, or spend limit. |
+| `auth_or_permission` | strict auth/permission markers | Credentials, API key, authentication, or provider permission failure. |
+| `rate_or_quota_limited` | strict 429/rate/quota markers | Rate limit, quota, usage-limit, or credit exhaustion failure. |
 | `api_transient` | clear network/5xx text | Provider/network transient failure. |
-| `invalid_output` | structural schema error or clear final JSON parse text | Provider output did not satisfy the final JSON contract. |
+| `schema_error` | structural schema error or clear final JSON parse text | Provider output did not satisfy the final JSON contract. |
 
 Do not include in v1:
 
@@ -153,17 +191,24 @@ Those can be added later if dogfood shows repeat failures with clear patterns.
 Classify in this priority order:
 
 1. Structural statuses: `missing_provider`, `timeout`, `output_cap`,
-   `invalid_output`.
-2. `prompt_too_large` text, including `context_length`, `maximum context`,
+   `schema_error`.
+2. Clear timeout text: `timeout_error`, `api timeout`, or `timed out`.
+3. `prompt_too_large` text, including `context_length`, `maximum context`,
    `prompt is too long`, `input too large`, and the runner guard diagnostic.
-3. Strict auth text, such as `unauthorized`, `forbidden`, `not authenticated`,
-   `authentication expired`, `invalid api key`, or `login required`.
-4. Strict rate/quota/billing text, such as `rate limit`, `429`, `quota`,
-   `insufficient credits`, `billing`, or `spend limit`.
-5. Clear transient text, such as `http 500`, `http 502`, `http 503`,
-   `http 504`, `internal server error`, `bad gateway`, `service unavailable`,
+4. Strict auth/permission markers: `authentication_error`,
+   `AuthenticationError`, `permission_error`, `PermissionDeniedError`,
+   `invalid authentication`, `incorrect api key`, `invalid api key`,
+   `not authenticated`, or HTTP 401/403 text paired with auth/permission
+   wording.
+5. Strict rate/quota markers: `rate_limit_error`, `RateLimitError`, `429`,
+   `rate limit`, `current quota`, `quota`, `usage limit`, or
+   `insufficient credits`.
+6. Clear transient markers: `http 500`, `http 502`, `http 503`, `http 504`,
+   `http 529`, `status 500`, `status 502`, `status 503`, `status 504`,
+   `status 529`, `api_error`, `overloaded_error`, `APIConnectionError`,
+   `internal server error`, `bad gateway`, `service unavailable`,
    `gateway timeout`, `connection reset`, or `socket connection was closed`.
-6. Clear final JSON parse text when structural status did not already classify.
+7. Clear final JSON parse text when structural status did not already classify.
 
 If none match, return the empty string.
 

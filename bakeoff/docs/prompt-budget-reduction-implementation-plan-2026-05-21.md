@@ -2,387 +2,382 @@
 
 Date: 2026-05-21
 
-Status: proposed
+Status: proposed, tightened after clarity and value audits
 
-Scope: Bakeoff plugin prompt surfaces, especially `skills/bakeoff/SKILL.md`
-and `commands/run.md`
+Scope: Bakeoff plugin prompt surfaces, especially `commands/run.md` and
+`skills/bakeoff/SKILL.md`
 
 ## Recommendation
 
-Reduce prompt budget by removing duplicated live contract first, then applying
-progressive disclosure to long examples, templates, and mode-specific rules.
+Reduce prompt budget by removing duplicated live contract first. Do the first
+implementation as one focused skill extraction, not a six-file prompt
+architecture.
 
-The current problem is not just verbosity. `skills/bakeoff/SKILL.md` and
-`commands/run.md` contain large overlapping copies of the same workflow
-contracts. That doubles prompt cost, creates drift risk, and makes every new
-approval mode, partial-failure rule, or summary-file rule harder for the model
-to honor.
+Target first pass:
 
-Use first-class skill routing immediately, but keep the routed surface small:
+- `commands/run.md`: thin `/bakeoff:run` shim that invokes `bakeoff-run`.
+- `skills/bakeoff/SKILL.md`: compact core/router with global invariants, type
+  taxonomy, permission semantics, and route map.
+- `skills/bakeoff-run/SKILL.md`: the canonical `/bakeoff:run` workflow,
+  including drafting, task fit, clean split, multi-lens review, approval,
+  validation, execution, summary, and continuation advice.
+- `references/run-appendix.md`: optional single appendix for bulky tables,
+  preview blocks, summary templates, and long examples. Create it only if
+  `bakeoff-run` would otherwise exceed the budget. Split this appendix only if
+  it grows past roughly 200 lines.
+- `scripts/prompt-budget.sh`: simple line-count budget check.
 
-- `commands/run.md`: one-line or very thin `/bakeoff:run` shim that invokes the
-  focused run skill.
-- `skills/bakeoff/SKILL.md`: tiny shared router/core contract with global
-  invariants, type taxonomy, and the skill routing map.
-- `skills/bakeoff-run/SKILL.md`: `/bakeoff:run` lifecycle: preflight,
-  argument/path routing, approval transitions, validation, execution, and handoff
-  to helper skills.
-- `skills/bakeoff-drafting/SKILL.md`: natural-language drafting, task-fit,
-  required-field non-synthesis, fast path, and split proposal rules.
-- `skills/bakeoff-review/SKILL.md`: review-shaped drafts, code-review facet
-  rules, multi-lens review, lens execution, and partial multi-lens summaries.
-- `skills/bakeoff-summary/SKILL.md`: artifact summary, continuation advice, and
-  post-run permission reminders.
-- `references/`: long tables, preview blocks, summary templates, failure
-  matrices, and examples that should not be eagerly loaded.
-- `scripts/` or tests: prompt-size, duplicate-section, and route-adherence
-  guardrails.
+Defer `bakeoff-drafting`, `bakeoff-review`, and `bakeoff-summary` helper skills.
+They are clean boundaries, but creating them now turns a two-file dedup into a
+larger routing project. Add helper skills only after dogfood shows that
+`bakeoff-run` remains too large or that routing by workflow phase improves
+adherence.
 
-Do not trim the safety invariants blindly. The approval gate, no-inline-answer
-rule, non-synthesizable build fields, path routing, validation-before-run, and
-final artifact summary contract are load-bearing.
+## Accepted Audit Changes
+
+- Keep the core insight: duplicate contract between `commands/run.md` and
+  `skills/bakeoff/SKILL.md` is the load-bearing problem.
+- Replace the previous five-skill split with one extracted skill:
+  `skills/bakeoff-run/SKILL.md`.
+- Replace the elaborate duplicate detector/frontmatter audit with a small
+  `wc -l` budget script.
+- Collapse `references/` to one optional `references/run-appendix.md`.
+- Remove optional prompt-source code generation from this plan.
+- Treat creation of `bakeoff-run`, command shim shrink, and core skill shrink as
+  one migration, not independent phases that can land in a breaking order.
+- Add explicit source-range move mapping, dogfood inputs/assertions, compatibility
+  gate, and rollback plan.
 
 ## Research Summary
 
 ### Local Bloat Audit
 
-Current line counts:
+Current live prompt size at the time of this tightened plan:
 
 ```text
-1034 skills/bakeoff/SKILL.md
- 999 commands/run.md
-2033 total
+1042 commands/run.md
+1078 skills/bakeoff/SKILL.md
+2120 total
 ```
 
 Highest-value duplication:
 
 - Drafting invariants:
-  `skills/bakeoff/SKILL.md:422-672` duplicates `commands/run.md:109-357`.
+  `commands/run.md:109-357` duplicates `skills/bakeoff/SKILL.md:466-716`.
 - Task fit and clean splits:
-  `skills/bakeoff/SKILL.md:48-218` overlaps `commands/run.md:358-514`.
+  `commands/run.md:358-557` overlaps `skills/bakeoff/SKILL.md:48-262`.
 - Multi-lens review:
-  `skills/bakeoff/SKILL.md:219-421` mirrors `commands/run.md:515-738`.
-- Fast path:
-  `skills/bakeoff/SKILL.md:673-771` repeats `commands/run.md:739-836`.
+  `commands/run.md:558-786` mirrors `skills/bakeoff/SKILL.md:263-465`.
+- Fast path and general drafting:
+  `commands/run.md:787-960` overlaps `skills/bakeoff/SKILL.md:717-947`.
 - Artifact summary and continuation:
-  `skills/bakeoff/SKILL.md:925-1005` overlaps `commands/run.md:918-999`.
+  `commands/run.md:961-1042` overlaps `skills/bakeoff/SKILL.md:969-1050`.
 
-Near-duplicate rules also appear across source-of-truth/no-inline-answer,
-work-order classification, path-like input handling, approval wording,
-no-write-before-approval, and patch handoff/permission semantics.
+Content that must survive somewhere explicit:
 
-Content that should stay explicit somewhere:
-
-- `commands/run.md` preflight and flag routing.
-- Existing work-order path validation and build/research routing.
-- Required-field non-synthesis rules for acceptance criteria, verifier, scope,
-  protected paths, and refactor invariants.
-- No-write-before-approval.
-- Validation-before-run.
-- Final summary requirements and artifact paths.
+- CLI preflight and existing work-order path routing.
+- No inline answer and no direct provider CLI calls.
+- Non-synthesizable fields: acceptance criteria, verifier, edit scope,
+  protected benchmark paths, and refactor invariants.
+- One batched context pass for drafting discovery.
+- No write before approval.
+- Validation before run.
+- Split and multi-lens partial-failure behavior.
+- Final artifact summary and permission semantics.
 
 ### External Pattern Review
 
-The strongest external patterns are consistent:
+External repo patterns support this shape:
 
-- Superpowers uses thin command shims that invoke focused skills rather than
-  repeating workflow bodies in every command:
+- Superpowers uses thin command shims that invoke focused skills:
   <https://raw.githubusercontent.com/pcvelz/superpowers/main/commands/execute-plan.md>
 - ECC separates portable skill behavior from harness-specific command adapters:
   <https://raw.githubusercontent.com/affaan-m/ECC/main/AGENTS.md>
-  and
-  <https://raw.githubusercontent.com/affaan-m/ECC/main/docs/architecture/cross-harness.md>
-- GSD treats prompt surface as a budgeted module, with profiles, namespace
-  routers, workflows, templates, and references:
+- GSD treats prompt surface as budgeted and favors routing/modules over giant
+  always-loaded prompts:
   <https://raw.githubusercontent.com/gsd-build/get-shit-done/main/docs/adr/0011-skill-surface-budget-module.md>
-  and
-  <https://raw.githubusercontent.com/gsd-build/get-shit-done/main/docs/ARCHITECTURE.md>
-- Anthropic's `frontend-design` plugin is a useful small-skill reference: short
-  dense live instructions without large inline appendices:
+- Anthropic's `frontend-design` plugin is a useful small-skill reference:
   <https://raw.githubusercontent.com/anthropics/claude-code/main/plugins/frontend-design/skills/frontend-design/SKILL.md>
-- OpenWolf uses generated maps and token-awareness to reduce repeated reading:
-  <https://raw.githubusercontent.com/cytostack/openwolf/main/README.md>
-- Metaswarm keeps phase transitions, retry policy, and human escalation close
-  to the execution loop:
-  <https://raw.githubusercontent.com/dsifry/metaswarm/main/skills/orchestrated-execution/SKILL.md>
 
-Patterns to avoid:
+The useful import is not "make many skills." It is "make the command surface a
+shim and keep one canonical behavior body."
 
-- One giant always-loaded skill containing every command, template, example,
-  failure policy, and appendix.
-- Duplicating workflow text across Claude commands, Codex skills, and docs.
-- Flat catalogs with verbose descriptions instead of routers or profiles.
-- Advisory gates buried in long prose rather than state-transition rules.
-- Relying on the model to remember state that could be persisted or summarized.
+## Architecture
 
-## Proposed Architecture
-
-### First-Class Routing Strategy
-
-Do not keep two hand-maintained canonical copies. Use a small set of focused
-skills as the canonical workflow modules:
-
-1. Preferred: `commands/run.md` is a shim to `bakeoff-run`; `bakeoff-run` routes
-   to `bakeoff-drafting`, `bakeoff-review`, and `bakeoff-summary` as needed.
-2. `skills/bakeoff/SKILL.md` remains the core/router skill with only global
-   invariants and skill-selection guidance.
-3. `references/` stores appendices, templates, examples, and long lookup tables,
-   not the primary workflow contract.
-4. Avoid: keeping the same multi-lens, task-fit, fast-path, approval, and
-   summary prose in both live files with "keep in sync" comments.
-
-The preferred approach is closest to the Superpowers command-shim pattern while
-retaining the ECC/GSD discipline of one canonical behavior surface and small
-routing adapters.
-
-### Suggested File Layout
+### File Layout
 
 ```text
 commands/
-  run.md                       # shim: invoke bakeoff-run
+  run.md                         # shim to bakeoff-run
 
 skills/
   bakeoff/
-    SKILL.md                   # core/router and global invariants
+    SKILL.md                     # core/router and global invariants
   bakeoff-run/
-    SKILL.md                   # /bakeoff:run lifecycle and transitions
-  bakeoff-drafting/
-    SKILL.md                   # NL drafting, task-fit, split, fast path
-  bakeoff-review/
-    SKILL.md                   # review drafts and multi-lens review
-  bakeoff-summary/
-    SKILL.md                   # artifact summaries and continuation advice
+    SKILL.md                     # canonical /bakeoff:run workflow
 
 references/
-  run-templates.md             # preview blocks and summary layouts
-  lens-presets.md              # lens synonym/focus table
-  anti-synthesis-examples.md   # examples, not core rule text
-  failure-matrix.md            # approval/partial-failure tables if too long
+  run-appendix.md                # optional bulky tables/templates/examples
+
+scripts/
+  prompt-budget.sh               # simple line budget report/check
 ```
 
-The skill bodies own behavior. References are loaded only for bulky examples,
-tables, and templates.
+### Shim Invocation Mechanism
 
-### Live Prompt Targets
+Use textual skill invocation in `commands/run.md`; do not invent a custom
+runtime hook.
 
-Target budgets:
+`commands/run.md` should keep the existing command frontmatter and tool
+allowlist, then reduce the body to this shape:
 
-- `commands/run.md`: 15-60 lines.
-- `skills/bakeoff/SKILL.md`: 60-120 lines.
-- `skills/bakeoff-run/SKILL.md`: 120-250 lines.
-- `skills/bakeoff-drafting/SKILL.md`: 120-250 lines.
-- `skills/bakeoff-review/SKILL.md`: 120-250 lines.
-- `skills/bakeoff-summary/SKILL.md`: 80-180 lines.
-- No duplicated section body longer than roughly 15 consecutive lines across
-  any two live skill or command files.
+```markdown
+# /bakeoff:run
 
-These are working limits, not sacred numbers. The real goal is to keep the
-always-loaded contract compact while still making the model route to the right
-skill before acting.
+Use the `bakeoff-run` skill for the entire workflow. Treat this command's
+arguments and the user's request as input to that skill.
 
-## Implementation Plan
+Do not satisfy the requested research, review, comparison, analysis, or build
+inline. Do not call provider CLIs directly; only the Bakeoff CLI may launch
+providers. If the `bakeoff-run` skill is unavailable, stop and report that the
+plugin install or routing is incomplete.
+```
 
-### Phase 1: Baseline and Guardrails
+The command shim must not draft, write, validate, run, or summarize on its own.
+Those transitions belong to `bakeoff-run`.
 
-Add a small prompt-budget report command or test that prints:
+### Budget Rule
 
-- line counts for `commands/*.md`, `skills/*/SKILL.md`, and `references/*.md`;
-- approximate token or word counts;
-- duplicated heading names across live command and skill files;
-- skill catalog count and frontmatter description lengths;
-- optionally, repeated exact blocks above a small line threshold.
+Use one enforced first-pass budget:
 
-Acceptance criteria:
+```text
+commands/run.md + skills/bakeoff/SKILL.md + skills/bakeoff-run/SKILL.md <= 1100 lines
+```
 
-- The report is easy to run during prompt-contract edits.
-- It fails or warns when live prompt files exceed agreed budgets.
-- It does not inspect secrets, run providers, or depend on network access.
+Additional design targets:
 
-### Phase 2: Create First-Class Skills Without Behavior Change
+- `commands/run.md` should be under 60 lines.
+- `skills/bakeoff/SKILL.md` should be under 180 lines.
+- `references/run-appendix.md` should stay under 200 lines; split only after it
+  exceeds that size.
 
-Create the new skill directories and move the long bodies there first, keeping
-the wording as close to current as possible.
+The script should enforce the aggregate budget first. Per-file targets can warn,
+not fail, during the first pass.
 
-Initial extraction map:
+## Verbatim Invariants To Preserve
 
-- `skills/bakeoff-run/SKILL.md`: invocation contract, preflight, existing path
-  mode, approval transitions, file writing, validation, execution, and route
-  calls to the helper skills.
-- `skills/bakeoff-drafting/SKILL.md`: required-field synthesis guidance,
-  mechanical pre-flight checklist, anti-synthesis examples, backend/schema drift
-  rules, fast path, task-fit, and clean split proposal rules.
-- `skills/bakeoff-review/SKILL.md`: review classification, code-review facet
-  rules, multi-lens trigger rules, lens execution, partial-progress handling,
-  partial summary file rules, and optional synthesis.
-- `skills/bakeoff-summary/SKILL.md`: run result summary, artifact path
-  preservation, continuation advisor, and post-run permission reminders.
-- `references/*.md`: long preview blocks, lens table, summary layout, failure
-  tables, and examples that do not need to be loaded for every turn.
+The project `CLAUDE.md` repeats two `/bakeoff:run` invariants because they are
+load-bearing. Preserve them verbatim in `skills/bakeoff-run/SKILL.md`; if a
+future `bakeoff-drafting` helper skill is created, preserve them there too.
 
-Acceptance criteria:
+```markdown
+- **One batched context pass.** If `/bakeoff:run` drafting needs local
+  context (file paths, verifier conventions, schema, available
+  backends), use ONE `ctx_batch_execute` call covering all questions.
+  Sequential `Bash` / `Read` / `Grep` probes during drafting are a
+  contract violation. Available backends (`claude`, `codex`) and the
+  canonical work-order skeletons are embedded in the skill — do **not**
+  probe the CLI (`bakeoff providers list`, `bakeoff --help`,
+  `bakeoff init`, `bakeoff doctor`) to discover them.
+- **No `Write` before approval.** Drafting must show the compact
+  preview, wait for affirmative reply (`yes` / `approve` / `run it` for
+  single, `write and run` for split/multi-lens), and only then issue
+  the file-mutating tool call.
+```
 
-- Extracted files preserve current behavior.
-- `commands/run.md` and `skills/bakeoff/SKILL.md` route to the correct focused
-  skill with minimal prose.
-- No approval or partial-failure rule exists only in a template file. State
-  transition rules stay in the relevant workflow skill.
+Also preserve the current command/skill rules that proposal is not approval,
+`draft-build` stdout is pre-approval safe, and all on-disk work orders must pass
+`bakeoff validate` before provider execution.
 
-### Phase 3: Shrink `commands/run.md` To A Shim
+## Source Range Move Map
 
-Keep only command-local adapter behavior:
+Use current headings as the authority and verify ranges with
+`rg -n '^#{1,4} ' commands/run.md skills/bakeoff/SKILL.md` before editing.
 
-- invoke `bakeoff-run`;
-- pass through the user's arguments/request;
-- state that `/bakeoff:run` must not answer inline or call provider CLIs
-  directly;
-- state that `bakeoff-run` owns preflight, approval, validation, execution, and
-  summary.
+Move into `skills/bakeoff-run/SKILL.md`:
 
-Remove every long workflow body from the command file.
+| Source | Target section |
+| --- | --- |
+| `commands/run.md:15-107` | Invocation, preflight, existing path mode |
+| `commands/run.md:109-357` | Drafting invariants |
+| `commands/run.md:358-557` | Natural-language drafting, task fit, clean split |
+| `commands/run.md:558-786` | Multi-lens review |
+| `commands/run.md:787-960` | Fast path and general drafting |
+| `commands/run.md:961-1042` | Execution, summary, continuation |
 
-Acceptance criteria:
+Remove duplicates from `skills/bakeoff/SKILL.md` after the moved
+`bakeoff-run` skill exists and is routed:
 
-- `commands/run.md` is short enough that command budget is no longer a material
-  concern.
-- The command always routes into `bakeoff-run` before drafting, writing,
-  validating, running, or summarizing.
-- The shim still prevents inline answers and direct provider CLI calls.
+| Source | Action |
+| --- | --- |
+| `skills/bakeoff/SKILL.md:48-262` | Remove duplicated task fit / split body |
+| `skills/bakeoff/SKILL.md:263-465` | Remove duplicated multi-lens body |
+| `skills/bakeoff/SKILL.md:466-716` | Remove duplicated drafting invariants |
+| `skills/bakeoff/SKILL.md:717-947` | Remove duplicated fast path / drafting rules |
+| `skills/bakeoff/SKILL.md:969-1050` | Remove duplicated summary / continuation body |
 
-### Phase 4: Shrink `skills/bakeoff/SKILL.md` To Core Router
+Keep and compress in `skills/bakeoff/SKILL.md`:
 
-Keep shared cross-command and cross-harness guidance:
+- source-of-truth principle;
+- no secrets in work orders/prompts/generated context;
+- work-order classification taxonomy;
+- route to `bakeoff-run` for `/bakeoff:run`;
+- permission semantics;
+- environment/auth ownership.
 
-- Bakeoff is source of truth; the CLI owns validation, provider execution,
-  judging, patch capture, reports, ledgers, triage, and exit codes.
-- Do not place secrets in work orders, prompts, generated context, summaries, or
-  plugin-written files.
-- Work-order classification taxonomy.
-- Permission semantics: Bakeoff artifacts are not permission to apply patches,
-  commit, open PRs, merge, or synthesize changes.
-- Environment variable/auth ownership.
-- Skill route map.
+## Implementation Steps
 
-Remove command-specific long bodies that now live in the focused skills.
+### Step 1: Add Budget Script
 
-Acceptance criteria:
+Create `scripts/prompt-budget.sh` as a small shell script using `wc -l`.
 
-- `SKILL.md` is usable as a compact Bakeoff overview for Codex.
-- It does not duplicate command-specific `run` workflow bodies.
-- It clearly tells the model which focused skill to use before drafting, running,
-  summarizing, or advising continuation.
+It should:
 
-### Phase 5: Add Prompt-Contract Scenarios
+- print line counts for `commands/run.md`, `skills/bakeoff/SKILL.md`,
+  `skills/bakeoff-run/SKILL.md` when present, and `references/run-appendix.md`
+  when present;
+- compute the aggregate live `/bakeoff:run` line count;
+- fail if the aggregate exceeds 1100 lines after migration;
+- warn, not fail, on per-file design target misses.
 
-Add or update manual dogfood scenarios that verify adherence after the trim:
+Do not build a duplicate-block detector, Go test, or frontmatter analyzer in
+this pass.
 
-- Existing work-order path validates and routes to `build` or `research`.
-- Natural-language build with missing verifier asks or performs targeted
-  read-only discovery; it does not synthesize a fake verifier.
-- Refactor request with "no behavior change" still asks for concrete
-  invariants.
-- Multi-lens request loads lens rules, requires exact `write and run`, and
-  writes a partial summary on stopped sequences.
-- Split request validates all files before running any part.
-- Final handoff summarizes artifact paths and does not apply patches.
+### Step 2: Extract `bakeoff-run`
 
-Acceptance criteria:
+Create `skills/bakeoff-run/SKILL.md` and move the command workflow into it.
+Preserve behavior first; edit for brevity only after the migration passes
+dogfood.
 
-- The scenarios cover the rules most likely to regress when prose is moved out
-  of live prompts.
-- The scenarios mention which focused skill should have been routed to.
+The skill should own:
 
-### Phase 6: Optional Generation
+- preflight;
+- existing work-order path mode;
+- natural-language drafting;
+- required-field non-synthesis;
+- task-fit warnings and deterministic-evidence repair menu;
+- clean split;
+- multi-lens review;
+- approval phrases;
+- filename collisions;
+- validation before run;
+- execution and exit-code interpretation;
+- artifact summary;
+- continuation advice;
+- permission reminders.
 
-If drift remains a concern, generate the live files from smaller source
-fragments during release prep:
+If the multi-lens lens table, preview block, or summary template pushes
+`bakeoff-run` past the aggregate budget, move those bulky pieces into
+`references/run-appendix.md` and leave only the rule plus "load appendix when
+needed" pointer in the skill.
 
-- source fragments live under `prompt-src/` or the focused skill directories;
-- generated files include a "generated from" header;
-- CI checks that generated live files are current.
+### Step 3: Shrink Command And Core Skill In The Same PR
 
-This should be a second pass. Manual extraction and budget guards are enough for
-the first reduction.
+After `bakeoff-run` exists:
 
-## Approval, Partial Failure, and Summary File Placement
+1. Shrink `commands/run.md` to the shim.
+2. Shrink `skills/bakeoff/SKILL.md` to the core/router.
+3. Run `scripts/prompt-budget.sh`.
+4. Run the dogfood scenarios below.
 
-These rules should stay close to the state transition they control:
+Do not merge a PR where `commands/run.md` routes to `bakeoff-run` before the
+skill exists. If this work must be split across PRs, use this order:
 
-- Global no-write-before-approval: keep inline in both live surfaces or in a
-  tiny shared rule in `skills/bakeoff/SKILL.md` and `skills/bakeoff-run/SKILL.md`.
-- Single work-order approval: keep in `skills/bakeoff-run/SKILL.md` because it
-  owns the transition from preview to file write.
-- Natural-language preview and split approval details: keep in
-  `skills/bakeoff-drafting/SKILL.md`.
-- Multi-lens approval, partial-progress block, and summary-file writing: keep in
-  `skills/bakeoff-review/SKILL.md`.
-- Final artifact summary and continuation advisor: keep in
-  `skills/bakeoff-summary/SKILL.md`.
+1. PR A: add `bakeoff-run`, keep old command/skill bodies intact.
+2. PR B: switch the command shim and remove duplicated bodies after dogfood.
 
-Avoid a global "approval doctrine" that repeats every mode. A compact shared
-rule plus mode-specific transition tables should be easier for the model to
-follow.
+Prefer one PR to avoid a long-lived duplicated state.
+
+### Step 4: Dogfood Scenarios
+
+Add these to `docs/task-fit-test-scenarios.md` or a new
+`docs/prompt-budget-dogfood-scenarios.md`.
+
+| Scenario | Input | Required assertions |
+| --- | --- | --- |
+| Existing path mode | `/bakeoff:run ./examples/review.work-order.json --run-id prompt-budget-path-smoke --quiet` | Routes through `bakeoff-run`; preflights; validates existing file; does not run task fit or natural-language drafting. |
+| Missing verifier | `/bakeoff:run build fix auth timeout handling in internal/auth` | Does not invent `go test`; classifies verifier/scope/AC as explicit, repo-discoverable, or user-owned; uses at most one batched context pass before proposing. |
+| Refactor invariants | `/bakeoff:run build extract default resolution helper in internal/config; verifier go test ./internal/config -run TestDefaults -count=1; edit scope internal/config` | Does not accept "no behavior change" as AC; asks for concrete invariants or proposes repo-discoverable evidence without writing. |
+| Clean split | `/bakeoff:run compare our CLI setup flow against README expectations, and review my local diff for security` | Offers separate work orders only if each part has independent evidence; requires `split`; then requires exact `write and run`; validates all files before running any. |
+| Multi-lens | `/bakeoff:run review my local changes against main with security and tests as separate lenses --diff` | Uses multi-lens rules; does not treat normal "security and tests" review as multi-lens unless separate lenses are requested; requires exact `write and run`; uses `<base>.<lens>` naming. |
+| Partial multi-lens stop | Simulate one lens command failure or interrupt after one completed lens | Shows completed lenses, stopped lens, remaining lenses, artifact paths, and whether a partial summary file was written; asks for `continue lenses`. |
+| Final handoff | Any completed build run with candidate patches | Summarizes report/decision/patch paths; does not apply patches, commit, open PRs, or synthesize changes without a separate user request. |
+
+## Compatibility Gate
+
+Before deleting the old command body, manually verify in the target Claude
+plugin runtime that a command shim can route to `skills/bakeoff-run/SKILL.md`.
+
+Expected behavior:
+
+- `/bakeoff:run ...` causes the model to use the `bakeoff-run` skill body before
+  drafting or running.
+- If the skill is unavailable, the model stops with the shim error instead of
+  falling back to inline answering.
+
+If this fails, do not ship the shim. Fall back to keeping `commands/run.md`
+self-contained for Claude and use `bakeoff-run` only on the Codex skill side
+until the runtime behavior is understood.
+
+## Rollback Plan
+
+This migration is prompt/docs only. Rollback is straightforward:
+
+1. Restore the previous full `commands/run.md` body.
+2. Restore the previous full `skills/bakeoff/SKILL.md` body.
+3. Leave `skills/bakeoff-run/SKILL.md` in place but unreferenced, or remove it in
+   the rollback commit.
+4. Re-run the dogfood scenario that failed and confirm the old behavior returns.
+
+Do not partially roll back only the command shim; a shim pointing to a missing or
+stale skill is worse than the current duplicated prompt.
+
+## Resolved Questions
+
+- **Shim mechanism:** textual skill invocation from `commands/run.md`, with the
+  existing command frontmatter/tool allowlist retained. No new runtime hook.
+- **Same-context loading:** assume the command, core skill, and routed run skill
+  may all enter context for `/bakeoff:run`; enforce the aggregate 1100-line
+  budget across those files.
+- **Skill count:** one new focused skill in the first pass: `bakeoff-run`.
+- **Helper skill visibility:** `bakeoff-drafting`, `bakeoff-review`, and
+  `bakeoff-summary` are not created in this pass. If created later, treat them
+  as internal helper skills routed from `bakeoff-run`, not user-facing commands.
+- **Budget tool:** shell script at `scripts/prompt-budget.sh`, using `wc -l`.
+  No Go test in this pass.
+- **Approval contract placement:** global no-write and one-batched-context-pass
+  invariants stay verbatim in `bakeoff-run`; mode-specific approval rules stay
+  in the state transition they control.
+- **Install profiles:** defer. `/bakeoff:run` prompt bloat is the urgent issue;
+  profiles are a later plugin-wide budget project.
+- **References:** one optional appendix file, not a directory of four files, in
+  the first pass.
 
 ## Acceptance Criteria
 
-- `skills/bakeoff/SKILL.md` drops below 180 lines.
-- `commands/run.md` drops below 60 lines unless a measured harness constraint
-  proves the command must be self-contained.
-- `skills/bakeoff-run/SKILL.md`, `skills/bakeoff-drafting/SKILL.md`,
-  `skills/bakeoff-review/SKILL.md`, and `skills/bakeoff-summary/SKILL.md` each
-  stay under the target budgets unless dogfood proves a specific exception.
-- The extracted focused skills contain the full current behavior with no known
+- `commands/run.md` is a thin shim under 60 lines.
+- `skills/bakeoff/SKILL.md` is a compact core/router under 180 lines.
+- The aggregate live `/bakeoff:run` prompt surface is at or below 1100 lines.
+- `skills/bakeoff-run/SKILL.md` contains the full current behavior with no known
   safety rule removed.
-- No large workflow section is hand-maintained in both live files.
-- Prompt-budget guardrails report line/token counts and duplicate sections.
-- Existing examples remain valid and continue to be referenced for JSON shape.
-- Dogfood scenarios pass for approval, missing-field, multi-lens, split,
-  existing-path, summary, and permission semantics.
+- The two `CLAUDE.md` invariants are preserved verbatim in `bakeoff-run`.
+- No large workflow section is hand-maintained in both `commands/run.md` and
+  `skills/bakeoff/SKILL.md`.
+- `scripts/prompt-budget.sh` reports the line budget and fails on aggregate
+  budget violation.
+- Dogfood scenarios pass for existing path, missing verifier, refactor
+  invariants, clean split, multi-lens, partial stop, final handoff, and
+  permission semantics.
 
-## Open Questions
+## Remaining Concerns
 
-- Does the Claude command runtime reliably allow `commands/run.md` to invoke a
-  plugin-local skill before acting, or must the command prompt remain more
-  self-contained?
-- Are `commands/run.md` and `skills/bakeoff/SKILL.md` ever loaded into the same
-  model context for the same turn? The target budgets should be stricter if yes.
-- How many focused skills can the plugin expose before skill-catalog routing
-  overhead becomes its own prompt-budget problem?
-- Should helper workflows such as `bakeoff-drafting` be user-invocable skills,
-  or internal skills that only `bakeoff-run` routes to?
-- What exact line or token budget should be enforced in CI?
-- Should prompt-budget reporting live in shell scripts, Go tests, or both?
-- How much of the approval contract must remain inline to preserve adherence
-  after progressive disclosure?
-- Should optional command families eventually ship as install profiles, or is
-  `/bakeoff:run` the only urgent budget problem?
-
-## Concerns
-
-- The current long prose likely exists because prior shorter contracts failed in
-  dogfood. Trimming without targeted scenarios could reintroduce silent
-  synthesis, approval bypass, or inline answers.
-- First-class routing saves prompt budget only if the model reliably invokes the
-  focused skill before acting.
-- Moving examples out of live prompt can increase schema drift unless the model
-  is forced to use `bakeoff draft-build`, `bakeoff validate`, and the existing
-  JSON examples.
-- Two harnesses can drift if command and skill adapters are edited separately.
-  A generated or tested source-of-truth approach may be needed.
-- Partial-failure rules and summary-file rules are easy to bury. They need
-  compact transition tables, not long narrative paragraphs.
-- Too many focused skills can recreate the prompt-budget problem in the skill
-  catalog. Keep the first split small and based on workflow boundaries.
-
-## Assumptions
-
-- The Go CLI remains the source of truth for schema validation, provider
-  execution, judging, triage, reports, ledgers, and exit codes.
-- Prompt reduction should not require changing Bakeoff runtime behavior.
-- The existing `examples/*.work-order.json` files remain the canonical non-build
-  JSON examples.
-- Plugin-local skills can be invoked by command shims and can route to each
-  other reliably enough for dogfood.
-- A plugin-shipped `references/` directory can still be read for appendices,
-  templates, and long examples when a focused skill asks for it.
-- The first implementation should prefer a small first-class skill split,
-  line-count reduction, and guardrails over a larger harness/profile redesign.
+- Textual skill invocation must be verified in the Claude plugin runtime before
+  removing the old command body.
+- The current long prose likely exists because shorter contracts previously
+  failed in dogfood. The scenario suite is the guardrail against reintroducing
+  silent synthesis, approval bypass, or inline answers.
+- Moving examples into an appendix can increase schema drift unless
+  `bakeoff draft-build`, `bakeoff validate`, and `examples/*.work-order.json`
+  remain explicit in `bakeoff-run`.
+- If `bakeoff-run` remains too large after deduplication, split helper skills as
+  a second pass based on observed dogfood failures, not ahead of evidence.

@@ -68,7 +68,7 @@ documented in [docs/release-publishing.md](docs/release-publishing.md).
 
 Codex install: this checkout ships `.codex-plugin/plugin.json`; verify the current Codex plugin flow in Codex docs.
 
-Natural-language requests draft a work order, show a compact review preview, and wait for explicit approval before writing or running. Short drafts include the full JSON inline; longer drafts show the planned work-order file and let you reply `show` to print the JSON before approving. For large requests, the plugin may suggest 2-3 separate work orders when the split is clean; each part is still a normal Bakeoff run. Explicit multi-lens review works the same way: it drafts separate normal review runs, then writes a short summary file after they finish. Sample work orders live in `examples/` (`gather`, `compare`, `analyze`, `review`, `build`).
+Natural-language requests draft a work order, show a compact review preview, and wait for explicit approval before writing or running. Short drafts include the full JSON inline; longer drafts show the planned work-order file and let you reply `show` to print the JSON before approving. For large requests, the plugin may suggest 2-3 separate work orders when the split is clean; each part is still a normal Bakeoff run. Eligible non-build splits can be approved with `parallel` after the preview to launch all parts at once; `write and run` or `sequential` keeps the existing one-after-another behavior. Explicit multi-lens review stays sequential and writes a short summary file after the lens runs finish. Sample work orders live in `examples/` (`gather`, `compare`, `analyze`, `review`, `build`).
 
 After a run finishes, `/bakeoff:run` may recommend one next normal work order
 when the artifacts make it obvious, such as drafting an implementation plan
@@ -144,6 +144,13 @@ Then Bakeoff runs triage automatically. Triage checks each finding for actionabi
 To run multiple lenses, say so explicitly: `/bakeoff:run review this diff against main with security, performance, and UX as separate lenses`. Bakeoff previews one normal review run per lens; reply `write and run` to write the files and run them sequentially.
 
 Plain review stays one run, even when you mention several concerns. If you explicitly ask for separate lenses, such as security plus performance plus UX, `/bakeoff:run` drafts one normal review work order per lens, keeps triage on for each lens unless disabled, runs them sequentially after `write and run` approval, and writes `runs/<base>.multi-lens-summary.md`. Synthesis into one prioritized fix plan is a separate follow-up approval, not an automatic hidden step.
+
+Generic clean splits are different from multi-lens review: if all 2-3 parts are
+`gather`, `compare`, or `analyze`, the preview offers `sequential`, `parallel`,
+and `show`. Parallel split children run as normal `bakeoff research ... --json
+--quiet` commands with explicit run ids. Because concurrent children race to
+update the convenience pointer, `latest` may point to any one child; use the
+run ids in the final summary or `bakeoff show <run-id>`.
 
 After a run, open `runs/<run-id>/report.md` first. Then open `runs/<run-id>/triage/triage.md`, unless you used `--no-triage`.
 
