@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "id": "io-copy-cancellation-patterns",
+  "type": "compare",
+  "goal": "Compare two cancellable io.Copy patterns in Go - closing the source/pipe to unblock the blocked read versus running a context-watcher goroutine that closes the source on context cancellation - and explain why the Go standard library does not provide an io.CopyContext function.",
+  "background": "Two idiomatic patterns exist for making io.Copy cancellable when the underlying Reader does not honor a context: (A) close the source (or read end of a pipe) from outside, causing the blocked Read to return an error such as io.ErrClosedPipe or os.ErrClosed; (B) spawn a watcher goroutine that selects on ctx.Done() and closes the source when the context is cancelled, then joins. Evaluate both on: mechanics and ordering, error semantics (which sentinel is returned, partial-copy byte counts, whether ctx.Err() is preserved or wrapped), goroutine-leak risk on the watcher pattern (in particular how the watcher exits on the happy path so it does not outlive the copy), applicability across reader types (*os.File, net.Conn, *exec.Cmd Stdout/Stderr pipes, io.Pipe, http.Response.Body), and interaction with readers that DO honor deadlines via SetReadDeadline (net.Conn) versus readers that do not (plain os.Pipe, bytes.Reader wrapping a slow source). Then explain why the stdlib does not expose io.CopyContext: cite the relevant golang/go proposals and discussions (e.g. proposals to add context to io.Reader / io.CopyContext / context-aware io interfaces and their rejection rationale), and the broader argument that context belongs at the source (Reader implementation) rather than the transport (Copy). Cite stdlib code that demonstrates the patterns in production: os/exec CommandContext killing the process to unblock pipe reads, net/http server read/write deadline mechanics, io.Pipe close semantics. Required evidence: file:line citations into Go stdlib, links to specific golang/go issues or proposals, and concrete code sketches for each pattern showing the join/cleanup. Acceptance criteria: (1) both patterns described with correct error semantics and a goroutine-leak analysis for pattern B; (2) at least three concrete stdlib citations (file:line or issue number); (3) a clear recommendation matrix mapping reader type to preferred pattern; (4) a sourced explanation of why io.CopyContext is not in the stdlib, naming at least one specific golang/go proposal or discussion.",
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "sonnet",
+      "scope": "mixed",
+      "effort": "high"
+    },
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "scope": "mixed",
+      "effort": "high"
+    }
+  ],
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  },
+  "scope_policy": {
+    "enforcement": "best_effort"
+  }
+}

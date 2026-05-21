@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "id": "research-multi-lens-multi-agent-code-review",
+  "type": "gather",
+  "goal": "Gather fresh web evidence on multi-lens code review (one reviewer applying multiple specialized perspectives or passes, e.g. security, performance, UX) and multi-agent code review (multiple coordinated AI reviewers inspecting the same change), with emphasis on recent (2024-2026) sources and practical implementations.",
+  "background": "The user is researching code-review techniques used by modern AI tooling and engineering teams. Coverage goals:\n\n- Define each approach and how they differ; note where they overlap or compose.\n- Cite recent sources (prefer 2024-2026): academic papers, vendor blog posts, OSS project docs, conference talks, and engineering postmortems.\n- Identify named systems, tools, frameworks, and prompts implementing either approach (agent frameworks, IDE plugins, CI bots, PR-review bots).\n- Report empirical results where available (precision, recall, false-positive rate, time-to-review, developer acceptance).\n- Surface trade-offs, failure modes, and open questions raised in the literature or practitioner write-ups.\n- Prefer primary sources with URLs; flag secondhand summaries.\n\nDo not synthesize speculative claims; report only what cited sources state. Cover both topics with comparable depth.",
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "sonnet",
+      "scope": "web",
+      "effort": "high"
+    },
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "scope": "web",
+      "effort": "high"
+    }
+  ],
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  }
+}

@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "id": "review-runner-capturestate-atomic",
+  "type": "gather",
+  "goal": "Review the captureState mutex pattern in internal/runner/runner.go and identify which fields can safely move to sync/atomic without breaking heartbeat/timeout semantics. Cite file:line evidence and call out fields that must stay under the mutex.",
+  "background": [
+    "Scope: internal/runner/runner.go ONLY. Do not review or recommend changes to other files.",
+    "Target pattern: the captureState struct and its mutex usage in this file.",
+    "Required prior reading: runs/2026-05-21-4704/report.md contains a consensus comparison of sync/atomic vs sync.Mutex for hot counters and atomic.Pointer[time.Time] for last-output timestamps. Read it BEFORE reviewing so the recommendations align with that consensus.",
+    "Focus: classify each mutex-protected field in captureState into one of: (a) safe to move to sync/atomic with a specific atomic type and migration sketch; (b) safe with caveats — explain the caveat (e.g. memory-ordering constraint, paired-read invariant, timestamp publication); (c) must stay under sync.Mutex — explain why (e.g. multi-field invariant, byte-slice append, compound state transition).",
+    "Heartbeat/timeout semantics: the runner emits periodic heartbeats and enforces wall-clock + idle timeouts based on the captured state. Any atomic conversion must preserve: (1) heartbeat lines report consistent counters and last-output timestamps, (2) the idle-timeout check sees a monotonic or correctly-published timestamp, (3) wall-clock budget enforcement is not weakened, (4) no torn reads of paired fields (e.g. byte counts read together with truncation flags).",
+    "Evidence standard: every finding must cite internal/runner/runner.go:<line> for the field, the lock site, and the read site. When recommending atomic.Pointer[time.Time] or atomic.Int64, reference the consensus from the prior report by section/topic.",
+    "Out of scope: rewriting the file, proposing patches, changing the public API, adding new fields, modifying tests, or reviewing any file other than internal/runner/runner.go."
+  ],
+  "facet": {
+    "id": "code-review",
+    "kind": "generic",
+    "focus": "Classify each captureState field as atomic-safe, atomic-with-caveats, or mutex-only, with respect to heartbeat/timeout semantics. Produce a per-field verdict table with file:line evidence.",
+    "include": [
+      "per-field verdict: atomic-safe / atomic-with-caveats / mutex-only, with the specific atomic type when applicable",
+      "concrete migration sketch (5-15 lines) for each atomic-safe field",
+      "named invariants that would break if a field moved out of the mutex (multi-field atomicity, paired reads, compound transitions)",
+      "race-detector and memory-ordering risks specific to heartbeat/timeout call sites",
+      "torn-read or publication risks for time.Time fields and their interaction with idle-timeout checks"
+    ],
+    "exclude": [
+      "rewrites or patches to internal/runner/runner.go (review only, not implementation)",
+      "recommendations that affect any file other than internal/runner/runner.go",
+      "style-only preferences without a correctness or performance argument",
+      "speculation without file:line evidence from internal/runner/runner.go",
+      "generic Go concurrency advice not tied to a specific field in captureState"
+    ]
+  },
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "sonnet",
+      "scope": "codebase",
+      "effort": "high"
+    },
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "scope": "codebase",
+      "effort": "high"
+    }
+  ],
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  },
+  "scope_policy": {
+    "enforcement": "best_effort"
+  }
+}

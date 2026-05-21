@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "id": "review-continuation-plan",
+  "type": "analyze",
+  "goal": "Review docs/artifact-aware-continuation-implementation-plan-2026-05-21.md for consistency with commands/run.md and skills/bakeoff/SKILL.md. Identify contradictions, missing references, ambiguities, factual errors about current behavior, and any plan-proposed behavior that would violate or duplicate existing contract invariants.",
+  "background": "Three files to analyze:\n- Plan under review: docs/artifact-aware-continuation-implementation-plan-2026-05-21.md (395 lines). Recommends a 'Continuation Advisor' approach (a short SKILL.md section plus an optional post-run recommendation in /bakeoff:run final summaries) instead of a new /bakeoff:continue command. Includes a 'Validated Corrections From Review' section claiming specific facts about current behavior.\n- Contract 1: commands/run.md (950 lines). Defines the /bakeoff:run drafting, validation, approval, and execution contract: preflight, task-fit gating, drafting invariants, fast-path eligibility, careful path, split, multi-lens, final-summary shape, and stop-after-handoff rule.\n- Contract 2: skills/bakeoff/SKILL.md (976 lines). Shared Bakeoff skill contract for validation, provider execution, judging, reports, ledgers, exit codes, filename collision policy.\n\nEvaluate the plan against these specific criteria and group findings by criterion in the report:\n1. Does the proposed SKILL.md 'Continuation Advisor' section duplicate, contradict, or overlap with existing SKILL.md content (post-run summary rules, exit-code semantics, judge-only rerun guidance, work-order type catalog, filename collision rules)?\n2. Does the proposed /bakeoff:run post-run continuation recommendation conflict with the existing 'Execution And Summary' section in commands/run.md (required final fields, stop-after-handoff rule, exit-4 judge-only-rerun wording, build-winner-patch path output)?\n3. Are the plan's 'Validated Corrections From Review' claims about current behavior factually accurate against the two contracts: (a) exit 4 is research-only for `bakeoff rerun --judge-only`; (b) 'review' is not a work-order type and review continuation drafts type=gather with facet.id=code-review; (c) 'plan' is not a work-order type and is a user-facing label for type=analyze; (d) multi-lens continuation should defer to the existing explicit multi-lens /bakeoff:run flow?\n4. Does the plan's stance against automatic chaining and against jumping from research to build without implementation evidence match the existing 'Stop after the Bakeoff handoff' rule in commands/run.md?\n5. Are there contract-required behaviors the plan recommends but does not explicitly preserve (e.g., no-write-before-approval, preview-then-approve flow for any /bakeoff:run drafting the advisor recommends, task-fit warnings, the canonical 'draft anyway' / 'write and run' approval phrases)?\n6. Internal consistency: do the plan's three deliverables (SKILL.md section, /bakeoff:run final-summary addition, docs/task-fit-test-scenarios.md scenario coverage) reference the right files, sections, and section names that actually exist in the contracts today?\n\nFor each finding, cite plan file path + line range or section name, and the contract section it interacts with. Classify each finding as one of: contradiction, ambiguity, missing-reference, factual-error, duplication, or non-issue. Cite evidence directly from the files; do not paraphrase contract language without quoting. Do not propose new plan content or rewrite the plan; flag issues only.\n\nThe plan file, both contract files, and the bakeoff repo are available under the working directory at /Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/bakeoff/.",
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "sonnet",
+      "scope": "codebase",
+      "effort": "high"
+    },
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "scope": "codebase",
+      "effort": "high"
+    }
+  ],
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  }
+}

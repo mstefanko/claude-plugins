@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "id": "go-sync-primitives-hot-state",
+  "type": "compare",
+  "goal": "Compare sync/atomic vs sync.Mutex for hot counters, and evaluate atomic.Pointer[time.Time] for last-output timestamps in Go. Produce a recommendation per use case with tradeoffs and concrete code patterns.",
+  "background": "Two related Go concurrency design decisions:\n\n1. Hot counters: a value (e.g. request counter, work-item counter, byte counter) incremented from many goroutines on every event. Candidates: sync/atomic (AddInt64/AddUint64/atomic.Int64/atomic.Uint64) vs sync.Mutex protecting a plain int64. Evaluate throughput under contention, correctness, memory-ordering semantics, race-detector behavior, code clarity, common pitfalls (e.g. alignment on 32-bit platforms before Go 1.19, mixing atomic and non-atomic access), and when one outperforms the other.\n\n2. Last-output timestamps: a time.Time that gets overwritten when an event happens (e.g. last activity, last write, last heartbeat) and read by watchers/timeout checkers. Candidate: atomic.Pointer[time.Time] (Go 1.19+) vs sync.Mutex around a time.Time field vs storing time.Time as Unix nanoseconds in atomic.Int64. Evaluate correctness of pointer publication, allocation overhead per update, read-side cost, monotonicity considerations, and idiomatic Go patterns.\n\nEvaluation dimensions: performance under contention, correctness (data races, torn reads, memory ordering), idiomatic Go (linters, race detector), code clarity, Go version compatibility, common bugs.\n\nDeliverable: per-decision recommendation with short code patterns (5-15 lines each) showing the preferred approach, plus the conditions under which the other approach is better. Cite Go documentation, sync/atomic package docs, and well-known references where relevant.\n\nThis is a general Go design comparison; not tied to a specific source file in this repo.",
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "sonnet",
+      "scope": "mixed",
+      "effort": "high"
+    },
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "scope": "mixed",
+      "effort": "high"
+    }
+  ],
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  }
+}

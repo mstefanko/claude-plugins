@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "id": "bakeoff-continue-prompt-only-feasibility",
+  "type": "analyze",
+  "goal": "Evaluate whether /bakeoff:continue can stay prompt-only with existing run artifacts, as proposed in PR1 of the artifact-aware continuation plan, or whether a dedicated Go-backed subcommand is needed. Stress-test the recommendation by examining what the prompt-only Continuation Advisor would actually need to read from completed run directories and whether those artifacts expose enough structured signal to (a) recommend a next-step mode (stop, plan, research, compare, analyze, review, build), (b) cite the prior run by paths in the next work order's background, and (c) preserve the build drafting invariants (no auto-apply, no auto-chain, no synthesis). Surface concrete failure modes, schema-drift risks between report.md / decision.json / triage / build artifacts and the advisor's expected fields, and the smallest set of artifact signals the advisor needs to function. Conclude with a yes/no on the PR1 prompt-only scope and a list of preconditions or guardrails the plan must add before merging.",
+  "background": "The plan to evaluate: docs/artifact-aware-continuation-implementation-plan-2026-05-21.md. Its Recommendation section proposes that PR1 ship only (1) a Continuation Advisor section in skills/bakeoff/SKILL.md, (2) an optional post-run recommendation line in commands/run.md, and (3) manual scenarios in docs/task-fit-test-scenarios.md - no /bakeoff:continue command and no new Go orchestration. Users invoke continuation as a normal /bakeoff:run with a prior run's artifact paths in the background field.\n\nArtifacts the advisor would consume (read paths from a completed run at runs/<run-id>/):\n- report.md (provider-merged narrative)\n- decision.json (canonical_winner, provider statuses, exit-code meaning)\n- triage/final.json and triage/triage.md (for code-review runs)\n- triage/source_finding_filter.json\n- providers/<id>/build/diff.patch (build runs only)\n- ledger entries (per-run summary)\n\nExisting slash-command surface to inspect for compatibility:\n- commands/run.md (the /bakeoff:run drafting and execution contract)\n- skills/bakeoff/SKILL.md (shared invariants)\n- examples/*.work-order.json (canonical type shapes: analyze, build, compare, gather, review)\n\nQuestions to answer with evidence from the plan and the artifact schemas:\n1. Does report.md plus decision.json carry enough structured signal for the advisor to choose between {stop, plan, research, compare, analyze, review, build} without parsing free-form prose, or does the advisor have to interpret narrative text? If interpretation, where does that break down?\n2. Can the advisor cite prior artifacts by stable path conventions (runs/<run-id>/report.md etc.) without any new Go-side path-resolution helper, on both interactive runs and runs invoked with custom --out / --run-id?\n3. Does the prompt-only path preserve the build drafting invariants documented in commands/run.md (acceptance criteria, gate verifier, edit scope, no synthesis, no auto-apply) when build is recommended as the next step? Where does the advisor need to refuse a 'build next' recommendation that the artifacts cannot support?\n4. What schema-drift risks does prompt-only impose - i.e. if a future PR changes decision.json fields or adds/removes a triage file, does the advisor silently degrade? Are the artifact fields the advisor reads documented anywhere, or implicit?\n5. Which failure modes does the plan's Mode Rules section already handle, and which does it leave open (e.g. exit 4 decision-incomplete runs, mid-failed multi-lens summaries, partial split runs)?\n6. What is the smallest set of concrete signals from existing artifacts that a prompt-only advisor needs in order to land safely in PR1, and is each one already present? If any are missing, name them and the lightest-weight way to expose them.\n7. Is there a class of continuation where prompt-only fundamentally cannot work (e.g. cross-run synthesis, dependency tracking between runs) and that the plan correctly defers, or does the plan over-defer?\n\nDeliverable: a yes/no recommendation on PR1's prompt-only scope, with concrete cited evidence (file:line from plan, commands/run.md, skills/bakeoff/SKILL.md, examples/*.work-order.json, and artifact paths from runs/<sample-run>/). If yes, list any guardrails the plan must add. If no, name the smallest Go-side surface (e.g. a stable artifact-summary JSON) that would unblock prompt-only later. Do not implement code or modify files. Cite paths and line numbers.\n\nAcceptance criteria for the analysis: (1) answers each of the seven questions above with at least one cited artifact or source-file reference; (2) names at least three failure modes the plan does or does not handle; (3) produces an explicit yes/no on PR1 scope plus any guardrails; (4) does not invent artifact fields not present in actual run directories or in the plan.",
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "sonnet",
+      "scope": "codebase",
+      "effort": "high"
+    },
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "scope": "codebase",
+      "effort": "high"
+    }
+  ],
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  },
+  "scope_policy": {
+    "enforcement": "best_effort"
+  }
+}
