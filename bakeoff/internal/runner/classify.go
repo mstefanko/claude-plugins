@@ -2,8 +2,7 @@ package runner
 
 import "strings"
 
-func ClassifyFailure(status string, exitCode *int, stdout string, stderr string) string {
-	_ = exitCode
+func ClassifyFailure(status string, stdout string, stderr string) string {
 	text := strings.ToLower(stdout + "\n" + stderr)
 	switch {
 	case status == StatusMissingProvider:
@@ -29,26 +28,9 @@ func ClassifyFailure(status string, exitCode *int, stdout string, stderr string)
 		strings.Contains(text, "max_tokens_exceeded"),
 		strings.Contains(text, "request_too_large"):
 		return "prompt_too_large"
-	case hasAny(text,
-		"authentication_error",
-		"authenticationerror",
-		"permission_error",
-		"permissiondeniederror",
-		"invalid authentication",
-		"incorrect api key",
-		"invalid api key",
-		"not authenticated",
-	) || ((hasHTTPStatus(text, "401", "403") || hasStandaloneCode(text, "401", "403")) && hasAuthPermissionWording(text)):
+	case hasAuthPermissionMarker(text) || ((hasHTTPStatus(text, "401", "403") || hasStandaloneCode(text, "401", "403")) && hasAuthPermissionWording(text)):
 		return "auth_or_permission"
-	case hasAny(text,
-		"rate_limit_error",
-		"ratelimiterror",
-		"rate limit",
-		"current quota",
-		"quota",
-		"usage limit",
-		"insufficient credits",
-	) || hasHTTPStatus(text, "429") || hasStandaloneCode(text, "429"):
+	case hasRateQuotaWording(text) || hasHTTPStatus(text, "429") || hasStandaloneCode(text, "429"):
 		return "rate_or_quota_limited"
 	case hasHTTPStatus(text, "500", "502", "503", "504", "529") ||
 		hasAny(text,
@@ -70,8 +52,9 @@ func ClassifyFailure(status string, exitCode *int, stdout string, stderr string)
 	}
 }
 
-func ClassifyJudgeError(status string, exitCode *int, stdout string, stderr string) string {
-	return ClassifyFailure(status, exitCode, stdout, stderr)
+// ClassifyJudgeError is a deprecated compatibility alias for ClassifyFailure.
+func ClassifyJudgeError(status string, _ *int, stdout string, stderr string) string {
+	return ClassifyFailure(status, stdout, stderr)
 }
 
 func hasAny(text string, needles ...string) bool {
@@ -129,6 +112,34 @@ func hasAuthPermissionWording(text string) bool {
 		"credential",
 		"unauthorized",
 		"forbidden",
+	)
+}
+
+func hasAuthPermissionMarker(text string) bool {
+	return hasAny(text,
+		"authentication_error",
+		"authenticationerror",
+		"permission_error",
+		"permissiondeniederror",
+		"invalid authentication",
+		"incorrect api key",
+		"invalid api key",
+		"not authenticated",
+	)
+}
+
+func hasRateQuotaWording(text string) bool {
+	return hasAny(text,
+		"rate_limit_error",
+		"ratelimiterror",
+		"rate limit",
+		"quota exceeded",
+		"exceeded quota",
+		"exceeded your current quota",
+		"exceeded current quota",
+		"out of quota",
+		"usage limit",
+		"insufficient credits",
 	)
 }
 

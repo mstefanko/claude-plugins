@@ -211,12 +211,18 @@ func TestPromptSizeErrorBoundaries(t *testing.T) {
 }
 
 func TestRunProviderRejectsOversizedPromptBeforeLaunch(t *testing.T) {
-	sentinel := filepath.Join(t.TempDir(), "invoked")
+	dir := t.TempDir()
+	sentinel := filepath.Join(dir, "invoked")
+	finalMessage := filepath.Join(dir, "last-message.txt")
+	if err := os.WriteFile(finalMessage, []byte("keep\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	result := RunProvider(context.Background(), Options{
-		Argv:    helperArgv("write-sentinel", sentinel),
-		Env:     helperEnv(),
-		Prompt:  strings.Repeat("x", MaxPromptBytes+1),
-		Budgets: Budgets{WallClockSeconds: 3, MaxOutputBytes: 2000},
+		Argv:             helperArgv("write-sentinel", sentinel),
+		Env:              helperEnv(),
+		Prompt:           strings.Repeat("x", MaxPromptBytes+1),
+		Budgets:          Budgets{WallClockSeconds: 3, MaxOutputBytes: 2000},
+		FinalMessagePath: finalMessage,
 	})
 	if result.Status != StatusExitError {
 		t.Fatalf("status = %s", result.Status)
@@ -226,6 +232,9 @@ func TestRunProviderRejectsOversizedPromptBeforeLaunch(t *testing.T) {
 	}
 	if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
 		t.Fatalf("provider was launched; sentinel stat err = %v", err)
+	}
+	if data, err := os.ReadFile(finalMessage); err != nil || string(data) != "keep\n" {
+		t.Fatalf("final message was mutated before launch: data=%q err=%v", data, err)
 	}
 }
 

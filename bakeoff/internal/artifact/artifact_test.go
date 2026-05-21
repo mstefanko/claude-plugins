@@ -111,6 +111,20 @@ func TestResultMapClassifiesFailureKindOnlyForConfidentFailures(t *testing.T) {
 	}
 }
 
+func TestPreserveJudgeErrorKindCopiesClassifiedFailure(t *testing.T) {
+	failed := map[string]any{"status": runner.StatusExitError, "failure_kind": "api_transient"}
+	PreserveJudgeErrorKind(failed)
+	if failed["judge_error_kind"] != "api_transient" {
+		t.Fatalf("judge_error_kind = %#v", failed["judge_error_kind"])
+	}
+
+	success := map[string]any{"status": runner.StatusOK, "failure_kind": "api_transient"}
+	PreserveJudgeErrorKind(success)
+	if _, ok := success["judge_error_kind"]; ok {
+		t.Fatalf("success should not get judge_error_kind: %#v", success)
+	}
+}
+
 func TestWriteMetaIncludesDecisionAndExitCode(t *testing.T) {
 	runDir := t.TempDir()
 	if err := workorder.WriteJSONAtomic(filepath.Join(runDir, "work-order.json"), map[string]any{"id": "sample"}); err != nil {

@@ -615,11 +615,7 @@ func runSingleJudge(ctx context.Context, f commands.Factory, wo *workorder.WorkO
 		OnTick:           commands.MakeTickPrinter(f, "judge:"+label, quiet),
 		FinalMessagePath: lastMessage,
 	}))
-	if !artifact.ProviderSucceeded(result) {
-		if kind := jsonutil.StringValue(result["failure_kind"]); kind != "" {
-			result["judge_error_kind"] = kind
-		}
-	}
+	artifact.PreserveJudgeErrorKind(result)
 	if err := artifact.WriteJudgeArtifacts(judgeDir, label, result); err != nil {
 		return nil, err
 	}

@@ -211,12 +211,12 @@ func runProcess(ctx context.Context, opts Options, requireFinalJSON bool) Result
 	if len(opts.Argv) == 0 {
 		return state.status(StatusMissingProvider, nil, "", "missing provider argv", nil, "")
 	}
+	if message := promptSizeError(opts.Prompt); message != "" {
+		return state.status(StatusExitError, nil, "", message, nil, "")
+	}
 	if opts.FinalMessagePath != "" {
 		_ = os.MkdirAll(filepathDir(opts.FinalMessagePath), 0o700)
 		_ = os.Remove(opts.FinalMessagePath)
-	}
-	if message := promptSizeError(opts.Prompt); message != "" {
-		return state.status(StatusExitError, nil, "", message, nil, "")
 	}
 
 	cmd := exec.CommandContext(ctx, opts.Argv[0], opts.Argv[1:]...)
@@ -358,7 +358,7 @@ func runProcess(ctx context.Context, opts Options, requireFinalJSON bool) Result
 }
 
 func promptSizeError(prompt string) string {
-	size := len([]byte(prompt))
+	size := len(prompt)
 	if size <= MaxPromptBytes {
 		return ""
 	}

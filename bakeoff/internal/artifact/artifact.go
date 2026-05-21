@@ -51,12 +51,23 @@ func ResultMap(result runner.Result) map[string]any {
 		out["repair_artifacts"] = result.RepairArtifacts
 	}
 	if !ProviderSucceeded(out) {
-		if kind := runner.ClassifyFailure(result.Status, result.ExitCode, result.Stdout, result.Stderr); kind != "" {
+		if kind := runner.ClassifyFailure(result.Status, result.Stdout, result.Stderr); kind != "" {
 			out["failure_kind"] = kind
 		}
 	}
 	out["stderr_kind"] = StderrKind(out)
 	return out
+}
+
+// PreserveJudgeErrorKind keeps the legacy judge_error_kind field in sync with
+// classified judge failures.
+func PreserveJudgeErrorKind(result map[string]any) {
+	if ProviderSucceeded(result) {
+		return
+	}
+	if kind := jsonutil.StringValue(result["failure_kind"]); kind != "" {
+		result["judge_error_kind"] = kind
+	}
 }
 
 func StatusWithoutPayload(result map[string]any) map[string]any {
