@@ -422,6 +422,15 @@ behavior.
     command plus pid/stdout/stderr paths and any run artifacts that exist, and
     marks the summary partial.
 
+- [ ] Failed triage after completed review child stays raw and partial.
+  - Setup: a parallel multi-lens child exits `0` and has usable `report.md` and
+    `decision.json`, but triage is failed, missing, stale, dry-run, or lacks a
+    current `triage/final.json`.
+  - Expect: plugin includes the report and decision artifacts, marks that lens
+    and the whole multi-lens summary partial, states that findings for that
+    lens are raw or unverified, and does not treat raw findings as build-ready
+    triaged issues.
+
 - [ ] Provider-concurrency dogfood records configured CLI behavior.
   - Setup: run an eligible two- or three-lens parallel review in an environment
     where Claude and Codex provider CLIs are configured for real execution.

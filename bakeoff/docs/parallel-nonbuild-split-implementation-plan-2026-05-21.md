@@ -2,7 +2,10 @@
 
 Date: 2026-05-21
 
-Status: proposed, trimmed after review
+Status: superseded in part by
+`docs/parallel-multi-lens-review-implementation-plan-2026-05-21.md` for
+multi-lens execution choice; retained as historical generic-split planning
+context
 
 Scope: harden concurrent run startup, then add opt-in parallel fanout for
 independent generic non-build split runs

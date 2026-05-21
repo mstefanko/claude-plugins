@@ -2,7 +2,9 @@
 
 Date: 2026-05-19
 
-Status: proposed
+Status: superseded by
+`docs/parallel-multi-lens-review-implementation-plan-2026-05-21.md` for
+parallel multi-lens execution choice; retained as historical drafting context
 
 Scope: Claude plugin drafting flow for review-shaped Bakeoff requests
 

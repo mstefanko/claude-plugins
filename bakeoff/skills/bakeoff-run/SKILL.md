@@ -69,11 +69,10 @@ careful path, split, and multi-lens.
   probe the CLI (`bakeoff providers list`, `bakeoff --help`,
   `bakeoff init`, `bakeoff doctor`) to discover them.
 - **No `Write` before approval.** Drafting must show the compact
-  preview, wait for affirmative reply (`yes` / `approve` / `run it` for
-  single, explicit displayed split/multi-lens choices such as
-  `write and run`, `sequential`, or `parallel` for multi-file previews),
-  and only then issue
-  the file-mutating tool call.
+  preview and wait for the preview's exact approval. Single-work-order
+  previews accept `yes`, `approve`, or `run it`; multi-file split or
+  multi-lens previews accept only displayed choices such as `write and
+  run`, `sequential`, or `parallel`. Only then issue the file-mutating tool call.
 
 Proposal is not approval. Repo exploration may support a read-only preview, but
 it does not authorize writing or running. `bakeoff draft-build` is
@@ -242,10 +241,12 @@ Parallel research children launch quiet JSON `bakeoff research` commands
 concurrently with one subshell per child under `/bin/sh` or Bash, no `xargs
 -P`, no `eval`, no `set -e`, explicit run ids, separate stdout/stderr/exit/pid
 files, bounded lifecycle progress only, and no claims about
-provider/judge/triage phases. Wait for all children to settle. Classify exits
-`0`, `3`, and `4` as completed, with caveats; classify `1`, `2`, `130`, launch
-failure, orphaned pid-without-exit, or missing artifacts as failed. Never
-summarize parallel runs with `latest`.
+provider/judge/triage phases. Any emitted fanout helper must start with
+`#!/bin/sh` or `#!/usr/bin/env bash`; never emit or run it under `zsh`. Wait
+for all children to settle. Classify exits `0`, `3`, and `4` as completed,
+with caveats; classify `1`, `2`, `130`, launch failure, orphaned
+pid-without-exit, or missing artifacts as failed. Never summarize parallel runs
+with `latest`.
 
 Summarize generic split runs independently. Do not produce an overall winner,
 merged patch, merged answer, persisted split summary, or cross-run synthesis
@@ -344,7 +345,10 @@ ignored items), most actionable findings by lens, overlap, clean lenses,
 caveats, explicit `bakeoff show <run-id>` commands, the summary path, and a
 note that `latest` may point to any one child and is not the group. If triage
 is disabled, missing, stale, dry-run, failed, or only recommended, state that
-findings are raw or unverified. Always include `## Optional Synthesis`.
+findings are raw or unverified. Always include `## Optional Synthesis`: when
+synthesis was not requested, write `Not requested.` plus the separate
+`type: "analyze"` synthesis-pass option when usable artifacts exist; if no lens
+has usable artifacts, say synthesis is unavailable until a lens completes.
 
 Do not synthesize automatically. Ask whether the user wants a synthesis pass
 deduping verified lens results into one prioritized fix plan. If accepted,

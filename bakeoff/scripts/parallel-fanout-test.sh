@@ -1,7 +1,7 @@
 #!/bin/sh
 set -u
 
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 
 fail() {
   printf 'ERROR: %s\n' "$1" >&2
@@ -48,6 +48,9 @@ is_running() {
   label=$1
   [ -f "$tmpdir/$label.pid" ] || return 1
   pid=$(cat "$tmpdir/$label.pid")
+  # This mirrors the prompt contract's lifecycle check. The exit-file check
+  # above is authoritative; pid checks only distinguish still-running children
+  # from pid-gone/orphaned children in this short-lived harness.
   kill -0 "$pid" 2>/dev/null
 }
 
@@ -66,7 +69,7 @@ classify_child() {
 
 summary_source() {
   label=$1
-  if grep -Fq '"label":"' "$tmpdir/$label.stdout" 2>/dev/null; then
+  if grep -Fq "\"label\":\"$label\"" "$tmpdir/$label.stdout" 2>/dev/null; then
     printf 'stdout-json\n'
     return 0
   fi
@@ -151,12 +154,18 @@ assert_contains "$progress_log" 'completed security exit=0'
 assert_contains "$progress_log" 'completed ux exit=1'
 assert_contains "$progress_log" 'completed performance exit=4'
 
+mkfifo "$tmpdir/orphan.fifo" || fail "could not create orphan fifo"
 (
-  :
-) &
-stale_pid=$!
-wait "$stale_pid" 2>/dev/null || :
-printf '%s\n' "$stale_pid" > "$tmpdir/orphan.pid"
+  IFS= read -r _ < "$tmpdir/orphan.fifo"
+  printf 'unreachable orphan stdout\n'
+  printf '0\n' > "$tmpdir/orphan.exit"
+) > "$tmpdir/orphan.stdout" 2> "$tmpdir/orphan.stderr" &
+orphan_pid=$!
+printf '%s\n' "$orphan_pid" > "$tmpdir/orphan.pid"
+[ "$(classify_child orphan)" = "running" ] || fail "orphan child was not running before kill"
+kill -9 "$orphan_pid" 2>/dev/null || fail "could not kill orphan child"
+wait "$orphan_pid" 2>/dev/null || :
+[ ! -f "$tmpdir/orphan.exit" ] || fail "orphan exit file should be absent"
 [ "$(classify_child orphan)" = "orphaned_child" ] || fail "orphaned child not classified"
 
 printf 'Parallel fanout test OK\n'

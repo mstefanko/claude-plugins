@@ -71,9 +71,8 @@ child run, not the group.
 
 ## Parallel Fanout Skeleton
 
-Run this skeleton under `/bin/sh` or Bash. It relies on POSIX-style positional
-arguments and separate child subshells; do not copy it into `zsh` with scalar
-word-splitting assumptions.
+Run this under `/bin/sh` or Bash with a `#!/bin/sh` or `#!/usr/bin/env bash`
+helper shebang; never run or copy the snippet into `zsh`.
 
 ```sh
 tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/bakeoff-parallel.XXXXXX") || exit 1
@@ -101,8 +100,6 @@ parallel bakeoff: completed security exit=0; running 2/3
 parallel bakeoff: completed architecture exit=4; running 1/3
 parallel bakeoff: completed ux exit=0; summarizing
 ```
-
-Parallel multi-lens progress examples:
 
 ```text
 parallel multi-lens: launched 3 lens runs
@@ -198,3 +195,6 @@ Summary file: <path>
 ## Next Commands
 ## Optional Synthesis
 ```
+
+When synthesis was not requested, `## Optional Synthesis` says `Not requested.`
+Offer a separate `type: "analyze"` pass, or say synthesis is unavailable.

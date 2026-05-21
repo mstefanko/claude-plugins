@@ -75,8 +75,7 @@ Two invariants are load-bearing enough to repeat here:
   probe the CLI (`bakeoff providers list`, `bakeoff --help`,
   `bakeoff init`, `bakeoff doctor`) to discover them.
 - **No `Write` before approval.** Drafting must show the compact
-  preview, wait for affirmative reply (`yes` / `approve` / `run it` for
-  single, explicit displayed split/multi-lens choices such as
-  `write and run`, `sequential`, or `parallel` for multi-file previews),
-  and only then issue
-  the file-mutating tool call.
+  preview and wait for the preview's exact approval. Single-work-order
+  previews accept `yes`, `approve`, or `run it`; multi-file split or
+  multi-lens previews accept only displayed choices such as `write and
+  run`, `sequential`, or `parallel`. Only then issue the file-mutating tool call.
