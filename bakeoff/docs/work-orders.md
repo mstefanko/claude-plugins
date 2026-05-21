@@ -10,13 +10,15 @@ drafting workflow, not a work-order schema feature: each lens is a normal
 `gather` work order with the standard `code-review` facet and lens-specific
 focus/include/exclude text.
 
-Eligible generic non-build splits may be launched in parallel by the plugin,
-but that still does not change the schema. Each child is a normal
-`gather`, `compare`, or `analyze` work order and a normal `bakeoff research`
-run with an explicit run id. Parallel split summaries use those explicit run
-ids and do not rely on `latest`, because concurrent child starts make the
-convenience pointer nondeterministic. Splits that include `build` and
-multi-lens review remain sequential in the current plugin contract.
+Eligible generic non-build splits and eligible 2-3 lens multi-lens review
+previews may be launched in parallel by the plugin, but that still does not
+change the schema. Each child is a normal `gather`, `compare`, or `analyze`
+work order for generic splits, or a normal `gather` plus `code-review` work
+order for multi-lens review, and each child is a normal `bakeoff research` run
+with an explicit run id. Parallel summaries use those explicit run ids and do
+not rely on `latest`, because concurrent child starts make the convenience
+pointer nondeterministic. Splits that include `build` remain ineligible for
+parallel fanout.
 
 Continuation is not a work-order schema feature either. When a completed run's
 artifacts suggest a useful next step, the plugin may recommend another normal
@@ -366,7 +368,9 @@ first, then launches all child research runs concurrently with `--json
 
 When the plugin drafts explicit multi-lens review, it uses readable lens stems
 instead of `.part-N`, such as `./review-auth.security.work-order.json` with
-`--run-id review-auth.security`. After the approved lens runs finish, the plugin
-may write a convenience summary such as
-`runs/review-auth.multi-lens-summary.md`; that file is not a CLI decision
-artifact and does not change the work-order contract.
+`--run-id review-auth.security`. Eligible 2-3 lens previews may offer
+`sequential` or `parallel`; both paths still validate every ordinary lens file
+before any run starts. After the approved lens runs finish, the plugin may
+write a convenience summary such as `runs/review-auth.multi-lens-summary.md`;
+that file is not a CLI decision artifact and does not change the work-order
+contract.

@@ -71,6 +71,10 @@ child run, not the group.
 
 ## Parallel Fanout Skeleton
 
+Run this skeleton under `/bin/sh` or Bash. It relies on POSIX-style positional
+arguments and separate child subshells; do not copy it into `zsh` with scalar
+word-splitting assumptions.
+
 ```sh
 tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/bakeoff-parallel.XXXXXX") || exit 1
 
@@ -96,6 +100,16 @@ parallel bakeoff: running 3/3: architecture, security, ux
 parallel bakeoff: completed security exit=0; running 2/3
 parallel bakeoff: completed architecture exit=4; running 1/3
 parallel bakeoff: completed ux exit=0; summarizing
+```
+
+Parallel multi-lens progress examples:
+
+```text
+parallel multi-lens: launched 3 lens runs
+parallel multi-lens: running 3/3: security, performance, ux
+parallel multi-lens: completed security exit=0; running 2/3
+parallel multi-lens: completed ux exit=1; running 1/3
+parallel multi-lens: completed performance exit=4; summarizing
 ```
 
 ## Multi-Lens Presets
@@ -139,6 +153,23 @@ Write, validate, and run these one after another? Reply `write and run`, reply
 If `--no-triage` is set, omit verification from the estimate, state findings
 will be raw and unverified, and count two phases instead of three. Provider
 reviews run in parallel within a lens, so count one worker phase per lens.
+
+For eligible 2-3 lens parallel previews, replace the last question with:
+
+```text
+Choose how to run these lens reviews:
+
+- `write and run` or `sequential` - write, validate, then run one after another.
+- `parallel` - write, validate, then run all <N> lens reviews at once.
+- `show` - print the JSON before approving.
+- `show <lens>` - print one lens JSON.
+
+Parallel cost note: <N> lens runs x <provider-count> providers can launch up to
+<N*provider-count> provider workers at once. Later phases can also overlap
+across lenses: up to <N> judge calls, and up to <N> triage calls when triage is
+enabled. Child output will be captured per run, and `latest` will point to one
+child run, not the group.
+```
 
 ## Multi-Lens Stop And Summary
 

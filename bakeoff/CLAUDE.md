@@ -76,5 +76,7 @@ Two invariants are load-bearing enough to repeat here:
   `bakeoff init`, `bakeoff doctor`) to discover them.
 - **No `Write` before approval.** Drafting must show the compact
   preview, wait for affirmative reply (`yes` / `approve` / `run it` for
-  single, `write and run` for split/multi-lens), and only then issue
+  single, explicit displayed split/multi-lens choices such as
+  `write and run`, `sequential`, or `parallel` for multi-file previews),
+  and only then issue
   the file-mutating tool call.

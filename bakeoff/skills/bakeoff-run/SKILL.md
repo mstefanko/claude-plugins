@@ -70,7 +70,9 @@ careful path, split, and multi-lens.
   `bakeoff init`, `bakeoff doctor`) to discover them.
 - **No `Write` before approval.** Drafting must show the compact
   preview, wait for affirmative reply (`yes` / `approve` / `run it` for
-  single, `write and run` for split/multi-lens), and only then issue
+  single, explicit displayed split/multi-lens choices such as
+  `write and run`, `sequential`, or `parallel` for multi-file previews),
+  and only then issue
   the file-mutating tool call.
 
 Proposal is not approval. Repo exploration may support a read-only preview, but
@@ -219,8 +221,8 @@ generic splits of 2-3 non-build `gather`/`compare`/`analyze` work orders where
 every file validates and every part has an explicit collision-free run id.
 Offer local `sequential`, `parallel`, and `show` choices only in that displayed
 preview. `write and run` remains sequential; outside that preview, `parallel`
-is normal user text. Never offer parallel for build parts, more than three
-parts, or multi-lens review.
+is normal user text. Never offer parallel for build parts or more than three
+parts.
 
 Derive one base slug. Append `.part-N` to work-order ids, filenames, and
 supplied `--run-id`; if no `--run-id` was supplied, use the stem as the run id.
@@ -234,15 +236,16 @@ Sequential splits continue after exits `0`, `3`, or `4`; exit `3` is completed
 with unresolved disagreement, and exit `4` is decision-incomplete with durable
 artifacts. Stop on exit `1`, `2`, `130`, interruption, or command failure;
 summarize completed and failed parts, then ask before remaining parts. Split
-runs may continue after exit `4`; multi-lens stops on exit `4`.
+runs may continue after exit `4`; sequential multi-lens stops on exit `4`.
 
-Parallel splits launch quiet JSON `bakeoff research` children concurrently with
-one subshell per child, no `xargs -P`, no `eval`, no `set -e`, explicit run ids,
-separate stdout/stderr/exit files, bounded lifecycle progress only, and no
-claims about provider/judge/triage phases. Wait for all children to settle.
-Classify exits `0`, `3`, and `4` as completed, with caveats; classify `1`,
-`2`, `130`, launch failure, or missing artifacts as failed. Never summarize
-parallel runs with `latest`.
+Parallel research children launch quiet JSON `bakeoff research` commands
+concurrently with one subshell per child under `/bin/sh` or Bash, no `xargs
+-P`, no `eval`, no `set -e`, explicit run ids, separate stdout/stderr/exit/pid
+files, bounded lifecycle progress only, and no claims about
+provider/judge/triage phases. Wait for all children to settle. Classify exits
+`0`, `3`, and `4` as completed, with caveats; classify `1`, `2`, `130`, launch
+failure, orphaned pid-without-exit, or missing artifacts as failed. Never
+summarize parallel runs with `latest`.
 
 Summarize generic split runs independently. Do not produce an overall winner,
 merged patch, merged answer, persisted split summary, or cross-run synthesis
@@ -260,10 +263,11 @@ Run task fit first. If the review target is unbounded by branch, PR, diff, file
 set, or local changes, stop with the task-fit warning and do not ask for
 lenses. If lenses are missing, ask which 2-3 to run. For more than three, warn
 and ask the user to narrow or say `run all lenses`; hard-stop at three unless
-the user explicitly approves all lenses. Lens presets and the summary template
-live in `references/run-appendix.md`; map SQL injection to
-`security`, accessibility to `ux`, and allow narrow custom kebab slugs while
-asking one clarification for vague lenses like `quality` or `everything`.
+the user explicitly approves all lenses. Do not offer parallel for `run all
+lenses` in this implementation. Lens presets and the summary template live in
+`references/run-appendix.md`; map SQL injection to `security`, accessibility
+to `ux`, and allow narrow custom kebab slugs while asking one clarification
+for vague lenses like `quality` or `everything`.
 
 For each lens, draft a normal review work order: `type: "gather"`,
 `facet.id: "code-review"`, shared providers/judge/budgets/scope/base/diff, and
@@ -279,29 +283,68 @@ settings, verification/triage state, and the cost note from the appendix. Do
 not print full JSON by default; use `show` or `show <lens>` with the 120-line
 / 10 KB limit.
 
-Require exact `write and run` approval before writing or running multi-lens
-files. After approval, write every lens file, validate all files before any
-run, and then run sequentially with `bakeoff research <lens-work-order>
---run-id <base>.<lens>` plus routed research flags. On validation failure, run
-nothing, repair, re-preview, and require fresh `write and run`. Validation
-warnings are advisory when validation exits successfully.
+Parallel multi-lens is eligible only for explicit 2-3 lens review previews
+where every draft is `type: "gather"` with `facet.id: "code-review"`, every
+file validates before launch, every run id is explicit and collision-free, and
+every final lens label matches `^[a-z0-9][a-z0-9-]{0,31}$`. Normalize known
+presets to labels like `security`, `performance`, `ux`, and `tests`. For
+custom lenses, use unique lowercase kebab labels only when normalization is
+unambiguous; if the label would need spaces, punctuation, uppercase, dots,
+underscores, slashes, or more than 32 characters, do not offer parallel until
+the lens is renamed or run sequentially.
+
+For eligible previews, offer local `write and run`/`sequential`, `parallel`,
+`show`, and `show <lens>` choices using the appendix wording. `write and run`
+and `sequential` both mean the existing one-after-another execution. Accept
+`parallel` only after an eligible displayed preview offered it. If `parallel`
+is sent after an ineligible preview, say parallel is not available for that
+preview and re-show valid choices; outside such a preview, treat `parallel` as
+ordinary user text.
+
+After approval, write every lens file and validate all final paths before any
+run. On validation failure, launch nothing, repair, re-preview, and require
+fresh approval. Validation warnings are advisory when validation exits
+successfully. Sequential approval runs `bakeoff research <lens-work-order>
+--run-id <base>.<lens>` plus routed research flags one at a time. Parallel
+approval launches all lens children concurrently as `bakeoff research
+<lens-work-order> --run-id <base>.<lens> [--out <dir>] [research flags] --json
+--quiet`, forwarding only `--out`, `--base`, `--diff`, `--changed-files`,
+`--no-triage`, and `--no-repo-layout`. Use separate stdout, stderr, exit, and
+pid files per child, and report only launched/running/completed lifecycle
+state. Shared `--out` writes must stay run-id-keyed: each child writes only
+under `<out>/<run-id>/`, auto-triage writes under that child directory,
+`latest` is nondeterministic, and the parent writes only the
+`<out>/<base>.multi-lens-summary.md` convenience file.
 
 Continue after exit `0`. Treat exit `3` as completed but unusual and untriaged
 unless triage artifacts exist. Stop on validation failure, exit `1`, `2`, `4`,
 `130`, interruption, or command failure. On a stop, show completed lenses, the
 stopped lens and artifacts, remaining lenses, whether a partial summary file
 was written, and ask for `continue lenses` before running remaining lenses.
+This stricter stop/continue behavior applies to sequential multi-lens only.
+Parallel multi-lens waits for every launched child to settle; exit `4` is
+completed with a decision-incomplete caveat because all children are already
+running. Mark the summary partial if any lens failed, was interrupted, never
+launched, is orphaned, lacks required artifacts, or has failed/missing/stale
+triage. Do not ask `continue lenses` after parallel launch unless a lens truly
+never launched.
 
-After completed lens runs, read `report.md`, `decision.json`,
-`triage/final.json`, `triage/triage.md`, and
-`triage/source_finding_filter.json` when present. Write
-`<out>/<base>.multi-lens-summary.md`, with numeric collision suffixes. Include
-each lens, run id, report path, triage path/state, run status, triage counts
-when available (`real_issue`, `needs_repro`, evidence gaps, false positives,
-deferred, documented, and ignored items), most actionable findings by lens,
-overlap, clean lenses, caveats, `bakeoff show` commands, and the summary path.
-If triage is disabled, missing, or only recommended, state that findings are raw
-and unverified. Mark failed or skipped lens summaries as partial.
+After lens runs, read artifacts through `ctx_execute_file`, `ctx_execute`, or
+an equivalent context sandbox that returns compact digests, counts, paths, and
+hashes rather than raw large artifacts. Inspect captured child JSON,
+`report.md`, `decision.json`, `manifest.json`, `triage/final.json`,
+`triage/triage.md`, and `triage/source_finding_filter.json` when present, plus
+child logs when a child failed or JSON is missing. Always attempt to write
+`<out>/<base>.multi-lens-summary.md`, with numeric collision suffixes, after
+all sequentially completed or parallel-launched children settle. Include every
+requested lens, run id, report path when present, triage path/state, result
+class and exit code, triage counts when available (`real_issue`,
+`needs_repro`, evidence gaps, false positives, deferred, documented, and
+ignored items), most actionable findings by lens, overlap, clean lenses,
+caveats, explicit `bakeoff show <run-id>` commands, the summary path, and a
+note that `latest` may point to any one child and is not the group. If triage
+is disabled, missing, stale, dry-run, failed, or only recommended, state that
+findings are raw or unverified. Always include `## Optional Synthesis`.
 
 Do not synthesize automatically. Ask whether the user wants a synthesis pass
 deduping verified lens results into one prioritized fix plan. If accepted,
@@ -312,8 +355,8 @@ invent findings, and preserve source lens and run id.
 ## Execution And Summary
 
 Default interactive runs keep CLI heartbeats. Use `--json --quiet` only when
-the user asks for quiet or machine-readable output, except for parallel split
-children.
+the user asks for quiet or machine-readable output, except for parallel
+research children.
 
 On exit `0`, `3`, or `4`, read artifacts and summarize. Exit `3` means a
 completed run with unresolved disagreement, not launcher failure. Exit `4`

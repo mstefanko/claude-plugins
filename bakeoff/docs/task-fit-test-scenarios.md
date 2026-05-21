@@ -170,8 +170,9 @@ behavior.
   - Prompt: `/bakeoff:run review this diff against main with security and tests as separate lenses`
   - Expect: plugin previews two separate review runs, uses filenames and run ids
     like `<base>.security` and `<base>.tests`, includes the cost note with a
-    worst-case wall-clock estimate, keeps verification/triage on, and asks for
-    `write and run`.
+    worst-case wall-clock estimate, keeps verification/triage on, and offers
+    local `write and run`/`sequential`, `parallel`, `show`, and `show <lens>`
+    choices.
 
 - [ ] `review swarm` without lenses asks for lens names after task fit passes.
   - Prompt: `/bakeoff:run review swarm this PR`
@@ -186,21 +187,23 @@ behavior.
 
 - [ ] Multi-lens approval requires the exact multi-file phrase.
   - Prompt: accept a multi-lens preview with `yes`.
-  - Expect: plugin asks for `write and run` because multiple files and runs are
-    being approved. It does not write files on plain `yes`.
+  - Expect: plugin asks for an explicit displayed multi-file choice such as
+    `write and run`, `sequential`, or `parallel` because multiple files and
+    runs are being approved. It does not write files on plain `yes`.
 
 - [ ] `show <lens>` prints one lens draft when combined JSON is too long.
   - Prompt: after a multi-lens preview says full JSON is verbose, reply
     `show security`.
   - Expect: plugin prints only the security work-order JSON, lists the other
-    available `show <lens>` choices, and repeats the `write and run` approval
-    question.
+    available `show <lens>` choices, and repeats the displayed multi-lens
+    approval choices.
 
 - [ ] Too many lenses requires narrowing or explicit approval.
   - Prompt: `/bakeoff:run review this diff against main with security, performance, UX, tests, and reliability lenses`
   - Expect: plugin warns that this would run five separate review runs, asks the
     user to narrow to 2-3 lenses or say `run all lenses`, and drafts nothing
-    until clarified.
+    until clarified. If the user says `run all lenses`, plugin does not offer
+    parallel fanout in this implementation.
 
 - [ ] Unknown lens handling distinguishes narrow from vague.
   - Prompt: `/bakeoff:run review this diff against main with billing invariants as a separate lens`
@@ -361,7 +364,7 @@ behavior.
   - Setup: make one generated lens work order invalid during command review.
   - Expect: plugin validates all lens files before running any; on validation
     error, it reports the failing file and error, repairs the JSON, and shows
-    the final set again before asking for exact `write and run` approval.
+    the final set again before asking for a fresh explicit multi-file approval.
 
 - [ ] Multi-lens `--no-triage` applies to every lens.
   - Prompt: `/bakeoff:run review this diff against main with security and performance as separate lenses --no-triage`
@@ -379,13 +382,52 @@ behavior.
   - Setup: first lens exits `0`, second lens exits `1`, `2`, `4`, or `130`.
   - Expect: plugin summarizes completed and failed lenses and asks before
     continuing. Exit `3`, if encountered, is marked as a completed unusual
-    handoff and untriaged unless triage artifacts exist.
+    handoff and untriaged unless triage artifacts exist. This stop/continue
+    behavior applies to sequential multi-lens runs.
 
-- [ ] Specialized multi-lens review remains sequential.
-  - Prompt: after a three-lens review preview, reply `parallel`.
-  - Expect: plugin does not accept `parallel` for multi-lens review. It repeats
-    the sequential `write and run` approval requirement and does not launch
-    lens runs.
+- [ ] `parallel` before an eligible multi-lens preview is not approval.
+  - Prompt: `/bakeoff:run review this diff against main in parallel with security and tests`
+  - Expect: plugin treats `parallel` as ordinary request text until it has
+    displayed an eligible multi-lens preview that offers the local `parallel`
+    choice. It writes, validates, and launches nothing before that preview.
+
+- [ ] Eligible multi-lens `parallel` launches all lenses concurrently.
+  - Prompt: after an eligible security/performance/UX review preview, reply
+    `parallel`.
+  - Expect: plugin writes all lens files, validates every final file path, and
+    launches all three `bakeoff research ... --json --quiet` children with
+    explicit run ids and separate stdout/stderr/exit/pid files. Parent progress
+    reports only launch/running/completed counts and child exit codes.
+
+- [ ] Ineligible multi-lens `parallel` re-shows valid choices.
+  - Setup: preview is ineligible because there are more than three lenses, one
+    lens label cannot be normalized to `^[a-z0-9][a-z0-9-]{0,31}$`, or the
+    user approved `run all lenses`.
+  - Prompt: reply `parallel`.
+  - Expect: plugin says parallel is not available for that preview, explains
+    the reason, and re-shows the valid sequential/show choices without writing
+    or launching.
+
+- [ ] Parallel multi-lens mixed exits still write a partial summary.
+  - Setup: one parallel child exits `0`, one exits `4`, and one exits `1`.
+  - Expect: plugin waits for every launched child to settle, treats exit `4` as
+    completed with a decision-incomplete caveat, marks the conversation and
+    persisted summaries partial, includes any available reports, decisions,
+    triage artifacts, child logs, and explicit `bakeoff show <run-id>`
+    commands, and never points to `latest` as the group.
+
+- [ ] Parallel multi-lens orphaned child is classified failed.
+  - Setup: a child pid is gone and no exit file exists.
+  - Expect: plugin classifies the lens as failed `orphaned_child`, includes the
+    command plus pid/stdout/stderr paths and any run artifacts that exist, and
+    marks the summary partial.
+
+- [ ] Provider-concurrency dogfood records configured CLI behavior.
+  - Setup: run an eligible two- or three-lens parallel review in an environment
+    where Claude and Codex provider CLIs are configured for real execution.
+  - Expect: final notes record whether the provider CLIs tolerated concurrent
+    invocations from the same host/session or self-serialized in a way that
+    limits speedup. The plugin still reports only parent lifecycle progress.
 
 - [ ] Completed multi-lens runs produce a persisted summary.
   - Prompt: after approved security/performance/UX lens runs finish.
@@ -399,7 +441,8 @@ behavior.
   - Setup: one lens completed, one lens failed, and one lens was not run.
   - Expect: plugin labels the conversation summary and any written summary file
     as partial, lists completed/stopped/remaining lenses, and asks for
-    `continue lenses` before running the remaining lens.
+    `continue lenses` before running the remaining lens only when the run was
+    sequential or a lens truly never launched.
 
 - [ ] Multi-lens synthesis is a separate approval step.
   - Prompt: after the summary, user asks for synthesis.
