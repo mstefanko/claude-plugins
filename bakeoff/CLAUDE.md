@@ -63,7 +63,7 @@ When spawning subagents (Agent/Task tool), the routing block is automatically in
 
 ## Bakeoff drafting (`/bakeoff:run`) invariants
 
-The full contract lives in `commands/run.md` and `skills/bakeoff/SKILL.md`.
+The full contract lives in `skills/bakeoff-run/SKILL.md`.
 Two invariants are load-bearing enough to repeat here:
 
 - **One batched context pass.** If `/bakeoff:run` drafting needs local
