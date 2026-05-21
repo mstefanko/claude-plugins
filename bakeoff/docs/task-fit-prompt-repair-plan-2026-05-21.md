@@ -132,15 +132,10 @@ Rules:
   Ask one targeted narrowing question instead.
 - Do not perform the direct one-pass answer from inside `/bakeoff:run` unless
   the user explicitly abandons Bakeoff in ordinary language.
-- After showing this menu, listen for an immediate reply of `1`, `2`, or a clear
-  rewrite label. Treat that selection as the revised natural-language request and
-  re-run task fit once.
-- Do not emit a second repair menu for the immediate follow-up. If the selected
-  rewrite or revised prompt still fails task fit or required fields, ask one
-  targeted clarification or use the existing generic warning path rather than
-  showing another repair menu.
-- Number and label replies are local selections from the displayed menu, not new
-  reserved phrases.
+- If the immediate reply selects one of the displayed rewrites by number or clear
+  label, carry forward the original targets, repositories, refs, and constraints;
+  treat the selected rewrite as the revised request; re-run task fit once; and
+  do not show another repair menu immediately.
 
 ## Real Use Case
 
@@ -218,9 +213,10 @@ Add three manual scenarios and leave existing scenarios intact:
    same warning, then user replies `1` or `Behavior impact`.
 
    Expect:
-   plugin treats the selected rewrite as the revised natural-language request,
-   re-runs task fit once, and proceeds to normal preview approval if it passes.
-   It does not show another repair menu for the immediate follow-up.
+   plugin carries forward the original repos and constraints, treats the selected
+   rewrite as the revised natural-language request, re-runs task fit once, and
+   proceeds to normal preview approval if it passes. It does not show another
+   repair menu for the immediate follow-up.
 
 3. **Interpretive compare with criteria drafts normally.**
    Prompt:
@@ -247,8 +243,9 @@ that behavior is already covered by the existing checklist.
   inline`, `narrow it to:`, or other magic reply is introduced.
 - The deterministic fork-diff prompt warns instead of drafting, with grounded
   rewrites that preserve user intent and do not invent requirements.
-- Selecting `1`, `2`, or a clear label treats that rewrite as the narrowed prompt
-  and does not show a second repair menu on the immediate follow-up.
+- Selecting `1`, `2`, or a clear label carries forward the original targets and
+  constraints, treats that rewrite as the narrowed prompt, and does not show a
+  second repair menu on the immediate follow-up.
 - The interpretive compare scenario drafts normally, and existing task-fit,
   required-field, split, and multi-lens checklist rows remain present.
 

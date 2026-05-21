@@ -36,6 +36,19 @@ Once `UpdateLatest` is concurrency-safe, the remaining PR2 coordination cost is
 mostly prompt contract and shell fanout. It does not require a Go scheduler or
 new artifact model.
 
+The progress surface is buildable at the child-run lifecycle level. The current
+Go CLI already has provider heartbeat support inside a single run, but split
+and multi-lens execution are Claude-side `/bakeoff:run` flows, not a Go parent
+command. PR2 should therefore report parent orchestration progress:
+
+```text
+launched -> running -> completed with exit code
+```
+
+Do not promise provider, judge, or triage phase progress for each child while
+using `--json --quiet`. That would require either interleaving child output or
+adding a Go fanout/status protocol, which is outside the trimmed PR2.
+
 Valid use cases are broader than review:
 
 ```text
@@ -159,6 +172,37 @@ PR2 is a prompt-contract change to `commands/run.md`,
 
 It should not change the Go work-order schema.
 
+Code reality check:
+
+- `internal/commands/researchcmd/run.go::RunResearch` implements one normal
+  research run. In JSON mode it suppresses human output and makes the run quiet,
+  then emits one final JSON summary.
+- `internal/runner/runner.go` already supports single-run provider heartbeats
+  through `runner.Options.OnTick`.
+- `internal/commands/shared.go::MakeTickPrinter` prints those heartbeats only
+  when the run is not quiet.
+- `internal/summary/summary.go::BuildResearch` already exposes the child
+  summary fields needed after completion: status, exit code, run id, run dir,
+  decision kind, provider summaries, triage state, artifact paths, and next
+  command.
+
+Therefore PR2 can report child process lifecycle progress from the parent
+fanout, then build the final answer from each child's JSON summary and run
+artifacts. It cannot report child-internal provider/judge/triage phase progress
+while those child runs are intentionally quiet.
+
+It should not add a Go parent scheduler. The primary implementation lives in:
+
+- `commands/run.md` for the slash-command approval and execution contract;
+- `skills/bakeoff/SKILL.md` for the mirrored skill contract;
+- documentation and task-fit scenarios for user-facing behavior.
+
+No PR2 change is expected in `internal/commands/researchcmd/run.go`. That file
+already implements a single normal research run. If shell orchestration later
+proves too fragile, the smallest Go fallback would be a new parent command that
+spawns external `bakeoff research` child processes and captures their output;
+do not fold that into PR2.
+
 ### Eligibility
 
 Parallel fanout is available only when all of these are true:
@@ -226,6 +270,55 @@ Use `--json --quiet` to avoid interleaved human output. Capture each child
 stdout/stderr separately in temporary orchestration logs. The logs are not
 Bakeoff decision artifacts; mention them only for failures.
 
+### Parent Progress
+
+Add a small parent progress loop to the Claude-side parallel execution
+contract. This is not native task-manager integration and not a new persisted
+artifact.
+
+The orchestration should track, per child:
+
+- part or lens label;
+- explicit run id;
+- command;
+- PID or equivalent child handle;
+- stdout log path;
+- stderr log path;
+- exit code after completion.
+
+Print progress when children launch, when a child completes, and at a bounded
+interval while children are still running. A 60-second interval matches the
+existing default heartbeat budget and avoids noisy output.
+
+Example output:
+
+```text
+parallel bakeoff: launched 3 runs
+parallel bakeoff: running 3/3 after 60s: architecture, security, ux
+parallel bakeoff: completed security exit=0; running 2/3
+parallel bakeoff: completed architecture exit=4; running 1/3
+parallel bakeoff: completed ux exit=0; summarizing
+```
+
+This progress is limited to child process lifecycle state. It can accurately
+say which child commands are still running and which have completed with which
+exit codes. It cannot accurately say whether an individual child is currently
+inside provider execution, judge execution, or triage while child output is
+quiet. The final summary still comes from each child's exit code, JSON summary,
+and run artifacts.
+
+Implementation guidance for the prompt contract:
+
+- launch every child as an external `bakeoff research ... --json --quiet`
+  process;
+- redirect each child's stdout and stderr to separate temp files;
+- record each child PID/handle immediately after launch;
+- avoid `eval`; construct commands from the already-known work-order path,
+  run id, `--out`, and forwarded flags;
+- poll the child handles or exit-status files at the progress interval;
+- after every child settles, parse each child's captured JSON summary when
+  present and fall back to run-dir artifact paths when JSON is missing.
+
 Do not attempt prompt-level cancellation in PR2. Once launched, wait for all
 children to settle. This is simpler and more honest than "cancel if feasible."
 
@@ -276,6 +369,8 @@ Add scenarios to `docs/task-fit-test-scenarios.md`:
 - `parallel` launches all 2-3 eligible non-build parts concurrently;
 - split containing build does not offer parallel;
 - one child exits `0`, one exits `4`, one exits `1`;
+- parent progress reports launched/running/completed child counts and exit
+  codes without claiming provider/judge/triage phase progress;
 - final response uses explicit run ids and never `latest`;
 - multi-lens parallel keeps the existing persisted multi-lens summary behavior.
 
@@ -296,6 +391,9 @@ Prior research remains useful context:
 Conclusion: native tasks may be useful later as an optional dashboard, but they
 are not part of PR1 or PR2. Durable Bakeoff run directories and final responses
 remain the source of truth.
+
+Parent progress lines are still part of PR2. They are plain command output from
+the fanout orchestration, not a second task state system.
 
 ## Things Decided Against
 
@@ -342,6 +440,21 @@ Rejected.
 It is skippable and non-authoritative. Including it makes the plan larger than
 the value justified.
 
+This does not reject simple parent progress output. The rejected piece is a
+second status surface based on Claude Code native tasks. Parent progress is
+derived directly from the child process handles and child exit codes that the
+fanout flow already needs.
+
+### Go-Backed Parent Scheduler
+
+Rejected for PR2.
+
+A Go command could provide stronger quoting, lifecycle handling, and tests, but
+it reintroduces scheduler surface area that the trimmed plan is trying to avoid.
+If PR2 dogfood shows shell fanout is unreliable, revisit a small parent command
+that spawns external `bakeoff research` child processes instead of running
+`researchcmd.RunResearch` concurrently in-process.
+
 ### Automatic Cross-Run Synthesis
 
 Rejected.
@@ -370,5 +483,7 @@ answers. Synthesis remains a separately approved `type: "analyze"` run.
 - Every child run has an explicit run id.
 - All work orders validate before any child launches.
 - Child runs use `--json --quiet`.
+- Parent progress output reports child launch, running count, completion, and
+  exit code, but does not claim provider/judge/triage phase progress.
 - Final summaries use explicit run ids and never rely on `latest`.
 - Generic parallel split does not create `.split-summary.md`.
