@@ -57,6 +57,26 @@ behavior.
   - Expect: plugin drafts one `type: "compare"` work order with the options and
     evidence surface. It does not answer the comparison inline.
 
+- [ ] Remote fork diff gets mechanical prompt repair.
+  - Prompt: `/bakeoff:run compare https://github.com/pcvelz/superpowers and https://github.com/obra/superpowers, how much has changed in the fork and what is the difference`
+  - Expect: task-fit warning; reason names deterministic fork diff evidence; no
+    work order is drafted; `draft anyway` is preserved; one or two labeled
+    rewrites identify what they fix plus goal and output shape.
+
+- [ ] Selecting a repair option becomes the narrowed prompt.
+  - Prompt: same warning, then user replies `1` or `Behavior impact`.
+  - Expect: plugin carries forward the original repos and constraints, treats
+    the selected rewrite as the revised natural-language request, re-runs task
+    fit once, and proceeds to normal preview approval if it passes. It does not
+    show another repair menu for the immediate follow-up.
+
+- [ ] Interpretive compare with criteria drafts normally.
+  - Prompt: `/bakeoff:run compare https://github.com/pcvelz/superpowers and https://github.com/obra/superpowers for behavior impact, regression risk, and upstreamability`
+  - Expect: plugin treats the request as a Bakeoff-shaped compare because the
+    user provided decision criteria where independent readers may disagree. It
+    drafts a normal preview rather than showing the deterministic-evidence
+    repair menu.
+
 - [ ] "Build a comparison/report/matrix" routes to research.
   - Prompt: `/bakeoff:run build a comparison matrix for SQLite FTS vs Tantivy`
   - Expect: plugin treats "build" as a request to produce a research artifact,

@@ -371,7 +371,11 @@ If the request is a weak fit, stop and warn instead of drafting. Use the phrase
   scope;
 - RCA or analyze requests without a concrete symptom, log, reproduction,
   trace, file set, incident, or command to inspect;
-- highly sequential planning where each answer depends on the prior result.
+- highly sequential planning where each answer depends on the prior result;
+- deterministic evidence extraction plus thin interpretation, such as
+  comparing two forks, counting changed files or commits, summarizing a
+  diffstat, or asking "what changed" when one command pass can produce the
+  evidence.
 
 Recommended wording:
 
@@ -381,6 +385,46 @@ independent providers can produce meaningfully different evidence or patches,
 and when there is a verifier, scope, or citation standard. Reply `draft anyway`
 to continue with Bakeoff, or tell me how to narrow it.
 ```
+
+For deterministic-evidence weak-fit prompts only, use this alternate warning
+shape instead of the generic warning:
+
+```text
+This may not need Bakeoff because <reason>. A direct one-pass answer would
+<direct evidence path>; do that outside Bakeoff if that is all you need.
+
+If you still want Bakeoff, reply `draft anyway`.
+
+Better Bakeoff shapes:
+1. <label> - fixes <missing lens or decision>. Goal: <goal>. Output: <evidence/output shape>.
+2. <label> - fixes <missing lens or decision>. Goal: <goal>. Output: <evidence/output shape>.
+```
+
+Do not warn solely because a task is small or straightforward. Use the
+deterministic-evidence repair menu only when the likely answer is stable fact
+listing, counting, or diffstat-style evidence from one obvious evidence path
+and the user has not provided a decision lens. If the prompt includes criteria
+where independent readers may reasonably disagree, such as behavior impact,
+compatibility risk, maintainability, or upstreamability, draft normally. If a
+borderline compare lacks a decision lens but also lacks one obvious
+deterministic evidence path, use the existing generic task-fit warning rather
+than the repair menu.
+
+Show the repair menu at most once for the current weak-fit turn. Show one or
+two rewrites. Never show a third rewrite. Each rewrite must state what it
+fixes, the revised goal, and the expected evidence or output shape. Rewrites
+may reshape the task for Bakeoff, but they must preserve the user's intent and
+must not invent missing requirements, repositories, criteria, or success
+measures. If the prompt is too thin to seed a concrete rewrite, do not invent
+options; ask one targeted narrowing question instead.
+
+Do not perform the direct one-pass answer from inside `/bakeoff:run` unless
+the user explicitly abandons Bakeoff in ordinary language. If the immediate
+reply selects one of the displayed rewrites by number or clear label, carry
+forward the original targets, repositories, refs, and constraints; treat the
+selected rewrite as the revised request; re-run task fit once; and do not show
+another repair menu immediately. Mechanical repair guidance does not waive
+required build fields.
 
 The warning is advisory. The phrase `draft anyway` in the user's reply
 satisfies it for that turn only; this is the only accepted opt-out phrase. Do
