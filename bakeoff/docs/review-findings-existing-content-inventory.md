@@ -84,7 +84,7 @@ and currently invisible to anyone reading the README.
 
 - Env vars in launcher and CLI:
   `CLAUDE_PLUGIN_ROOT`, `BAKEOFF_GO_BINARY`, `BAKEOFF_PLUGIN_ROOT`, `CODEX_PLUGIN_ROOT`,
-  `NO_COLOR`, `GOCACHE` (auto-set to `/tmp/bakeoff-go-cache` for `go run`).
+  `NO_COLOR`, `GOCACHE` (defaulting under `${TMPDIR:-/tmp}` for source fallbacks).
 - Plugin-internal settings (`.claude/settings.local.json`): allowlists context-mode MCP
   tools — not user-facing, but documents that **bakeoff's dev workflow expects
   context-mode**.
@@ -137,7 +137,8 @@ and currently invisible to anyone reading the README.
 - `/plugin marketplace add mstefanko-plugins <abs path>` — marketplace registration.
 - `/plugin marketplace update mstefanko-plugins`, `/plugin install bakeoff@mstefanko-plugins`,
   `/reload-plugins`.
-- Plugin cache path: `~/.claude/plugins/cache/mstefanko-plugins/bakeoff`.
+- Plugin cache path pattern:
+  `~/.claude/plugins/cache/<marketplace>/<plugin>`.
 
 ---
 

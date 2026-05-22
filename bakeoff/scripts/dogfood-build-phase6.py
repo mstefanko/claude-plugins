@@ -101,8 +101,8 @@ def main() -> int:
 def fake_env(work_root: Path, ledger_rows: int) -> dict[str, str]:
     env = os.environ.copy()
     env["PATH"] = str(FAKES) + os.pathsep + env.get("PATH", "")
-    env["GOCACHE"] = env.get("GOCACHE", "/tmp/bakeoff-go-cache")
     env["TMPDIR"] = SYSTEM_TMPDIR
+    env["GOCACHE"] = env.get("GOCACHE", str(Path(env["TMPDIR"]) / "bakeoff-go-cache"))
     env["BAKEOFF_PHASE6_WORK_ROOT"] = str(work_root)
     env["BAKEOFF_PHASE6_LEDGER_ROWS"] = str(ledger_rows)
     return env

@@ -471,6 +471,7 @@ func runWorkers(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder
 	promptTrims := []prompt.TrimRecord{}
 	for _, item := range pairs {
 		results[item.id] = item.result
+		commands.LogPromptTrimRecords(f, item.trims)
 		promptTrims = append(promptTrims, item.trims...)
 	}
 	if humanOutput {
@@ -491,7 +492,6 @@ func runOneWorker(ctx context.Context, f commands.Factory, wo *workorder.WorkOrd
 		return nil, nil, err
 	}
 	trimResult := prompt.TrimContextToBudget(workerPrompt, runner.MaxPromptBytes, "worker:"+participant.ID)
-	commands.LogPromptTrim(f, trimResult)
 	workerPrompt = trimResult.Text
 	promptTrims := commands.TrimRecords(trimResult)
 	if err := workorder.WriteTextAtomic(filepath.Join(providerDir, "prompt.txt"), workerPrompt); err != nil {

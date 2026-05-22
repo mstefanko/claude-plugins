@@ -165,6 +165,7 @@ Update every launcher/readiness path to use this order:
 BAKEOFF_GO_BINARY
   -> ${BAKEOFF_PLUGIN_DATA}/bin/bakeoff
   -> ${CLAUDE_PLUGIN_DATA}/bin/bakeoff
+  -> <plugins-root>/data/<plugin>-<marketplace>/bin/bakeoff
   -> ${CLAUDE_PLUGIN_ROOT}/dist/bakeoff
   -> go run/go build from source when Go is present
 ```
@@ -174,10 +175,19 @@ Notes:
 - `BAKEOFF_PLUGIN_DATA` is an explicit override for tests, mirrors, and
   non-Claude launchers.
 - `CLAUDE_PLUGIN_DATA` is the normal installed-plugin location.
+- The conventional Claude plugin data path is derived from plugin roots shaped
+  like `<plugins-root>/marketplaces/<marketplace>/<plugin>` or
+  `<plugins-root>/cache/<marketplace>/<plugin>/<version>` and is probed even
+  when `CLAUDE_PLUGIN_DATA` is not present in the child environment.
+- Resolution is order-only. Data-dir candidates beat `dist/bakeoff`; mtimes,
+  hashes, and version strings are not tie-breakers.
 - `dist/bakeoff` is a local build or platform-specific package artifact, not a
   committed multi-platform distribution strategy.
 - `BAKEOFF_GO_BINARY` remains first because explicit user configuration should
   always win.
+- Successful setup deletes root `dist/bakeoff`, so a missing cache binary after
+  setup means the launcher should use the data-dir binary. No sentinel, rename,
+  or freshness marker is used.
 
 Readiness exit-code contract:
 
@@ -187,6 +197,7 @@ Readiness exit-code contract:
   an explicit path such as `BAKEOFF_GO_BINARY` is missing or not executable.
 - `--check` exits `1` when a candidate binary exists and is executable but
   fails the `--version` probe.
+- `--print-path` prints only the resolved executable path for launch helpers.
 - Without `--check`, missing binaries may fall through to a source build when Go
   is available. Build failure exits `1`; no binary and no Go exits `2`.
 

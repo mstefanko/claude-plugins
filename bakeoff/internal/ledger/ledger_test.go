@@ -1,10 +1,13 @@
 package ledger
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -120,6 +123,114 @@ func TestUpdateLatestConcurrent(t *testing.T) {
 	if len(matches) != 0 {
 		t.Fatalf("temporary latest artifacts remain: %v", matches)
 	}
+}
+
+func TestUpdateLatestConcurrentCLIResearch(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping CLI process concurrency test in short mode")
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoRoot := filepath.Clean(filepath.Join(cwd, "..", ".."))
+	temp := t.TempDir()
+	binary := filepath.Join(temp, "bakeoff")
+	build := exec.Command("go", "build", "-o", binary, "./cmd/bakeoff")
+	build.Dir = repoRoot
+	build.Env = append(os.Environ(), "GOCACHE="+filepath.Join(temp, "go-cache"))
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go build failed: %v\n%s", err, output)
+	}
+
+	workOrderPath := filepath.Join(temp, "gather.work-order.json")
+	workOrder := map[string]any{
+		"schema_version": 1,
+		"id":             "cli-latest-concurrency",
+		"type":           "gather",
+		"goal":           "Gather a fake concurrency fact.",
+		"background":     "CLI-level smoke test for concurrent latest updates.",
+		"providers": []map[string]any{
+			{"id": "claude", "backend": "claude", "model": "claude-test", "scope": "codebase"},
+			{"id": "codex", "backend": "codex", "model": "codex-test", "scope": "web"},
+		},
+		"scope_policy": map[string]any{"enforcement": "best_effort"},
+		"judge":        map[string]any{"backend": "claude", "model": "judge-test"},
+		"budgets":      map[string]any{"wall_clock_seconds": 20, "max_output_bytes": 20000, "heartbeat_seconds": 0},
+	}
+	workOrderBytes, err := json.MarshalIndent(workOrder, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(workOrderPath, append(workOrderBytes, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	out := filepath.Join(temp, "runs")
+	fakeBin := filepath.Join(repoRoot, "tests", "parity", "fakes")
+	const runCount = 8
+	known := make(map[string]string, runCount)
+	errs := make(chan error, runCount)
+	var wg sync.WaitGroup
+	for i := 0; i < runCount; i++ {
+		runID := fmt.Sprintf("cli-run-%02d", i)
+		known[runID] = filepath.Join(out, runID)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			cmd := exec.Command(binary, "research", workOrderPath, "--out", out, "--run-id", runID, "--json", "--quiet", "--no-triage", "--no-repo-layout")
+			cmd.Dir = repoRoot
+			cmd.Env = withPath(os.Environ(), fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				errs <- fmt.Errorf("%s failed: %w\n%s", runID, err, output)
+				return
+			}
+			errs <- nil
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for runID, runDir := range known {
+		for _, name := range []string{"manifest.json", "decision.json", "report.md"} {
+			if _, err := os.Stat(filepath.Join(runDir, name)); err != nil {
+				t.Fatalf("%s missing %s: %v", runID, name, err)
+			}
+		}
+	}
+	resolved, err := ResolveRunDir(out, "latest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID := filepath.Base(resolved)
+	if known[runID] != resolved {
+		t.Fatalf("latest resolved to %q, want one of %v", resolved, known)
+	}
+	matches, err := filepath.Glob(filepath.Join(out, ".latest.*.tmp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("temporary latest artifacts remain: %v", matches)
+	}
+}
+
+func withPath(env []string, value string) []string {
+	out := make([]string, 0, len(env)+1)
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "PATH=") {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return append(out, "PATH="+value)
 }
 
 func TestUpdateLatestFileFallbackWritesCompleteLatest(t *testing.T) {

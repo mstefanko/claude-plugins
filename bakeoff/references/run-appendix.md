@@ -78,9 +78,13 @@ child run, not the group.
 
 Run this under `/bin/sh` or Bash with a `#!/bin/sh` or `#!/usr/bin/env bash`
 helper shebang; never run or copy the snippet into `zsh`.
+Before emitting the helper, resolve the CLI once with
+`"${CLAUDE_PLUGIN_ROOT}/scripts/bakeoff-ensure-cli" --check --print-path` and
+replace `BAKEOFF_CLI` with that absolute path.
 
 ```sh
 tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/bakeoff-parallel.XXXXXX") || exit 1
+BAKEOFF_CLI="/absolute/path/printed/by/bakeoff-ensure-cli"
 
 start_child() {
   label=$1
@@ -88,7 +92,7 @@ start_child() {
   work_order=$3
   shift 3
   (
-    "${CLAUDE_PLUGIN_ROOT}/bin/bakeoff" research "$work_order" \
+    "$BAKEOFF_CLI" research "$work_order" \
       --run-id "$run_id" "$@" --json --quiet
     printf '%s\n' "$?" > "$tmpdir/$label.exit"
   ) > "$tmpdir/$label.stdout" 2> "$tmpdir/$label.stderr" &

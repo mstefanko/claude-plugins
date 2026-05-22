@@ -66,9 +66,16 @@ Both plugin surfaces use the same launcher contract:
 BAKEOFF_GO_BINARY
   -> ${BAKEOFF_PLUGIN_DATA}/bin/bakeoff
   -> ${CLAUDE_PLUGIN_DATA}/bin/bakeoff
+  -> <plugins-root>/data/<plugin>-<marketplace>/bin/bakeoff
   -> ${CLAUDE_PLUGIN_ROOT}/dist/bakeoff
   -> go run ./cmd/bakeoff
 ```
+
+The conventional data path is derived only when the plugin root matches either
+`<plugins-root>/marketplaces/<marketplace>/<plugin>` or
+`<plugins-root>/cache/<marketplace>/<plugin>/<version>`. Resolution is
+order-only: data-dir binaries beat `dist/bakeoff`; mtimes and hashes are not
+tie-breakers.
 
 By default, `/bakeoff:setup` runs `go build` against
 `${CLAUDE_PLUGIN_ROOT}/cmd/bakeoff` and installs the result at
@@ -76,8 +83,11 @@ By default, `/bakeoff:setup` runs `go build` against
 modules through the normal Go toolchain cache on first setup.
 
 `scripts/bakeoff-ensure-cli --check` only checks configured, setup-installed, or
-packaged binaries; it does not build. Running `scripts/bakeoff-ensure-cli`
+packaged binaries; it does not build. `--print-path` prints only the resolved
+executable path for launch helpers. Running `scripts/bakeoff-ensure-cli`
 without `--check` may build `dist/bakeoff` from source when Go is available.
+Successful setup deletes root `dist/bakeoff` so later plugin sessions prefer the
+installed data binary instead of a stale cache artifact.
 
 The optional release-binary setup path verifies `checksums.txt` first:
 

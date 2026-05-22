@@ -371,7 +371,7 @@ def cases() -> list[Case]:
 def build_go_binary(out_dir: Path) -> Path:
     binary = out_dir / ("bakeoff.exe" if os.name == "nt" else "bakeoff")
     env = os.environ.copy()
-    env.setdefault("GOCACHE", "/tmp/bakeoff-go-cache")
+    env.setdefault("GOCACHE", str(Path(env.get("TMPDIR", "/tmp")) / "bakeoff-go-cache"))
     Path(env["GOCACHE"]).mkdir(parents=True, exist_ok=True)
     completed = subprocess.run(
         ["go", "build", "-o", str(binary), "./cmd/bakeoff"],

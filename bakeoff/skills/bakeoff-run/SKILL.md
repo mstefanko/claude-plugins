@@ -1,6 +1,7 @@
 ---
 name: bakeoff-run
-description: "USE THIS SKILL when /bakeoff:run is invoked to draft, validate, and run Bakeoff work orders."
+description: "Internal handler loaded by /bakeoff:run to draft, validate, and run Bakeoff work orders."
+user-invocable: false
 version: "0.0.0"
 allowed-tools: "Read,Write,Edit,Glob,Grep,Bash"
 author: mstefanko
@@ -25,7 +26,7 @@ Do not call provider CLIs directly; only the Bakeoff CLI may launch providers.
 Run first:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/scripts/bakeoff-ensure-cli" --check
+BAKEOFF_CLI="$("${CLAUDE_PLUGIN_ROOT}/scripts/bakeoff-ensure-cli" --check --print-path)"
 ```
 
 If exit `2`, stop and direct the user to install Go 1.24+ and run
@@ -33,6 +34,10 @@ If exit `2`, stop and direct the user to install Go 1.24+ and run
 other non-zero exit is an unexpected CLI resolution failure; surface the output
 and direct the user to `/bakeoff:doctor`. Do not draft, validate, or run until
 preflight succeeds.
+
+Keep the resolved `BAKEOFF_CLI` value for every CLI invocation in this workflow,
+especially generated parallel launch helpers. Never hardcode cache
+`dist/bakeoff` paths or re-resolve the child command inside parallel children.
 
 Parse `$ARGUMENTS` before deciding whether the input is a path or request.
 Recognize only `--out`, `--run-id`, `--base`, `--diff`, `--changed-files`,
@@ -237,13 +242,15 @@ artifacts. Stop on exit `1`, `2`, `130`, interruption, or command failure;
 summarize completed and failed parts, then ask before remaining parts. Split
 runs may continue after exit `4`; sequential multi-lens stops on exit `4`.
 
-Parallel research children launch quiet JSON `bakeoff research` commands
+Parallel research children launch quiet JSON `"$BAKEOFF_CLI" research` commands
 concurrently with one subshell per child under `/bin/sh` or Bash, no `xargs
 -P`, no `eval`, no `set -e`, explicit run ids, separate stdout/stderr/exit/pid
 files, bounded lifecycle progress only, and no claims about
 provider/judge/triage phases. Any emitted fanout helper must start with
 `#!/bin/sh` or `#!/usr/bin/env bash`; never emit or run it under `zsh`. Wait
-for all children to settle. Classify exits `0`, `3`, and `4` as completed,
+for all children to settle. The helper must assign `BAKEOFF_CLI` to the
+absolute path captured by `bakeoff-ensure-cli --check --print-path` before
+starting children. Classify exits `0`, `3`, and `4` as completed,
 with caveats; classify `1`, `2`, `130`, launch failure, orphaned
 pid-without-exit, or missing artifacts as failed. Never summarize parallel runs
 with `latest`.
@@ -305,9 +312,9 @@ ordinary user text.
 After approval, write every lens file and validate all final paths before any
 run. On validation failure, launch nothing, repair, re-preview, and require
 fresh approval. Validation warnings are advisory when validation exits
-successfully. Sequential approval runs `bakeoff research <lens-work-order>
+successfully. Sequential approval runs `"$BAKEOFF_CLI" research <lens-work-order>
 --run-id <base>.<lens>` plus routed research flags one at a time. Parallel
-approval launches all lens children concurrently as `bakeoff research
+approval launches all lens children concurrently as `"$BAKEOFF_CLI" research
 <lens-work-order> --run-id <base>.<lens> [--out <dir>] [research flags] --json
 --quiet`, forwarding only `--out`, `--base`, `--diff`, `--changed-files`,
 `--no-triage`, and `--no-repo-layout`. Use separate stdout, stderr, exit, and

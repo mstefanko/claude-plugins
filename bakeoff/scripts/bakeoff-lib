@@ -35,6 +35,53 @@ bakeoff_data_root() {
   return 1
 }
 
+bakeoff_plugin_coordinates() {
+  local root prefix rest marketplace plugin version
+  root="$(bakeoff_plugin_root)"
+
+  case "$root" in
+    */.claude/plugins/cache/*/*/*)
+      prefix="${root%%/cache/*}"
+      rest="${root#"$prefix/cache/"}"
+      marketplace="${rest%%/*}"
+      rest="${rest#*/}"
+      plugin="${rest%%/*}"
+      version="${rest#*/}"
+      [[ -n "$version" && "$version" != */* ]] || return 1
+      ;;
+    */.claude/plugins/marketplaces/*/*)
+      prefix="${root%%/marketplaces/*}"
+      rest="${root#"$prefix/marketplaces/"}"
+      marketplace="${rest%%/*}"
+      rest="${rest#*/}"
+      plugin="$rest"
+      [[ "$plugin" != */* ]] || return 1
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+
+  [[ -n "$prefix" && -n "$marketplace" && -n "$plugin" ]] || return 1
+  printf '%s\t%s\t%s\n' "$prefix" "$marketplace" "$plugin"
+}
+
+bakeoff_conventional_data_root() {
+  local prefix marketplace plugin
+  IFS=$'\t' read -r prefix marketplace plugin < <(bakeoff_plugin_coordinates) || return 1
+  printf '%s/data/%s-%s\n' "$prefix" "$plugin" "$marketplace"
+}
+
+bakeoff_conventional_cache_root() {
+  local prefix marketplace plugin
+  IFS=$'\t' read -r prefix marketplace plugin < <(bakeoff_plugin_coordinates) || return 1
+  printf '%s/cache/%s/%s\n' "$prefix" "$marketplace" "$plugin"
+}
+
+bakeoff_default_go_cache() {
+  printf '%s/bakeoff-go-cache\n' "${TMPDIR:-/tmp}"
+}
+
 bakeoff_host_os_arch() {
   local uname_s uname_m goos goarch
   uname_s="$(uname -s 2>/dev/null || printf unknown)"
@@ -57,19 +104,28 @@ bakeoff_host_os_arch() {
 }
 
 bakeoff_candidate_binaries() {
-  local data root data_label
+  local data root data_label conventional_data
 
   if [[ -n "${BAKEOFF_GO_BINARY:-}" ]]; then
     printf 'BAKEOFF_GO_BINARY\t%s\texplicit\n' "$BAKEOFF_GO_BINARY"
   fi
 
-  if data="$(bakeoff_data_root)"; then
-    if [[ -n "${BAKEOFF_PLUGIN_DATA:-}" ]]; then
-      data_label="BAKEOFF_PLUGIN_DATA/bin/bakeoff"
-    else
-      data_label="CLAUDE_PLUGIN_DATA/bin/bakeoff"
-    fi
+  if [[ -n "${BAKEOFF_PLUGIN_DATA:-}" ]]; then
+    data="$BAKEOFF_PLUGIN_DATA"
+    data_label="BAKEOFF_PLUGIN_DATA/bin/bakeoff"
     printf '%s\t%s/bin/bakeoff\tprovisioned\n' "$data_label" "$data"
+  fi
+
+  if [[ -n "${CLAUDE_PLUGIN_DATA:-}" ]]; then
+    data="$CLAUDE_PLUGIN_DATA"
+    data_label="CLAUDE_PLUGIN_DATA/bin/bakeoff"
+    printf '%s\t%s/bin/bakeoff\tprovisioned\n' "$data_label" "$data"
+  fi
+
+  if conventional_data="$(bakeoff_conventional_data_root)"; then
+    if [[ "${BAKEOFF_PLUGIN_DATA:-}" != "$conventional_data" && "${CLAUDE_PLUGIN_DATA:-}" != "$conventional_data" ]]; then
+      printf 'Claude plugin data/bin/bakeoff\t%s/bin/bakeoff\tprovisioned\n' "$conventional_data"
+    fi
   fi
 
   root="$(bakeoff_plugin_root)"

@@ -3,19 +3,25 @@ set -euo pipefail
 
 usage() {
   cat >&2 <<'EOF'
-usage: scripts/bakeoff-ensure-cli [--check]
+usage: scripts/bakeoff-ensure-cli [--check] [--print-path]
 
 Ensures a runnable Bakeoff CLI is available.
 
-  --check  only check configured, provisioned, or packaged binaries; never build
+  --check       only check configured, provisioned, or packaged binaries; never build
+  --print-path  print only the resolved executable path on success
 EOF
 }
 
 check_only=0
+print_path=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --check)
       check_only=1
+      shift
+      ;;
+    --print-path|--path)
+      print_path=1
       shift
       ;;
     -h|--help)
@@ -41,7 +47,11 @@ report_probe() {
   if ! version="$(bakeoff_version_probe "$binary" "$label")"; then
     return 1
   fi
-  echo "bakeoff cli: using $label ($binary): $version"
+  if [[ "$print_path" -eq 1 ]]; then
+    printf '%s\n' "$binary"
+  else
+    echo "bakeoff cli: using $label ($binary): $version"
+  fi
 }
 
 while IFS=$'\t' read -r label path kind; do
@@ -80,7 +90,7 @@ if ! mkdir -p "$root/dist"; then
   exit 1
 fi
 
-if ! (cd "$root" && GOCACHE="${GOCACHE:-/tmp/bakeoff-go-cache}" go build -o "$root/dist/bakeoff" ./cmd/bakeoff); then
+if ! (cd "$root" && GOCACHE="${GOCACHE:-$(bakeoff_default_go_cache)}" go build -o "$root/dist/bakeoff" ./cmd/bakeoff); then
   echo "error: failed to build Bakeoff CLI into $root/dist/bakeoff" >&2
   exit 1
 fi

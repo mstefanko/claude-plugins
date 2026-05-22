@@ -22,6 +22,9 @@ func TestTrimContextToBudgetClearsContextTags(t *testing.T) {
 	if result.Record == nil || result.Record.Prompt != "worker:claude" || strings.Join(result.Record.Sections, ",") != "context" {
 		t.Fatalf("record = %#v", result.Record)
 	}
+	if result.Record.OriginalBytes != len(text) || result.Record.FinalBytes != len(result.Text) {
+		t.Fatalf("record byte counts = %#v, result = %#v", result.Record, result)
+	}
 }
 
 func TestTrimContextToBudgetRecordsExactBackgroundAndRepoLayoutSections(t *testing.T) {

@@ -196,6 +196,18 @@ run_release_setup() {
     "$root/scripts/bakeoff-setup" --yes --from-release --version "$tag" "$@"
 }
 
+run_release_setup_with_root() {
+  local data="$1"
+  local release_dir="$2"
+  local plugin_root="$3"
+  shift 3
+  env \
+    BAKEOFF_PLUGIN_DATA="$data" \
+    BAKEOFF_PLUGIN_ROOT="$plugin_root" \
+    BAKEOFF_RELEASE_BASE_URL="file://$release_dir" \
+    "$root/scripts/bakeoff-setup" --yes --from-release --version "$tag" "$@"
+}
+
 run_source_setup() {
   local data="$1"
   shift
@@ -232,14 +244,18 @@ test_valid_release_install() {
 }
 
 test_source_build_install() {
-  local data output
+  local cache_tmp data output
   command -v go >/dev/null 2>&1 || {
     echo "skip: source setup test requires go"
     return 0
   }
+  cache_tmp="$tmp/source-build-cache"
+  mkdir -p "$cache_tmp"
   data="$tmp/data-source"
-  output="$(run_source_setup "$data")"
+  output="$(TMPDIR="$cache_tmp" GOCACHE= run_source_setup "$data")"
   [[ -x "$data/bin/bakeoff" ]] || fail "source-built binary is not executable"
+  [[ -d "$cache_tmp/bakeoff-go-cache" ]] || fail "source setup did not use TMPDIR-derived GOCACHE"
+  assert_not_exists "$data/go-cache"
   assert_contains "$("$data/bin/bakeoff" --version)" "bakeoff source"
   grep -Eq '"schema_version"[[:space:]]*:[[:space:]]*1' "$data/version.json" || fail "source version.json missing schema"
   grep -Eq '"install_kind"[[:space:]]*:[[:space:]]*"source-build"' "$data/version.json" || fail "source version.json missing ownership"
@@ -270,6 +286,79 @@ test_resolution_order() {
   assert_contains "$output" "bakeoff override"
   output="$(env BAKEOFF_GO_BINARY="$override" BAKEOFF_PLUGIN_ROOT="$plugin_root" BAKEOFF_PLUGIN_DATA="$data" "$root/bin/bakeoff" --version)"
   assert_contains "$output" "bakeoff override"
+}
+
+test_conventional_data_precedes_dist_without_env() {
+  local home plugin_root data output path
+  home="$tmp/home-conventional"
+  plugin_root="$home/.claude/plugins/marketplaces/mstefanko-plugins/bakeoff"
+  data="$home/.claude/plugins/data/bakeoff-mstefanko-plugins"
+  mkdir -p "$plugin_root/dist" "$data/bin"
+  write_fake_bakeoff "$plugin_root/dist/bakeoff" "dist"
+  write_fake_bakeoff "$data/bin/bakeoff" "data"
+
+  output="$(env -i HOME="$home" PATH="/usr/bin:/bin" BAKEOFF_PLUGIN_ROOT="$plugin_root" "$root/scripts/bakeoff-ensure-cli" --check)"
+  assert_contains "$output" "Claude plugin data/bin/bakeoff"
+  assert_contains "$output" "bakeoff data"
+  if [[ "$output" == *"bakeoff dist"* ]]; then
+    fail "resolver used dist despite conventional data binary: $output"
+  fi
+
+  path="$(env -i HOME="$home" PATH="/usr/bin:/bin" BAKEOFF_PLUGIN_ROOT="$plugin_root" "$root/scripts/bakeoff-ensure-cli" --check --print-path)"
+  [[ "$path" == "$data/bin/bakeoff" ]] || fail "print-path = $path, want $data/bin/bakeoff"
+
+  output="$(env -i HOME="$home" PATH="/usr/bin:/bin" BAKEOFF_PLUGIN_ROOT="$plugin_root" "$root/bin/bakeoff" --version)"
+  assert_contains "$output" "bakeoff data"
+}
+
+test_conventional_data_precedes_dist_for_cache_root_without_env() {
+  local home plugin_root data output path
+  home="$tmp/home-conventional-cache"
+  plugin_root="$home/.claude/plugins/cache/mstefanko-plugins/bakeoff/v9.9.9"
+  data="$home/.claude/plugins/data/bakeoff-mstefanko-plugins"
+  mkdir -p "$plugin_root/dist" "$data/bin"
+  write_fake_bakeoff "$plugin_root/dist/bakeoff" "dist"
+  write_fake_bakeoff "$data/bin/bakeoff" "data"
+
+  output="$(env -i HOME="$home" PATH="/usr/bin:/bin" BAKEOFF_PLUGIN_ROOT="$plugin_root" "$root/scripts/bakeoff-ensure-cli" --check)"
+  assert_contains "$output" "Claude plugin data/bin/bakeoff"
+  assert_contains "$output" "bakeoff data"
+  if [[ "$output" == *"bakeoff dist"* ]]; then
+    fail "resolver used dist despite conventional cache-root data binary: $output"
+  fi
+
+  path="$(env -i HOME="$home" PATH="/usr/bin:/bin" BAKEOFF_PLUGIN_ROOT="$plugin_root" "$root/scripts/bakeoff-ensure-cli" --check --print-path)"
+  [[ "$path" == "$data/bin/bakeoff" ]] || fail "print-path = $path, want $data/bin/bakeoff"
+}
+
+test_unrecognized_plugin_root_ignores_conventional_data_without_env() {
+  local home plugin_root data output
+  home="$tmp/home-unrecognized"
+  plugin_root="$home/plugins/marketplaces/mstefanko-plugins/bakeoff"
+  data="$home/.claude/plugins/data/bakeoff-mstefanko-plugins"
+  mkdir -p "$plugin_root/dist" "$data/bin"
+  write_fake_bakeoff "$plugin_root/dist/bakeoff" "dist"
+  write_fake_bakeoff "$data/bin/bakeoff" "data"
+
+  output="$(env -i HOME="$home" PATH="/usr/bin:/bin" BAKEOFF_PLUGIN_ROOT="$plugin_root" "$root/scripts/bakeoff-ensure-cli" --check)"
+  assert_contains "$output" "dist/bakeoff"
+  assert_contains "$output" "bakeoff dist"
+  if [[ "$output" == *"bakeoff data"* ]]; then
+    fail "resolver used conventional data for unrecognized plugin root: $output"
+  fi
+}
+
+test_setup_invalidates_root_dist() {
+  local release data plugin_root
+  release="$(make_release invalidates-dist)"
+  data="$tmp/data-invalidates-dist"
+  plugin_root="$tmp/home-invalidates/.claude/plugins/marketplaces/mstefanko-plugins/bakeoff"
+  mkdir -p "$plugin_root/dist"
+  write_fake_bakeoff "$plugin_root/dist/bakeoff" "stale-dist"
+
+  run_release_setup_with_root "$data" "$release" "$plugin_root" >/dev/null
+  [[ -x "$data/bin/bakeoff" ]] || fail "release setup did not install data binary"
+  assert_not_exists "$plugin_root/dist/bakeoff"
 }
 
 test_checksum_failures() {
@@ -351,6 +440,10 @@ test_no_go_no_binary_check
 test_source_build_install
 test_valid_release_install
 test_resolution_order
+test_conventional_data_precedes_dist_without_env
+test_conventional_data_precedes_dist_for_cache_root_without_env
+test_unrecognized_plugin_root_ignores_conventional_data_without_env
+test_setup_invalidates_root_dist
 test_checksum_failures
 test_single_space_checksum_is_accepted
 test_archive_failures

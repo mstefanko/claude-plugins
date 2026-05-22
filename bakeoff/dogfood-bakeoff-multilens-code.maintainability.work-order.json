@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "id": "dogfood-bakeoff-multilens-code.maintainability",
+  "type": "gather",
+  "goal": "Find maintainability risks in the Bakeoff multi-lens and parallel-flow code paths likely to cause future defects.",
+  "background": [
+    "Repository: mstefanko-plugins/bakeoff at /Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/bakeoff",
+    "Branch: main, HEAD: d7cc4a4 (runtime visibility); local uncommitted changes exist in internal/runner/runner.go and others; review the current working tree.",
+    "Review target files (all 7, no other files):",
+    "- skills/bakeoff-run/SKILL.md (411 lines) - drafting and multi-lens contract for /bakeoff:run",
+    "- commands/run.md (15 lines) - slash command entry point",
+    "- references/run-appendix.md (205 lines) - split and multi-lens preview templates and presets",
+    "- internal/commands/researchcmd/run.go (1031 lines) - research command implementation including multi-lens fanout",
+    "- internal/runner/runner.go (1106 lines) - provider runner and concurrency layer",
+    "- internal/ledger/ledger.go (273 lines) - run ledger persistence",
+    "- internal/triage/state.go (319 lines) - triage state machine",
+    "Scope: multi-lens and parallel-flow code paths and their interactions across these 7 files.",
+    "Lens: MAINTAINABILITY only. Correctness and reliability are covered by sibling lens runs.",
+    "Acceptance for findings: every finding must cite file:line, name the future-defect risk it creates, and propose a bounded, targeted refactor (not a rewrite)."
+  ],
+  "facet": {
+    "id": "code-review",
+    "kind": "generic",
+    "focus": "Duplication, function and file size, package layering between researchcmd, runner, ledger, and triage, naming clarity, abstraction boundaries, contract drift between SKILL.md and the implementing code, and test coverage gaps for the changed multi-lens path.",
+    "include": [
+      "duplicated logic across files or repeated patterns within a large function",
+      "function or file size and branching complexity that obstructs future change",
+      "layering or dependency-direction violations between researchcmd, runner, ledger, and triage",
+      "naming, dead code, or misleading abstractions that hide intent",
+      "missing or weak tests covering the multi-lens or parallel fanout code path",
+      "public API surface that exposes accidental coupling between packages",
+      "contract drift between SKILL.md/run-appendix.md and the implementing Go code"
+    ],
+    "exclude": [
+      "issues outside the 7 named target files",
+      "correctness bugs (covered by the correctness lens)",
+      "reliability concerns: timeouts, retries, leaks, crash safety (covered by the reliability lens)",
+      "style-only preferences without project convention evidence",
+      "broad rewrites unrelated to the changed multi-lens behavior",
+      "speculation without file:line evidence"
+    ]
+  },
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "sonnet",
+      "scope": "codebase",
+      "effort": "high"
+    },
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "scope": "codebase",
+      "effort": "high"
+    }
+  ],
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  }
+}

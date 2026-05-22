@@ -32,6 +32,7 @@ done
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$script_dir/bakeoff-lib"
 root="$(bakeoff_plugin_root)"
+cache_root="$(bakeoff_conventional_cache_root || true)"
 cwd="$(pwd)"
 
 removed=()
@@ -223,7 +224,7 @@ if [[ "$force" -ne 1 ]]; then
 Bakeoff uninstall cleanup will remove Bakeoff-owned plugin state:
 
 - $root/dist/bakeoff and an empty $root/dist directory
-- $HOME/.claude/plugins/cache/mstefanko-plugins/bakeoff
+- ${cache_root:-the Bakeoff plugin cache directory}
 - BAKEOFF_PLUGIN_DATA or CLAUDE_PLUGIN_DATA bin/version/tmp/go-cache state when
   version.json marks it as Bakeoff-owned
 - Bakeoff-generated run ledgers and work-order/context/report files in:
@@ -243,7 +244,9 @@ fi
 remove_file "$root/dist/bakeoff"
 rmdir "$root/dist" 2>/dev/null || true
 
-remove_dir "$HOME/.claude/plugins/cache/mstefanko-plugins/bakeoff"
+if [[ -n "$cache_root" ]]; then
+  remove_dir "$cache_root"
+fi
 
 if data_root="$(bakeoff_data_root)"; then
   cleanup_plugin_data_dir "$data_root"

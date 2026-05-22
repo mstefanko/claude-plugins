@@ -24,7 +24,7 @@ done < <(bakeoff_candidate_binaries)
 
 if command -v go >/dev/null 2>&1; then
   ROOT="$(bakeoff_plugin_root)"
-  export GOCACHE="${GOCACHE:-/tmp/bakeoff-go-cache}"
+  export GOCACHE="${GOCACHE:-$(bakeoff_default_go_cache)}"
   exec go run "$ROOT/cmd/bakeoff" "$@"
 fi
 

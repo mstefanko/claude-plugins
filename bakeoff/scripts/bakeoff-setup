@@ -372,6 +372,14 @@ esac
 read -r goos goarch < <(bakeoff_host_os_arch)
 binary_path="${data}/bin/bakeoff"
 
+invalidate_root_dist_binary() {
+  local dist_binary="$root/dist/bakeoff"
+  if [[ -e "$dist_binary" || -L "$dist_binary" ]]; then
+    rm -f "$dist_binary"
+  fi
+  rmdir "$root/dist" 2>/dev/null || true
+}
+
 if [[ "$install_mode" == "source" ]]; then
   if [[ "$dry_run" -eq 1 ]]; then
     if [[ "$json_output" -eq 1 ]]; then
@@ -419,7 +427,7 @@ EOF
     esac
   fi
 
-  mkdir -p "$data/bin" "$data/tmp" "$data/go-cache"
+  mkdir -p "$data/bin" "$data/tmp"
   tmp_dir="$(mktemp -d "$data/tmp/setup.XXXXXX")"
   install_tmp=""
   cleanup() {
@@ -435,7 +443,7 @@ EOF
   mod_path="$(module_path "$root")"
   install_tmp="$(mktemp "$data/bin/.bakeoff.XXXXXX")"
   ldflags="-s -w -X github.com/mstefanko/claude-plugins/bakeoff/internal/buildinfo.Version=source -X github.com/mstefanko/claude-plugins/bakeoff/internal/buildinfo.Commit=$commit -X github.com/mstefanko/claude-plugins/bakeoff/internal/buildinfo.Date=$installed_at"
-  if ! build_output="$(cd "$root" && GOCACHE="${GOCACHE:-$data/go-cache}" go build -ldflags "$ldflags" -o "$install_tmp" ./cmd/bakeoff 2>&1)"; then
+  if ! build_output="$(cd "$root" && GOCACHE="${GOCACHE:-$(bakeoff_default_go_cache)}" go build -ldflags "$ldflags" -o "$install_tmp" ./cmd/bakeoff 2>&1)"; then
     die 1 "failed to build Bakeoff CLI from bundled source: $build_output"
   fi
   chmod 0755 "$install_tmp"
@@ -446,6 +454,7 @@ EOF
 
   mv -f "$install_tmp" "$binary_path"
   install_tmp=""
+  invalidate_root_dist_binary
 
   metadata_tmp="$(mktemp "$data/.version.XXXXXX")"
   cat > "$metadata_tmp" <<EOF
@@ -608,6 +617,7 @@ fi
 
 mv -f "$install_tmp" "$binary_path"
 install_tmp=""
+invalidate_root_dist_binary
 
 installed_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 metadata_tmp="$(mktemp "$data/.version.XXXXXX")"

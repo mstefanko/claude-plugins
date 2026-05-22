@@ -1,6 +1,6 @@
 ---
 name: bakeoff
-description: "USE THIS SKILL when the user says bakeoff, /bakeoff, run a bakeoff, compare providers, inspect a bakeoff run, code-review bakeoff, or competitive build bakeoff."
+description: "Bakeoff overview and routing. Use /bakeoff:run to draft or execute work orders; use the other /bakeoff:* commands for setup, history, inspection, and maintenance."
 version: "0.0.0"
 allowed-tools: "Read,Write,Edit,Glob,Grep,Bash"
 author: mstefanko

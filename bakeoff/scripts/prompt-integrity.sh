@@ -39,7 +39,11 @@ require_contains commands/run.md 'Use the `bakeoff-run` skill for the entire wor
 require_contains commands/run.md 'If the `bakeoff-run` skill is unavailable' 'missing-skill stop rule'
 require_contains skills/bakeoff/SKILL.md '`/bakeoff:run` must use the `bakeoff-run` skill.' 'core routing rule'
 require_contains skills/bakeoff-run/SKILL.md 'name: bakeoff-run' 'bakeoff-run skill frontmatter'
+require_contains skills/bakeoff-run/SKILL.md 'user-invocable: false' 'hidden bakeoff-run slash menu entry'
 require_contains skills/bakeoff-run/SKILL.md 'references/run-appendix.md' 'appendix references'
+require_contains skills/bakeoff-run/SKILL.md '--check --print-path' 'resolved CLI path capture'
+require_contains references/run-appendix.md 'BAKEOFF_CLI="/absolute/path/printed/by/bakeoff-ensure-cli"' 'parallel helper resolved CLI placeholder'
+require_contains references/run-appendix.md '"$BAKEOFF_CLI" research' 'parallel helper resolved CLI invocation'
 
 claude_invariants=$(extract_invariants CLAUDE.md)
 run_invariants=$(extract_invariants skills/bakeoff-run/SKILL.md)

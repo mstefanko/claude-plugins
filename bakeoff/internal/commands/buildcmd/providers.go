@@ -58,6 +58,9 @@ func runBuildProviders(ctx context.Context, f commands.Factory, wo *workorder.Wo
 	if err := group.Wait(); err != nil {
 		return nil, err
 	}
+	for _, run := range results {
+		commands.LogPromptTrimRecords(f, run.PromptTrims)
+	}
 	return results, nil
 }
 func runOneBuildProvider(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder, participant workorder.Participant, repo buildworkspace.Repository, runDir string, baseline buildverify.Result, worktreePath string, caps provider.ScopeCapabilities, keepWorktrees bool, quiet bool, repoLayoutBlock string, noRepoLayout bool) (run providerRun, err error) {
@@ -99,7 +102,6 @@ func runOneBuildProvider(ctx context.Context, f commands.Factory, wo *workorder.
 		return run, err
 	}
 	trimResult := prompt.TrimContextToBudget(workerPrompt, runner.MaxPromptBytes, "worker:"+participant.ID)
-	commands.LogPromptTrim(f, trimResult)
 	workerPrompt = trimResult.Text
 	run.PromptTrims = commands.TrimRecords(trimResult)
 	if err := workorder.WriteTextAtomic(filepath.Join(providerDir, "prompt.txt"), workerPrompt); err != nil {
