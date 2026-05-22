@@ -238,10 +238,11 @@ func Run(ctx context.Context, f commands.Factory, opts *TriageOptions) (int, err
 	}
 	citationCheckIDs := triage.CitationCheckIDs(citationChecks)
 	finalMessagePath := ""
-	if wo.Judge.Backend == "codex" {
+	outputLastMessage := commands.OutputLastMessageSupported(ctx, f, wo.Judge)
+	if outputLastMessage {
 		finalMessagePath = filepath.Join(triageDir, "last-message.txt")
 	}
-	argv, err := provider.BuildParticipantArgv(wo.Judge, citationCWD, nil, finalMessagePath, commands.CodexOutputLastMessageSupported(ctx, f, wo.Judge))
+	argv, err := provider.BuildParticipantArgv(wo.Judge, citationCWD, nil, finalMessagePath, outputLastMessage)
 	if err != nil {
 		return 0, &apperror.RuntimeError{Err: err}
 	}

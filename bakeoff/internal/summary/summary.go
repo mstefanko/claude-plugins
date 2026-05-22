@@ -132,7 +132,10 @@ func CompactStatus(raw any) string {
 		text = strings.TrimSpace(jsonutil.StringValue(raw))
 	}
 	if okStatuses[text] {
-		return text
+		return runner.StatusOK
+	}
+	if text == runner.StatusSalvaged {
+		return "warn"
 	}
 	return "failed"
 }
@@ -189,12 +192,14 @@ func JudgeJSONSummary(runDir string, decision map[string]any) JudgeSummary {
 	}
 	status := "ok"
 	for _, raw := range rawStatuses {
-		if !okStatuses[raw] {
+		compact := CompactStatus(raw)
+		if compact == "failed" {
 			status = "failed"
 			break
 		}
-		if raw == runner.StatusOKAfterFormatRetry {
-			status = runner.StatusOKAfterFormatRetry
+		if compact == "warn" {
+			status = "warn"
+			continue
 		}
 	}
 	rawStatus := rawStatuses[0]

@@ -67,6 +67,21 @@ func TestBuildParticipantArgvRequiresCodexWorkspaceWrite(t *testing.T) {
 	}
 }
 
+func TestBuildParticipantArgvAddsClaudeLastMessageWhenSupported(t *testing.T) {
+	participant := workorder.Participant{ID: "claude", Backend: "claude", Model: "claude-test", Effort: "high", Scope: "codebase"}
+	argv, _, err := buildParticipantArgv(participant, workorder.ScopePolicy{Enforcement: "best_effort"}, "/tmp/worktree", provider.ScopeCapabilities{
+		Backend:  "claude",
+		Supports: map[string]bool{"disallowed_tools": true, "output_last_message": true},
+	}, "/tmp/last-message.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(argv, " ")
+	if !strings.Contains(joined, "--output-last-message /tmp/last-message.txt") {
+		t.Fatalf("claude argv missing last-message support: %v", argv)
+	}
+}
+
 func TestBuildEnvScrubsSecrets(t *testing.T) {
 	got := runnerenv.SafeEnv([]string{
 		"PATH=/bin",

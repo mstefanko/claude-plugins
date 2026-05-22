@@ -497,13 +497,19 @@ func runOneWorker(ctx context.Context, f commands.Factory, wo *workorder.WorkOrd
 	if err := workorder.WriteTextAtomic(filepath.Join(providerDir, "prompt.txt"), workerPrompt); err != nil {
 		return nil, promptTrims, err
 	}
-	finalMessagePath := ""
-	if participant.Backend == "codex" {
-		finalMessagePath = filepath.Join(providerDir, "last-message.txt")
-	}
 	var caps *provider.ScopeCapabilities
 	if value, ok := capabilities[participant.Backend]; ok {
 		caps = &value
+	}
+	finalMessagePath := ""
+	supportsLastMessage := false
+	if caps != nil {
+		supportsLastMessage = commands.SupportsOutputLastMessage(participant, *caps)
+	} else {
+		supportsLastMessage = commands.OutputLastMessageSupported(ctx, f, participant)
+	}
+	if supportsLastMessage {
+		finalMessagePath = filepath.Join(providerDir, "last-message.txt")
 	}
 	scopeExecution, err := scope.BuildExecution(ctx, f.Capabilities(), participant, wo.ScopePolicy, cwd, runDir, caps, finalMessagePath)
 	if err != nil {
@@ -621,7 +627,8 @@ func runSingleJudge(ctx context.Context, f commands.Factory, wo *workorder.WorkO
 		return nil, promptTrims, err
 	}
 	lastMessage := ""
-	if wo.Judge.Backend == "codex" {
+	outputLastMessage := commands.OutputLastMessageSupported(ctx, f, wo.Judge)
+	if outputLastMessage {
 		name := "last-message.txt"
 		if label != "gather" {
 			name = "last-message-" + label + ".txt"
@@ -629,7 +636,7 @@ func runSingleJudge(ctx context.Context, f commands.Factory, wo *workorder.WorkO
 		lastMessage = filepath.Join(judgeDir, name)
 	}
 	cwd, _ := os.Getwd()
-	argv, err := provider.BuildParticipantArgv(wo.Judge, cwd, nil, lastMessage, commands.CodexOutputLastMessageSupported(ctx, f, wo.Judge))
+	argv, err := provider.BuildParticipantArgv(wo.Judge, cwd, nil, lastMessage, outputLastMessage)
 	if err != nil {
 		return nil, promptTrims, err
 	}

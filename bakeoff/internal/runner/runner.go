@@ -34,6 +34,7 @@ const (
 	MaxPromptBytes             = 1000000
 	StatusOK                   = runstatus.OK
 	StatusOKAfterFormatRetry   = runstatus.OKAfterFormatRetry
+	StatusSalvaged             = runstatus.Salvaged
 	StatusTimeout              = runstatus.Timeout
 	StatusOutputCap            = runstatus.OutputCap
 	StatusMissingProvider      = runstatus.MissingProvider
@@ -124,6 +125,7 @@ type Result struct {
 	FinalJSON           any                 `json:"final_json"`
 	FinalJSONSource     string              `json:"final_json_source,omitempty"`
 	OutputCap           *OutputCapMetadata  `json:"output_cap,omitempty"`
+	Salvage             *SalvageMetadata    `json:"salvage,omitempty"`
 	FormatRetry         *FormatRetrySummary `json:"format_retry,omitempty"`
 	RepairArtifacts     *RepairArtifacts    `json:"repair_artifacts,omitempty"`
 }
@@ -142,6 +144,15 @@ type AttemptStatus struct {
 	FinalJSONSource     string             `json:"final_json_source,omitempty"`
 	IO                  IOStats            `json:"io"`
 	OutputCap           *OutputCapMetadata `json:"output_cap,omitempty"`
+	Salvage             *SalvageMetadata   `json:"salvage,omitempty"`
+}
+
+type SalvageMetadata struct {
+	Source             string `json:"source"`
+	StopReasonHint     string `json:"stop_reason_hint,omitempty"`
+	RecoveredJSONBytes int    `json:"recovered_json_bytes"`
+	RecoveredAt        string `json:"recovered_at"`
+	OriginalStatus     string `json:"-"`
 }
 
 type FormatRetrySummary struct {
@@ -325,14 +336,26 @@ func runProcess(ctx context.Context, opts Options, requireFinalJSON bool) Result
 			state.emitTick(time.Now(), budgets, opts.OnTick)
 		}
 		if state.hasOutputCap() {
+			if result, ok := state.salvagedStatus(StatusOutputCap, exitCode, stdoutText, stderrText, opts); ok {
+				return result
+			}
 			return state.status(StatusOutputCap, exitCode, stdoutText, stderrText, nil, "")
+		}
+		if result, ok := state.salvagedStatus(StatusTimeout, exitCode, stdoutText, stderrText, opts); ok {
+			return result
 		}
 		return state.status(StatusTimeout, exitCode, stdoutText, stderrText, nil, "")
 	}
 	if state.outputCapTerminal() || (state.hasOutputCap() && waitErr != nil) {
+		if result, ok := state.salvagedStatus(StatusOutputCap, exitCode, stdoutText, stderrText, opts); ok {
+			return result
+		}
 		return state.status(StatusOutputCap, exitCode, stdoutText, stderrText, nil, "")
 	}
 	if waitErr != nil {
+		if result, ok := state.salvagedStatus(StatusExitError, exitCode, stdoutText, stderrText, opts); ok {
+			return result
+		}
 		return state.status(StatusExitError, exitCode, stdoutText, stderrText, nil, "")
 	}
 	if !requireFinalJSON {
@@ -342,13 +365,16 @@ func runProcess(ctx context.Context, opts Options, requireFinalJSON bool) Result
 		return state.status(StatusOK, exitCode, stdoutText, stderrText, nil, "")
 	}
 
-	finalJSONText, finalJSONSource := finalJSONText(stdoutText, opts.FinalMessagePath)
+	finalJSONText, finalJSONSource, _ := finalJSONFromStdout(stdoutText)
 	finalJSON, err := ExtractFinalJSON(finalJSONText, sourceLabel(finalJSONSource))
 	if err == nil && opts.Validator != nil {
 		finalJSON, err = opts.Validator(finalJSON)
 	}
 	if err != nil {
 		stderrText = appendDiagnostic(stderrText, err.Error())
+		if result, ok := state.salvagedStatus(StatusSchemaError, exitCode, stdoutText, stderrText, opts); ok {
+			return result
+		}
 		if state.hasOutputCap() {
 			return state.statusWithSource(StatusOutputCap, exitCode, stdoutText, stderrText, nil, finalJSONSource)
 		}
@@ -877,6 +903,29 @@ func (s *captureState) statusWithSource(status string, exitCode *int, stdout str
 	return result
 }
 
+func (s *captureState) salvagedStatus(originalStatus string, exitCode *int, stdout string, stderr string, opts Options) (Result, bool) {
+	text, source, ok := salvageFinalJSON(stdout, opts.FinalMessagePath)
+	if !ok {
+		return Result{}, false
+	}
+	finalJSON, err := ExtractFinalJSON(text, sourceLabel(source))
+	if err == nil && opts.Validator != nil {
+		finalJSON, err = opts.Validator(finalJSON)
+	}
+	if err != nil {
+		return Result{}, false
+	}
+	result := s.statusWithSource(StatusSalvaged, exitCode, stdout, stderr, finalJSON, source)
+	result.Salvage = &SalvageMetadata{
+		Source:             salvageSourceName(source),
+		StopReasonHint:     StopReasonHint(stdout, stderr, text),
+		RecoveredJSONBytes: len([]byte(recoveredFinalJSONText(text))),
+		RecoveredAt:        time.Now().UTC().Format(time.RFC3339),
+		OriginalStatus:     originalStatus,
+	}
+	return result, true
+}
+
 func (s *captureState) stderrTruncated() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -967,6 +1016,37 @@ func extractTaggedJSONValues(text string) []any {
 	}
 }
 
+func recoveredFinalJSONText(text string) string {
+	last := ""
+	searchFrom := 0
+	for {
+		start := strings.Index(text[searchFrom:], FinalJSONOpen)
+		if start == -1 {
+			if last != "" {
+				return last
+			}
+			return text
+		}
+		start += searchFrom
+		jsonStart := skipWhitespace(text, start+len(FinalJSONOpen))
+		decoder := json.NewDecoder(strings.NewReader(text[jsonStart:]))
+		decoder.UseNumber()
+		var payload any
+		if err := decoder.Decode(&payload); err != nil {
+			searchFrom = start + len(FinalJSONOpen)
+			continue
+		}
+		jsonEnd := jsonStart + int(decoder.InputOffset())
+		closeStart := skipWhitespace(text, jsonEnd)
+		if strings.HasPrefix(text[closeStart:], FinalJSONClose) {
+			last = text[start : closeStart+len(FinalJSONClose)]
+			searchFrom = closeStart + len(FinalJSONClose)
+		} else {
+			searchFrom = start + len(FinalJSONOpen)
+		}
+	}
+}
+
 func normalizeJSONNumbers(value any) any {
 	switch typed := value.(type) {
 	case map[string]any:
@@ -1005,13 +1085,20 @@ func skipWhitespace(text string, start int) int {
 	return start
 }
 
-func finalJSONText(stdout string, finalMessagePath string) (string, string) {
+func finalJSONFromStdout(stdout string) (string, string, bool) {
+	return stdout, FinalJSONSourceStdout, strings.TrimSpace(stdout) != ""
+}
+
+func salvageFinalJSON(stdout string, finalMessagePath string) (string, string, bool) {
 	if finalMessagePath != "" {
 		if text, ok := readNonEmptyText(finalMessagePath); ok {
-			return text, FinalJSONSourceLastMessage
+			return text, FinalJSONSourceLastMessage, true
 		}
 	}
-	return stdout, FinalJSONSourceStdout
+	if strings.TrimSpace(stdout) == "" {
+		return "", FinalJSONSourceStdout, false
+	}
+	return stdout, FinalJSONSourceStdout, true
 }
 
 func readNonEmptyText(path string) (string, bool) {
@@ -1028,6 +1115,28 @@ func sourceLabel(source string) string {
 		return "last-message artifact"
 	}
 	return "stdout"
+}
+
+func salvageSourceName(source string) string {
+	if source == FinalJSONSourceLastMessage {
+		return "last-message.txt"
+	}
+	return "stdout"
+}
+
+func StopReasonHint(texts ...string) string {
+	for _, text := range texts {
+		if hasMaxTokensStopReason(text) {
+			return "max_tokens"
+		}
+	}
+	return ""
+}
+
+func hasMaxTokensStopReason(text string) bool {
+	lower := strings.ToLower(text)
+	return (strings.Contains(lower, "stop_reason") || strings.Contains(lower, "stop reason") || strings.Contains(lower, "finish_reason") || strings.Contains(lower, "finish reason")) &&
+		(strings.Contains(lower, "max_tokens") || strings.Contains(lower, "max tokens"))
 }
 
 func appendDiagnostic(stderr string, diagnostic string) string {
@@ -1052,6 +1161,7 @@ func attemptStatus(result Result) AttemptStatus {
 		FinalJSONSource:     result.FinalJSONSource,
 		IO:                  result.IO,
 		OutputCap:           result.OutputCap,
+		Salvage:             result.Salvage,
 	}
 }
 

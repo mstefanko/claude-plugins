@@ -115,11 +115,12 @@ func runSingleBuildJudge(ctx context.Context, f commands.Factory, wo *workorder.
 		return nil, buildPhaseTiming{}, promptTrims, err
 	}
 	lastMessage := ""
-	if wo.Judge.Backend == "codex" {
+	outputLastMessage := commands.OutputLastMessageSupported(ctx, f, wo.Judge)
+	if outputLastMessage {
 		lastMessage = filepath.Join(judgeDir, "last-message-"+label+".txt")
 	}
 	cwd, _ := os.Getwd()
-	argv, err := provider.BuildParticipantArgv(wo.Judge, cwd, nil, lastMessage, commands.CodexOutputLastMessageSupported(ctx, f, wo.Judge))
+	argv, err := provider.BuildParticipantArgv(wo.Judge, cwd, nil, lastMessage, outputLastMessage)
 	if err != nil {
 		return nil, buildPhaseTiming{}, promptTrims, err
 	}

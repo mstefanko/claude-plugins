@@ -106,7 +106,7 @@ func runOneBuildProvider(ctx context.Context, f commands.Factory, wo *workorder.
 		return run, err
 	}
 	finalMessagePath := ""
-	if participant.Backend == "codex" && caps.Supports["output_last_message"] {
+	if commands.SupportsOutputLastMessage(participant, caps) {
 		finalMessagePath = filepath.Join(providerDir, "last-message.txt")
 	}
 	argv, scopeMetadata, err := buildParticipantArgv(participant, wo.ScopePolicy, providerCWD, caps, finalMessagePath)

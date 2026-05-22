@@ -43,7 +43,7 @@ func NewCapabilityRegistry(lookup LookupFunc) *CapabilityRegistry {
 	return &CapabilityRegistry{lookup: lookup, cache: map[string]capabilityEntry{}}
 }
 
-func BuildParticipantArgv(participant workorder.Participant, cwd string, extraArgs []string, finalMessagePath string, codexOutputLastMessage bool) ([]string, error) {
+func BuildParticipantArgv(participant workorder.Participant, cwd string, extraArgs []string, finalMessagePath string, outputLastMessage bool) ([]string, error) {
 	effort := participant.Effort
 	if effort == "" {
 		effort = "high"
@@ -53,11 +53,14 @@ func BuildParticipantArgv(participant workorder.Participant, cwd string, extraAr
 	case "claude":
 		argv := []string{"claude", "-p", "--model", participant.Model, "--effort", effort}
 		argv = append(argv, extras...)
+		if finalMessagePath != "" && outputLastMessage {
+			argv = append(argv, "--output-last-message", finalMessagePath)
+		}
 		return argv, nil
 	case "codex":
 		argv := []string{"codex", "exec", "-m", participant.Model, "-c", fmt.Sprintf(`model_reasoning_effort="%s"`, effort), "--skip-git-repo-check"}
 		argv = append(argv, extras...)
-		if finalMessagePath != "" && codexOutputLastMessage {
+		if finalMessagePath != "" && outputLastMessage {
 			argv = append(argv, "--output-last-message", finalMessagePath)
 		}
 		if cwd != "" {
@@ -177,6 +180,7 @@ func ScopeCapabilitiesFromHelp(backend string, helpText string) ScopeCapabilitie
 		supports["disallowed_tools"] = HasHelpOption(options, "--disallowedTools", "--disallowed-tools")
 		supports["tools"] = HasHelpOption(options, "--tools")
 		supports["permission_mode"] = HasHelpOption(options, "--permission-mode")
+		supports["output_last_message"] = HasHelpOption(options, "--output-last-message")
 	case "codex":
 		supports["sandbox"] = HasHelpOption(options, "--sandbox")
 		supports["sandbox_workspace_write"] = supports["sandbox"] && strings.Contains(helpText, "workspace-write")

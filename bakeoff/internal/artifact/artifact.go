@@ -44,6 +44,9 @@ func ResultMap(result runner.Result) map[string]any {
 	if result.OutputCap != nil {
 		out["output_cap"] = result.OutputCap
 	}
+	if result.Salvage != nil {
+		out["salvage"] = result.Salvage
+	}
 	if result.FormatRetry != nil {
 		out["format_retry"] = result.FormatRetry
 	}
@@ -51,7 +54,7 @@ func ResultMap(result runner.Result) map[string]any {
 		out["repair_artifacts"] = result.RepairArtifacts
 	}
 	if !ProviderSucceeded(out) {
-		if kind := runner.ClassifyFailure(result.Status, result.Stdout, result.Stderr); kind != "" {
+		if kind := resultFailureKind(result); kind != "" {
 			out["failure_kind"] = kind
 		}
 	}
@@ -87,12 +90,13 @@ func StatusWithoutPayload(result map[string]any) map[string]any {
 		"stderr_kind",
 		"failure_kind",
 		"judge_error_kind",
+		"salvage_artifact_error",
 	} {
 		if value, ok := result[key]; ok {
 			status[key] = value
 		}
 	}
-	for _, key := range []string{"io", "output_cap", "format_retry", "scope_enforcement"} {
+	for _, key := range []string{"io", "output_cap", "salvage", "format_retry", "scope_enforcement"} {
 		if value, ok := result[key]; ok {
 			status[key] = value
 		}
@@ -162,6 +166,9 @@ func WriteProviderArtifacts(providerDir string, result map[string]any) error {
 	if err := WriteFormatRetryArtifacts(providerDir, result, ""); err != nil {
 		return err
 	}
+	if err := WriteSalvageArtifact(providerDir, result, ""); err != nil {
+		result["salvage_artifact_error"] = err.Error()
+	}
 	if err := workorder.WriteJSONAtomic(filepath.Join(providerDir, "status.json"), StatusWithoutPayload(result)); err != nil {
 		return err
 	}
@@ -193,6 +200,9 @@ func WriteJudgeArtifacts(judgeDir string, label string, result map[string]any) e
 	}
 	if err := WriteFormatRetryArtifacts(judgeDir, result, suffix); err != nil {
 		return err
+	}
+	if err := WriteSalvageArtifact(judgeDir, result, suffix); err != nil {
+		result["salvage_artifact_error"] = err.Error()
 	}
 	if err := workorder.WriteJSONAtomic(filepath.Join(judgeDir, statusName), StatusWithoutPayload(result)); err != nil {
 		return err
@@ -239,6 +249,56 @@ func WriteFormatRetryArtifacts(directory string, result map[string]any, suffix s
 		return err
 	}
 	return workorder.WriteJSONAtomic(filepath.Join(directory, "repair-status"+suffixPart+".json"), obj["status"])
+}
+
+func WriteSalvageArtifact(directory string, result map[string]any, suffix string) error {
+	salvage, ok := result["salvage"]
+	if !ok || salvage == nil {
+		return nil
+	}
+	suffixPart := ""
+	if suffix != "" {
+		suffixPart = "-" + suffix
+	}
+	return workorder.WriteJSONAtomic(filepath.Join(directory, "salvage"+suffixPart+".json"), salvage)
+}
+
+func resultFailureKind(result runner.Result) string {
+	if runner.StopReasonHint(result.Stdout, result.Stderr) == "max_tokens" || salvageStopReasonHint(result) == "max_tokens" {
+		return "max_tokens"
+	}
+	status := originalStatus(result)
+	if status == runner.StatusTimeout {
+		return timeoutFailureKind(result)
+	}
+	return runner.ClassifyFailure(status, result.Stdout, result.Stderr)
+}
+
+func originalStatus(result runner.Result) string {
+	if result.Salvage != nil && result.Salvage.OriginalStatus != "" {
+		return result.Salvage.OriginalStatus
+	}
+	return result.Status
+}
+
+func salvageStopReasonHint(result runner.Result) string {
+	if result.Salvage == nil {
+		return ""
+	}
+	return result.Salvage.StopReasonHint
+}
+
+func timeoutFailureKind(result runner.Result) string {
+	if result.StdoutObservedBytes == 0 && result.IO.StdoutObservedBytes == 0 {
+		return "quiet_stdout"
+	}
+	if result.IO.QuietTickCount > 0 {
+		return "quiet_stdout"
+	}
+	if result.IO.LastStdoutAge != nil && result.IO.QuietThresholdSeconds > 0 && *result.IO.LastStdoutAge >= float64(result.IO.QuietThresholdSeconds) {
+		return "quiet_stdout"
+	}
+	return "wall_clock"
 }
 
 type MetaOptions struct {

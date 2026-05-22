@@ -49,18 +49,37 @@ func TestRunProviderReportsSchemaErrorForMissingFinalJSON(t *testing.T) {
 	}
 }
 
-func TestRunProviderPrefersNonemptyLastMessage(t *testing.T) {
+func TestRunProviderSalvagesNonemptyLastMessageAfterStdoutSchemaError(t *testing.T) {
 	lastMessage := filepath.Join(t.TempDir(), "last-message.txt")
 	opts := helperOptionsWithArgs(Budgets{WallClockSeconds: 3, MaxOutputBytes: 2000}, "last-message", lastMessage)
 	opts.FinalMessagePath = lastMessage
 	result := RunProvider(context.Background(), opts)
-	if result.Status != StatusOK {
+	if result.Status != StatusSalvaged {
 		t.Fatalf("status = %s stderr=%q", result.Status, result.Stderr)
 	}
 	if result.FinalJSONSource != FinalJSONSourceLastMessage {
 		t.Fatalf("source = %s", result.FinalJSONSource)
 	}
+	if result.Salvage == nil || result.Salvage.Source != "last-message.txt" || result.Salvage.RecoveredJSONBytes != len(`<final_json>{"ok": true}</final_json>`) {
+		t.Fatalf("salvage metadata = %#v", result.Salvage)
+	}
 	if !reflect.DeepEqual(result.FinalJSON, map[string]any{"ok": true}) {
+		t.Fatalf("final_json = %#v", result.FinalJSON)
+	}
+}
+
+func TestRunProviderUsesStdoutBeforeLastMessageOnSuccess(t *testing.T) {
+	lastMessage := filepath.Join(t.TempDir(), "last-message.txt")
+	opts := helperOptionsWithArgs(Budgets{WallClockSeconds: 3, MaxOutputBytes: 2000}, "stdout-and-last-message", lastMessage)
+	opts.FinalMessagePath = lastMessage
+	result := RunProvider(context.Background(), opts)
+	if result.Status != StatusOK {
+		t.Fatalf("status = %s stderr=%q", result.Status, result.Stderr)
+	}
+	if result.FinalJSONSource != FinalJSONSourceStdout {
+		t.Fatalf("source = %s", result.FinalJSONSource)
+	}
+	if result.FinalJSON.(map[string]any)["source"] != "stdout" {
 		t.Fatalf("final_json = %#v", result.FinalJSON)
 	}
 }
@@ -75,6 +94,35 @@ func TestRunProviderFallsBackToStdoutWhenLastMessageIsEmpty(t *testing.T) {
 	}
 	if result.FinalJSONSource != FinalJSONSourceStdout {
 		t.Fatalf("source = %s", result.FinalJSONSource)
+	}
+}
+
+func TestRunProviderSalvagesFailedRunFromLastMessage(t *testing.T) {
+	lastMessage := filepath.Join(t.TempDir(), "last-message.txt")
+	opts := helperOptionsWithArgs(Budgets{WallClockSeconds: 3, MaxOutputBytes: 2000}, "last-message-exit", lastMessage)
+	opts.FinalMessagePath = lastMessage
+	result := RunProvider(context.Background(), opts)
+	if result.Status != StatusSalvaged {
+		t.Fatalf("status = %s stderr=%q", result.Status, result.Stderr)
+	}
+	if result.ExitCode == nil || *result.ExitCode != 7 {
+		t.Fatalf("exit code = %#v", result.ExitCode)
+	}
+	if result.Salvage == nil || result.Salvage.OriginalStatus != StatusExitError {
+		t.Fatalf("salvage metadata = %#v", result.Salvage)
+	}
+}
+
+func TestRunProviderDoesNotFallBackToStdoutWhenLastMessageInvalid(t *testing.T) {
+	lastMessage := filepath.Join(t.TempDir(), "last-message.txt")
+	opts := helperOptionsWithArgs(Budgets{WallClockSeconds: 3, MaxOutputBytes: 2000}, "bad-last-message-exit", lastMessage)
+	opts.FinalMessagePath = lastMessage
+	result := RunProvider(context.Background(), opts)
+	if result.Status != StatusExitError {
+		t.Fatalf("status = %s stderr=%q final=%#v", result.Status, result.Stderr, result.FinalJSON)
+	}
+	if result.FinalJSON != nil || result.Salvage != nil {
+		t.Fatalf("unexpected salvage: final=%#v salvage=%#v", result.FinalJSON, result.Salvage)
 	}
 }
 
@@ -286,8 +334,11 @@ func TestRunProviderHeartbeatTicksForQuietProcess(t *testing.T) {
 			ticks = append(ticks, tick)
 		},
 	})
-	if result.Status != StatusTimeout {
+	if result.Status != StatusSalvaged {
 		t.Fatalf("status = %s", result.Status)
+	}
+	if result.FinalJSONSource != FinalJSONSourceStdout {
+		t.Fatalf("source = %s", result.FinalJSONSource)
 	}
 	if len(ticks) < 2 {
 		t.Fatalf("expected heartbeat ticks, got %#v", ticks)
@@ -452,11 +503,27 @@ func TestHelperProcess(t *testing.T) {
 			panic(err)
 		}
 		fmt.Print("plain prose without final json")
+	case "stdout-and-last-message":
+		if err := os.WriteFile(args[1], []byte(`<final_json>{"source": "last-message"}</final_json>`), 0o644); err != nil {
+			panic(err)
+		}
+		fmt.Print(`<final_json>{"source": "stdout"}</final_json>`)
 	case "empty-last-message":
 		if err := os.WriteFile(args[1], nil, 0o644); err != nil {
 			panic(err)
 		}
 		fmt.Print(`<final_json>{"ok": true}</final_json>`)
+	case "last-message-exit":
+		if err := os.WriteFile(args[1], []byte(`<final_json>{"ok": true}</final_json>`), 0o644); err != nil {
+			panic(err)
+		}
+		os.Exit(7)
+	case "bad-last-message-exit":
+		if err := os.WriteFile(args[1], []byte(`not json`), 0o644); err != nil {
+			panic(err)
+		}
+		fmt.Print(`<final_json>{"ok": true}</final_json>`)
+		os.Exit(7)
 	case "retry":
 		prompt, _ := io.ReadAll(os.Stdin)
 		if strings.Contains(string(prompt), FormatRetryMarker) {

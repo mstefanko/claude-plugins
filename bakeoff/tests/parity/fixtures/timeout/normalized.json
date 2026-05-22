@@ -50,7 +50,7 @@
         "provider_statuses": {
           "claude": {
             "exit_code": -15,
-            "failure_kind": "timeout",
+            "failure_kind": "quiet_stdout",
             "io": {
               "heartbeat_count": 0,
               "last_output_age": 0,
@@ -92,7 +92,7 @@
           },
           "codex": {
             "exit_code": -15,
-            "failure_kind": "timeout",
+            "failure_kind": "quiet_stdout",
             "io": {
               "heartbeat_count": 0,
               "last_output_age": 0,
@@ -208,7 +208,7 @@
             "compact_status": "failed",
             "effort": "high",
             "exit_code": -15,
-            "failure_kind": "timeout",
+            "failure_kind": "quiet_stdout",
             "model": "fake-claude",
             "output_bytes": 0,
             "scope": "codebase",
@@ -239,7 +239,7 @@
             "compact_status": "failed",
             "effort": "high",
             "exit_code": -15,
-            "failure_kind": "timeout",
+            "failure_kind": "quiet_stdout",
             "model": "fake-codex",
             "output_bytes": 0,
             "scope": "web",
@@ -363,7 +363,7 @@
       "type": "json",
       "value": {
         "exit_code": -15,
-        "failure_kind": "timeout",
+        "failure_kind": "quiet_stdout",
         "io": {
           "heartbeat_count": 0,
           "last_output_age": 0,
@@ -419,7 +419,7 @@
       "type": "json",
       "value": {
         "exit_code": -15,
-        "failure_kind": "timeout",
+        "failure_kind": "quiet_stdout",
         "io": {
           "heartbeat_count": 0,
           "last_output_age": 0,
@@ -470,7 +470,7 @@
     },
     "runs/timeout/report.md": {
       "type": "text",
-      "value": "# Bakeoff Report: gather-fake\n\n## Outcome\n\nMode: `gather`\nDecision: `both_failed`\nStalled at: `providers`\nResult: `both_failed`\nNext: `bakeoff show timeout`\n\n## Decision Audit\n\n- Judge ran: `false`\n- Stalled at: `providers`\n\n## Provider Status\n\n| Provider | Status | Wall | Stdout | Stderr | Scope | Notes |\n|----------|--------|------|--------|--------|-------|-------|\n| `claude` | `timeout` | <SECONDS>s | 0 B | 0 B | codebase -> codebase (partial) | failure kind: timeout; stderr: `providers/claude/stderr.txt` |\n| `codex` | `timeout` | <SECONDS>s | 0 B | 0 B | web -> web (partial) | failure kind: timeout; stderr: `providers/codex/stderr.txt` |\n\n## Findings\n\nNo provider completed successfully.\n\n## Caveats\n\n- both providers failed; judge skipped\n"
+      "value": "# Bakeoff Report: gather-fake\n\n## Outcome\n\nMode: `gather`\nDecision: `both_failed`\nStalled at: `providers`\nResult: `both_failed`\nNext: `bakeoff show timeout`\n\n## Decision Audit\n\n- Judge ran: `false`\n- Stalled at: `providers`\n\n## Provider Status\n\n| Provider | Status | Wall | Stdout | Stderr | Scope | Notes |\n|----------|--------|------|--------|--------|-------|-------|\n| `claude` | `timeout` | <SECONDS>s | 0 B | 0 B | codebase -> codebase (partial) | failure kind: quiet_stdout; stderr: `providers/claude/stderr.txt` |\n| `codex` | `timeout` | <SECONDS>s | 0 B | 0 B | web -> web (partial) | failure kind: quiet_stdout; stderr: `providers/codex/stderr.txt` |\n\n## Findings\n\nNo provider completed successfully.\n\n## Caveats\n\n- both providers failed; judge skipped\n"
     },
     "runs/timeout/work-order.json": {
       "type": "json",

@@ -53,6 +53,9 @@ func TestProviderSucceeded(t *testing.T) {
 	if ProviderSucceeded(map[string]any{"status": "schema_error"}) {
 		t.Fatal("schema_error should fail")
 	}
+	if ProviderSucceeded(map[string]any{"status": runner.StatusSalvaged}) {
+		t.Fatal("salvaged should fail")
+	}
 }
 
 func TestResultMapClassifiesStderrKind(t *testing.T) {
@@ -111,6 +114,41 @@ func TestResultMapClassifiesFailureKindOnlyForConfidentFailures(t *testing.T) {
 	}
 }
 
+func TestResultMapSubtypesTimeoutFailures(t *testing.T) {
+	quiet := ResultMap(runner.Result{Status: runner.StatusTimeout})
+	if quiet["failure_kind"] != "quiet_stdout" {
+		t.Fatalf("quiet timeout failure_kind = %#v", quiet["failure_kind"])
+	}
+
+	lastStdoutAge := 1.0
+	wall := ResultMap(runner.Result{
+		Status:              runner.StatusTimeout,
+		StdoutObservedBytes: 42,
+		IO:                  runner.IOStats{StdoutObservedBytes: 42, LastStdoutAge: &lastStdoutAge, QuietThresholdSeconds: 10},
+	})
+	if wall["failure_kind"] != "wall_clock" {
+		t.Fatalf("wall timeout failure_kind = %#v", wall["failure_kind"])
+	}
+
+	maxTokens := ResultMap(runner.Result{Status: runner.StatusTimeout, Stderr: `{"stop_reason":"max_tokens"}`})
+	if maxTokens["failure_kind"] != "max_tokens" {
+		t.Fatalf("max_tokens failure_kind = %#v", maxTokens["failure_kind"])
+	}
+}
+
+func TestResultMapClassifiesSalvagedFromOriginalStatus(t *testing.T) {
+	result := ResultMap(runner.Result{
+		Status: runner.StatusSalvaged,
+		Salvage: &runner.SalvageMetadata{
+			Source:         "last-message.txt",
+			OriginalStatus: runner.StatusTimeout,
+		},
+	})
+	if result["failure_kind"] != "quiet_stdout" {
+		t.Fatalf("salvaged failure_kind = %#v", result["failure_kind"])
+	}
+}
+
 func TestPreserveJudgeErrorKindCopiesClassifiedFailure(t *testing.T) {
 	failed := map[string]any{"status": runner.StatusExitError, "failure_kind": "api_transient"}
 	PreserveJudgeErrorKind(failed)
@@ -122,6 +160,38 @@ func TestPreserveJudgeErrorKindCopiesClassifiedFailure(t *testing.T) {
 	PreserveJudgeErrorKind(success)
 	if _, ok := success["judge_error_kind"]; ok {
 		t.Fatalf("success should not get judge_error_kind: %#v", success)
+	}
+}
+
+func TestWriteProviderArtifactsWritesSalvageMetadata(t *testing.T) {
+	dir := t.TempDir()
+	result := ResultMap(runner.Result{
+		Status:          runner.StatusSalvaged,
+		FinalJSON:       map[string]any{"ok": true},
+		FinalJSONSource: runner.FinalJSONSourceLastMessage,
+		Salvage: &runner.SalvageMetadata{
+			Source:             "last-message.txt",
+			RecoveredJSONBytes: 34,
+			RecoveredAt:        "2026-05-22T15:04:05Z",
+			OriginalStatus:     runner.StatusTimeout,
+		},
+	})
+	if err := WriteProviderArtifacts(dir, result); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "salvage.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var salvage map[string]any
+	if err := json.Unmarshal(data, &salvage); err != nil {
+		t.Fatal(err)
+	}
+	if salvage["source"] != "last-message.txt" || salvage["original_status"] != nil {
+		t.Fatalf("salvage metadata = %#v", salvage)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "final.json")); !os.IsNotExist(err) {
+		t.Fatalf("salvaged provider should not write final.json: %v", err)
 	}
 }
 

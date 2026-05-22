@@ -93,7 +93,7 @@ func buildParticipantArgv(participant workorder.Participant, policy workorder.Sc
 		}
 		metadata["enforcement_level"] = "partial"
 	}
-	argv, err := provider.BuildParticipantArgv(participant, worktreePath, extraArgs, finalMessagePath, caps.Supports["output_last_message"])
+	argv, err := provider.BuildParticipantArgv(participant, worktreePath, extraArgs, finalMessagePath, commands.SupportsOutputLastMessage(participant, caps))
 	return argv, metadata, err
 }
 

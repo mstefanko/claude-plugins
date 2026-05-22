@@ -22,6 +22,20 @@ func TestProviderStatusSummaryCompactsFailure(t *testing.T) {
 	}
 }
 
+func TestProviderStatusSummaryCompactsSalvagedAsWarn(t *testing.T) {
+	got := ProviderStatusSummary(map[string]any{"status": "salvaged"})
+	if got.Status != "warn" || got.RawStatus != "salvaged" {
+		t.Fatalf("summary = %#v", got)
+	}
+}
+
+func TestProviderStatusSummaryCompactsFormatRetryAsOK(t *testing.T) {
+	got := ProviderStatusSummary(map[string]any{"status": "ok_after_format_retry"})
+	if got.Status != "ok" || got.RawStatus != "ok_after_format_retry" {
+		t.Fatalf("summary = %#v", got)
+	}
+}
+
 func TestCommandStatus(t *testing.T) {
 	if CommandStatus(0) != "ok" {
 		t.Fatal("exit 0 should be ok")

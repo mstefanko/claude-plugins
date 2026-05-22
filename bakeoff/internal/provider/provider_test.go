@@ -13,8 +13,8 @@ import (
 )
 
 func TestScopeCapabilitiesFromHelp(t *testing.T) {
-	claude := ScopeCapabilitiesFromHelp("claude", "--allowedTools --disallowed-tools --tools --permission-mode")
-	if !claude.Available || !claude.Supports["allowed_tools"] || !claude.Supports["disallowed_tools"] || !claude.Supports["tools"] || !claude.Supports["permission_mode"] {
+	claude := ScopeCapabilitiesFromHelp("claude", "--allowedTools --disallowed-tools --tools --permission-mode --output-last-message")
+	if !claude.Available || !claude.Supports["allowed_tools"] || !claude.Supports["disallowed_tools"] || !claude.Supports["tools"] || !claude.Supports["permission_mode"] || !claude.Supports["output_last_message"] {
 		t.Fatalf("claude capabilities = %#v", claude)
 	}
 
@@ -36,21 +36,23 @@ func TestScopeCapabilitiesFromHelpVariants(t *testing.T) {
 			backend: "claude",
 			help:    "Usage: claude -p [--allowedTools tools] [--disallowedTools tools] [--permission-mode mode]",
 			supports: map[string]bool{
-				"allowed_tools":    true,
-				"disallowed_tools": true,
-				"tools":            false,
-				"permission_mode":  true,
+				"allowed_tools":       true,
+				"disallowed_tools":    true,
+				"tools":               false,
+				"permission_mode":     true,
+				"output_last_message": false,
 			},
 		},
 		{
 			name:    "claude dashed",
 			backend: "claude",
-			help:    "--allowed-tools value --disallowed-tools value --tools value",
+			help:    "--allowed-tools value --disallowed-tools value --tools value --output-last-message value",
 			supports: map[string]bool{
-				"allowed_tools":    true,
-				"disallowed_tools": true,
-				"tools":            true,
-				"permission_mode":  false,
+				"allowed_tools":       true,
+				"disallowed_tools":    true,
+				"tools":               true,
+				"permission_mode":     false,
+				"output_last_message": true,
 			},
 		},
 		{
@@ -132,6 +134,22 @@ func TestBuildParticipantArgv(t *testing.T) {
 	}
 	if want := []string{"claude", "-p", "--model", "sonnet", "--effort", "high", "--disallowedTools", "WebFetch"}; !reflect.DeepEqual(claude, want) {
 		t.Fatalf("claude argv = %#v, want %#v", claude, want)
+	}
+
+	claudeLastMessage, err := BuildParticipantArgv(workorder.Participant{Backend: "claude", Model: "sonnet", Effort: "high"}, "", nil, "/tmp/last.txt", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"claude", "-p", "--model", "sonnet", "--effort", "high", "--output-last-message", "/tmp/last.txt"}; !reflect.DeepEqual(claudeLastMessage, want) {
+		t.Fatalf("claude argv with last message = %#v, want %#v", claudeLastMessage, want)
+	}
+
+	claudeUnsupported, err := BuildParticipantArgv(workorder.Participant{Backend: "claude", Model: "sonnet", Effort: "high"}, "", nil, "/tmp/last.txt", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"claude", "-p", "--model", "sonnet", "--effort", "high"}; !reflect.DeepEqual(claudeUnsupported, want) {
+		t.Fatalf("claude argv without last-message support = %#v, want %#v", claudeUnsupported, want)
 	}
 
 	codex, err := BuildParticipantArgv(workorder.Participant{Backend: "codex", Model: "gpt", Effort: "medium"}, "/tmp/work", []string{"--sandbox", "read-only"}, "/tmp/last.txt", true)

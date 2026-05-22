@@ -7,6 +7,7 @@ import (
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/jsonutil"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/ledger"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/runner"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
 )
 
@@ -261,6 +262,13 @@ func renderProviderStatusTable(decision map[string]any) []string {
 		if kind := jsonutil.StringValue(status["failure_kind"]); kind != "" {
 			notes = append(notes, "failure kind: "+kind)
 		}
+		if jsonutil.StringValue(status["status"]) == runner.StatusSalvaged {
+			note := "salvaged output"
+			if source := salvageSource(status); source != "" {
+				note += " from " + source
+			}
+			notes = append(notes, note)
+		}
 		if path := jsonutil.StringValue(status["stderr_path"]); path != "" {
 			notes = append(notes, "stderr: `"+path+"`")
 		}
@@ -308,6 +316,19 @@ func humanBytes(size int) string {
 
 func escapeTableCell(text string) string {
 	return strings.ReplaceAll(text, "|", `\|`)
+}
+
+func salvageSource(status map[string]any) string {
+	switch salvage := status["salvage"].(type) {
+	case *runner.SalvageMetadata:
+		return salvage.Source
+	case runner.SalvageMetadata:
+		return salvage.Source
+	case map[string]any:
+		return jsonutil.StringValue(salvage["source"])
+	default:
+		return ""
+	}
 }
 
 func renderGather(wo *workorder.WorkOrder, decision map[string]any, workerResults map[string]map[string]any, judgeResults map[string]map[string]any) []string {

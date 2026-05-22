@@ -426,7 +426,7 @@ func checkCWDWritable() (bool, string) {
 
 func supportOrder(backend string) []string {
 	if backend == "claude" {
-		return []string{"allowed_tools", "disallowed_tools", "tools", "permission_mode"}
+		return []string{"allowed_tools", "disallowed_tools", "tools", "permission_mode", "output_last_message"}
 	}
 	return []string{"sandbox", "sandbox_workspace_write", "disable_feature", "profile", "config", "output_last_message"}
 }

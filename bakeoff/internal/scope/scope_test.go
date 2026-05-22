@@ -142,6 +142,25 @@ func TestBuildExecutionUsesFrozenCapsBeforeRegistry(t *testing.T) {
 	}
 }
 
+func TestBuildExecutionAddsClaudeLastMessageFromCaps(t *testing.T) {
+	execution, err := BuildExecution(
+		context.Background(),
+		nil,
+		workorder.Participant{ID: "claude", Backend: "claude", Model: "sonnet", Scope: "codebase"},
+		workorder.ScopePolicy{Enforcement: "best_effort"},
+		"/work",
+		"/work/runs/r1",
+		&provider.ScopeCapabilities{Backend: "claude", Available: true, Supports: map[string]bool{"disallowed_tools": true, "output_last_message": true}},
+		"/tmp/last-message.txt",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsAll(execution.Argv, "--output-last-message", "/tmp/last-message.txt") {
+		t.Fatalf("claude argv did not include output_last_message capability: %#v", execution.Argv)
+	}
+}
+
 func TestScopeErrorResultUsesConsistentStatusShape(t *testing.T) {
 	result := ScopeErrorResult(
 		&EnforcementError{Message: "missing controls"},

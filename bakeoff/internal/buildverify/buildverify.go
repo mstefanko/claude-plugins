@@ -413,6 +413,8 @@ func verifierStatus(status string) string {
 		return StatusMissingCommand
 	case runner.StatusCancelled:
 		return StatusCancelled
+	case runner.StatusSalvaged:
+		return StatusFailed
 	default:
 		return StatusFailed
 	}

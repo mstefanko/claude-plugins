@@ -21,12 +21,23 @@ type Factory interface {
 	Capabilities() *provider.CapabilityRegistry
 }
 
-func CodexOutputLastMessageSupported(ctx context.Context, f Factory, participant workorder.Participant) bool {
-	if participant.Backend != "codex" {
+func OutputLastMessageSupported(ctx context.Context, f Factory, participant workorder.Participant) bool {
+	if participant.Backend != "codex" && participant.Backend != "claude" {
 		return false
 	}
 	caps := f.Capabilities().DetectScopeCapabilities(ctx, participant.Backend)
+	return SupportsOutputLastMessage(participant, caps)
+}
+
+func SupportsOutputLastMessage(participant workorder.Participant, caps provider.ScopeCapabilities) bool {
+	if participant.Backend != "codex" && participant.Backend != "claude" {
+		return false
+	}
 	return caps.Supports["output_last_message"]
+}
+
+func CodexOutputLastMessageSupported(ctx context.Context, f Factory, participant workorder.Participant) bool {
+	return OutputLastMessageSupported(ctx, f, participant)
 }
 
 func WrapValidation(err error) error {

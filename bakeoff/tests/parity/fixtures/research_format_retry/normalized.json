@@ -390,7 +390,7 @@
           },
           "codex": {
             "backend": "codex",
-            "compact_status": "ok_after_format_retry",
+            "compact_status": "ok",
             "effort": "high",
             "exit_code": 0,
             "final_json_source": "stdout",
