@@ -190,6 +190,50 @@ func TestRenderProviderStatusShowsFailureKind(t *testing.T) {
 	}
 }
 
+func TestRenderSingleProviderOnlyNotesTimedOutOrSalvagedPeer(t *testing.T) {
+	cases := []struct {
+		name       string
+		peerStatus map[string]any
+		want       string
+	}{
+		{
+			name:       "timeout",
+			peerStatus: map[string]any{"status": "timeout", "failure_kind": "quiet_stdout"},
+			want:       "Partial result: `codex` timed out (`quiet_stdout`), so this lens is single-provider-only and surfaces only `claude`.",
+		},
+		{
+			name:       "salvaged",
+			peerStatus: map[string]any{"status": "salvaged", "salvage": map[string]any{"source": "last-message.txt"}},
+			want:       "Partial result: `codex` was salvaged from `last-message.txt` but did not complete successfully, so this lens is single-provider-only and surfaces only `claude`.",
+		},
+	}
+	for _, tc := range cases {
+		for _, mode := range []string{"gather", "compare", "analyze"} {
+			t.Run(tc.name+"/"+mode, func(t *testing.T) {
+				text := Render(
+					&workorder.WorkOrder{ID: "sample", Type: mode},
+					map[string]any{
+						"mode":          mode,
+						"decision_kind": "single_provider_only",
+						"judge_ran":     false,
+						"provider_statuses": map[string]any{
+							"claude": map[string]any{"status": "ok"},
+							"codex":  tc.peerStatus,
+						},
+						"canonical_winner": "claude",
+					},
+					map[string]map[string]any{"claude": {"final_json": map[string]any{"claims": []any{}, "unknowns": []any{}}}},
+					map[string]map[string]any{},
+					RenderOptions{},
+				)
+				if !strings.Contains(text, tc.want) {
+					t.Fatalf("report missing partial note %q:\n%s", tc.want, text)
+				}
+			})
+		}
+	}
+}
+
 func TestRenderFailedJudgeShowsStatusAndProviderClaims(t *testing.T) {
 	text := Render(
 		&workorder.WorkOrder{

@@ -338,7 +338,12 @@ func renderGather(wo *workorder.WorkOrder, decision map[string]any, workerResult
 	case "single_provider_only":
 		providerID := jsonutil.StringValue(decision["canonical_winner"])
 		worker := jsonutil.FinalJSONMap(workerResults[providerID])
-		return append(append([]string{"## Findings", ""}, claimLines(jsonutil.ListValue(worker["claims"]), providerID, false)...), unknowns(worker)...)
+		lines := []string{"## Findings", ""}
+		if note := singleProviderPartialNote(decision); note != "" {
+			lines = append(lines, note, "")
+		}
+		lines = append(lines, claimLines(jsonutil.ListValue(worker["claims"]), providerID, false)...)
+		return append(lines, unknowns(worker)...)
 	case "provider_union_only", "judge_failed":
 		return renderPerProviderResearch(wo, workerResults, "## Findings")
 	}
@@ -450,6 +455,46 @@ func renderPerProviderComparison(workerResults map[string]map[string]any, headin
 	return lines
 }
 
+func singleProviderPartialNote(decision map[string]any) string {
+	if jsonutil.StringValue(decision["decision_kind"]) != "single_provider_only" {
+		return ""
+	}
+	winner := jsonutil.StringValue(decision["canonical_winner"])
+	statuses, _ := decision["provider_statuses"].(map[string]any)
+	for _, providerID := range sortedMapKeys(statuses) {
+		if providerID == winner {
+			continue
+		}
+		status, _ := statuses[providerID].(map[string]any)
+		reason := partialPeerReason(status)
+		if reason == "" {
+			continue
+		}
+		if winner == "" {
+			return fmt.Sprintf("Partial result: `%s` %s, so this lens is single-provider-only.", providerID, reason)
+		}
+		return fmt.Sprintf("Partial result: `%s` %s, so this lens is single-provider-only and surfaces only `%s`.", providerID, reason, winner)
+	}
+	return ""
+}
+
+func partialPeerReason(status map[string]any) string {
+	switch jsonutil.StringValue(status["status"]) {
+	case runner.StatusTimeout:
+		if kind := jsonutil.StringValue(status["failure_kind"]); kind != "" {
+			return "timed out (`" + kind + "`)"
+		}
+		return "timed out"
+	case runner.StatusSalvaged:
+		if source := salvageSource(status); source != "" {
+			return "was salvaged from `" + source + "` but did not complete successfully"
+		}
+		return "was salvaged but did not complete successfully"
+	default:
+		return ""
+	}
+}
+
 func renderCompare(decision map[string]any, workerResults map[string]map[string]any) []string {
 	lines := []string{"## Comparison", ""}
 	kind := jsonutil.StringValue(decision["decision_kind"])
@@ -474,6 +519,9 @@ func renderCompare(decision map[string]any, workerResults map[string]map[string]
 	case kind == "single_provider_only" && winner != "":
 		final := jsonutil.FinalJSONMap(workerResults[winner])
 		lines = append(lines, "No comparison possible - surfacing the single completed result.")
+		if note := singleProviderPartialNote(decision); note != "" {
+			lines = append(lines, note)
+		}
 		if position := jsonutil.StringValue(final["position"]); position != "" {
 			lines = append(lines, "Position: "+position)
 		}
@@ -503,6 +551,11 @@ func renderAnalyze(decision map[string]any, workerResults map[string]map[string]
 	}
 	if winner == "" {
 		return append(lines, "No stable spine was selected. Human decision required.", "")
+	}
+	if jsonutil.StringValue(decision["decision_kind"]) == "single_provider_only" {
+		if note := singleProviderPartialNote(decision); note != "" {
+			lines = append(lines, note, "")
+		}
 	}
 	final := jsonutil.FinalJSONMap(workerResults[winner])
 	verdicts := map[string]map[string]any{}

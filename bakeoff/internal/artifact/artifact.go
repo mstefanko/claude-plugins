@@ -264,7 +264,7 @@ func WriteSalvageArtifact(directory string, result map[string]any, suffix string
 }
 
 func resultFailureKind(result runner.Result) string {
-	if runner.StopReasonHint(result.Stdout, result.Stderr) == "max_tokens" || salvageStopReasonHint(result) == "max_tokens" {
+	if failureStopReasonHint(result) == "max_tokens" {
 		return "max_tokens"
 	}
 	status := originalStatus(result)
@@ -281,11 +281,11 @@ func originalStatus(result runner.Result) string {
 	return result.Status
 }
 
-func salvageStopReasonHint(result runner.Result) string {
-	if result.Salvage == nil {
-		return ""
+func failureStopReasonHint(result runner.Result) string {
+	if result.Salvage != nil && result.Salvage.StopReasonHint != "" {
+		return result.Salvage.StopReasonHint
 	}
-	return result.Salvage.StopReasonHint
+	return runner.StopReasonHint(result.Stdout, result.Stderr)
 }
 
 func timeoutFailureKind(result runner.Result) string {

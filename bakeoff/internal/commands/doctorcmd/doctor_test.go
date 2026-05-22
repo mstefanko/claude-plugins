@@ -50,7 +50,7 @@ func TestRunDoctorBuildPreflightUsesFakeProviders(t *testing.T) {
 
 	err := runDoctor(context.Background(), f, &DoctorOptions{Build: true, SkipAuthProbe: true, Quiet: true, JSON: true})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("%v\nreport = %#v", err, decodeDoctorReport(t, out))
 	}
 
 	report := decodeDoctorReport(t, out)

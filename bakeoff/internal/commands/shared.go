@@ -36,10 +36,6 @@ func SupportsOutputLastMessage(participant workorder.Participant, caps provider.
 	return caps.Supports["output_last_message"]
 }
 
-func CodexOutputLastMessageSupported(ctx context.Context, f Factory, participant workorder.Participant) bool {
-	return OutputLastMessageSupported(ctx, f, participant)
-}
-
 func WrapValidation(err error) error {
 	var validation *workorder.ValidationError
 	if errors.As(err, &validation) {

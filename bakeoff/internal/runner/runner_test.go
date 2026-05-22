@@ -49,6 +49,15 @@ func TestRunProviderReportsSchemaErrorForMissingFinalJSON(t *testing.T) {
 	}
 }
 
+func TestRunProviderCapturesFastFinalJSONReliably(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		result := RunProvider(context.Background(), helperOptions("final", Budgets{WallClockSeconds: 3, MaxOutputBytes: 2000}))
+		if result.Status != StatusOK || !strings.Contains(result.Stdout, FinalJSONOpen) {
+			t.Fatalf("run %d lost fast stdout: status=%s stdout=%q stderr=%q", i, result.Status, result.Stdout, result.Stderr)
+		}
+	}
+}
+
 func TestRunProviderSalvagesNonemptyLastMessageAfterStdoutSchemaError(t *testing.T) {
 	lastMessage := filepath.Join(t.TempDir(), "last-message.txt")
 	opts := helperOptionsWithArgs(Budgets{WallClockSeconds: 3, MaxOutputBytes: 2000}, "last-message", lastMessage)
@@ -60,7 +69,7 @@ func TestRunProviderSalvagesNonemptyLastMessageAfterStdoutSchemaError(t *testing
 	if result.FinalJSONSource != FinalJSONSourceLastMessage {
 		t.Fatalf("source = %s", result.FinalJSONSource)
 	}
-	if result.Salvage == nil || result.Salvage.Source != "last-message.txt" || result.Salvage.RecoveredJSONBytes != len(`<final_json>{"ok": true}</final_json>`) {
+	if result.Salvage == nil || result.Salvage.Source != "last-message.txt" || result.Salvage.RecoveredJSONBytes != len(`{"ok":true}`) {
 		t.Fatalf("salvage metadata = %#v", result.Salvage)
 	}
 	if !reflect.DeepEqual(result.FinalJSON, map[string]any{"ok": true}) {

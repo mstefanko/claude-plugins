@@ -275,11 +275,15 @@ func runProcess(ctx context.Context, opts Options, requireFinalJSON bool) Result
 	group, groupCtx := errgroup.WithContext(groupCtx)
 	processDone := make(chan struct{})
 	waitDone := make(chan error, 1)
+	stdoutDone := make(chan struct{})
+	stderrDone := make(chan struct{})
 
 	group.Go(func() error {
-		defer close(processDone)
+		<-stdoutDone
+		<-stderrDone
 		err := cmd.Wait()
 		waitDone <- err
+		close(processDone)
 		return nil
 	})
 	group.Go(func() error {
@@ -287,10 +291,12 @@ func runProcess(ctx context.Context, opts Options, requireFinalJSON bool) Result
 		return nil
 	})
 	group.Go(func() error {
+		defer close(stdoutDone)
 		state.readStdout(groupCtx, stdout, cmd)
 		return nil
 	})
 	group.Go(func() error {
+		defer close(stderrDone)
 		state.readStderr(groupCtx, stderr)
 		return nil
 	})
@@ -365,8 +371,13 @@ func runProcess(ctx context.Context, opts Options, requireFinalJSON bool) Result
 		return state.status(StatusOK, exitCode, stdoutText, stderrText, nil, "")
 	}
 
-	finalJSONText, finalJSONSource, _ := finalJSONFromStdout(stdoutText)
-	finalJSON, err := ExtractFinalJSON(finalJSONText, sourceLabel(finalJSONSource))
+	finalJSONText, finalJSONSource, hasStdoutText := finalJSONFromStdout(stdoutText)
+	var finalJSON any
+	if hasStdoutText {
+		finalJSON, err = ExtractFinalJSON(finalJSONText, sourceLabel(finalJSONSource))
+	} else {
+		err = workorder.Validationf("stdout is missing a <final_json>...</final_json> block")
+	}
 	if err == nil && opts.Validator != nil {
 		finalJSON, err = opts.Validator(finalJSON)
 	}
@@ -919,7 +930,7 @@ func (s *captureState) salvagedStatus(originalStatus string, exitCode *int, stdo
 	result.Salvage = &SalvageMetadata{
 		Source:             salvageSourceName(source),
 		StopReasonHint:     StopReasonHint(stdout, stderr, text),
-		RecoveredJSONBytes: len([]byte(recoveredFinalJSONText(text))),
+		RecoveredJSONBytes: recoveredJSONBytes(finalJSON),
 		RecoveredAt:        time.Now().UTC().Format(time.RFC3339),
 		OriginalStatus:     originalStatus,
 	}
@@ -1016,37 +1027,6 @@ func extractTaggedJSONValues(text string) []any {
 	}
 }
 
-func recoveredFinalJSONText(text string) string {
-	last := ""
-	searchFrom := 0
-	for {
-		start := strings.Index(text[searchFrom:], FinalJSONOpen)
-		if start == -1 {
-			if last != "" {
-				return last
-			}
-			return text
-		}
-		start += searchFrom
-		jsonStart := skipWhitespace(text, start+len(FinalJSONOpen))
-		decoder := json.NewDecoder(strings.NewReader(text[jsonStart:]))
-		decoder.UseNumber()
-		var payload any
-		if err := decoder.Decode(&payload); err != nil {
-			searchFrom = start + len(FinalJSONOpen)
-			continue
-		}
-		jsonEnd := jsonStart + int(decoder.InputOffset())
-		closeStart := skipWhitespace(text, jsonEnd)
-		if strings.HasPrefix(text[closeStart:], FinalJSONClose) {
-			last = text[start : closeStart+len(FinalJSONClose)]
-			searchFrom = closeStart + len(FinalJSONClose)
-		} else {
-			searchFrom = start + len(FinalJSONOpen)
-		}
-	}
-}
-
 func normalizeJSONNumbers(value any) any {
 	switch typed := value.(type) {
 	case map[string]any:
@@ -1131,6 +1111,14 @@ func StopReasonHint(texts ...string) string {
 		}
 	}
 	return ""
+}
+
+func recoveredJSONBytes(finalJSON any) int {
+	data, err := json.Marshal(finalJSON)
+	if err != nil {
+		return 0
+	}
+	return len(data)
 }
 
 func hasMaxTokensStopReason(text string) bool {

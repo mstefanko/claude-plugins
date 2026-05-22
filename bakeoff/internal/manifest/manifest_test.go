@@ -134,6 +134,22 @@ func TestWriteRunManifestProviderSummaryKeepsRawAndAddsCompactStatus(t *testing.
 	if claude["status"] != "schema_error" || claude["compact_status"] != "failed" {
 		t.Fatalf("provider summary status = %#v", claude)
 	}
+	status["status"] = "salvaged"
+	writeJSON(t, filepath.Join(runDir, "decision.json"), map[string]any{
+		"decision_kind":     "single_provider_only",
+		"judge_ran":         false,
+		"judge_attempted":   true,
+		"judge_completed":   false,
+		"provider_statuses": map[string]any{"claude": status},
+	})
+	value, err = manifest.WriteRunManifest(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claude = value["providers"].(map[string]any)["claude"].(map[string]any)
+	if claude["status"] != "salvaged" || claude["compact_status"] != "warn" {
+		t.Fatalf("salvaged provider summary status = %#v", claude)
+	}
 	for _, key := range []string{"exit_code", "output_bytes", "stderr_truncated", "stdout_truncated", "stdout_observed_bytes", "stderr_observed_bytes", "failure_kind", "scope_enforcement", "stderr_path"} {
 		if _, ok := claude[key]; !ok {
 			t.Fatalf("missing passthrough %s in %#v", key, claude)
