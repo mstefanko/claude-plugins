@@ -9,6 +9,9 @@ const (
 
 	CodexDefault = "gpt-5.5"
 	CodexGPT5    = "gpt-5"
+
+	GeminiDefault  = "pro"
+	CopilotDefault = "auto"
 )
 
 func DoctorModelIDs() map[string]string {
@@ -18,5 +21,7 @@ func DoctorModelIDs() map[string]string {
 		"claude_haiku":  ClaudeHaiku,
 		"codex":         CodexDefault,
 		"codex_gpt5":    CodexGPT5,
+		"gemini":        GeminiDefault,
+		"copilot":       CopilotDefault,
 	}
 }

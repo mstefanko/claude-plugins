@@ -22,17 +22,11 @@ type Factory interface {
 }
 
 func OutputLastMessageSupported(ctx context.Context, f Factory, participant workorder.Participant) bool {
-	if participant.Backend != "codex" && participant.Backend != "claude" {
-		return false
-	}
 	caps := f.Capabilities().DetectScopeCapabilities(ctx, participant.Backend)
 	return SupportsOutputLastMessage(participant, caps)
 }
 
 func SupportsOutputLastMessage(participant workorder.Participant, caps provider.ScopeCapabilities) bool {
-	if participant.Backend != "codex" && participant.Backend != "claude" {
-		return false
-	}
 	return caps.Supports["output_last_message"]
 }
 

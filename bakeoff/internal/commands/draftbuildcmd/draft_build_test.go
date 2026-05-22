@@ -54,7 +54,7 @@ func TestRunDraftBuildPrintsValidatedJSONOnly(t *testing.T) {
 		Acceptance: []string{"The emitted JSON validates."},
 		Scopes:     []string{"internal/commands/draftbuildcmd"},
 		Gates:      []string{"tests=go test ./internal/commands/draftbuildcmd"},
-	}, []workorder.GateDraft{{ID: "tests", Command: "go test ./internal/commands/draftbuildcmd"}})
+	}, []workorder.GateDraft{{ID: "tests", Command: "go test ./internal/commands/draftbuildcmd"}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestRunDraftBuildInvalidInputSurfacesValidationError(t *testing.T) {
 		Goal:   "Reject missing acceptance.",
 		Scopes: []string{"internal/commands/draftbuildcmd"},
 		Gates:  []string{"tests=go test ./internal/commands/draftbuildcmd"},
-	}, []workorder.GateDraft{{ID: "tests", Command: "go test ./internal/commands/draftbuildcmd"}})
+	}, []workorder.GateDraft{{ID: "tests", Command: "go test ./internal/commands/draftbuildcmd"}}, nil)
 	var validation *apperror.ValidationError
 	if !errors.As(err, &validation) || !strings.Contains(err.Error(), "acceptance") {
 		t.Fatalf("expected validation error mentioning acceptance, got %T %v", err, err)
@@ -91,6 +91,66 @@ func TestRunDraftBuildInvalidInputSurfacesValidationError(t *testing.T) {
 	if out.String() != "" || errOut.String() != "" {
 		t.Fatalf("unexpected output stdout=%q stderr=%q", out.String(), errOut.String())
 	}
+}
+
+func TestRunDraftBuildWithProviderFlags(t *testing.T) {
+	var out, errOut bytes.Buffer
+	f := draftBuildTestFactory{streams: output.NewStreams(&out, &errOut)}
+	providers, err := parseProviderFlags([]string{"claude", "gemini:pro"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = runDraftBuild(context.Background(), f, &DraftBuildOptions{
+		ID:         "draft-build-gemini",
+		Goal:       "Print a Gemini draft build work order.",
+		Acceptance: []string{"The emitted JSON validates."},
+		Scopes:     []string{"internal/commands/draftbuildcmd"},
+		Gates:      []string{"tests=go test ./internal/commands/draftbuildcmd"},
+	}, []workorder.GateDraft{{ID: "tests", Command: "go test ./internal/commands/draftbuildcmd"}}, providers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	obj := decodeDraftOutput(t, out.String())
+	wo, err := workorder.Validate(obj)
+	if err != nil {
+		t.Fatalf("printed JSON did not validate: %v\n%s", err, out.String())
+	}
+	if wo.Providers[1].Backend != "gemini" || wo.Providers[1].Model != "pro" {
+		t.Fatalf("providers = %#v", wo.Providers)
+	}
+}
+
+func TestParseProviderFlags(t *testing.T) {
+	t.Run("zero means default", func(t *testing.T) {
+		providers, err := parseProviderFlags(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if providers != nil {
+			t.Fatalf("providers = %#v, want nil", providers)
+		}
+	})
+	t.Run("exactly two", func(t *testing.T) {
+		_, err := parseProviderFlags([]string{"claude"})
+		if err == nil || !strings.Contains(err.Error(), "exactly twice") {
+			t.Fatalf("expected exactly twice error, got %v", err)
+		}
+	})
+	t.Run("uses default model", func(t *testing.T) {
+		providers, err := parseProviderFlags([]string{"claude", "copilot"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if providers[1].Model != "auto" {
+			t.Fatalf("copilot model = %q", providers[1].Model)
+		}
+	})
+	t.Run("rejects duplicate backend", func(t *testing.T) {
+		_, err := parseProviderFlags([]string{"gemini:pro", "gemini:flash"})
+		if err == nil || !strings.Contains(err.Error(), "duplicates") {
+			t.Fatalf("expected duplicate error, got %v", err)
+		}
+	})
 }
 
 func TestParseGateFlags(t *testing.T) {

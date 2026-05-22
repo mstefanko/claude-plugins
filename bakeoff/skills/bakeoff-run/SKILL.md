@@ -72,10 +72,12 @@ careful path, split, and multi-lens.
   context (file paths, verifier conventions, schema, available
   backends), use ONE `ctx_batch_execute` call covering all questions.
   Sequential `Bash` / `Read` / `Grep` probes during drafting are a
-  contract violation. Available backends (`claude`, `codex`) and the
+  contract violation. Available backends (`claude`, `codex`, `gemini`,
+  `copilot`), the canonical default pair (`claude` + `codex`), and the
   canonical work-order skeletons are embedded in the skill — do **not**
   probe the CLI (`bakeoff providers list`, `bakeoff --help`,
-  `bakeoff init`, `bakeoff doctor`) to discover them.
+  `bakeoff init`) to discover them. Use `bakeoff doctor --json` only for
+  current-machine readiness and fallback-pair selection.
 - **No `Write` before approval.** Drafting must show the compact
   preview and wait for the preview's exact approval. Single-work-order
   previews accept `yes`, `approve`, or `run it`; multi-file split or
@@ -104,18 +106,51 @@ style preferences, or verifier restatements as acceptance criteria. Do not
 invent verifier placeholders such as "the conventional test command", "the auth
 tests", "the build", or `go test ./internal/<pkg>/...` from a package name.
 
-Available provider backends are `claude` and `codex`; available judge backend
-is `claude`. If the user names an unknown backend, ask one clarification
-question. Do not run `bakeoff providers list`, `bakeoff --help`,
-`bakeoff init`, `bakeoff doctor`, or scratch init commands for drafting
+Available provider backends are `claude`, `codex`, `gemini`, and `copilot`.
+Generated drafts must contain exactly two providers. The canonical provider
+pair is `claude/sonnet` plus `codex/gpt-5.5`; the generated judge remains
+`claude/opus`. Manual work orders may use any catalog backend as judge as long
+as validation accepts the backend/model pair. If the user names an unknown
+backend, ask one clarification question. Do not run `bakeoff providers list`,
+`bakeoff --help`, `bakeoff init`, or scratch init commands for drafting
 discovery.
 
+Provider-pair extraction rules:
+
+- If the user explicitly names exactly two known providers, use those providers.
+- If the user asks to replace one provider with another, keep exactly two
+  providers and show the resulting pair in the preview.
+- If wording such as "add Gemini", "include Gemini too", or "use Gemini as
+  well" would add a third provider to the canonical pair, ask one
+  clarification: `Bakeoff supports exactly two providers for now. Should Gemini
+  replace Claude or Codex for this work order?`
+- If the user names fewer than two or more than two providers and the intended
+  pair cannot be inferred without adding a third provider, ask one
+  clarification.
+
+Implicit provider selection rules:
+
+- Run `bakeoff doctor --json --quiet --skip-auth-probe` once after CLI
+  preflight when drafting from natural language and the user did not explicitly
+  choose providers.
+- If `selected_default_pair` is present, draft that pair. If it is not the
+  canonical pair, call out the fallback in the preview.
+- If `fallback_requires_user_choice` is true, ask which fallback peer to use
+  and do not draft until the user chooses.
+- If `runnable_default_pair_available` is false, stop and summarize the missing
+  provider readiness from doctor.
+- Existing work-order paths, reruns, and replayed artifacts never substitute
+  providers.
+
 For build fast-path drafts, run `bakeoff draft-build` with the extracted id,
-goal, acceptance criteria, edit scope, gate verifier, and optional
-base/protected paths. Use stdout as the preview source; the command owns the
-canonical build shape, provider/judge defaults, budgets, `build.verify[].argv`,
-and self-validation. Metric verifier drafts, generated fixtures, and protected
-benchmark harnesses still use careful manual drafting.
+goal, acceptance criteria, edit scope, gate verifier, optional base/protected
+paths, and exactly two `--provider` flags when the user explicitly chose a pair
+or doctor selected a fallback pair. With zero `--provider` flags the command
+stays deterministic and emits the canonical Claude+Codex pair. Use stdout as
+the preview source; the command owns the canonical build shape, provider/judge
+defaults, budgets, `build.verify[].argv`, and self-validation. Metric verifier
+drafts, generated fixtures, and protected benchmark harnesses still use careful
+manual drafting.
 
 For gather/code-review, compare, and analyze drafts, copy field names from
 `examples/*.work-order.json`. Avoid schema drift: use `providers[].backend`
@@ -178,9 +213,9 @@ stop when a missing value cannot be determined safely.
 Manual drafts must be clean JSON, not TODO templates. Include explicit
 `schema_version`, `id`, `type`, `goal`, `background`, `providers`, `judge`,
 `budgets`, and `scope_policy.enforcement: "best_effort"`. Defaults: research
-providers are Claude `sonnet` high and Codex `gpt-5.5` high with scope selected
-by task; build providers use `scope: "codebase"`; judge is Claude `opus`
-xhigh; research budget is 900 seconds/60000 bytes; build budget is 1200
+providers come from the provider-pair rules above with catalog default models
+and high effort; build providers use `scope: "codebase"`; judge is Claude
+`opus` xhigh; research budget is 900 seconds/60000 bytes; build budget is 1200
 seconds/80000 bytes. Build drafts require `build.base_ref`, non-empty
 `build.verify`, at least one `kind: "gate"` verifier, and codebase-scoped
 providers. Do not include `build.patch_max_bytes`. For metric verifiers,

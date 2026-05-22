@@ -71,9 +71,18 @@ manual editing.
 | `build` | Required only when `type: "build"`. |
 
 Provider participants require `id`, `backend`, and `model`; provider `scope`
-defaults to `mixed` when omitted. Valid backends are `claude` and `codex`.
-Valid scopes are `codebase`, `web`, and `mixed`. Build providers cannot use
-`web` scope.
+defaults to `mixed` when omitted. Valid backends are `claude`, `codex`,
+`gemini`, and `copilot`. Work orders always have exactly two providers:
+generated defaults are Claude `sonnet` plus Codex `gpt-5.5`, with Claude
+`opus` as judge. Manual work orders may choose any two catalog backends, and
+may also set the judge to any catalog backend as long as `judge.backend` plus
+`judge.model` differs from each provider backend/model pair. Valid scopes are
+`codebase`, `web`, and `mixed`. Build providers cannot use `web` scope.
+
+Provider credentials never belong in work orders. Bakeoff launches the local
+provider CLIs and relies on their existing auth stores; `bakeoff doctor`
+reports whether optional Gemini or Copilot CLIs are installed and ready without
+making them required for the canonical default pair.
 
 When repo layout is enabled, Bakeoff injects a small generated `<repo_layout>`
 orientation block only for providers with `scope: "codebase"` or
@@ -93,10 +102,11 @@ effective context view before spending provider time.
 
 ## Model Names
 
-Bakeoff passes `model` through to the selected backend CLI. Claude defaults use
-tier aliases such as `sonnet` and `opus`, which follow Claude Code's current
-alias behavior. Use a full provider model id when a run should be pinned to a
-specific version.
+Bakeoff passes `model` through to the selected backend CLI. Defaults are
+`claude/sonnet`, `codex/gpt-5.5`, `gemini/pro`, `copilot/auto`, and
+`claude/opus` for generated judges. Claude defaults use tier aliases such as
+`sonnet` and `opus`, which follow Claude Code's current alias behavior. Use a
+full provider model id when a run should be pinned to a specific version.
 
 Claude alias resolution may depend on operator/provider configuration such as
 `ANTHROPIC_DEFAULT_SONNET_MODEL` or `ANTHROPIC_DEFAULT_OPUS_MODEL`. Use full ids
@@ -104,7 +114,7 @@ when exact replay matters.
 
 The requested model strings are recorded in `meta.json` under
 `resolved_models`. Bakeoff does not currently record the provider-resolved dated
-id behind a Claude alias.
+id behind provider aliases.
 
 ## Facets
 
@@ -188,7 +198,10 @@ bakeoff draft-build \
 Required flags are `--id`, `--goal`, at least one `--acceptance`, at least one
 `--scope`, and at least one `--gate <id>=<command>`. Repeat `--background` for
 extra context and `--protected-path` for verifier scripts or fixtures providers
-must not edit. Metric verifier drafting remains manual for now.
+must not edit. Repeat `--provider` exactly twice to override the deterministic
+Claude+Codex default, using either `backend` or `backend:model`, for example
+`--provider claude --provider gemini:pro`. Metric verifier drafting remains
+manual for now.
 
 Verifier fields:
 

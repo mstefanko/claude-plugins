@@ -37,9 +37,10 @@ Apply the shared Bakeoff skill contract. Do not request or write secrets.
 3. Summarize local readiness from the JSON:
 
    - launcher or binary status from the ensure step;
-   - `claude`, `codex`, and `git` availability;
+   - `claude`, `codex`, optional `gemini`/`copilot`, and `git` availability;
    - cwd writability;
-   - default Claude and Codex models;
+   - canonical and selected default provider pair;
+   - default provider models;
    - scope controls and any advisory fallback;
    - warnings or missing setup tasks.
 

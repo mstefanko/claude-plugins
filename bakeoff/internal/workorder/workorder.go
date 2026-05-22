@@ -14,6 +14,8 @@ import (
 	"slices"
 	"sort"
 	"strings"
+
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/provider"
 )
 
 const (
@@ -35,7 +37,6 @@ var (
 	initKinds           = []string{"gather", "compare", "analyze", "review", "build"}
 	scopeEnforcements   = []string{"advisory", "best_effort", "required"}
 	repoLayoutPolicies  = []string{ScopeRepoLayoutAuto, ScopeRepoLayoutOff}
-	backends            = []string{"claude", "codex"}
 	scopes              = []string{"codebase", "web", "mixed"}
 	efforts             = []string{"low", "medium", "high", "xhigh"}
 	workerStatuses      = []string{"complete", "complete_with_concerns", "needs_context", "blocked"}
@@ -100,6 +101,10 @@ type Participant struct {
 	Scope   string         `json:"scope,omitempty"`
 	Raw     map[string]any `json:"-"`
 }
+
+func (p Participant) BackendName() string { return p.Backend }
+func (p Participant) ModelName() string   { return p.Model }
+func (p Participant) EffortLevel() string { return p.Effort }
 
 type Facet struct {
 	ID      string   `json:"id"`
@@ -539,8 +544,8 @@ func validateParticipant(value map[string]any, label string, requireScope bool) 
 	}
 
 	backend, ok := normalized["backend"].(string)
-	if !ok || !contains(backends, backend) {
-		return Participant{}, Validationf("%s.backend must be one of: %s (got %s)", label, strings.Join(backends, ", "), pyRepr(normalized["backend"]))
+	if !ok || !provider.ValidBackend(backend) {
+		return Participant{}, Validationf("%s.backend must be one of: %s (got %s)", label, strings.Join(provider.BackendNames(), ", "), pyRepr(normalized["backend"]))
 	}
 	model, ok := normalized["model"].(string)
 	if !ok || strings.TrimSpace(model) == "" {

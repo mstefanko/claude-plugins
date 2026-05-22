@@ -101,6 +101,7 @@ func TestCommandOptions(t *testing.T) {
 			copy.Background = append([]string(nil), opts.Background...)
 			copy.Gates = append([]string(nil), opts.Gates...)
 			copy.ProtectedPaths = append([]string(nil), opts.ProtectedPaths...)
+			copy.Providers = append([]string(nil), opts.Providers...)
 			got = &copy
 			return nil
 		})
@@ -113,6 +114,8 @@ func TestCommandOptions(t *testing.T) {
 			"--scope", "docs, examples",
 			"--background", "Keep commas, please.",
 			"--protected-path", "scripts/bench-json",
+			"--provider", "claude",
+			"--provider", "gemini:pro",
 			"--base-ref", "main",
 			"--comparison-goal", "Prefer the simplest green patch.",
 			"--budget-wall-seconds", "1",
@@ -132,6 +135,7 @@ func TestCommandOptions(t *testing.T) {
 			Background:           []string{"Keep commas, please."},
 			Gates:                []string{"tests=go test ./..., -run TestDraft"},
 			ProtectedPaths:       []string{"scripts/bench-json"},
+			Providers:            []string{"claude", "gemini:pro"},
 			BaseRef:              "main",
 			ComparisonGoal:       "Prefer the simplest green patch.",
 			BudgetWallSeconds:    1,

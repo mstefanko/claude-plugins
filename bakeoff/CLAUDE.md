@@ -70,10 +70,12 @@ Two invariants are load-bearing enough to repeat here:
   context (file paths, verifier conventions, schema, available
   backends), use ONE `ctx_batch_execute` call covering all questions.
   Sequential `Bash` / `Read` / `Grep` probes during drafting are a
-  contract violation. Available backends (`claude`, `codex`) and the
+  contract violation. Available backends (`claude`, `codex`, `gemini`,
+  `copilot`), the canonical default pair (`claude` + `codex`), and the
   canonical work-order skeletons are embedded in the skill — do **not**
   probe the CLI (`bakeoff providers list`, `bakeoff --help`,
-  `bakeoff init`, `bakeoff doctor`) to discover them.
+  `bakeoff init`) to discover them. Use `bakeoff doctor --json` only for
+  current-machine readiness and fallback-pair selection.
 - **No `Write` before approval.** Drafting must show the compact
   preview and wait for the preview's exact approval. Single-work-order
   previews accept `yes`, `approve`, or `run it`; multi-file split or

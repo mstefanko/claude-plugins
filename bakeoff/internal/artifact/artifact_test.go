@@ -210,8 +210,9 @@ func TestWriteMetaIncludesDecisionAndExitCode(t *testing.T) {
 		Type: "compare",
 		Providers: []workorder.Participant{
 			{ID: "claude", Backend: "claude", Model: "sonnet", Effort: "high", Scope: "codebase"},
+			{ID: "gemini", Backend: "gemini", Model: "pro", Effort: "high", Scope: "codebase"},
 		},
-		Judge: workorder.Participant{Backend: "claude", Model: "opus", Effort: "xhigh"},
+		Judge: workorder.Participant{Backend: "copilot", Model: "auto", Effort: "xhigh"},
 	}
 	lookupMissing := func(string) (string, error) { return "", os.ErrNotExist }
 	err := WriteMeta(context.Background(), runDir, wo, "run-1", "2026-05-19T00:00:00Z", MetaOptions{
@@ -233,5 +234,15 @@ func TestWriteMetaIncludesDecisionAndExitCode(t *testing.T) {
 	}
 	if meta["decision_kind"] != "tie" || meta["judge_ran"] != true || meta["exit_code"] != float64(3) {
 		t.Fatalf("meta missing terminal fields: %#v", meta)
+	}
+	versions := meta["provider_cli_versions"].(map[string]any)
+	if _, ok := versions["gemini"]; !ok {
+		t.Fatalf("meta missing selected provider CLI version: %#v", versions)
+	}
+	if _, ok := versions["copilot"]; !ok {
+		t.Fatalf("meta missing selected judge CLI version: %#v", versions)
+	}
+	if _, ok := versions["codex"]; ok {
+		t.Fatalf("meta should not record unused provider CLI version: %#v", versions)
 	}
 }

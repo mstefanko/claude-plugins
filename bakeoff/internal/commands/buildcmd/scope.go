@@ -60,8 +60,37 @@ func buildParticipantArgv(participant workorder.Participant, policy workorder.Sc
 				fallbackReasons = append(fallbackReasons, "codex CLI did not advertise --disable")
 			}
 		}
+	case "gemini":
+		if supports["approval_auto_edit"] {
+			extraArgs = append(extraArgs, "--approval-mode", "auto_edit")
+			mechanisms = append(mechanisms, "gemini:approval-mode=auto_edit")
+		} else if supports["approval_yolo"] {
+			extraArgs = append(extraArgs, "--approval-mode", "yolo")
+			mechanisms = append(mechanisms, "gemini:approval-mode=yolo")
+		} else if supports["yolo_flag"] {
+			extraArgs = append(extraArgs, "--yolo")
+			mechanisms = append(mechanisms, "gemini:yolo")
+		} else {
+			fallbackReasons = append(fallbackReasons, "gemini --help did not advertise non-interactive edit mode; configure --approval-mode auto_edit or --yolo")
+		}
+		if requestedScope == "codebase" {
+			fallbackReasons = append(fallbackReasons, "gemini CLI scope controls are advisory for codebase scope")
+		}
+	case "copilot":
+		if supports["no_ask_user"] {
+			mechanisms = append(mechanisms, "copilot:no-ask-user")
+		} else {
+			fallbackReasons = append(fallbackReasons, "copilot --help did not advertise --no-ask-user")
+		}
+		if supports["allow_tool"] {
+			extraArgs = append(extraArgs, "--allow-tool", "edit")
+			mechanisms = append(mechanisms, "copilot:allow-tool=edit")
+		}
+		if requestedScope == "codebase" {
+			fallbackReasons = append(fallbackReasons, "copilot CLI scope controls are advisory for codebase scope")
+		}
 	}
-	if participant.Backend == "codex" && !supports["sandbox_workspace_write"] {
+	if mustFailBuildScope(participant.Backend, supports) {
 		metadata := map[string]any{
 			"requested_scope":   requestedScope,
 			"policy":            enforcement,
@@ -95,6 +124,19 @@ func buildParticipantArgv(participant workorder.Participant, policy workorder.Sc
 	}
 	argv, err := provider.BuildParticipantArgv(participant, worktreePath, extraArgs, finalMessagePath, commands.SupportsOutputLastMessage(participant, caps))
 	return argv, metadata, err
+}
+
+func mustFailBuildScope(backend string, supports map[string]bool) bool {
+	switch backend {
+	case "codex":
+		return !supports["sandbox_workspace_write"]
+	case "gemini":
+		return !supports["approval_auto_edit"] && !supports["approval_yolo"] && !supports["yolo_flag"]
+	case "copilot":
+		return !supports["no_ask_user"]
+	default:
+		return false
+	}
 }
 
 func providerCapabilities(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder) map[string]provider.ScopeCapabilities {
@@ -143,8 +185,15 @@ func normalizeChangedPath(path string) string {
 func isAgentInstructionPath(path string) bool {
 	path = strings.Trim(filepath.ToSlash(path), "/")
 	base := filepath.Base(path)
-	if base == "CLAUDE.md" || base == "AGENTS.md" {
+	if base == "CLAUDE.md" || base == "AGENTS.md" || base == "GEMINI.md" {
 		return true
 	}
-	return strings.HasPrefix(path, ".claude/") || strings.HasPrefix(path, ".codex/") || strings.Contains(path, "/.claude/") || strings.Contains(path, "/.codex/")
+	return strings.HasPrefix(path, ".claude/") ||
+		strings.HasPrefix(path, ".codex/") ||
+		strings.HasPrefix(path, ".gemini/") ||
+		strings.HasPrefix(path, ".github/copilot-instructions.md") ||
+		strings.Contains(path, "/.claude/") ||
+		strings.Contains(path, "/.codex/") ||
+		strings.Contains(path, "/.gemini/") ||
+		strings.Contains(path, "/.github/copilot-instructions.md")
 }

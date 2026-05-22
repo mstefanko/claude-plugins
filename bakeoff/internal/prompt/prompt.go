@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	providerpkg "github.com/mstefanko/claude-plugins/bakeoff/internal/provider"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
 )
 
@@ -308,10 +309,7 @@ func fixturePrompt(name string) (string, error) {
 }
 
 func workerFixtureBackend(provider workorder.Participant) string {
-	if provider.Backend == "codex" {
-		return "codex"
-	}
-	return "claude"
+	return providerpkg.PromptFlavor(provider.Backend)
 }
 
 func sortedJSON(value any) (string, error) {

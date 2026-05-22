@@ -19,7 +19,12 @@ func SafeEnv(environ []string) []string {
 
 func ShouldScrub(key string) bool {
 	upper := strings.ToUpper(key)
-	if strings.HasPrefix(upper, "ANTHROPIC_") || strings.HasPrefix(upper, "OPENAI_") {
+	for _, prefix := range []string{"ANTHROPIC_", "OPENAI_", "GEMINI_", "GOOGLE_", "GITHUB_", "COPILOT_"} {
+		if strings.HasPrefix(upper, prefix) {
+			return true
+		}
+	}
+	if upper == "GH_TOKEN" || strings.HasPrefix(upper, "GH_") && strings.Contains(upper, "TOKEN") {
 		return true
 	}
 	for _, marker := range []string{"API_KEY", "ACCESS_KEY", "PRIVATE_KEY", "SECRET", "TOKEN", "PASSWORD", "AUTHORIZATION", "BEARER", "CREDENTIAL", "PASSPHRASE", "JWT", "SESSION", "COOKIE"} {

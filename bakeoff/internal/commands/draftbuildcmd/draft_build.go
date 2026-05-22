@@ -6,6 +6,7 @@ import (
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/apperror"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/provider"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
 	"github.com/spf13/cobra"
 )
@@ -24,6 +25,7 @@ type DraftBuildOptions struct {
 	BudgetMaxOutputBytes int
 	GateWallSeconds      int
 	GateMaxOutputBytes   int
+	Providers            []string
 }
 
 func NewCmdDraftBuild(f commands.Factory, runF func(context.Context, *DraftBuildOptions) error) *cobra.Command {
@@ -46,8 +48,12 @@ func NewCmdDraftBuild(f commands.Factory, runF func(context.Context, *DraftBuild
 			if err != nil {
 				return commands.WrapValidation(err)
 			}
+			providers, err := parseProviderFlags(opts.Providers)
+			if err != nil {
+				return commands.WrapValidation(err)
+			}
 			if runF == nil {
-				return runDraftBuild(cmd.Context(), f, opts, gates)
+				return runDraftBuild(cmd.Context(), f, opts, gates, providers)
 			}
 			return runF(cmd.Context(), opts)
 		},
@@ -60,6 +66,7 @@ func NewCmdDraftBuild(f commands.Factory, runF func(context.Context, *DraftBuild
 	cmd.Flags().StringVar(&opts.BaseRef, "base-ref", workorder.DefaultBuildDraftBaseRef, "build base ref")
 	cmd.Flags().StringArrayVar(&opts.Background, "background", nil, "additional context paragraph (repeatable)")
 	cmd.Flags().StringArrayVar(&opts.ProtectedPaths, "protected-path", nil, "repository-relative protected path (repeatable)")
+	cmd.Flags().StringArrayVar(&opts.Providers, "provider", nil, "worker provider as backend or backend:model; repeat exactly twice to override defaults")
 	cmd.Flags().StringVar(&opts.ComparisonGoal, "comparison-goal", workorder.DefaultBuildDraftComparisonGoal, "build comparison goal")
 	cmd.Flags().IntVar(&opts.BudgetWallSeconds, "budget-wall-seconds", workorder.DefaultBuildDraftBudgetWallSeconds, "work-order wall budget")
 	cmd.Flags().IntVar(&opts.BudgetMaxOutputBytes, "budget-max-output-bytes", workorder.DefaultBuildDraftBudgetMaxOutputBytes, "work-order output budget")
@@ -68,7 +75,7 @@ func NewCmdDraftBuild(f commands.Factory, runF func(context.Context, *DraftBuild
 	return cmd
 }
 
-func runDraftBuild(_ context.Context, f commands.Factory, opts *DraftBuildOptions, gates []workorder.GateDraft) error {
+func runDraftBuild(_ context.Context, f commands.Factory, opts *DraftBuildOptions, gates []workorder.GateDraft, providers []workorder.Participant) error {
 	doc, err := workorder.DraftBuild(workorder.BuildDraftOptions{
 		ID:                   opts.ID,
 		Goal:                 opts.Goal,
@@ -83,6 +90,7 @@ func runDraftBuild(_ context.Context, f commands.Factory, opts *DraftBuildOption
 		BudgetMaxOutputBytes: opts.BudgetMaxOutputBytes,
 		GateWallSeconds:      opts.GateWallSeconds,
 		GateMaxOutputBytes:   opts.GateMaxOutputBytes,
+		Providers:            providers,
 	})
 	if err != nil {
 		return commands.WrapValidation(err)
@@ -93,6 +101,52 @@ func runDraftBuild(_ context.Context, f commands.Factory, opts *DraftBuildOption
 	}
 	f.Streams().Printf("%s", text)
 	return nil
+}
+
+func parseProviderFlags(values []string) ([]workorder.Participant, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	if len(values) != 2 {
+		return nil, workorder.Validationf("--provider must be supplied exactly twice or not at all")
+	}
+	out := make([]workorder.Participant, 0, len(values))
+	seen := map[string]int{}
+	for i, value := range values {
+		backend, model, err := parseProviderFlag(value, i)
+		if err != nil {
+			return nil, err
+		}
+		if previous, ok := seen[backend]; ok {
+			return nil, workorder.Validationf("--provider[%d] backend %q duplicates --provider[%d]", i, backend, previous)
+		}
+		seen[backend] = i
+		out = append(out, workorder.Participant{ID: backend, Backend: backend, Model: model, Scope: "codebase", Effort: "high"})
+	}
+	return out, nil
+}
+
+func parseProviderFlag(value string, index int) (string, string, error) {
+	raw := strings.TrimSpace(value)
+	if raw == "" {
+		return "", "", workorder.Validationf("--provider[%d] must be backend or backend:model", index)
+	}
+	backend := raw
+	model := ""
+	if parts := strings.SplitN(raw, ":", 2); len(parts) == 2 {
+		backend = strings.TrimSpace(parts[0])
+		model = strings.TrimSpace(parts[1])
+		if model == "" {
+			return "", "", workorder.Validationf("--provider[%d] model must be non-empty", index)
+		}
+	}
+	if !provider.ValidBackend(backend) {
+		return "", "", workorder.Validationf("--provider[%d] backend must be one of: %s", index, strings.Join(provider.BackendNames(), ", "))
+	}
+	if model == "" {
+		model = provider.DefaultModel(backend)
+	}
+	return backend, model, nil
 }
 
 func parseGateFlags(values []string) ([]workorder.GateDraft, error) {

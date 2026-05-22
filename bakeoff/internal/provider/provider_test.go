@@ -8,9 +8,37 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-
-	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
 )
+
+type testParticipant struct {
+	backend string
+	model   string
+	effort  string
+}
+
+func (p testParticipant) BackendName() string { return p.backend }
+func (p testParticipant) ModelName() string   { return p.model }
+func (p testParticipant) EffortLevel() string { return p.effort }
+
+func TestProviderCatalog(t *testing.T) {
+	if !ValidBackend("gemini") || !ValidBackend("copilot") || ValidBackend("unknown") {
+		t.Fatalf("valid backend answers are wrong")
+	}
+	if got := DefaultModel("gemini"); got != "pro" {
+		t.Fatalf("gemini default model = %q", got)
+	}
+	if got := PromptFlavor("copilot"); got != PromptFlavorGeneric {
+		t.Fatalf("copilot prompt flavor = %q", got)
+	}
+	resolved := ResolveDefaultPair(map[string]bool{"claude": true, "gemini": true})
+	if resolved.CanonicalDefaultAvailable || !resolved.RunnableDefaultPair || !reflect.DeepEqual(resolved.SelectedDefaultPair, []string{"claude", "gemini"}) {
+		t.Fatalf("fallback resolution = %#v", resolved)
+	}
+	ambiguous := ResolveDefaultPair(map[string]bool{"claude": true, "gemini": true, "copilot": true})
+	if !ambiguous.FallbackRequiresUserChoice || ambiguous.SelectedDefaultPair != nil || len(ambiguous.FallbackCandidates) != 2 {
+		t.Fatalf("ambiguous fallback resolution = %#v", ambiguous)
+	}
+}
 
 func TestScopeCapabilitiesFromHelp(t *testing.T) {
 	claude := ScopeCapabilitiesFromHelp("claude", "--allowedTools --disallowed-tools --tools --permission-mode --output-last-message")
@@ -21,6 +49,16 @@ func TestScopeCapabilitiesFromHelp(t *testing.T) {
 	codex := ScopeCapabilitiesFromHelp("codex", "--sandbox <read-only|workspace-write> --disable --profile --config --output-last-message")
 	if !codex.Available || !codex.Supports["sandbox"] || !codex.Supports["sandbox_workspace_write"] || !codex.Supports["disable_feature"] || !codex.Supports["profile"] || !codex.Supports["config"] || !codex.Supports["output_last_message"] {
 		t.Fatalf("codex capabilities = %#v", codex)
+	}
+
+	gemini := ScopeCapabilitiesFromHelp("gemini", "--model value --approval-mode <default|auto_edit|yolo> --yolo")
+	if !gemini.Available || !gemini.Supports["model"] || !gemini.Supports["approval_mode"] || !gemini.Supports["approval_auto_edit"] || !gemini.Supports["approval_yolo"] || !gemini.Supports["yolo_flag"] {
+		t.Fatalf("gemini capabilities = %#v", gemini)
+	}
+
+	copilot := ScopeCapabilitiesFromHelp("copilot", "--model value --no-ask-user --allow-tool edit --deny-tool web")
+	if !copilot.Available || !copilot.Supports["model"] || !copilot.Supports["no_ask_user"] || !copilot.Supports["allow_tool"] || !copilot.Supports["deny_tool"] {
+		t.Fatalf("copilot capabilities = %#v", copilot)
 	}
 }
 
@@ -128,7 +166,7 @@ func TestMissingProbeUsesPythonStyleDiagnostic(t *testing.T) {
 }
 
 func TestBuildParticipantArgv(t *testing.T) {
-	claude, err := BuildParticipantArgv(workorder.Participant{Backend: "claude", Model: "sonnet", Effort: "high"}, "", []string{"--disallowedTools", "WebFetch"}, "", false)
+	claude, err := BuildParticipantArgv(testParticipant{backend: "claude", model: "sonnet", effort: "high"}, "", []string{"--disallowedTools", "WebFetch"}, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +174,7 @@ func TestBuildParticipantArgv(t *testing.T) {
 		t.Fatalf("claude argv = %#v, want %#v", claude, want)
 	}
 
-	claudeLastMessage, err := BuildParticipantArgv(workorder.Participant{Backend: "claude", Model: "sonnet", Effort: "high"}, "", nil, "/tmp/last.txt", true)
+	claudeLastMessage, err := BuildParticipantArgv(testParticipant{backend: "claude", model: "sonnet", effort: "high"}, "", nil, "/tmp/last.txt", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +182,7 @@ func TestBuildParticipantArgv(t *testing.T) {
 		t.Fatalf("claude argv with last message = %#v, want %#v", claudeLastMessage, want)
 	}
 
-	claudeUnsupported, err := BuildParticipantArgv(workorder.Participant{Backend: "claude", Model: "sonnet", Effort: "high"}, "", nil, "/tmp/last.txt", false)
+	claudeUnsupported, err := BuildParticipantArgv(testParticipant{backend: "claude", model: "sonnet", effort: "high"}, "", nil, "/tmp/last.txt", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,12 +190,28 @@ func TestBuildParticipantArgv(t *testing.T) {
 		t.Fatalf("claude argv without last-message support = %#v, want %#v", claudeUnsupported, want)
 	}
 
-	codex, err := BuildParticipantArgv(workorder.Participant{Backend: "codex", Model: "gpt", Effort: "medium"}, "/tmp/work", []string{"--sandbox", "read-only"}, "/tmp/last.txt", true)
+	codex, err := BuildParticipantArgv(testParticipant{backend: "codex", model: "gpt", effort: "medium"}, "/tmp/work", []string{"--sandbox", "read-only"}, "/tmp/last.txt", true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"codex", "exec", "-m", "gpt", "-c", `model_reasoning_effort="medium"`, "--skip-git-repo-check", "--sandbox", "read-only", "--output-last-message", "/tmp/last.txt", "-C", "/tmp/work"}
 	if !reflect.DeepEqual(codex, want) {
 		t.Fatalf("codex argv = %#v, want %#v", codex, want)
+	}
+
+	gemini, err := BuildParticipantArgv(testParticipant{backend: "gemini", model: "pro", effort: "high"}, "/tmp/work", []string{"--approval-mode", "auto_edit"}, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"gemini", "--model", "pro", "--approval-mode", "auto_edit"}; !reflect.DeepEqual(gemini, want) {
+		t.Fatalf("gemini argv = %#v, want %#v", gemini, want)
+	}
+
+	copilot, err := BuildParticipantArgv(testParticipant{backend: "copilot", model: "auto", effort: "high"}, "/tmp/work", nil, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"copilot", "--model", "auto", "--no-ask-user"}; !reflect.DeepEqual(copilot, want) {
+		t.Fatalf("copilot argv = %#v, want %#v", copilot, want)
 	}
 }

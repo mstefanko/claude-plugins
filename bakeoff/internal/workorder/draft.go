@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/modeldefaults"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/provider"
 )
 
 const (
@@ -30,6 +31,7 @@ type BuildDraftOptions struct {
 	BudgetMaxOutputBytes int
 	GateWallSeconds      int
 	GateMaxOutputBytes   int
+	Providers            []Participant
 }
 
 type GateDraft struct {
@@ -126,18 +128,39 @@ func DraftBuild(opts BuildDraftOptions) (any, error) {
 		})
 	}
 
+	providers := opts.Providers
+	if len(providers) == 0 {
+		providers = []Participant{
+			{ID: "claude", Backend: "claude", Model: modeldefaults.ClaudeSonnet, Scope: "codebase", Effort: "high"},
+			{ID: "codex", Backend: "codex", Model: modeldefaults.CodexDefault, Scope: "codebase", Effort: "high"},
+		}
+	} else if len(providers) != 2 {
+		return nil, Validationf("providers must have exactly 2 entries")
+	}
+	for i := range providers {
+		if providers[i].ID == "" {
+			providers[i].ID = providers[i].Backend
+		}
+		if providers[i].Model == "" {
+			providers[i].Model = provider.DefaultModel(providers[i].Backend)
+		}
+		if providers[i].Scope == "" {
+			providers[i].Scope = "codebase"
+		}
+		if providers[i].Effort == "" {
+			providers[i].Effort = "high"
+		}
+	}
+
 	doc := buildDraftDocument{
 		SchemaVersion: 1,
 		ID:            id,
 		Type:          "build",
 		Goal:          goal,
 		Background:    background,
-		Providers: []Participant{
-			{ID: "claude", Backend: "claude", Model: modeldefaults.ClaudeSonnet, Scope: "codebase", Effort: "high"},
-			{ID: "codex", Backend: "codex", Model: modeldefaults.CodexDefault, Scope: "codebase", Effort: "high"},
-		},
-		ScopePolicy: ScopePolicy{Enforcement: "best_effort"},
-		Judge:       Participant{Backend: "claude", Model: modeldefaults.ClaudeOpus, Effort: "xhigh"},
+		Providers:     providers,
+		ScopePolicy:   ScopePolicy{Enforcement: "best_effort"},
+		Judge:         Participant{Backend: "claude", Model: modeldefaults.ClaudeOpus, Effort: "xhigh"},
 		Build: buildDraftSpec{
 			BaseRef:        baseRef,
 			ComparisonGoal: comparisonGoal,

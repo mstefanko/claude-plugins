@@ -26,6 +26,13 @@ to print verbose JSON before approving. Straightforward build drafts use
 `bakeoff draft-build` internally so canonical build JSON is generated and
 validated before preview.
 
+Generated drafts keep exactly two providers. The canonical default pair is
+`claude/sonnet` plus `codex/gpt-5.5` with a `claude/opus` judge. If Codex is
+not available and exactly one optional peer (`gemini` or `copilot`) is ready,
+natural-language drafting may use `claude` plus that peer and call out the
+fallback in the preview. Existing work-order paths are never rewritten or
+substituted.
+
 Recognized `/bakeoff:run` flags:
 
 | Flag | Routed to | Meaning |
@@ -155,8 +162,10 @@ Required repeatable flags:
 Optional flags include `--base-ref`, repeatable `--background`, repeatable
 `--protected-path`, `--comparison-goal`, `--budget-wall-seconds`,
 `--budget-max-output-bytes`, `--gate-wall-seconds`, and
-`--gate-max-output-bytes`. Gate commands are emitted as `["sh", "-c",
-"<command>"]`. Metric verifier drafting remains manual for now.
+`--gate-max-output-bytes`. Repeat `--provider` exactly twice to choose a
+non-default pair, using `backend` or `backend:model`. Gate commands are emitted
+as `["sh", "-c", "<command>"]`. Metric verifier drafting remains manual for
+now.
 
 Example:
 
@@ -166,6 +175,8 @@ bakeoff draft-build \
   --goal "Order ls output by finished_at descending" \
   --acceptance "Rows are sorted by finished_at descending." \
   --scope "internal/commands/lscmd" \
+  --provider claude \
+  --provider gemini:pro \
   --gate "tests=go test ./internal/commands/lscmd -run TestLsOrder -count=1"
 ```
 
@@ -350,7 +361,9 @@ bakeoff doctor [flags]
 ```
 
 Checks provider CLIs, local readiness, scope controls, default models, cwd
-writability, and provider auth/session state unless auth probes are skipped.
+writability, default-pair fallback status, and provider auth/session state
+unless auth probes are skipped. Missing Gemini or Copilot does not fail doctor;
+missing Claude, missing `git`, or no runnable two-provider pair does.
 
 Flags:
 
@@ -360,6 +373,12 @@ Flags:
 | `--skip-auth-probe` | Skip spendful provider auth probes. |
 | `--quiet` | Suppress provider heartbeat lines. |
 | `--json` | Emit a parseable JSON readiness report. |
+
+JSON output includes `canonical_default_pair`, `selected_default_pair`,
+`fallback_candidates`, `fallback_requires_user_choice`,
+`canonical_default_available`, `runnable_default_pair_available`, and a
+`providers` map with per-backend availability, default model, auth probe, scope
+capabilities, and build preflight details when requested.
 
 ## JSON Modes
 

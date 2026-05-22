@@ -82,6 +82,53 @@ func TestBuildParticipantArgvAddsClaudeLastMessageWhenSupported(t *testing.T) {
 	}
 }
 
+func TestBuildParticipantArgvForGeminiAndCopilot(t *testing.T) {
+	gemini := workorder.Participant{ID: "gemini", Backend: "gemini", Model: "pro", Effort: "high", Scope: "codebase"}
+	argv, metadata, err := buildParticipantArgv(gemini, workorder.ScopePolicy{Enforcement: "best_effort"}, "/tmp/worktree", provider.ScopeCapabilities{
+		Backend:  "gemini",
+		Supports: map[string]bool{"approval_mode": true, "approval_auto_edit": true},
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(argv, " ")
+	if !strings.Contains(joined, "gemini --model pro --approval-mode auto_edit") {
+		t.Fatalf("gemini argv missing auto_edit: %v", argv)
+	}
+	if metadata["enforcement_level"] != "partial" {
+		t.Fatalf("gemini metadata = %#v", metadata)
+	}
+
+	_, metadata, err = buildParticipantArgv(gemini, workorder.ScopePolicy{Enforcement: "best_effort"}, "/tmp/worktree", provider.ScopeCapabilities{
+		Backend:  "gemini",
+		Supports: map[string]bool{"approval_mode": true},
+	}, "")
+	if err == nil || metadata["enforcement_level"] != "failed" {
+		t.Fatalf("expected gemini build edit failure, metadata=%#v err=%v", metadata, err)
+	}
+
+	copilot := workorder.Participant{ID: "copilot", Backend: "copilot", Model: "auto", Effort: "high", Scope: "codebase"}
+	argv, _, err = buildParticipantArgv(copilot, workorder.ScopePolicy{Enforcement: "best_effort"}, "/tmp/worktree", provider.ScopeCapabilities{
+		Backend:  "copilot",
+		Supports: map[string]bool{"no_ask_user": true, "allow_tool": true},
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined = strings.Join(argv, " ")
+	if !strings.Contains(joined, "copilot --model auto --no-ask-user --allow-tool edit") {
+		t.Fatalf("copilot argv missing non-interactive edit controls: %v", argv)
+	}
+}
+
+func TestAgentInstructionPathIncludesOptionalProviderConfig(t *testing.T) {
+	for _, path := range []string{"GEMINI.md", ".gemini/settings.json", ".github/copilot-instructions.md", "pkg/.gemini/config.json", "pkg/.github/copilot-instructions.md"} {
+		if !isAgentInstructionPath(path) {
+			t.Fatalf("%s should be treated as provider instruction/config path", path)
+		}
+	}
+}
+
 func TestBuildEnvScrubsSecrets(t *testing.T) {
 	got := runnerenv.SafeEnv([]string{
 		"PATH=/bin",

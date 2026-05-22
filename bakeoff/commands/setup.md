@@ -69,9 +69,9 @@ mutate project files, or run live build probes.
    ```
 
    This intentionally runs provider auth probes. Setup is the first-run
-   readiness moment, so users should see missing `claude`, `codex`, `git`,
-   scope support, cwd writability, or provider auth/session problems before
-   trying `/bakeoff:run`.
+   readiness moment, so users should see missing `claude`, `codex`, optional
+   `gemini`/`copilot`, `git`, scope support, cwd writability, fallback-pair
+   status, or provider auth/session problems before trying `/bakeoff:run`.
 
    If doctor exits non-zero but emits JSON, summarize the JSON instead of
    treating setup as opaque failure: the CLI install succeeded, but readiness
@@ -80,7 +80,8 @@ mutate project files, or run live build probes.
 8. Summarize readiness:
 
    - binary install path and source-build/release kind;
-   - `claude`, `codex`, and `git` availability;
+   - `claude`, `codex`, optional `gemini`/`copilot`, and `git` availability;
+   - canonical and selected default provider pair;
    - provider auth probe status and warnings;
    - scope controls and cwd writability;
    - next fixes for missing tools or auth/session failures.

@@ -200,6 +200,65 @@ func TestBuildWorkOrderValidation(t *testing.T) {
 	}
 }
 
+func TestProviderCatalogBackendsValidate(t *testing.T) {
+	data := validWorkOrder()
+	providers := data["providers"].([]any)
+	providers[0].(map[string]any)["id"] = "claude"
+	providers[0].(map[string]any)["backend"] = "claude"
+	providers[0].(map[string]any)["model"] = "sonnet"
+	providers[1].(map[string]any)["id"] = "gemini"
+	providers[1].(map[string]any)["backend"] = "gemini"
+	providers[1].(map[string]any)["model"] = "pro"
+	data["judge"] = map[string]any{"backend": "copilot", "model": "auto"}
+	wo, err := Validate(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wo.Providers[1].Backend != "gemini" || wo.Judge.Backend != "copilot" {
+		t.Fatalf("validated participants = %#v judge=%#v", wo.Providers, wo.Judge)
+	}
+
+	data = validWorkOrder()
+	providers = data["providers"].([]any)
+	providers[0].(map[string]any)["id"] = "codex"
+	providers[0].(map[string]any)["backend"] = "codex"
+	providers[1].(map[string]any)["id"] = "copilot"
+	providers[1].(map[string]any)["backend"] = "copilot"
+	if _, err := Validate(data); err != nil {
+		t.Fatalf("codex + copilot should validate: %v", err)
+	}
+}
+
+func TestProviderValidationRejectsWrongCountsAndUnknownBackends(t *testing.T) {
+	data := validWorkOrder()
+	data["providers"] = []any{
+		map[string]any{"id": "claude", "backend": "claude", "model": "same", "scope": "codebase"},
+	}
+	_, err := Validate(data)
+	if err == nil || !strings.Contains(err.Error(), "exactly 2") {
+		t.Fatalf("expected one-provider rejection, got %v", err)
+	}
+
+	data = validWorkOrder()
+	data["providers"] = []any{
+		map[string]any{"id": "claude", "backend": "claude", "model": "same", "scope": "codebase"},
+		map[string]any{"id": "codex", "backend": "codex", "model": "other", "scope": "web"},
+		map[string]any{"id": "gemini", "backend": "gemini", "model": "pro", "scope": "mixed"},
+	}
+	_, err = Validate(data)
+	if err == nil || !strings.Contains(err.Error(), "exactly 2") {
+		t.Fatalf("expected three-provider rejection, got %v", err)
+	}
+
+	data = validWorkOrder()
+	providers := data["providers"].([]any)
+	providers[1].(map[string]any)["backend"] = "unknown"
+	_, err = Validate(data)
+	if err == nil || !strings.Contains(err.Error(), "claude, codex, gemini, copilot") {
+		t.Fatalf("expected catalog backend error, got %v", err)
+	}
+}
+
 func TestBuildVerifierBaselineValidation(t *testing.T) {
 	data := validBuildWorkOrder()
 	verify := data["build"].(map[string]any)["verify"].([]any)

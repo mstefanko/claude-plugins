@@ -1,56 +1,72 @@
 {
   "files": {
     "judge-analyze.txt": {
-      "sha256": "9820ad12348b87a3105f91e7e32a8e147a65bb0ffaff66e3f8c346ad42fc2ddf",
-      "size_bytes": 4868
+      "sha256": "28d8b70b98b7cacc0dc474cd4b5137ce0e8b59eb031f32d3dde670b694f00063",
+      "size_bytes": 5000
     },
     "judge-build.txt": {
-      "sha256": "e7fcf236801563b476b9b498b7aba8f855955cf2a2ef9609492ea3a4552689af",
-      "size_bytes": 4496
+      "sha256": "c0e32c112dc912d398d851382329947ef3d273b3fdc3d1f8676378d0b30d9c6c",
+      "size_bytes": 4965
     },
     "judge-compare.txt": {
-      "sha256": "3c7077f4e6e6eee75fa869e044c1af7a6446ca123103c7bcdbf46200b173db68",
-      "size_bytes": 4786
+      "sha256": "662738129410ac867ba7565760611985f51c4b78b29b5e5b1405c5015a1dd39f",
+      "size_bytes": 4918
     },
     "judge-gather.txt": {
-      "sha256": "c7b03e36e65096e35d7352201f1cf12a23ad83030a4a047d9db8e724c14c3fa5",
-      "size_bytes": 4067
+      "sha256": "751cf80412b742c8e3ecb17b14f75641d7672caff749f1db310806c98d8991a3",
+      "size_bytes": 4199
     },
     "triage.txt": {
-      "sha256": "56c602edfce1159b9b98407f2a3a481b95de588b329bef4db484bcb750589649",
-      "size_bytes": 4302
+      "sha256": "ec4a1599a6927a2646f17e00dc552da6d613e3941437f6baace47a8d60d9700f",
+      "size_bytes": 3944
     },
     "worker-analyze-claude.txt": {
-      "sha256": "6ff374d12602f5ef339cc59d4acf2810b0311ef16456c7540b9faee07a7a7574",
-      "size_bytes": 4644
+      "sha256": "a702206f2e573ceabd31448de80fc80b2a431ae137585c344240f8b8346c5625",
+      "size_bytes": 4719
     },
     "worker-analyze-codex.txt": {
-      "sha256": "9f4e197a5b125a4e8a0b398c03811289cf4426ad686ba849e5781ec321146f2b",
-      "size_bytes": 4631
+      "sha256": "d2aed6d4e08f0fb53a40f6f6968bfa011a6804847615113e4180baebd45623e2",
+      "size_bytes": 4706
+    },
+    "worker-analyze-generic-terminal-agent.txt": {
+      "sha256": "a702206f2e573ceabd31448de80fc80b2a431ae137585c344240f8b8346c5625",
+      "size_bytes": 4719
     },
     "worker-build-claude.txt": {
-      "sha256": "495157dec36e6ee548c14bf54af2ecd888aaeab1ea3b5efcd51c3d32bf7ea6ea",
-      "size_bytes": 4336
+      "sha256": "f004709dad5fcb9118e554ce2f676d14d8d15b3dbcc4a95ece2e738f7f1708bd",
+      "size_bytes": 4860
     },
     "worker-build-codex.txt": {
-      "sha256": "f17552a0d3970a0f6118a4ff06af0493cc57da576415798530bae72cc77eff3d",
-      "size_bytes": 4486
+      "sha256": "56c1dec5d216000a1a6c5737014da0c0ec3b1af98805f81954b80f4fffaa2de9",
+      "size_bytes": 5010
+    },
+    "worker-build-generic-terminal-agent.txt": {
+      "sha256": "ee004492e01311534d20225ce97141a8c7ef79968b6882da4c284736a3d2fb15",
+      "size_bytes": 4921
     },
     "worker-compare-claude.txt": {
-      "sha256": "ce9a11f73a2ab53d0dc14cea146198ac15e9ba4bd63afeeaa19a8bb93f641074",
-      "size_bytes": 5001
+      "sha256": "285182e133d71af0eebd648eb3d61e9c7d260ca83883d719ee4cd0f3f4d7c77f",
+      "size_bytes": 5076
     },
     "worker-compare-codex.txt": {
-      "sha256": "74c5d4b99fce16da35bbefebc8a9207492215d30025b50332ddd83f33d1b64d0",
-      "size_bytes": 4988
+      "sha256": "0d857020e0b15052645d6feb64ea6e9bd3b49b3bb606e90e9fb13838f983e5af",
+      "size_bytes": 5063
+    },
+    "worker-compare-generic-terminal-agent.txt": {
+      "sha256": "285182e133d71af0eebd648eb3d61e9c7d260ca83883d719ee4cd0f3f4d7c77f",
+      "size_bytes": 5076
     },
     "worker-gather-claude.txt": {
-      "sha256": "fcfb7e6c87eb7cf7742a33ea9ec9100ecc5f590789872277e00213b554f97278",
-      "size_bytes": 4333
+      "sha256": "8e86168cd82657eceb6b5c0ea8322481415dd0ad63e32243f27e22f49dfc605d",
+      "size_bytes": 4408
     },
     "worker-gather-codex.txt": {
-      "sha256": "ba8391b480870e7a49d403d2a409de0d7b9343427f31f5643b5ddf408027604e",
-      "size_bytes": 4319
+      "sha256": "7c654ee0db725743f06c9ceee2ffc6cf416c964452fac741aee18712591665b6",
+      "size_bytes": 4394
+    },
+    "worker-gather-generic-terminal-agent.txt": {
+      "sha256": "8e86168cd82657eceb6b5c0ea8322481415dd0ad63e32243f27e22f49dfc605d",
+      "size_bytes": 4408
     }
   },
   "schema_version": 1

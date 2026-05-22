@@ -52,11 +52,19 @@ func NewCmdDoctor(f commands.Factory, runF func(context.Context, *DoctorOptions)
 func runDoctor(ctx context.Context, f commands.Factory, opts *DoctorOptions) error {
 	failed := false
 	defaults := modeldefaults.DoctorModelIDs()
+	canonicalPair := provider.CanonicalDefaultPair()
 	report := map[string]any{
-		"command":  "doctor",
-		"status":   "ok",
-		"tools":    map[string]any{},
-		"defaults": defaults,
+		"command":                         "doctor",
+		"status":                          "ok",
+		"tools":                           map[string]any{},
+		"defaults":                        defaults,
+		"canonical_default_pair":          canonicalPair,
+		"selected_default_pair":           nil,
+		"fallback_candidates":             [][]string{},
+		"fallback_requires_user_choice":   false,
+		"canonical_default_available":     false,
+		"runnable_default_pair_available": false,
+		"providers":                       map[string]any{},
 		"scope_policy": map[string]any{
 			"default_enforcement": "best_effort",
 			"status_artifacts":    []string{"provider status.json", "meta.json"},
@@ -66,21 +74,46 @@ func runDoctor(ctx context.Context, f commands.Factory, opts *DoctorOptions) err
 		"warnings":           []string{},
 	}
 	tools := report["tools"].(map[string]any)
-	for _, tool := range []string{"claude", "codex", "git"} {
+	providerEntries := report["providers"].(map[string]any)
+	toolNames := append(provider.BackendNames(), "git")
+	toolOK := map[string]bool{}
+	for _, tool := range toolNames {
 		path, err := f.LookupProvider(tool)
 		if err != nil {
 			tools[tool] = map[string]any{"ok": false, "path": nil, "version": nil}
-			failed = true
-			continue
+			toolOK[tool] = false
+		} else {
+			version := artifact.ToolVersion(ctx, tool, f.LookupProvider)
+			tools[tool] = map[string]any{"ok": true, "path": path, "version": version}
+			toolOK[tool] = true
 		}
-		tools[tool] = map[string]any{"ok": true, "path": path, "version": artifact.ToolVersion(ctx, tool, f.LookupProvider)}
+	}
+	if !toolOK["git"] {
+		failed = true
+		report["warnings"] = appendStringAny(report["warnings"], "git is required for most Bakeoff workflows")
 	}
 
 	scopeCaps := report["scope_capabilities"].(map[string]any)
 	capabilityValues := map[string]provider.ScopeCapabilities{}
-	for _, backend := range []string{"claude", "codex"} {
-		caps := f.Capabilities().DetectScopeCapabilities(ctx, backend)
-		capabilityValues[backend] = caps
+	readyForDefault := map[string]bool{}
+	for _, spec := range provider.KnownBackends() {
+		toolStatus := tools[spec.Name].(map[string]any)
+		entry := map[string]any{
+			"canonical_default":             provider.BackendInPair(canonicalPair, spec.Name),
+			"optional":                      spec.Optional,
+			"required_for_selected_default": false,
+			"available":                     toolOK[spec.Name],
+			"path":                          toolStatus["path"],
+			"version":                       toolStatus["version"],
+			"default_model":                 spec.DefaultModel,
+			"prompt_flavor":                 spec.PromptFlavor,
+			"supports_build":                spec.SupportsBuild,
+		}
+		caps := provider.ScopeCapabilities{Backend: spec.Name, Available: false, Supports: map[string]bool{}, ProbeError: "executable not found"}
+		if toolOK[spec.Name] {
+			caps = f.Capabilities().DetectScopeCapabilities(ctx, spec.Name)
+		}
+		capabilityValues[spec.Name] = caps
 		capMap := map[string]any{
 			"available": caps.Available,
 			"backend":   caps.Backend,
@@ -89,10 +122,37 @@ func runDoctor(ctx context.Context, f commands.Factory, opts *DoctorOptions) err
 		if caps.ProbeError != "" {
 			capMap["probe_error"] = caps.ProbeError
 		}
-		scopeCaps[backend] = capMap
-		if !caps.Available {
-			failed = true
+		scopeCaps[spec.Name] = capMap
+		entry["scope_capabilities"] = capMap
+		providerEntries[spec.Name] = entry
+		readyForDefault[spec.Name] = toolOK[spec.Name] && caps.Available
+	}
+	resolution := provider.ResolveDefaultPair(readyForDefault)
+	report["canonical_default_available"] = resolution.CanonicalDefaultAvailable
+	report["runnable_default_pair_available"] = resolution.RunnableDefaultPair
+	report["fallback_candidates"] = resolution.FallbackCandidates
+	report["fallback_requires_user_choice"] = resolution.FallbackRequiresUserChoice
+	if len(resolution.SelectedDefaultPair) > 0 {
+		report["selected_default_pair"] = resolution.SelectedDefaultPair
+		for _, backend := range resolution.SelectedDefaultPair {
+			if entry, ok := providerEntries[backend].(map[string]any); ok {
+				entry["required_for_selected_default"] = true
+			}
 		}
+	}
+	if !readyForDefault["claude"] {
+		failed = true
+		report["warnings"] = appendStringAny(report["warnings"], "claude is required because generated judges default to claude/opus")
+	}
+	if !resolution.RunnableDefaultPair {
+		failed = true
+		report["warnings"] = appendStringAny(report["warnings"], "no runnable two-provider default pair is available")
+	}
+	if !resolution.CanonicalDefaultAvailable {
+		report["warnings"] = appendStringAny(report["warnings"], "canonical default provider pair claude + codex is degraded")
+	}
+	if resolution.FallbackRequiresUserChoice {
+		report["warnings"] = appendStringAny(report["warnings"], "multiple fallback provider pairs are available; natural-language drafting must ask which peer to use")
 	}
 	writable, detail := checkCWDWritable()
 	cwd, _ := os.Getwd()
@@ -105,7 +165,7 @@ func runDoctor(ctx context.Context, f commands.Factory, opts *DoctorOptions) err
 	if !opts.JSON {
 		streams := f.Streams()
 		streams.Printf("bakeoff doctor\n")
-		for _, tool := range []string{"claude", "codex", "git"} {
+		for _, tool := range toolNames {
 			toolStatus := tools[tool].(map[string]any)
 			if !toolStatus["ok"].(bool) {
 				streams.Printf("- %s: missing\n", tool)
@@ -114,12 +174,20 @@ func runDoctor(ctx context.Context, f commands.Factory, opts *DoctorOptions) err
 			}
 		}
 		streams.Printf("- defaults:\n")
-		for _, key := range []string{"claude_sonnet", "claude_opus", "claude_haiku", "codex", "codex_gpt5"} {
+		for _, key := range []string{"claude_sonnet", "claude_opus", "claude_haiku", "codex", "codex_gpt5", "gemini", "copilot"} {
 			streams.Printf("  %s: %s\n", key, defaults[key])
+		}
+		streams.Printf("- canonical default pair: %s\n", joinComma(canonicalPair))
+		if selected, ok := report["selected_default_pair"].([]string); ok && len(selected) > 0 {
+			streams.Printf("- selected default pair: %s\n", joinComma(selected))
+		} else if resolution.FallbackRequiresUserChoice {
+			streams.Printf("- selected default pair: requires user choice\n")
+		} else {
+			streams.Printf("- selected default pair: unavailable\n")
 		}
 		streams.Printf("- scope policy: best_effort by default; provider status records enforcement and advisory fallback.\n")
 		streams.Printf("- scope capabilities:\n")
-		for _, backend := range []string{"claude", "codex"} {
+		for _, backend := range provider.BackendNames() {
 			caps := capabilityValues[backend]
 			if !caps.Available {
 				streams.Printf("  %s: unavailable (%s)\n", backend, caps.ProbeError)
@@ -151,7 +219,7 @@ func runDoctor(ctx context.Context, f commands.Factory, opts *DoctorOptions) err
 		streams.Printf("- bias: %s\n", report["bias"])
 	}
 	if opts.Build {
-		ok, err := runBuildPreflight(ctx, f, opts, report, capabilityValues)
+		ok, err := runBuildPreflight(ctx, f, opts, report, capabilityValues, toolOK, resolution)
 		if err != nil {
 			return err
 		}
@@ -159,7 +227,7 @@ func runDoctor(ctx context.Context, f commands.Factory, opts *DoctorOptions) err
 			failed = true
 		}
 	} else if !opts.SkipAuthProbe && !failed {
-		if err := runAuthProbes(ctx, f, opts, report); err != nil {
+		if err := runAuthProbes(ctx, f, opts, report, installedBackends(toolOK)); err != nil {
 			return err
 		}
 	}
@@ -181,13 +249,14 @@ type errDoctorFailed struct{}
 
 func (errDoctorFailed) Error() string { return "doctor failed" }
 
-func runAuthProbes(ctx context.Context, f commands.Factory, opts *DoctorOptions, report map[string]any) error {
+func runAuthProbes(ctx context.Context, f commands.Factory, opts *DoctorOptions, report map[string]any, backends []string) error {
 	authProbes := report["auth_probes"].(map[string]any)
+	providerEntries, _ := report["providers"].(map[string]any)
 	prompt := `Auth probe. Reply exactly with <final_json>{"status":"complete","claims":[],"conflicts":[],"unknowns":[],"recommended_next_checks":[]}</final_json>`
 	cwd, _ := os.Getwd()
-	participants := []workorder.Participant{
-		{Backend: "claude", Model: modeldefaults.ClaudeSonnet, Effort: "low"},
-		{Backend: "codex", Model: modeldefaults.CodexDefault, Effort: "low"},
+	participants := make([]workorder.Participant, 0, len(backends))
+	for _, backend := range backends {
+		participants = append(participants, participantForBackend(backend, "low"))
 	}
 	for _, participant := range participants {
 		argv, err := provider.BuildParticipantArgv(participant, cwd, nil, "", false)
@@ -207,6 +276,9 @@ func runAuthProbes(ctx context.Context, f commands.Factory, opts *DoctorOptions,
 		}
 		probeStatus := authProbeStatus(result)
 		authProbes[participant.Backend] = probeStatus
+		if entry, ok := providerEntries[participant.Backend].(map[string]any); ok {
+			entry["auth_probe"] = probeStatus
+		}
 		if !opts.JSON {
 			f.Streams().Printf("- %s auth probe: %s\n", participant.Backend, result["status"])
 		}
@@ -226,7 +298,7 @@ func runAuthProbes(ctx context.Context, f commands.Factory, opts *DoctorOptions,
 
 const buildProbeFile = "bakeoff-doctor-build-probe.txt"
 
-func runBuildPreflight(ctx context.Context, f commands.Factory, opts *DoctorOptions, report map[string]any, capabilityValues map[string]provider.ScopeCapabilities) (bool, error) {
+func runBuildPreflight(ctx context.Context, f commands.Factory, opts *DoctorOptions, report map[string]any, capabilityValues map[string]provider.ScopeCapabilities, toolOK map[string]bool, resolution provider.DefaultPairResolution) (bool, error) {
 	preflight := map[string]any{
 		"enabled":                     true,
 		"ok":                          false,
@@ -257,15 +329,19 @@ func runBuildPreflight(ctx context.Context, f commands.Factory, opts *DoctorOpti
 	}()
 
 	overallOK := true
+	required := requiredBuildBackends(resolution)
 	providers := preflight["providers"].(map[string]any)
-	for _, backend := range []string{"claude", "codex"} {
+	for _, backend := range provider.BackendNames() {
+		if !toolOK[backend] {
+			continue
+		}
 		entry, err := runBuildProviderPreflight(ctx, f, opts, backend, parent, capabilityValues[backend])
 		if err != nil {
 			return false, err
 		}
 		providers[backend] = entry
 		ok, _ := entry["ok"].(bool)
-		if !ok {
+		if !ok && required[backend] {
 			overallOK = false
 		}
 		if !opts.JSON {
@@ -308,6 +384,23 @@ func runBuildProviderPreflight(ctx context.Context, f commands.Factory, opts *Do
 	if backend == "codex" {
 		entry["supports_sandbox_workspace_write"] = true
 	}
+	if backend == "gemini" {
+		switch {
+		case caps.Supports["approval_auto_edit"]:
+			entry["edit_mode"] = "approval-mode auto_edit"
+		case caps.Supports["approval_yolo"]:
+			entry["edit_mode"] = "approval-mode yolo"
+		case caps.Supports["yolo_flag"]:
+			entry["edit_mode"] = "yolo"
+		default:
+			entry["reason"] = "gemini --help did not advertise non-interactive edit mode; see Gemini CLI headless/configuration docs for --approval-mode auto_edit or --yolo"
+			return entry, nil
+		}
+	}
+	if backend == "copilot" && !caps.Supports["no_ask_user"] {
+		entry["reason"] = "copilot --help did not advertise --no-ask-user"
+		return entry, nil
+	}
 
 	workspace := filepath.Join(parent, backend)
 	if err := os.Mkdir(workspace, 0o700); err != nil {
@@ -318,6 +411,17 @@ func runBuildProviderPreflight(ctx context.Context, f commands.Factory, opts *Do
 	extraArgs := []string{}
 	if backend == "codex" {
 		extraArgs = append(extraArgs, "--sandbox", "workspace-write")
+	} else if backend == "gemini" {
+		switch {
+		case caps.Supports["approval_auto_edit"]:
+			extraArgs = append(extraArgs, "--approval-mode", "auto_edit")
+		case caps.Supports["approval_yolo"]:
+			extraArgs = append(extraArgs, "--approval-mode", "yolo")
+		case caps.Supports["yolo_flag"]:
+			extraArgs = append(extraArgs, "--yolo")
+		}
+	} else if backend == "copilot" && caps.Supports["allow_tool"] {
+		extraArgs = append(extraArgs, "--allow-tool", "edit")
 	}
 	argv, err := provider.BuildParticipantArgv(participant, workspace, extraArgs, "", false)
 	if err != nil {
@@ -362,11 +466,7 @@ func runBuildProviderPreflight(ctx context.Context, f commands.Factory, opts *Do
 }
 
 func buildProbeParticipant(backend string) workorder.Participant {
-	model := modeldefaults.ClaudeSonnet
-	if backend == "codex" {
-		model = modeldefaults.CodexDefault
-	}
-	return workorder.Participant{ID: backend, Backend: backend, Model: model, Effort: "low", Scope: "codebase"}
+	return participantForBackend(backend, "low")
 }
 
 func buildProbePrompt(token string) string {
@@ -425,10 +525,54 @@ func checkCWDWritable() (bool, string) {
 }
 
 func supportOrder(backend string) []string {
-	if backend == "claude" {
+	switch backend {
+	case "claude":
 		return []string{"allowed_tools", "disallowed_tools", "tools", "permission_mode", "output_last_message"}
+	case "codex":
+		return []string{"sandbox", "sandbox_workspace_write", "disable_feature", "profile", "config", "output_last_message"}
+	case "gemini":
+		return []string{"model", "approval_mode", "approval_auto_edit", "approval_yolo", "yolo_flag"}
+	case "copilot":
+		return []string{"model", "no_ask_user", "allow_tool", "deny_tool"}
+	default:
+		return nil
 	}
-	return []string{"sandbox", "sandbox_workspace_write", "disable_feature", "profile", "config", "output_last_message"}
+}
+
+func installedBackends(toolOK map[string]bool) []string {
+	backends := []string{}
+	for _, backend := range provider.BackendNames() {
+		if toolOK[backend] {
+			backends = append(backends, backend)
+		}
+	}
+	return backends
+}
+
+func participantForBackend(backend string, effort string) workorder.Participant {
+	return workorder.Participant{
+		ID:      backend,
+		Backend: backend,
+		Model:   provider.DefaultModel(backend),
+		Effort:  effort,
+		Scope:   "codebase",
+	}
+}
+
+func requiredBuildBackends(resolution provider.DefaultPairResolution) map[string]bool {
+	required := map[string]bool{}
+	if len(resolution.SelectedDefaultPair) > 0 {
+		for _, backend := range resolution.SelectedDefaultPair {
+			required[backend] = true
+		}
+		return required
+	}
+	for _, pair := range resolution.FallbackCandidates {
+		for _, backend := range pair {
+			required[backend] = true
+		}
+	}
+	return required
 }
 
 func joinComma(items []string) string {

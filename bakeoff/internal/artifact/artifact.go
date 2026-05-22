@@ -332,6 +332,17 @@ func WriteMetaWithExtra(ctx context.Context, runDir string, wo *workorder.WorkOr
 		}
 		providers[participant.ID] = entry
 	}
+	versions := map[string]any{"git": ToolVersion(ctx, "git", opts.LookupProvider)}
+	seenBackends := map[string]bool{}
+	for _, participant := range wo.Providers {
+		seenBackends[participant.Backend] = true
+	}
+	seenBackends[wo.Judge.Backend] = true
+	for _, spec := range provider.KnownBackends() {
+		if seenBackends[spec.Name] {
+			versions[spec.Name] = ToolVersion(ctx, spec.Name, opts.LookupProvider)
+		}
+	}
 	meta := map[string]any{
 		"run_id":                runID,
 		"type":                  wo.Type,
@@ -345,7 +356,7 @@ func WriteMetaWithExtra(ctx context.Context, runDir string, wo *workorder.WorkOr
 		"cwd":                   mustGetwd(),
 		"bakeoff_version":       buildinfo.Current().Version,
 		"scope_policy":          map[string]any{"enforcement": wo.ScopePolicy.Enforcement},
-		"provider_cli_versions": map[string]any{"claude": ToolVersion(ctx, "claude", opts.LookupProvider), "codex": ToolVersion(ctx, "codex", opts.LookupProvider), "git": ToolVersion(ctx, "git", opts.LookupProvider)},
+		"provider_cli_versions": versions,
 		"input_hashes":          inputHashes,
 		"resolved_models": map[string]any{
 			"providers": providers,

@@ -38,6 +38,7 @@ not write secrets into files.
 4. Summarize actionable readiness:
 
    - missing binaries;
+   - canonical default pair and any selected fallback pair;
    - provider auth/session failures;
    - sandbox and scope-control readiness;
    - cwd writability;

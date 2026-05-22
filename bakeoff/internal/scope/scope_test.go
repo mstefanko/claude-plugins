@@ -120,6 +120,44 @@ func TestBuildExecutionMixedScopeRequiredIsEnforced(t *testing.T) {
 	}
 }
 
+func TestBuildExecutionForGenericOptionalProviderIsPartial(t *testing.T) {
+	execution, err := BuildExecution(
+		context.Background(),
+		nil,
+		workorder.Participant{ID: "gemini", Backend: "gemini", Model: "pro", Scope: "codebase"},
+		workorder.ScopePolicy{Enforcement: "best_effort"},
+		"/work",
+		"/work/runs/r1",
+		&provider.ScopeCapabilities{Backend: "gemini", Available: true, Supports: map[string]bool{"model": true}},
+		"",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if execution.Metadata["enforcement_level"] != "partial" || execution.Metadata["fallback_reason"] == nil {
+		t.Fatalf("gemini metadata = %#v", execution.Metadata)
+	}
+	if !containsAll(execution.Argv, "gemini", "--model", "pro") {
+		t.Fatalf("gemini argv = %#v", execution.Argv)
+	}
+}
+
+func TestBuildExecutionForRequiredOptionalProviderControlsFails(t *testing.T) {
+	_, err := BuildExecution(
+		context.Background(),
+		nil,
+		workorder.Participant{ID: "copilot", Backend: "copilot", Model: "auto", Scope: "codebase"},
+		workorder.ScopePolicy{Enforcement: "required"},
+		"/work",
+		"/work/runs/r1",
+		&provider.ScopeCapabilities{Backend: "copilot", Available: true, Supports: map[string]bool{"no_ask_user": true}},
+		"",
+	)
+	if err == nil || !strings.Contains(err.Error(), "advisory") {
+		t.Fatalf("expected optional provider required scope failure, got %v", err)
+	}
+}
+
 func TestBuildExecutionUsesFrozenCapsBeforeRegistry(t *testing.T) {
 	registry := provider.NewCapabilityRegistry(func(string) (string, error) {
 		return "", errors.New("registry should not be consulted when frozen caps are provided")

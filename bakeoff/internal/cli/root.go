@@ -36,7 +36,7 @@ Get started:
   bakeoff validate gather.work-order.json
   bakeoff research gather.work-order.json
 
-Provider CLIs required on PATH: ` + "`claude`, `codex`" + `.
+Provider CLIs: ` + "`claude`" + ` is required for generated judges; ` + "`codex`" + ` is the canonical peer, with ` + "`gemini`" + ` and ` + "`copilot`" + ` as optional peers.
 Run ` + "`bakeoff doctor`" + ` to check.
 `
 

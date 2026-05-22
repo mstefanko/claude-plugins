@@ -4,7 +4,11 @@
   <img src="assets/bakeoff-logo.png" alt="Bakeoff logo: two cake slices labeled A and B on a cake stand next to the Bakeoff wordmark" width="720">
 </p>
 
-Bakeoff turns agent comparison into a repeatable workflow. Give Claude and Codex the same research, review, or build task; Bakeoff runs them in parallel, collects their work, judges the outputs, and returns a report with replayable artifacts.
+Bakeoff turns agent comparison into a repeatable workflow. Give two providers
+the same research, review, or build task; Bakeoff runs them in parallel,
+collects their work, judges the outputs, and returns a report with replayable
+artifacts. The default pair is Claude + Codex; Gemini and GitHub Copilot can be
+chosen as optional peers.
 
 The tool is deliberately small and transparent. It launches providers, records artifacts, runs verification or judging, and writes a ledger, while leaving your checkout untouched. No surprise patches, no automatic PRs, no hidden state. Just parallel agent work with enough evidence to audit, reproduce, and trust the result.
 
@@ -32,14 +36,18 @@ Every Bakeoff run has the same shape. The mode determines what the judge does an
 ```mermaid
 flowchart LR
     REQ[Request] --> WO[Work order<br/>draft or validate]
-    WO --> RUN[Claude + Codex<br/>same task]
+    WO --> RUN[Two providers<br/>same task]
     RUN --> SELECT[Mode selector<br/>merge, judge, triage, or gates]
     SELECT --> OUT[Report + decision<br/>ledger]
 ```
 
 ## Quick Start
 
-Prerequisites: Claude Code with this plugin installed; Go 1.24+ so `/bakeoff:setup` can build the bundled CLI source; `git` for review and build; authenticated `claude` and `codex` CLIs for live runs. Provider auth lives with the provider CLIs — don't put secrets in work orders.
+Prerequisites: Claude Code with this plugin installed; Go 1.24+ so
+`/bakeoff:setup` can build the bundled CLI source; `git` for review and build;
+an authenticated `claude` CLI for generated judges; and at least one peer CLI.
+`codex` is the canonical peer, while `gemini` and `copilot` are optional peers.
+Provider auth lives with the provider CLIs — don't put secrets in work orders.
 
 ```text
 /bakeoff:setup                                           # build bundled Go CLI into plugin data
@@ -76,7 +84,11 @@ from a research report or inspecting a selected build patch. It can also say
 that no follow-up Bakeoff run is recommended. Follow-up work still uses the
 same preview, validation, and approval flow; there is no automatic chaining.
 
-Generated work orders use Claude model aliases (`sonnet`, `opus`) so defaults stay current; use full model ids in the work order to pin exact versions.
+Generated work orders use exactly two providers. Defaults are `claude/sonnet`
+plus `codex/gpt-5.5`, with `claude/opus` as judge. If Codex is missing and
+exactly one optional peer is ready, `/bakeoff:run` may draft Claude + that peer
+and call out the fallback in the preview. Use full model ids in the work order
+to pin exact versions.
 
 ## Research
 
@@ -84,7 +96,9 @@ Think of research as:
 
 **same task -> two independent answers -> mode-specific judge -> report**
 
-`gather`, `compare`, and `analyze` use the same basic pipeline. Claude and Codex each work from the same request, then Bakeoff judges the results differently depending on the mode:
+`gather`, `compare`, and `analyze` use the same basic pipeline. The two selected
+providers each work from the same request, then Bakeoff judges the results
+differently depending on the mode:
 
 - `gather`: combines overlapping claims into one cited list
 - `compare`: judges named options and returns a winner, consensus, or tie
@@ -104,7 +118,9 @@ After a run, use `/bakeoff:history` to find recent run ids and
 <details open>
 <summary>Research and evidence behind this design</summary>
 
-The evidence says independent attempts are stronger than one single answer. So Bakeoff asks Claude and Codex to work separately, then combines or judges their outputs ([Self-Consistency](https://arxiv.org/abs/2203.11171)).
+The evidence says independent attempts are stronger than one single answer. So
+Bakeoff asks two selected providers to work separately, then combines or judges
+their outputs ([Self-Consistency](https://arxiv.org/abs/2203.11171)).
 
 The evidence also says more agents are not automatically better. Parallel research can help, but coordination and token cost climb quickly ([Anthropic multi-agent research](https://www.anthropic.com/engineering/multi-agent-research-system)). That is why Bakeoff stays small: two providers, one judge, replayable artifacts.
 
@@ -260,7 +276,7 @@ Slash commands:
 - `/bakeoff:run <path or request> [--run-id ID] [--out runs] [--quiet] [--keep-worktrees] [--no-triage] [--no-repo-layout]` — validate and run, or draft from natural language.
 - `/bakeoff:history [limit] [--out runs] [--facet ID] [--triage-state STATE] [--type TYPE]` — list recent runs with run ids and short goal summaries.
 - `/bakeoff:inspect [latest or run-id]` — open existing reports, decisions, triage, handoff.
-- `/bakeoff:doctor [--skip-auth-probe] [--build] [--quiet]` — readiness check. `--build` runs live edit probes.
+- `/bakeoff:doctor [--skip-auth-probe] [--build] [--quiet]` — readiness check. Reports the canonical pair, optional providers, and any draft-time fallback. `--build` runs live edit probes.
 - `/bakeoff:uninstall` — remove plugin state, then guide manual plugin uninstall.
 
 Core CLI: `bakeoff draft-build`, `bakeoff validate`, `bakeoff research`, `bakeoff build`, `bakeoff rerun`, `bakeoff ls`, `bakeoff show`, `bakeoff triage`, `bakeoff doctor`. Full reference in [docs/cli-reference.md](docs/cli-reference.md).

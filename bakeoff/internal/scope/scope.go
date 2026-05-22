@@ -99,6 +99,11 @@ func BuildExecution(ctx context.Context, registry *provider.CapabilityRegistry, 
 				fallbackReasons = append(fallbackReasons, "codex CLI did not advertise --disable")
 			}
 		}
+	case participant.Backend == "gemini" || participant.Backend == "copilot":
+		if requestedScope == "codebase" || requestedScope == "web" {
+			mechanisms = append(mechanisms, "prompt_scope_instruction")
+			fallbackReasons = append(fallbackReasons, participant.Backend+" CLI scope controls are advisory for "+requestedScope+" scope")
+		}
 	}
 
 	enforcementLevel := "partial"
@@ -189,9 +194,6 @@ func ScopeErrorResult(err error, provider workorder.Participant, policy workorde
 }
 
 func outputLastMessageSupport(ctx context.Context, registry *provider.CapabilityRegistry, participant workorder.Participant, supports map[string]bool) bool {
-	if participant.Backend != "codex" && participant.Backend != "claude" {
-		return false
-	}
 	if supports != nil {
 		return supports["output_last_message"]
 	}

@@ -127,23 +127,89 @@ func TestRunDoctorBuildPreflightFailsWithoutCodexWorkspaceWrite(t *testing.T) {
 	}
 }
 
+func TestRunDoctorReportsFallbackPairWhenCodexMissing(t *testing.T) {
+	f, out := newDoctorFakeFactoryWithBackends(t, true, "claude", "gemini")
+
+	err := runDoctor(context.Background(), f, &DoctorOptions{
+		SkipAuthProbe: true,
+		Quiet:         true,
+		JSON:          true,
+	})
+	if err != nil {
+		t.Fatalf("%v\nreport = %#v", err, decodeDoctorReport(t, out))
+	}
+
+	report := decodeDoctorReport(t, out)
+	if report["canonical_default_available"] != false || report["runnable_default_pair_available"] != true {
+		t.Fatalf("default readiness = %#v", report)
+	}
+	selected := report["selected_default_pair"].([]any)
+	if len(selected) != 2 || selected[0] != "claude" || selected[1] != "gemini" {
+		t.Fatalf("selected pair = %#v", selected)
+	}
+	providers := report["providers"].(map[string]any)
+	gemini := providers["gemini"].(map[string]any)
+	if gemini["required_for_selected_default"] != true || gemini["default_model"] != modeldefaults.GeminiDefault {
+		t.Fatalf("gemini provider report = %#v", gemini)
+	}
+}
+
+func TestRunDoctorReportsAmbiguousFallbackChoice(t *testing.T) {
+	f, out := newDoctorFakeFactoryWithBackends(t, true, "claude", "gemini", "copilot")
+
+	err := runDoctor(context.Background(), f, &DoctorOptions{SkipAuthProbe: true, Quiet: true, JSON: true})
+	if err != nil {
+		t.Fatalf("%v\nreport = %#v", err, decodeDoctorReport(t, out))
+	}
+
+	report := decodeDoctorReport(t, out)
+	if report["selected_default_pair"] != nil || report["fallback_requires_user_choice"] != true || report["runnable_default_pair_available"] != true {
+		t.Fatalf("fallback choice report = %#v", report)
+	}
+	candidates := report["fallback_candidates"].([]any)
+	if len(candidates) != 2 {
+		t.Fatalf("fallback candidates = %#v", candidates)
+	}
+}
+
+func TestRunDoctorFailsWhenClaudeMissing(t *testing.T) {
+	f, out := newDoctorFakeFactoryWithBackends(t, true, "gemini", "copilot")
+
+	err := runDoctor(context.Background(), f, &DoctorOptions{SkipAuthProbe: true, Quiet: true, JSON: true})
+	if err == nil {
+		t.Fatal("expected doctor to fail without claude")
+	}
+	report := decodeDoctorReport(t, out)
+	if report["status"] != "failed" || report["runnable_default_pair_available"] != false {
+		t.Fatalf("report = %#v", report)
+	}
+}
+
 func newDoctorFakeFactory(t *testing.T, codexWorkspaceWrite bool) (doctorTestFactory, *bytes.Buffer) {
+	return newDoctorFakeFactoryWithBackends(t, codexWorkspaceWrite, "claude", "codex")
+}
+
+func newDoctorFakeFactoryWithBackends(t *testing.T, codexWorkspaceWrite bool, backends ...string) (doctorTestFactory, *bytes.Buffer) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("doctor fake provider scripts require POSIX shell")
 	}
 	dir := t.TempDir()
-	writeDoctorFakeProvider(t, dir, "claude", true)
-	writeDoctorFakeProvider(t, dir, "codex", codexWorkspaceWrite)
+	fakeBackends := map[string]bool{}
+	for _, backend := range backends {
+		fakeBackends[backend] = true
+		writeDoctorFakeProvider(t, dir, backend, codexWorkspaceWrite)
+	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	lookup := func(name string) (string, error) {
-		switch name {
-		case "claude", "codex":
+		if fakeBackends[name] {
 			return filepath.Join(dir, name), nil
-		default:
-			return exec.LookPath(name)
 		}
+		if name == "gemini" || name == "copilot" || name == "codex" || name == "claude" {
+			return "", exec.ErrNotFound
+		}
+		return exec.LookPath(name)
 	}
 	var out, errOut bytes.Buffer
 	f := doctorTestFactory{
@@ -160,13 +226,15 @@ func writeDoctorFakeProvider(t *testing.T, dir string, name string, codexWorkspa
 	if codexWorkspaceWrite {
 		sandboxHelp = "--sandbox <read-only|workspace-write>"
 	}
-	expectedModel := modeldefaults.ClaudeSonnet
-	if name == "codex" {
-		expectedModel = modeldefaults.CodexDefault
-	}
+	expectedModel := provider.DefaultModel(name)
 	help := "echo 'fake claude help'; echo '--allowedTools'; echo '--disallowedTools'; echo '--tools'; echo '--permission-mode'"
-	if name == "codex" {
+	switch name {
+	case "codex":
 		help = fmt.Sprintf("echo 'fake codex exec help'; echo '%s'; echo '--disable'; echo '--profile'; echo '--config'; echo '--output-last-message'", sandboxHelp)
+	case "gemini":
+		help = "echo 'fake gemini help'; echo '--model'; echo '--approval-mode <default|auto_edit|yolo>'; echo '--yolo'"
+	case "copilot":
+		help = "echo 'fake copilot help'; echo '--model'; echo '--no-ask-user'; echo '--allow-tool'; echo '--deny-tool'"
 	}
 	script := fmt.Sprintf(`#!/bin/sh
 if [ "$1" = "--version" ]; then

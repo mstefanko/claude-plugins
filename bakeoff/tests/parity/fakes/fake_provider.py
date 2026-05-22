@@ -32,6 +32,19 @@ def print_help(name: str) -> None:
         print("  --tools")
         print("  --permission-mode")
         return
+    if name == "gemini":
+        print("fake gemini help")
+        print("  --model")
+        print("  --approval-mode <default|auto_edit|yolo>")
+        print("  --yolo")
+        return
+    if name == "copilot":
+        print("fake copilot help")
+        print("  --model")
+        print("  --no-ask-user")
+        print("  --allow-tool")
+        print("  --deny-tool")
+        return
     print("fake codex exec help")
     print("  --sandbox <read-only|workspace-write>")
     print("  --disable")
