@@ -163,9 +163,9 @@ Optional flags include `--base-ref`, repeatable `--background`, repeatable
 `--protected-path`, `--comparison-goal`, `--budget-wall-seconds`,
 `--budget-max-output-bytes`, `--gate-wall-seconds`, and
 `--gate-max-output-bytes`. Repeat `--provider` exactly twice to choose a
-non-default pair, using `backend` or `backend:model`. Gate commands are emitted
-as `["sh", "-c", "<command>"]`. Metric verifier drafting remains manual for
-now.
+non-default pair, using `backend` or `backend:model`; the generated work order
+preserves the order of the two flags. Gate commands are emitted as
+`["sh", "-c", "<command>"]`. Metric verifier drafting remains manual for now.
 
 Example:
 

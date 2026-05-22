@@ -292,6 +292,8 @@ func (r *CapabilityRegistry) runProbe(ctx context.Context, argv []string, timeou
 	}
 	exe, err := r.lookup(argv[0])
 	if err != nil {
+		// Keep this diagnostic stable for Python parity fixtures and legacy callers
+		// that compare the old implementation's missing-executable text.
 		return "", fmt.Errorf("FileNotFoundError: [Errno 2] No such file or directory: '%s'", argv[0])
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)

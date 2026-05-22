@@ -134,6 +134,15 @@ func TestGenericWorkerFixturesStayProviderNeutral(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		for _, backend := range []string{"claude", "codex"} {
+			other, err := fixturePrompt("worker-" + mode + "-" + backend + ".txt")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if text == other {
+				t.Fatalf("%s generic fixture should not be byte-identical to %s fixture", mode, backend)
+			}
+		}
 		scrubbed := strings.NewReplacer(
 			"CLAUDE.md", "",
 			"GEMINI.md", "",

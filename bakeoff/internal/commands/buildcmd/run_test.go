@@ -127,6 +127,11 @@ func TestAgentInstructionPathIncludesOptionalProviderConfig(t *testing.T) {
 			t.Fatalf("%s should be treated as provider instruction/config path", path)
 		}
 	}
+	for _, path := range []string{".github/copilot-instructions.md.bak", "pkg/.github/copilot-instructions.md.bak"} {
+		if isAgentInstructionPath(path) {
+			t.Fatalf("%s should not be treated as provider instruction/config path", path)
+		}
+	}
 }
 
 func TestBuildEnvScrubsSecrets(t *testing.T) {

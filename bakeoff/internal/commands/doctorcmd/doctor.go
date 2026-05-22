@@ -75,7 +75,8 @@ func runDoctor(ctx context.Context, f commands.Factory, opts *DoctorOptions) err
 	}
 	tools := report["tools"].(map[string]any)
 	providerEntries := report["providers"].(map[string]any)
-	toolNames := append(provider.BackendNames(), "git")
+	toolNames := append([]string{}, provider.BackendNames()...)
+	toolNames = append(toolNames, "git")
 	toolOK := map[string]bool{}
 	for _, tool := range toolNames {
 		path, err := f.LookupProvider(tool)

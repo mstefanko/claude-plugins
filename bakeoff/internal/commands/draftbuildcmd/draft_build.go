@@ -66,7 +66,7 @@ func NewCmdDraftBuild(f commands.Factory, runF func(context.Context, *DraftBuild
 	cmd.Flags().StringVar(&opts.BaseRef, "base-ref", workorder.DefaultBuildDraftBaseRef, "build base ref")
 	cmd.Flags().StringArrayVar(&opts.Background, "background", nil, "additional context paragraph (repeatable)")
 	cmd.Flags().StringArrayVar(&opts.ProtectedPaths, "protected-path", nil, "repository-relative protected path (repeatable)")
-	cmd.Flags().StringArrayVar(&opts.Providers, "provider", nil, "worker provider as backend or backend:model; repeat exactly twice to override defaults")
+	cmd.Flags().StringArrayVar(&opts.Providers, "provider", nil, "worker provider as backend or backend:model; repeat exactly twice to override defaults; order is preserved")
 	cmd.Flags().StringVar(&opts.ComparisonGoal, "comparison-goal", workorder.DefaultBuildDraftComparisonGoal, "build comparison goal")
 	cmd.Flags().IntVar(&opts.BudgetWallSeconds, "budget-wall-seconds", workorder.DefaultBuildDraftBudgetWallSeconds, "work-order wall budget")
 	cmd.Flags().IntVar(&opts.BudgetMaxOutputBytes, "budget-max-output-bytes", workorder.DefaultBuildDraftBudgetMaxOutputBytes, "work-order output budget")
@@ -111,17 +111,23 @@ func parseProviderFlags(values []string) ([]workorder.Participant, error) {
 		return nil, workorder.Validationf("--provider must be supplied exactly twice or not at all")
 	}
 	out := make([]workorder.Participant, 0, len(values))
-	seen := map[string]int{}
+	seenBackends := map[string]int{}
+	seenIDs := map[string]int{}
 	for i, value := range values {
 		backend, model, err := parseProviderFlag(value, i)
 		if err != nil {
 			return nil, err
 		}
-		if previous, ok := seen[backend]; ok {
+		if previous, ok := seenBackends[backend]; ok {
 			return nil, workorder.Validationf("--provider[%d] backend %q duplicates --provider[%d]", i, backend, previous)
 		}
-		seen[backend] = i
-		out = append(out, workorder.Participant{ID: backend, Backend: backend, Model: model, Scope: "codebase", Effort: "high"})
+		seenBackends[backend] = i
+		participant := workorder.Participant{ID: backend, Backend: backend, Model: model, Scope: "codebase", Effort: "high"}
+		if previous, ok := seenIDs[participant.ID]; ok {
+			return nil, workorder.Validationf("--provider[%d] generated id %q duplicates --provider[%d]", i, participant.ID, previous)
+		}
+		seenIDs[participant.ID] = i
+		out = append(out, participant)
 	}
 	return out, nil
 }

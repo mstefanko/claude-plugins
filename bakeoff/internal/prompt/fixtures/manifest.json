@@ -29,8 +29,8 @@
       "size_bytes": 4706
     },
     "worker-analyze-generic-terminal-agent.txt": {
-      "sha256": "a702206f2e573ceabd31448de80fc80b2a431ae137585c344240f8b8346c5625",
-      "size_bytes": 4719
+      "sha256": "aa1360a5cc91420595239bbd2821d7d0dbe81d6003dc599a6495ab15adce8a74",
+      "size_bytes": 4895
     },
     "worker-build-claude.txt": {
       "sha256": "f004709dad5fcb9118e554ce2f676d14d8d15b3dbcc4a95ece2e738f7f1708bd",
@@ -53,8 +53,8 @@
       "size_bytes": 5063
     },
     "worker-compare-generic-terminal-agent.txt": {
-      "sha256": "285182e133d71af0eebd648eb3d61e9c7d260ca83883d719ee4cd0f3f4d7c77f",
-      "size_bytes": 5076
+      "sha256": "254cad254d19317e66c926378e63d318603c9ba386266721e95560e2221f215c",
+      "size_bytes": 5252
     },
     "worker-gather-claude.txt": {
       "sha256": "8e86168cd82657eceb6b5c0ea8322481415dd0ad63e32243f27e22f49dfc605d",
@@ -65,8 +65,8 @@
       "size_bytes": 4394
     },
     "worker-gather-generic-terminal-agent.txt": {
-      "sha256": "8e86168cd82657eceb6b5c0ea8322481415dd0ad63e32243f27e22f49dfc605d",
-      "size_bytes": 4408
+      "sha256": "94c0ca6ec38c1859a41bf590f5086d2935634f5027ced477b3feec20a24be44a",
+      "size_bytes": 4584
     }
   },
   "schema_version": 1

@@ -299,9 +299,15 @@ func Validate(data map[string]any) (*WorkOrder, error) {
 	if err != nil {
 		return nil, err
 	}
-	for i, provider := range providers {
-		if mode == "build" && provider.Scope == "web" {
-			return nil, Validationf(`providers[%d].scope "web" is not supported for type "build"`, i)
+	for i, participant := range providers {
+		if mode == "build" {
+			spec, ok := provider.Backend(participant.Backend)
+			if !ok || !spec.SupportsBuild {
+				return nil, Validationf("providers[%d].backend %q does not support type \"build\"", i, participant.Backend)
+			}
+			if participant.Scope == "web" {
+				return nil, Validationf(`providers[%d].scope "web" is not supported for type "build"`, i)
+			}
 		}
 	}
 	providerIDs := make(map[string]bool, len(providers))

@@ -93,10 +93,14 @@ func TestRunDraftBuildInvalidInputSurfacesValidationError(t *testing.T) {
 	}
 }
 
-func TestRunDraftBuildWithProviderFlags(t *testing.T) {
+func TestRunDraftBuildWithDoctorFallbackProviderPair(t *testing.T) {
 	var out, errOut bytes.Buffer
 	f := draftBuildTestFactory{streams: output.NewStreams(&out, &errOut)}
-	providers, err := parseProviderFlags([]string{"claude", "gemini:pro"})
+	resolution := provider.ResolveDefaultPair(map[string]bool{"claude": true, "gemini": true})
+	if len(resolution.SelectedDefaultPair) != 2 || resolution.SelectedDefaultPair[0] != "claude" || resolution.SelectedDefaultPair[1] != "gemini" {
+		t.Fatalf("fallback pair = %#v", resolution)
+	}
+	providers, err := parseProviderFlags(resolution.SelectedDefaultPair)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,6 +147,15 @@ func TestParseProviderFlags(t *testing.T) {
 		}
 		if providers[1].Model != "auto" {
 			t.Fatalf("copilot model = %q", providers[1].Model)
+		}
+	})
+	t.Run("preserves flag order", func(t *testing.T) {
+		providers, err := parseProviderFlags([]string{"codex", "claude"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if providers[0].Backend != "codex" || providers[1].Backend != "claude" {
+			t.Fatalf("providers = %#v", providers)
 		}
 	})
 	t.Run("rejects duplicate backend", func(t *testing.T) {

@@ -145,12 +145,13 @@ Implicit provider selection rules:
 For build fast-path drafts, run `bakeoff draft-build` with the extracted id,
 goal, acceptance criteria, edit scope, gate verifier, optional base/protected
 paths, and exactly two `--provider` flags when the user explicitly chose a pair
-or doctor selected a fallback pair. With zero `--provider` flags the command
-stays deterministic and emits the canonical Claude+Codex pair. Use stdout as
-the preview source; the command owns the canonical build shape, provider/judge
-defaults, budgets, `build.verify[].argv`, and self-validation. Metric verifier
-drafts, generated fixtures, and protected benchmark harnesses still use careful
-manual drafting.
+or doctor selected a fallback pair. Pass those flags in the same order you will
+show in the preview; `draft-build` preserves the two-provider order. With zero
+`--provider` flags the command stays deterministic and emits the canonical
+Claude+Codex pair. Use stdout as the preview source; the command owns the
+canonical build shape, provider/judge defaults, budgets, `build.verify[].argv`,
+and self-validation. Metric verifier drafts, generated fixtures, and protected
+benchmark harnesses still use careful manual drafting.
 
 For gather/code-review, compare, and analyze drafts, copy field names from
 `examples/*.work-order.json`. Avoid schema drift: use `providers[].backend`

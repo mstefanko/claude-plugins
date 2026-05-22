@@ -200,8 +200,9 @@ Required flags are `--id`, `--goal`, at least one `--acceptance`, at least one
 extra context and `--protected-path` for verifier scripts or fixtures providers
 must not edit. Repeat `--provider` exactly twice to override the deterministic
 Claude+Codex default, using either `backend` or `backend:model`, for example
-`--provider claude --provider gemini:pro`. Metric verifier drafting remains
-manual for now.
+`--provider claude --provider gemini:pro`. The generated work order preserves
+the order of the two `--provider` flags. Metric verifier drafting remains manual
+for now.
 
 Verifier fields:
 

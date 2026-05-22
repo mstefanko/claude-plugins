@@ -191,9 +191,9 @@ func isAgentInstructionPath(path string) bool {
 	return strings.HasPrefix(path, ".claude/") ||
 		strings.HasPrefix(path, ".codex/") ||
 		strings.HasPrefix(path, ".gemini/") ||
-		strings.HasPrefix(path, ".github/copilot-instructions.md") ||
+		path == ".github/copilot-instructions.md" ||
 		strings.Contains(path, "/.claude/") ||
 		strings.Contains(path, "/.codex/") ||
 		strings.Contains(path, "/.gemini/") ||
-		strings.Contains(path, "/.github/copilot-instructions.md")
+		strings.HasSuffix(path, "/.github/copilot-instructions.md")
 }
