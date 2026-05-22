@@ -9,6 +9,7 @@ dist/
 
 # Local/editor state
 .DS_Store
+node-compile-cache/
 *.log
 *.tmp
 .claude/settings.local.json

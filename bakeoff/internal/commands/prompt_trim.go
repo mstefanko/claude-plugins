@@ -7,25 +7,15 @@ import (
 )
 
 func LogPromptTrim(f Factory, result prompt.TrimResult) {
-	LogPromptTrimRecords(f, TrimRecords(result))
-}
-
-func LogPromptTrimRecords(f Factory, records []prompt.TrimRecord) {
-	for _, record := range records {
-		logPromptTrimRecord(f, record)
-	}
-}
-
-func logPromptTrimRecord(f Factory, record prompt.TrimRecord) {
-	if len(record.Sections) == 0 {
+	if result.Record == nil {
 		return
 	}
 	f.Streams().Errorf(
 		"prompt_trim: prompt=%s dropped=%s original_bytes=%d final_bytes=%d\n",
-		record.Prompt,
-		strings.Join(record.Sections, ","),
-		record.OriginalBytes,
-		record.FinalBytes,
+		result.Record.Prompt,
+		strings.Join(result.Record.Sections, ","),
+		result.OriginalBytes,
+		result.FinalBytes,
 	)
 }
 
@@ -34,18 +24,10 @@ func AttachPromptTrim(decision map[string]any, records []prompt.TrimRecord) {
 		return
 	}
 	dropped := make([]map[string]any, 0, len(records))
-	seen := map[string]struct{}{}
 	for _, record := range records {
-		// TrimContextToBudget never emits empty sections, but keep this tolerant
-		// because tests and future callers may construct records by hand.
 		if len(record.Sections) == 0 {
 			continue
 		}
-		key := record.Prompt + "\x00" + strings.Join(record.Sections, "\x00")
-		if _, exists := seen[key]; exists {
-			continue
-		}
-		seen[key] = struct{}{}
 		dropped = append(dropped, map[string]any{
 			"prompt":   record.Prompt,
 			"sections": append([]string(nil), record.Sections...),

@@ -27,6 +27,7 @@ Run first:
 
 ```bash
 BAKEOFF_CLI="$("${CLAUDE_PLUGIN_ROOT}/scripts/bakeoff-ensure-cli" --check --print-path)"
+[[ -n "$BAKEOFF_CLI" && -x "$BAKEOFF_CLI" ]]
 ```
 
 If exit `2`, stop and direct the user to install Go 1.24+ and run
@@ -34,6 +35,8 @@ If exit `2`, stop and direct the user to install Go 1.24+ and run
 other non-zero exit is an unexpected CLI resolution failure; surface the output
 and direct the user to `/bakeoff:doctor`. Do not draft, validate, or run until
 preflight succeeds.
+If the command exits zero but the printed value is empty or not executable, stop
+as an unexpected CLI resolution failure and direct the user to `/bakeoff:doctor`.
 
 Keep the resolved `BAKEOFF_CLI` value for every CLI invocation in this workflow,
 especially generated parallel launch helpers. Never hardcode cache

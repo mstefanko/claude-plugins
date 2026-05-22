@@ -451,7 +451,7 @@ No scratchpad. No markdown. No prose before or after the final_json block.
 The JSON object must match the schema required by the original task prompt.
 If the previous stdout cannot be repaired faithfully, emit the closest schema-valid object that explicitly records the uncertainty in the schema's unknowns/caveats field when such a field exists.
 </output_format>
-`, FormatRetryMarker, escapePromptBlockBody(lastNonEmptyLine(previous.Stderr, previous.Status)), tailText(originalPrompt, MaxRepairPromptChars), escapePromptBlockBody(tailText(previous.Stdout, MaxRepairStdoutChars)), escapePromptBlockBody(tailText(previous.Stderr, MaxRepairStderrChars)))
+`, FormatRetryMarker, escapePromptBlockBody(lastNonEmptyLine(previous.Stderr, previous.Status)), escapePromptBlockBody(tailText(originalPrompt, MaxRepairPromptChars)), escapePromptBlockBody(tailText(previous.Stdout, MaxRepairStdoutChars)), escapePromptBlockBody(tailText(previous.Stderr, MaxRepairStderrChars)))
 }
 
 func escapePromptBlockBody(body string) string {

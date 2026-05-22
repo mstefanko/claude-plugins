@@ -15,8 +15,8 @@ while IFS=$'\t' read -r label path kind; do
 
   if [[ -e "$path" || -L "$path" ]]; then
     if [[ ! -x "$path" ]]; then
-      echo "error: $label exists but is not executable: $path" >&2
-      exit 2
+      echo "warning: $label exists but is not executable, skipping: $path" >&2
+      continue
     fi
     exec "$path" "$@"
   fi

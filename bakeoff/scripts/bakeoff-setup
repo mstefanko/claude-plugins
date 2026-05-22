@@ -454,7 +454,6 @@ EOF
 
   mv -f "$install_tmp" "$binary_path"
   install_tmp=""
-  invalidate_root_dist_binary
 
   metadata_tmp="$(mktemp "$data/.version.XXXXXX")"
   cat > "$metadata_tmp" <<EOF
@@ -476,6 +475,7 @@ EOF
 }
 EOF
   mv -f "$metadata_tmp" "$data/version.json"
+  invalidate_root_dist_binary
 
   if [[ "$json_output" -eq 1 ]]; then
     emit_source_json "installed"
@@ -617,7 +617,6 @@ fi
 
 mv -f "$install_tmp" "$binary_path"
 install_tmp=""
-invalidate_root_dist_binary
 
 installed_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 metadata_tmp="$(mktemp "$data/.version.XXXXXX")"
@@ -643,6 +642,7 @@ cat > "$metadata_tmp" <<EOF
 }
 EOF
 mv -f "$metadata_tmp" "$data/version.json"
+invalidate_root_dist_binary
 
 if [[ "$json_output" -eq 1 ]]; then
   emit_release_json "installed"

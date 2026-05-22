@@ -85,6 +85,10 @@ replace `BAKEOFF_CLI` with that absolute path.
 ```sh
 tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/bakeoff-parallel.XXXXXX") || exit 1
 BAKEOFF_CLI="/absolute/path/printed/by/bakeoff-ensure-cli"
+if [ -z "$BAKEOFF_CLI" ] || [ ! -x "$BAKEOFF_CLI" ]; then
+  echo "resolved Bakeoff CLI is not executable: $BAKEOFF_CLI" >&2
+  exit 2
+fi
 
 start_child() {
   label=$1

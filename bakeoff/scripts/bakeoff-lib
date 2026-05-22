@@ -7,6 +7,35 @@ BAKEOFF_MACOS_GATEKEEPER_HELP="macOS may be blocking this unsigned Bakeoff binar
 
 BAKEOFF_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+bakeoff_strip_trailing_slashes() {
+  local value="$1"
+  while [[ "$value" != "/" && "$value" == */ ]]; do
+    value="${value%/}"
+  done
+  printf '%s\n' "$value"
+}
+
+bakeoff_normalize_path_key() {
+  local path dir base physical_dir
+  path="$(bakeoff_strip_trailing_slashes "$1")"
+  if [[ -z "$path" ]]; then
+    printf '\n'
+    return 0
+  fi
+  dir="$(dirname "$path")"
+  base="$(basename "$path")"
+  if [[ -d "$dir" ]]; then
+    if physical_dir="$(cd "$dir" 2>/dev/null && pwd -P)"; then
+      printf '%s/%s\n' "$physical_dir" "$base"
+      return 0
+    fi
+  fi
+  case "$path" in
+    /*) printf '%s\n' "$path" ;;
+    *) printf '%s/%s\n' "$(pwd -P)" "$path" ;;
+  esac
+}
+
 bakeoff_plugin_root() {
   if [[ -n "${BAKEOFF_PLUGIN_ROOT:-}" ]]; then
     printf '%s\n' "$BAKEOFF_PLUGIN_ROOT"
@@ -37,7 +66,7 @@ bakeoff_data_root() {
 
 bakeoff_plugin_coordinates() {
   local root prefix rest marketplace plugin version
-  root="$(bakeoff_plugin_root)"
+  root="$(bakeoff_strip_trailing_slashes "$(bakeoff_plugin_root)")"
 
   case "$root" in
     */.claude/plugins/cache/*/*/*)
@@ -79,7 +108,13 @@ bakeoff_conventional_cache_root() {
 }
 
 bakeoff_default_go_cache() {
-  printf '%s/bakeoff-go-cache\n' "${TMPDIR:-/tmp}"
+  local tmpdir
+  tmpdir="$(bakeoff_strip_trailing_slashes "${TMPDIR:-/tmp}")"
+  if [[ "$tmpdir" == "/" ]]; then
+    printf '/bakeoff-go-cache\n'
+  else
+    printf '%s/bakeoff-go-cache\n' "$tmpdir"
+  fi
 }
 
 bakeoff_host_os_arch() {
@@ -105,31 +140,48 @@ bakeoff_host_os_arch() {
 
 bakeoff_candidate_binaries() {
   local data root data_label conventional_data
+  local seen_paths=$'\n'
+
+  candidate_seen() {
+    local key="$1"
+    [[ "$seen_paths" == *$'\n'"$key"$'\n'* ]]
+  }
+
+  emit_candidate() {
+    local label="$1"
+    local path="$2"
+    local kind="$3"
+    local key
+    key="$(bakeoff_normalize_path_key "$path")"
+    if candidate_seen "$key"; then
+      return 0
+    fi
+    seen_paths+="$key"$'\n'
+    printf '%s\t%s\t%s\n' "$label" "$path" "$kind"
+  }
 
   if [[ -n "${BAKEOFF_GO_BINARY:-}" ]]; then
-    printf 'BAKEOFF_GO_BINARY\t%s\texplicit\n' "$BAKEOFF_GO_BINARY"
+    emit_candidate 'BAKEOFF_GO_BINARY' "$BAKEOFF_GO_BINARY" 'explicit'
   fi
 
   if [[ -n "${BAKEOFF_PLUGIN_DATA:-}" ]]; then
-    data="$BAKEOFF_PLUGIN_DATA"
+    data="$(bakeoff_strip_trailing_slashes "$BAKEOFF_PLUGIN_DATA")"
     data_label="BAKEOFF_PLUGIN_DATA/bin/bakeoff"
-    printf '%s\t%s/bin/bakeoff\tprovisioned\n' "$data_label" "$data"
+    emit_candidate "$data_label" "$data/bin/bakeoff" 'provisioned'
   fi
 
   if [[ -n "${CLAUDE_PLUGIN_DATA:-}" ]]; then
-    data="$CLAUDE_PLUGIN_DATA"
+    data="$(bakeoff_strip_trailing_slashes "$CLAUDE_PLUGIN_DATA")"
     data_label="CLAUDE_PLUGIN_DATA/bin/bakeoff"
-    printf '%s\t%s/bin/bakeoff\tprovisioned\n' "$data_label" "$data"
+    emit_candidate "$data_label" "$data/bin/bakeoff" 'provisioned'
   fi
 
   if conventional_data="$(bakeoff_conventional_data_root)"; then
-    if [[ "${BAKEOFF_PLUGIN_DATA:-}" != "$conventional_data" && "${CLAUDE_PLUGIN_DATA:-}" != "$conventional_data" ]]; then
-      printf 'Claude plugin data/bin/bakeoff\t%s/bin/bakeoff\tprovisioned\n' "$conventional_data"
-    fi
+    emit_candidate 'Claude plugin data/bin/bakeoff' "$conventional_data/bin/bakeoff" 'provisioned'
   fi
 
-  root="$(bakeoff_plugin_root)"
-  printf 'dist/bakeoff\t%s/dist/bakeoff\tpackaged\n' "$root"
+  root="$(bakeoff_strip_trailing_slashes "$(bakeoff_plugin_root)")"
+  emit_candidate 'dist/bakeoff' "$root/dist/bakeoff" 'packaged'
 }
 
 bakeoff_version_probe() {

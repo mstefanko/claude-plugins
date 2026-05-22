@@ -288,6 +288,29 @@ test_resolution_order() {
   assert_contains "$output" "bakeoff override"
 }
 
+test_duplicate_data_candidates_warn_once_and_fall_through() {
+  local plugin_root="$tmp/plugin-root-duplicates"
+  local data="$tmp/data-duplicates"
+  local output warning_count
+  mkdir -p "$plugin_root/dist" "$data/bin"
+  write_fake_bakeoff "$plugin_root/dist/bakeoff" "dist"
+  write_fake_bakeoff "$data/bin/bakeoff" "data"
+  chmod 0644 "$data/bin/bakeoff"
+
+  output="$(env BAKEOFF_PLUGIN_ROOT="$plugin_root" BAKEOFF_PLUGIN_DATA="$data" CLAUDE_PLUGIN_DATA="$data/" "$root/scripts/bakeoff-ensure-cli" --check 2>&1)"
+  assert_contains "$output" "warning: BAKEOFF_PLUGIN_DATA/bin/bakeoff exists but is not executable"
+  assert_contains "$output" "dist/bakeoff"
+  assert_contains "$output" "bakeoff dist"
+  warning_count="$(grep -oF 'exists but is not executable' <<< "$output" | wc -l | tr -d ' ')"
+  [[ "$warning_count" == "1" ]] || fail "duplicate data candidates produced $warning_count warnings: $output"
+
+  output="$(env BAKEOFF_PLUGIN_ROOT="$plugin_root" BAKEOFF_PLUGIN_DATA="$data" CLAUDE_PLUGIN_DATA="$data/" "$root/bin/bakeoff" --version 2>&1)"
+  assert_contains "$output" "warning: BAKEOFF_PLUGIN_DATA/bin/bakeoff exists but is not executable"
+  assert_contains "$output" "bakeoff dist"
+  warning_count="$(grep -oF 'exists but is not executable' <<< "$output" | wc -l | tr -d ' ')"
+  [[ "$warning_count" == "1" ]] || fail "duplicate bin candidates produced $warning_count warnings: $output"
+}
+
 test_conventional_data_precedes_dist_without_env() {
   local home plugin_root data output path
   home="$tmp/home-conventional"
@@ -297,17 +320,17 @@ test_conventional_data_precedes_dist_without_env() {
   write_fake_bakeoff "$plugin_root/dist/bakeoff" "dist"
   write_fake_bakeoff "$data/bin/bakeoff" "data"
 
-  output="$(env -i HOME="$home" PATH="/usr/bin:/bin" BAKEOFF_PLUGIN_ROOT="$plugin_root" "$root/scripts/bakeoff-ensure-cli" --check)"
+  output="$(env -i HOME="$home" PATH="/usr/bin:/bin" BAKEOFF_PLUGIN_ROOT="$plugin_root/" "$root/scripts/bakeoff-ensure-cli" --check)"
   assert_contains "$output" "Claude plugin data/bin/bakeoff"
   assert_contains "$output" "bakeoff data"
   if [[ "$output" == *"bakeoff dist"* ]]; then
     fail "resolver used dist despite conventional data binary: $output"
   fi
 
-  path="$(env -i HOME="$home" PATH="/usr/bin:/bin" BAKEOFF_PLUGIN_ROOT="$plugin_root" "$root/scripts/bakeoff-ensure-cli" --check --print-path)"
+  path="$(env -i HOME="$home" PATH="/usr/bin:/bin" BAKEOFF_PLUGIN_ROOT="$plugin_root/" "$root/scripts/bakeoff-ensure-cli" --check --print-path)"
   [[ "$path" == "$data/bin/bakeoff" ]] || fail "print-path = $path, want $data/bin/bakeoff"
 
-  output="$(env -i HOME="$home" PATH="/usr/bin:/bin" BAKEOFF_PLUGIN_ROOT="$plugin_root" "$root/bin/bakeoff" --version)"
+  output="$(env -i HOME="$home" PATH="/usr/bin:/bin" BAKEOFF_PLUGIN_ROOT="$plugin_root/" "$root/bin/bakeoff" --version)"
   assert_contains "$output" "bakeoff data"
 }
 
@@ -440,6 +463,7 @@ test_no_go_no_binary_check
 test_source_build_install
 test_valid_release_install
 test_resolution_order
+test_duplicate_data_candidates_warn_once_and_fall_through
 test_conventional_data_precedes_dist_without_env
 test_conventional_data_precedes_dist_for_cache_root_without_env
 test_unrecognized_plugin_root_ignores_conventional_data_without_env
