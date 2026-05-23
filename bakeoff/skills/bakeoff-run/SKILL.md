@@ -107,6 +107,9 @@ invent verifier placeholders such as "the conventional test command", "the auth
 tests", "the build", or `go test ./internal/<pkg>/...` from a package name.
 
 Available provider backends are `claude`, `codex`, `gemini`, and `copilot`.
+Those four names are the full catalog. Never invent provider or model variants
+such as `gemini-pro` unless the exact backend/model pair appears in an
+approved work order or explicit user text.
 Generated drafts must contain exactly two providers. The canonical provider
 pair is `claude/sonnet` plus `codex/gpt-5.5`; the generated judge remains
 `claude/opus`. Manual work orders may use any catalog backend as judge as long
@@ -120,9 +123,19 @@ Provider-pair extraction rules:
 - If the user explicitly names exactly two known providers, use those providers.
 - If the user asks to replace one provider with another, keep exactly two
   providers and show the resulting pair in the preview.
+- If the user names one provider as a replacement after a just-completed run,
+  default to swapping the non-winner and show the resulting pair inline. Ask
+  only when the winner/non-winner cannot be recovered from artifacts.
 - If wording such as "add Gemini", "include Gemini too", or "use Gemini as
   well" applies to a just-completed run or an explicit source run id, do not
   ask which provider to replace. Route to escalation preview instead.
+- If add-provider intent collides with a just-finished run, frame the choice as
+  a redirect, not a normal analyze/compare question: "Two ways to bring Gemini
+  in. You asked about analyze, but the compare just finished, so a third-opinion
+  escalation is also on the table." Offer parallel noun-phrase labels:
+  "New analyze: Claude + Gemini", "New analyze: Codex + Gemini", and
+  "Escalate the compare with Gemini". Define independent/witness/dispute inline
+  and state advisory-only impact for escalation.
 - If the same wording would add a third provider to a brand-new work order with
   no source run context, ask one clarification: `Bakeoff normal work orders use
   exactly two providers. Should Gemini replace Claude or Codex for this work
@@ -150,7 +163,8 @@ Post-run escalation is separate from work-order drafting. Use
 --dry-run` after reading structured source artifacts and only when the source
 run is `gather`, `compare`, `analyze`, or `gather` with
 `facet.id: "code-review"`. Do not offer build escalation. Recommend one mode
-first, then list alternatives:
+first, then list all three alternatives with equal-shape one-liners
+(when-to-use plus cost):
 
 - `independent` (fresh third answer): use when the source run is unresolved,
   decision-incomplete, or the user wants independent evidence. Cost: one
@@ -162,7 +176,18 @@ first, then list alternatives:
   conflicts, unknowns, judge caveats, kept-from-nonwinner material, or triage
   gaps. Cost: one provider call.
 
-Always require explicit mode approval before running a non-dry-run escalation.
+If source artifacts show failed or missing triage, recommend
+`bakeoff triage <run-id> --force` first with the rationale "retry - first
+failure is most often transient"; offer escalation only as fallback. Mode
+mapping: triage/verification/"is this finding real" maps to `dispute`; "is the
+conclusion sound" or broad sanity checking maps to `witness`; "fresh answer" or
+"second opinion" maps to `independent`.
+
+Escalation previews for `witness` and `dispute` must disclose before approval:
+"advisory only - cannot pick a new winner" and "escalation triage operates on
+the escalation provider's new findings, not the source run's findings." For
+cheap advisory modes, include the cost line in the first preview and accept a
+single `yes`; `independent` keeps the fuller dry-run/cost gate.
 For code-review escalation, leave triage enabled unless the user supplied
 `--no-triage`.
 
@@ -179,9 +204,13 @@ benchmark harnesses still use careful manual drafting.
 
 For gather/code-review, compare, and analyze drafts, copy field names from
 `examples/*.work-order.json`. Avoid schema drift: use `providers[].backend`
-and `scope: "codebase"`, not `kind`, `role`, or `"local"`; use
-`judge: {backend, model, effort}`; use nested `build.verify[]` with
-`argv: [...]`; put criteria in `background`; use integer `schema_version: 1`.
+and `providers[].id`; use `scope: "codebase"`, not `kind`, `role`, or
+`"local"`; use `judge: {backend, model, effort}`; use `budgets` keys
+`wall_clock_seconds`, `max_output_bytes`, `heartbeat_seconds`,
+`output_cap_grace_seconds`, and `max_output_overrun_bytes`; use nested
+`build.verify[]` with `argv: [...]`; put criteria in `background`; use integer
+`schema_version: 1`. For code-review facets, use `facet.kind: "generic"` and
+write `facet.include` / `facet.exclude` as descriptive criteria, not path globs.
 Non-build and manual build drafts should internally validate before preview
 when practical, but the enforced safety gate is the on-disk
 `bakeoff validate` after approval.
@@ -255,11 +284,20 @@ review context is useful. Let the CLI auto-triage reviews unless
 
 Before writing, show a compact preview with id/type, planned file path,
 providers, judge, budget, scope policy, goal, short background summary, and
-command. Include full JSON only if at most 120 lines and 10 KB; otherwise say
-`show` can print it. Ask: "Write, validate, and run this work order? Reply
-`yes` to continue, reply `show` to print the full JSON, or tell me what to
-change." If the user edits, asks, or replies ambiguously, revise or clarify and
-show an updated preview before writing.
+command. Bold or visually anchor the mutation target path as
+`./<basename>.work-order.json`. Note that the run id is assigned by the CLI on
+launch unless a `--run-id` was supplied; preview-time id is the file basename.
+Include full JSON only if at most 120 lines and 10 KB; otherwise say `show` can
+print it.
+
+Choice-label conventions: `yes`, `approve`, and `run it` accept every approved
+single-work-order preview. Mode-specific aliases such as `approve witness` are
+optional and shown only as "or" alongside base verbs. `show` prints JSON; it is
+not an accept token and belongs on its own line. `inspect` opens or prints an
+existing report, not the draft JSON. Scoped variants use `<verb>: <scope>`.
+Every preview ends with "Reply `cancel` to discard this draft." If the user
+edits, asks, or replies ambiguously, revise or clarify and show an updated
+preview before writing.
 
 After approval, write only `./<id>.work-order.json`. If the filename or
 `runs/<id>` exists, append the smallest numeric suffix (`-2`, `-3`, ...);
@@ -297,7 +335,8 @@ Resolve collisions after `.part-N`, for example `base.part-1-2`. After
 approval, write all files, validate all files, and only then run the approved
 sequence or fanout. If any validation fails, run nothing, surface the error,
 repair, show the final set, and ask for fresh approval. Validation warnings are
-advisory when validation exits successfully.
+advisory when validation exits successfully; print each warning verbatim on its
+own line before adding any assistant gloss.
 
 Sequential splits continue after exits `0`, `3`, or `4`; exit `3` is completed
 with unresolved disagreement, and exit `4` is decision-incomplete with durable
@@ -443,12 +482,25 @@ converge, recommend `bakeoff rerun <run-id> --judge-only` first. Mention a full
 `bakeoff rerun <run-id>` only secondarily. Do not recommend judge-only rerun
 for build runs.
 
-Final responses must include run id, command or exit-code meaning, decision
-kind, report path, relevant triage path/state for code-review research,
-`bakeoff show <run-id>`, and for build runs the selected patch artifact only
-when `decision.json.canonical_winner` is non-null:
+Post-run summaries lead with the verdict, not the run id:
+`Decision: <X wins | consensus | unresolved> - <one-line position>`. Then give
+run id, command or exit-code meaning, decision kind, report path, relevant
+triage path/state for code-review research, `bakeoff show <run-id>`, and for
+build runs the selected patch artifact only when
+`decision.json.canonical_winner` is non-null:
 `<out>/<run-id>/providers/<winner>/build/diff.patch`. Include diagnostics for
 build runs when present. Stop after the Bakeoff handoff.
+
+When triage fails on an otherwise durable run, use this order:
+1. Run table or compact status with `triage: failed (<class>)`.
+2. Last ~20 lines of `triage/stderr.txt`, or "no stderr captured".
+3. Caveat: "Report is durable; only triage failed. N findings are present but
+   unverified."
+4. Primary recommendation: `bakeoff triage <id> --force`, with one sentence on
+   transient retries.
+5. Secondary options under "Other options", not equal-weight siblings.
+State the "findings are unverified until triage succeeds" caveat once per
+session and refer back instead of repeating it on every escalation summary.
 
 At most one artifact-aware continuation recommendation is allowed. Read stable
 structured artifacts before recommending: parseable `decision.json`, mode,
@@ -463,11 +515,23 @@ Allowed recommendation shapes are stop, inspect, judge-only rerun for research,
 escalation preview for non-build research/review, draft an implementation plan
 (`type: "analyze"`), gather/research, compare, review (`gather` plus
 `code-review`), or draft a build work order for approval.
+Escalation previews are strongly recommended when structured artifacts show:
+`decision_kind == "consensus"` with non-empty `consensus_disagreements`;
+`decision_kind` in `unresolved`, `disagreement`, or tie-like states; or a
+non-empty `Kept From Nonwinner` / `Additions From Loser` block. Recommend
+`bakeoff escalate <run-id> --provider <peer> --mode dispute --dry-run` when the
+question is focused dispute material. If artifact signals are weak, recommend
+`stop` or `inspect` cleanly; do not hedge with "usually optional" after making a
+recommendation.
 Prefer planning between research and build unless the implementation is tiny,
 concrete, and verifier-ready. Review-to-build advice requires actionable
 current triage plus supplied or repo-discovered acceptance criteria and
 verifier. For build runs, prefer inspecting or reviewing the selected patch
 when a canonical winner exists; if none exists, say there is no selected patch.
+
+Before emitting any preview, validation note, or final summary, do one short
+self-review pass: no stub sentences, no internal markers, no contradiction
+between recommendation and caveat, and no half-finished paragraph.
 
 Do not apply patches, create issues, create branches, commit, push, open PRs,
 synthesize a third patch, chain into another build, or edit source files from

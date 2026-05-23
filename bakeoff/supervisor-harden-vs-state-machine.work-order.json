@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "id": "supervisor-harden-vs-state-machine",
+  "type": "compare",
+  "goal": "Compare two approaches for the bakeoff provider runner (the 'supervisor' in internal/runner/): (A) incrementally harden internal/runner/runner.go and process_unix.go/process_windows.go in place, versus (B) introduce an explicit process-state machine with companion race-detector and goroutine-leak tests. Produce a decision-grade recommendation with tradeoffs.",
+  "background": "The bakeoff CLI runs provider subprocesses (Claude, Codex, etc.) via internal/runner/. runner.go is ~1200 lines and process_unix.go / process_windows.go handle signal and process-group teardown; runner_test.go is ~600 lines. Today there is no explicit state machine: lifecycle (spawn, copy stdout/stderr, wait, kill on cap or context cancel, drain) is expressed via inline goroutines, channels, and ad-hoc booleans, with platform shims under process_*.go. Approach A keeps the existing structure but plugs observed gaps -- tighter cleanup ordering, defensive context.AfterFunc / WaitGroup invariants, deterministic kill-then-wait, narrower retries, and additive tests that exercise race conditions (cancel-during-copy, killed-before-exit, stderr-overflow-during-stop) and goroutine leaks (e.g. go.uber.org/goleak in TestMain). Approach B extracts a typed Process state machine (states such as Idle, Spawning, Running, Stopping, Killing, Reaped, with transitions returning errors on illegal moves), separates transport/IO from lifecycle, routes all signals and timeouts through a single event loop, and adds race/leak tests against the formal state graph. Acceptance criteria for the comparison: (1) each approach must name concrete code locations it touches or adds; (2) each must state which specific race or leak classes it forecloses and which it cannot; (3) each must call out implications for the Windows process_windows.go path where job-object semantics differ from POSIX process groups; (4) each must estimate complexity in lines/files added and test surface; (5) the final recommendation must pick one approach and justify it on durability of correctness vs. churn cost, not on style. Out of scope: rewriting verifier or artifact subsystems; switching off Go's os/exec; changing CLI ergonomics.",
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "sonnet",
+      "scope": "mixed",
+      "effort": "high"
+    },
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "scope": "mixed",
+      "effort": "high"
+    }
+  ],
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  },
+  "scope_policy": {
+    "enforcement": "best_effort"
+  }
+}

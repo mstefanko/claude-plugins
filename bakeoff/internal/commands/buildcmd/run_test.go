@@ -284,6 +284,19 @@ func TestRunBuildMutatesIsolatedWorktreesAndCapturesPatches(t *testing.T) {
 	if decision["canonical_winner"] != "claude" || decision["selection_basis"] != "metric" {
 		t.Fatalf("decision = %#v", decision)
 	}
+	latest, err := os.Readlink(filepath.Join(outDir, "latest"))
+	if err == nil && latest != "build-run" {
+		t.Fatalf("latest symlink = %q", latest)
+	}
+	if err != nil {
+		data, readErr := os.ReadFile(filepath.Join(outDir, "latest"))
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if strings.TrimSpace(string(data)) != "build-run" {
+			t.Fatalf("latest file = %q", string(data))
+		}
+	}
 	for _, providerID := range []string{"claude", "codex"} {
 		patchPath := filepath.Join(runDir, "providers", providerID, "build", "diff.patch")
 		patch, err := os.ReadFile(patchPath)

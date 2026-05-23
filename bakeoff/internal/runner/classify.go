@@ -2,6 +2,17 @@ package runner
 
 import "strings"
 
+const DefaultNoOutputWedgeSeconds = DefaultHeartbeatSeconds * 2
+
+type FailureStats struct {
+	StdoutObservedBytes   int
+	StderrObservedBytes   int
+	WallSeconds           float64
+	QuietThresholdSeconds int
+	HeartbeatCount        int
+	QuietTickObservations int
+}
+
 func ClassifyFailure(status string, stdout string, stderr string) string {
 	text := strings.ToLower(stdout + "\n" + stderr)
 	switch {
@@ -50,6 +61,27 @@ func ClassifyFailure(status string, stdout string, stderr string) string {
 	default:
 		return ""
 	}
+}
+
+func ClassifyFailureWithStats(status string, stdout string, stderr string, stats FailureStats) string {
+	if kind := ClassifyNoOutputFailure(status, stats); kind != "" {
+		return kind
+	}
+	return ClassifyFailure(status, stdout, stderr)
+}
+
+func ClassifyNoOutputFailure(status string, stats FailureStats) string {
+	if status != StatusExitError || stats.StdoutObservedBytes != 0 || stats.StderrObservedBytes != 0 {
+		return ""
+	}
+	threshold := float64(stats.QuietThresholdSeconds)
+	if threshold <= 0 {
+		threshold = DefaultNoOutputWedgeSeconds
+	}
+	if stats.WallSeconds >= threshold || stats.QuietTickObservations > 0 {
+		return "wedged_no_output"
+	}
+	return ""
 }
 
 // ClassifyJudgeError is a deprecated compatibility alias for ClassifyFailure.

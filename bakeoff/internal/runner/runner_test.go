@@ -362,6 +362,35 @@ func TestRunProviderHeartbeatTicksForQuietProcess(t *testing.T) {
 	}
 }
 
+func TestQuietTickCountTracksWindowsNotObservations(t *testing.T) {
+	started := time.Unix(0, 0)
+	state := &captureState{
+		started:               started,
+		maxOutputBytes:        100,
+		quietThresholdSeconds: 2,
+		capHitCh:              make(chan struct{}),
+		hardStopCh:            make(chan struct{}),
+	}
+
+	state.emitTick(started.Add(2*time.Second), Budgets{}, nil)
+	state.emitTick(started.Add(3*time.Second), Budgets{}, nil)
+	stats := state.currentIO(started.Add(3 * time.Second))
+	if stats.QuietTickObservations != 2 || stats.QuietTickCount != 1 {
+		t.Fatalf("first quiet window stats = %#v", stats)
+	}
+
+	state.appendStdout([]byte("x"), &exec.Cmd{})
+	state.mu.Lock()
+	outputAt := *state.lastStdoutAt
+	state.mu.Unlock()
+	state.emitTick(outputAt.Add(2*time.Second), Budgets{}, nil)
+
+	stats = state.currentIO(outputAt.Add(2 * time.Second))
+	if stats.QuietTickObservations != 3 || stats.QuietTickCount != 2 {
+		t.Fatalf("second quiet window stats = %#v", stats)
+	}
+}
+
 func TestRunProviderReportsCancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {

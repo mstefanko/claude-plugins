@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/runner"
@@ -67,6 +68,14 @@ func TestResultMapClassifiesStderrKind(t *testing.T) {
 	if codex["stderr_kind"] != "transport_noise" {
 		t.Fatalf("codex stderr kind = %#v", codex["stderr_kind"])
 	}
+	changedPreamble := ResultMap(runner.Result{
+		Status:    runner.StatusOK,
+		Stderr:    "Future Codex banner\nprompt echo\n<final_json>{\"ok\":true}</final_json>\n2026-05-23T12:00:00Z WARN failed to record rollout items",
+		FinalJSON: map[string]any{"ok": true},
+	})
+	if changedPreamble["stderr_kind"] != "transport_noise" {
+		t.Fatalf("changed-preamble stderr kind = %#v", changedPreamble["stderr_kind"])
+	}
 	preambleOnly := ResultMap(runner.Result{
 		Status: runner.StatusOK,
 		Stderr: "Reading prompt from stdin...\nOpenAI Codex v0.125.0\n" +
@@ -106,6 +115,11 @@ func TestResultMapClassifiesFailureKindOnlyForConfidentFailures(t *testing.T) {
 	ambiguous := ResultMap(runner.Result{Status: runner.StatusExitError, Stderr: "fatal"})
 	if _, ok := ambiguous["failure_kind"]; ok {
 		t.Fatalf("ambiguous failure_kind should be absent: %#v", ambiguous)
+	}
+
+	wedged := ResultMap(runner.Result{Status: runner.StatusExitError, WallSeconds: 120, IO: runner.IOStats{QuietThresholdSeconds: 20}})
+	if wedged["failure_kind"] != "wedged_no_output" {
+		t.Fatalf("wedged failure_kind = %#v", wedged["failure_kind"])
 	}
 
 	success := ResultMap(runner.Result{Status: runner.StatusOK, Stderr: "rate_limit_error: ignored because provider succeeded"})
@@ -193,6 +207,75 @@ func TestWriteProviderArtifactsWritesSalvageMetadata(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "final.json")); !os.IsNotExist(err) {
 		t.Fatalf("salvaged provider should not write final.json: %v", err)
 	}
+}
+
+func TestWriteProviderArtifactsFiltersCodexTransportStderr(t *testing.T) {
+	dir := t.TempDir()
+	result := ResultMap(runner.Result{
+		Status: runner.StatusOK,
+		Stderr: "Reading prompt from stdin...\nOpenAI Codex v0.125.0\n" +
+			"user prompt echo\n<final_json>{\"ok\":true}</final_json>\n2026-05-23T12:00:00Z WARN failed to record rollout items\n",
+		FinalJSON: map[string]any{"ok": true},
+	})
+	if err := WriteProviderArtifacts(dir, result); err != nil {
+		t.Fatal(err)
+	}
+	stderr, err := os.ReadFile(filepath.Join(dir, "stderr.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(stderr)
+	if strings.Contains(text, "user prompt echo") || strings.Contains(text, "<final_json>") {
+		t.Fatalf("transport echo was not filtered:\n%s", text)
+	}
+	for _, want := range []string{"Reading prompt from stdin", "OpenAI Codex", "WARN failed to record rollout items", "transport echo filtered"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("filtered stderr missing %q:\n%s", want, text)
+		}
+	}
+	status := readArtifactJSON(t, filepath.Join(dir, "status.json"))
+	if status["stderr_filtered"] != true {
+		t.Fatalf("status missing stderr_filtered: %#v", status)
+	}
+}
+
+func TestWriteProviderArtifactsDoesNotMarkUnchangedTransportStderr(t *testing.T) {
+	dir := t.TempDir()
+	result := map[string]any{
+		"status":      runner.StatusOK,
+		"stderr_kind": "transport_noise",
+		"stderr":      "Reading prompt from stdin...\nOpenAI Codex v0.125.0\n2026-05-23T12:00:00Z WARN failed to record rollout items\n",
+		"stdout":      "",
+		"final_json":  map[string]any{"ok": true},
+	}
+	if err := WriteProviderArtifacts(dir, result); err != nil {
+		t.Fatal(err)
+	}
+	stderr, err := os.ReadFile(filepath.Join(dir, "stderr.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(stderr)
+	if strings.Contains(text, "transport echo filtered") {
+		t.Fatalf("unchanged stderr should not get filter marker:\n%s", text)
+	}
+	status := readArtifactJSON(t, filepath.Join(dir, "status.json"))
+	if _, ok := status["stderr_filtered"]; ok {
+		t.Fatalf("unchanged stderr should not be marked filtered: %#v", status)
+	}
+}
+
+func readArtifactJSON(t *testing.T, path string) map[string]any {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var value map[string]any
+	if err := json.Unmarshal(data, &value); err != nil {
+		t.Fatal(err)
+	}
+	return value
 }
 
 func TestWriteMetaIncludesDecisionAndExitCode(t *testing.T) {

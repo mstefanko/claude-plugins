@@ -22,6 +22,41 @@ func TestShouldAutoTriageCodeReviewGather(t *testing.T) {
 	}
 }
 
+func TestShouldRecommendTriageSuppressesNonGatherModes(t *testing.T) {
+	workOrder := map[string]any{
+		"type": "compare",
+	}
+	decision := map[string]any{"decision_kind": "consensus"}
+	report := "# report\n\n## Findings\n\n- **F-001** fallback to empty map on invalid decision reads\n"
+	if reason := ShouldRecommendTriage(workOrder, decision, report); reason != "" {
+		t.Fatalf("compare run should not recommend triage, got %q", reason)
+	}
+}
+
+func TestShouldRecommendTriageUsesProseNotFindingBodiesForActionWords(t *testing.T) {
+	workOrder := map[string]any{
+		"type":  "gather",
+		"facet": map[string]any{"id": CodeReviewFacetID},
+	}
+	decision := map[string]any{"decision_kind": "structured_union"}
+	findingOnly := "# report\n\n## Findings\n\n- **F-001** fallback to empty map on invalid decision reads\n"
+	reason := ShouldRecommendTriage(workOrder, decision, findingOnly)
+	if strings.Contains(reason, "invalid") {
+		t.Fatalf("finding-body action word should not drive reason, got %q", reason)
+	}
+	findingContinuation := "# report\n\n## Findings\n\n- **F-001** fallback to empty map\n  Evidence: invalid decision reads\n"
+	reason = ShouldRecommendTriage(workOrder, decision, findingContinuation)
+	if strings.Contains(reason, "invalid") {
+		t.Fatalf("finding continuation action word should not drive reason, got %q", reason)
+	}
+
+	prose := "# report\n\n## Findings\n\nThis looks invalid and needs verification.\n\n- **F-001** actionable claim\n"
+	reason = ShouldRecommendTriage(workOrder, decision, prose)
+	if !strings.Contains(reason, "report mentions invalid") {
+		t.Fatalf("prose action word should drive reason, got %q", reason)
+	}
+}
+
 func TestSelectTriageSourceFindings(t *testing.T) {
 	findings := []map[string]string{
 		{"id": "F-001", "section": "Findings", "text": "bug in handler"},

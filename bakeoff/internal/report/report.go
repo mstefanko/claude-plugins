@@ -50,6 +50,7 @@ func Render(wo *workorder.WorkOrder, decision map[string]any, workerResults map[
 		"# Bakeoff Report: " + wo.ID,
 		"",
 	}
+	lines = append(lines, reportGlossary()...)
 	lines = append(lines, renderJudgeFailureStatus(decision, opts)...)
 	lines = append(lines, renderOutcome(wo, decision, workerResults, opts)...)
 	lines = append(lines, decisionAudit(decision)...)
@@ -73,6 +74,7 @@ func RenderEscalation(wo *workorder.WorkOrder, decision map[string]any, addedFin
 		"# Bakeoff Escalation Report: " + wo.ID,
 		"",
 	}
+	lines = append(lines, reportGlossary()...)
 	lines = append(lines, renderEscalationAnswer(decision, opts)...)
 	lines = append(lines, "## Source Run", "")
 	lines = append(lines, "- Run: `"+opts.SourceRunID+"`")
@@ -115,6 +117,9 @@ func renderEscalationAnswer(decision map[string]any, opts EscalationRenderOption
 		"## Answer",
 		"",
 		"- Result: `" + kind + "` - " + headline,
+	}
+	if gloss := statusGloss(kind); gloss != "" {
+		lines = append(lines, "- Result meaning: "+gloss)
 	}
 	if effect != "" {
 		lines = append(lines, "- Source decision effect: `"+effect+"`")
@@ -265,6 +270,9 @@ func renderOutcome(wo *workorder.WorkOrder, decision map[string]any, workerResul
 		"",
 		"Mode: `" + mode + "`",
 		"Decision: `" + kind + "`",
+	}
+	if gloss := statusGloss(kind); gloss != "" {
+		lines = append(lines, "Decision meaning: "+gloss)
 	}
 	if stalledAt := jsonutil.StringValue(decision["stalled_at"]); stalledAt != "" {
 		lines = append(lines, "Stalled at: `"+stalledAt+"`")
@@ -451,6 +459,12 @@ func renderProviderStatusTable(decision map[string]any) []string {
 		if kind := jsonutil.StringValue(status["stderr_kind"]); kind != "" && kind != "none" {
 			notes = append(notes, "stderr kind: "+kind)
 		}
+		if jsonutil.BoolValue(status["stderr_filtered"]) {
+			notes = append(notes, "stderr filtered")
+		}
+		if gloss := statusGloss(jsonutil.StringValue(status["status"])); gloss != "" {
+			notes = append(notes, "status: "+gloss)
+		}
 		if kind := jsonutil.StringValue(status["failure_kind"]); kind != "" {
 			notes = append(notes, "failure kind: "+kind)
 		}
@@ -491,7 +505,11 @@ func renderProviderStatusTable(decision map[string]any) []string {
 func byteCell(captured int, observed int, truncated bool) string {
 	text := humanBytes(captured)
 	if truncated && observed != 0 && observed != captured {
-		text += " (obs " + humanBytes(observed) + ")"
+		excess := observed - captured
+		if excess < 0 {
+			excess = 0
+		}
+		text += " (trunc, +" + humanBytes(excess) + ")"
 	}
 	return text
 }
@@ -857,6 +875,10 @@ func genericItemLines(items []any) []string {
 			continue
 		}
 		if obj, ok := item.(map[string]any); ok {
+			if disputeLines, ok := disputeItemLines(obj); ok {
+				lines = append(lines, disputeLines...)
+				continue
+			}
 			claim := firstString(obj["claim"], obj["description"], obj["loser_note"], fmt.Sprint(obj))
 			lines = append(lines, "- "+claim)
 			if evidence := joinList(obj["evidence"], ", "); evidence != "" {
@@ -870,6 +892,55 @@ func genericItemLines(items []any) []string {
 		lines = append(lines, "- "+fmt.Sprint(item))
 	}
 	return lines
+}
+
+func disputeItemLines(obj map[string]any) ([]string, bool) {
+	id := jsonutil.StringValue(obj["id"])
+	resolution := firstString(obj["resolution"], obj["assessment"], obj["summary"])
+	if id == "" || resolution == "" {
+		return nil, false
+	}
+	prefix := "**" + id + "**"
+	if materiality := jsonutil.StringValue(obj["materiality"]); materiality != "" {
+		prefix += " " + materiality + "."
+	}
+	lines := []string{"- " + prefix + " " + resolution}
+	if evidence := joinList(obj["evidence"], ", "); evidence != "" {
+		lines = append(lines, "  Evidence: "+evidence)
+	}
+	if source := jsonutil.StringValue(obj["source_provider"]); source != "" {
+		lines = append(lines, "  Source: `"+source+"`")
+	}
+	return lines, true
+}
+
+func reportGlossary() []string {
+	return []string{
+		"## Glossary",
+		"",
+		"- `F-NNN`: report finding; `R-NNN`: judge rationale; `D-NNN`: escalation dispute point.",
+		"- Kept-from-nonwinner / additions-from-loser sections are material from the non-selected provider that the report preserved.",
+		"",
+	}
+}
+
+func statusGloss(status string) string {
+	switch status {
+	case runner.StatusOKAfterFormatRetry:
+		return "completed after a format-only retry repaired the provider JSON"
+	case runner.StatusSalvaged:
+		return "usable evidence was recovered, but the provider did not complete cleanly"
+	case "consensus":
+		return "both providers reached the same position; sub-claim divergences may still matter"
+	case "escalation_advisory_supported":
+		return "advisory escalation supports the source decision and does not replace the source winner"
+	case "escalation_advisory_challenged":
+		return "advisory escalation questions the source decision and does not replace the source winner"
+	case "consensus_disagreements":
+		return "sub-claim differences preserved even though the top-level result is consensus"
+	default:
+		return ""
+	}
 }
 
 func outOfFacetLines(items []any) []string {

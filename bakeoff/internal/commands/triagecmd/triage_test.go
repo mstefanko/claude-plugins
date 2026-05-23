@@ -117,9 +117,98 @@ func TestForceTriageProviderFailurePreservesPreviousTriage(t *testing.T) {
 	}
 }
 
-type testFactory struct{}
+func TestForceTriageSuccessArchivesPreviousTriage(t *testing.T) {
+	root := t.TempDir()
+	fakeBin := filepath.Join(root, "bin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fakeClaude := filepath.Join(fakeBin, "claude")
+	if err := os.WriteFile(fakeClaude, []byte("#!/bin/sh\ncat >/dev/null\nprintf '<final_json>{\"schema_version\":1,\"status\":\"complete\",\"summary\":\"new triage\",\"items\":[],\"unknowns\":[]}</final_json>\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-func (testFactory) Streams() output.Streams {
+	runDir := filepath.Join(root, "runs", "r1")
+	writeJSON(t, filepath.Join(runDir, "work-order.json"), map[string]any{
+		"schema_version": 1,
+		"id":             "triage-force",
+		"type":           "gather",
+		"goal":           "triage",
+		"background":     "",
+		"providers": []map[string]any{
+			{"id": "claude", "backend": "claude", "model": "m", "scope": "codebase"},
+			{"id": "codex", "backend": "codex", "model": "m", "scope": "codebase"},
+		},
+		"judge":   map[string]any{"backend": "claude", "model": "judge"},
+		"budgets": map[string]any{"wall_clock_seconds": 1, "max_output_bytes": 1000, "heartbeat_seconds": 0},
+	})
+	writeJSON(t, filepath.Join(runDir, "decision.json"), map[string]any{"decision_kind": "structured_union", "judge_ran": true})
+	writeJSON(t, filepath.Join(runDir, "meta.json"), map[string]any{"run_id": "r1", "cwd": root})
+	if err := workorder.WriteTextAtomic(filepath.Join(runDir, "report.md"), "# report\n\n## Findings\n\n- **F-001** bug in file.go:1\n"); err != nil {
+		t.Fatal(err)
+	}
+	writeJSON(t, filepath.Join(runDir, "triage", "final.json"), map[string]any{"summary": "old triage", "input_hashes": map[string]any{}})
+	if err := workorder.WriteTextAtomic(filepath.Join(runDir, "triage", "triage.md"), "# old triage\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	exitCode, err := Run(context.Background(), testFactory{streams: output.NewStreams(&out, &errOut)}, &TriageOptions{
+		RunID:  "r1",
+		Out:    filepath.Join(root, "runs"),
+		Force:  true,
+		RunDir: runDir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exitCode != 0 {
+		t.Fatalf("exitCode = %d", exitCode)
+	}
+	archives, err := filepath.Glob(filepath.Join(runDir, "triage.failed-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(archives) != 1 {
+		t.Fatalf("archives = %#v", archives)
+	}
+	if data, err := os.ReadFile(filepath.Join(archives[0], "triage.md")); err != nil || string(data) != "# old triage\n" {
+		t.Fatalf("archived old triage data=%q err=%v", string(data), err)
+	}
+	final, err := workorder.ReadRequiredObject(filepath.Join(runDir, "triage", "final.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final["summary"] != "new triage" {
+		t.Fatalf("new final.json = %#v", final)
+	}
+	if !strings.Contains(out.String(), "archived prior triage to ") {
+		t.Fatalf("missing archive notice:\nstdout=%s\nstderr=%s", out.String(), errOut.String())
+	}
+	latest, err := os.Readlink(filepath.Join(root, "runs", "latest"))
+	if err == nil && latest != "r1" {
+		t.Fatalf("latest symlink = %q", latest)
+	}
+	if err != nil {
+		data, readErr := os.ReadFile(filepath.Join(root, "runs", "latest"))
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if data := strings.TrimSpace(string(data)); data != "r1" {
+			t.Fatalf("latest file = %q", data)
+		}
+	}
+}
+
+type testFactory struct {
+	streams output.Streams
+}
+
+func (f testFactory) Streams() output.Streams {
+	if f.streams.Out != nil {
+		return f.streams
+	}
 	return output.NewStreams(&bytes.Buffer{}, &bytes.Buffer{})
 }
 

@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "id": "bakeoff-orchestration-compare",
+  "type": "compare",
+  "goal": "Compare three potential improvements to Bakeoff's build orchestration and verifier subsystem: (1) gate-first verifier short-circuiting, (2) safe verifier parallelism, and (3) stronger cleanup and lock recovery. For each option, provide a concrete change sketch, correctness risk assessment, blast radius for in-flight runs, effort estimate, and shipping priority. End with a one-paragraph cross-cutting recommendation that orders the three options for implementation and justifies the order.",
+  "background": "Bakeoff is a Go CLI that runs competitive build/research work orders across multiple AI provider backends (claude, codex, gemini, copilot) and adjudicates the results. The build-mode pipeline assigns each provider an isolated worktree, lets it produce a patch, then runs a set of verifiers against each candidate worktree to score it. Relevant source:\n- internal/buildverify/ — verifier execution against build candidates\n- internal/runner/runner.go — top-level run orchestration\n- internal/buildworkspace/buildworkspace.go — worktree lifecycle, cleanup, RemoveWorktree\n- internal/workorder/workorder.go — schema; verifiers carry kind: \"gate\" | \"metric\"; gates are pass/fail and decide eligibility, metrics produce comparable scores used by the judge.\n- internal/scope/scope.go — scope enforcement during patch application.\n\nThree options under comparison:\n\nOption 1 — Gate-first short-circuiting: Run all kind:\"gate\" verifiers before any kind:\"metric\" verifier, per candidate. If a gate fails, skip the candidate's remaining metric verifiers and mark it ineligible. Today verifiers run in declared order, which can spend metric runtime on candidates that a later gate would have disqualified. Evaluate impact on total run time, decision quality, ordering invariants the judge depends on, and any case where a metric must run before a gate.\n\nOption 2 — Safe verifier parallelism: Allow independent verifiers (typically across candidates, or across non-conflicting verifiers per candidate) to run concurrently while preserving correctness — no shared mutable state, bounded process concurrency, deterministic decision input. Evaluate which axis of parallelism is safe (per-candidate vs per-verifier), how stdout/stderr capture and timeouts behave under concurrency, interaction with worktree isolation, and how Option 1's short-circuit semantics survive parallel execution.\n\nOption 3 — Stronger cleanup and lock recovery: Today worktree cleanup is best-effort via buildworkspace.RemoveWorktree, with no explicit detection of stale locks, orphaned worktrees from crashed prior runs, or partially-cleaned state. Stronger behavior would include startup reconciliation, stale-lock detection with safe takeover, on-failure cleanup that survives panics/signals, and observable diagnostics. Evaluate failure modes today, the minimal viable hardening, blast-radius risk (deleting a legitimate concurrent run's worktree), and how this composes with Option 2's concurrency.\n\nFor each option produce:\n1. Concrete change at the file/function level, with the smallest reasonable diff sketch.\n2. Correctness risks and how to mitigate them.\n3. Blast radius for in-flight runs and downstream consumers (judge, triage, ledger).\n4. Rough effort (S/M/L) and one-line justification.\n5. Order-to-ship score (1 = ship first).\n\nClose with a one-paragraph cross-cutting recommendation that orders all three and justifies the order, calling out dependencies between the options (e.g., does parallelism require gate-first; does cleanup hardening unblock parallelism).",
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "sonnet",
+      "scope": "mixed",
+      "effort": "high"
+    },
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "scope": "mixed",
+      "effort": "high"
+    }
+  ],
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  },
+  "scope_policy": {
+    "enforcement": "best_effort"
+  }
+}

@@ -240,12 +240,50 @@ func plausibleMissingPath(token string, ref string, suggestions []string) bool {
 		return true
 	}
 	ref = cleanSlash(ref)
+	if slashDelimitedProse(ref) {
+		return false
+	}
 	first, _, _ := strings.Cut(ref, "/")
 	if commonPathRoots[first] {
 		return true
 	}
 	base := filepath.Base(ref)
 	return strings.Contains(base, ".")
+}
+
+func slashDelimitedProse(ref string) bool {
+	if strings.HasPrefix(ref, "../") || strings.HasPrefix(ref, "/") {
+		return false
+	}
+	parts := strings.Split(ref, "/")
+	if len(parts) != 2 {
+		return false
+	}
+	left, right := parts[0], parts[1]
+	if strings.Contains(left, ".") || strings.Contains(right, ".") {
+		return false
+	}
+	if !allLowerASCIIWord(left) || !allLowerASCIIWord(right) {
+		return false
+	}
+	switch left {
+	case "internal", "cmd", "pkg", "src", "app", "apps", "lib", "libs", "docs", "test", "tests", "scripts":
+		return false
+	default:
+		return true
+	}
+}
+
+func allLowerASCIIWord(text string) bool {
+	if text == "" {
+		return false
+	}
+	for _, r := range text {
+		if r < 'a' || r > 'z' {
+			return false
+		}
+	}
+	return true
 }
 
 func domainLikePath(token string) bool {

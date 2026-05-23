@@ -199,6 +199,19 @@ func TestWitnessRunWritesEscalationArtifacts(t *testing.T) {
 	if !strings.Contains(string(reportData), "advisory") {
 		t.Fatalf("report should label witness as advisory:\n%s", string(reportData))
 	}
+	latest, err := os.Readlink(filepath.Join(outDir, "latest"))
+	if err == nil && latest != "witness" {
+		t.Fatalf("latest symlink = %q", latest)
+	}
+	if err != nil {
+		data, readErr := os.ReadFile(filepath.Join(outDir, "latest"))
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if strings.TrimSpace(string(data)) != "witness" {
+			t.Fatalf("latest file = %q", string(data))
+		}
+	}
 }
 
 func TestDisputeWritesPacketAndStaysAdvisory(t *testing.T) {

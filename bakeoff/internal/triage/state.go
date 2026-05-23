@@ -143,6 +143,9 @@ func ShouldAutoTriage(workOrder map[string]any, decision map[string]any) string 
 }
 
 func ShouldRecommendTriage(workOrder map[string]any, decision map[string]any, reportText string) string {
+	if workOrder["type"] != "gather" || FacetID(workOrder) != CodeReviewFacetID {
+		return ""
+	}
 	findings, _ := BuildFindingIndex(reportText)
 	switch decision["decision_kind"] {
 	case "single_provider_only":
@@ -152,26 +155,19 @@ func ShouldRecommendTriage(workOrder map[string]any, decision map[string]any, re
 	case "tie":
 		return "no stable winner after judging; inspect decision.json and verify before fixing"
 	}
-	if workOrder["type"] == "gather" && FacetID(workOrder) == CodeReviewFacetID {
-		return "code-review facet - verify actionable findings before fixing"
-	}
-	if workOrder["type"] == "gather" && len(findings) >= 5 {
+	if len(findings) >= 5 {
 		return fmt.Sprintf("gather report with %d findings - verify before fixing", len(findings))
 	}
-	sourceFindings, _ := SelectTriageSourceFindings(findings, "")
-	texts := []string{}
-	for _, finding := range sourceFindings {
-		texts = append(texts, finding["text"])
-	}
-	if match := triageActionRE.FindString(strings.Join(texts, "\n")); match != "" {
+	if match := triageActionRE.FindString(triageRecommendationProse(reportText)); match != "" {
 		return "report mentions " + strings.ToLower(match) + " - verify before fixing"
 	}
+	sourceFindings, _ := SelectTriageSourceFindings(findings, "")
 	for _, finding := range sourceFindings {
 		if finding["section"] == "Conflicts" {
 			return "report contains conflicts - verify before fixing"
 		}
 	}
-	return ""
+	return "code-review facet - verify actionable findings before fixing"
 }
 
 var findingIDRE = regexp.MustCompile(`^\s*-\s+\*\*(F-\d{3})\*\*\s+(.*)$`)
@@ -238,6 +234,51 @@ func BuildFindingIndex(reportText string) ([]map[string]string, bool) {
 var triageActionRE = regexp.MustCompile(`(?i)\b(?:bug|bugs|fix|fixes|fixed|gap|gaps|missing|invalid|schema_error|drift|incorrect|mismatch|misleading|ambiguous|unclear|incomplete|omits?|lacks?|stale|contradicts?|contradiction|confusing|unrecoverable)\b`)
 var primaryExplanationActionRE = regexp.MustCompile(`(?i)\b(?:bug|bugs|fix|fixes|gap|gaps|missing coverage|missing test|missing tests|no test|no tests|untested|incorrect|mismatch|drift|risk|risks|risky|omits?|should)\b`)
 var primaryExplanationDocDriftRE = regexp.MustCompile(`(?i)\b(?:README|docs?|documentation)\b.*\b(?:but|omits?|missing|drift|mismatch|incorrect)\b`)
+
+func triageRecommendationProse(reportText string) string {
+	lines := []string{}
+	section := ""
+	inFence := false
+	inFindingBlock := false
+	for _, line := range strings.Split(reportText, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") {
+			inFence = !inFence
+			continue
+		}
+		if inFence {
+			continue
+		}
+		if strings.HasPrefix(line, "## ") {
+			section = strings.TrimSpace(strings.TrimPrefix(line, "## "))
+			inFindingBlock = false
+			continue
+		}
+		if strings.HasPrefix(line, "### ") {
+			inFindingBlock = false
+			continue
+		}
+		if strings.HasPrefix(trimmed, "- **F-") || strings.HasPrefix(trimmed, "**F-") {
+			inFindingBlock = true
+			continue
+		}
+		if inFindingBlock {
+			if trimmed == "" {
+				inFindingBlock = false
+				continue
+			}
+			if strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t") {
+				continue
+			}
+			inFindingBlock = false
+		}
+		if section == "Strongest Material" || section == "Sub-Claim Divergences" || section == "Consensus Disagreements" {
+			continue
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
+}
 
 func SelectTriageSourceFindings(findings []map[string]string, facetID string) ([]map[string]string, []map[string]string) {
 	selected := []map[string]string{}

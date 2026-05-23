@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "id": "decision-typing-vs-validators-compare",
+  "type": "compare",
+  "goal": "Compare two designs for hardening bakeoff's decision/manifest/triage data flow: (A) introduce typed Go structs for decisions, reports, and manifests plus stricter JSON decoding (json.NewDecoder with DisallowUnknownFields, explicit field types); (B) keep today's map[string]any flow but add smaller, targeted validators at the read/write boundaries. Recommend one approach for the bakeoff CLI as it stands today.",
+  "background": "Today's bakeoff CLI (Go 1.24, module github.com/mstefanko/claude-plugins/bakeoff) reads and writes decision.json, manifest.json, triage artifacts, and provider outputs through map[string]any with ad-hoc type assertions. Key call sites: internal/decision/decision.go, internal/manifest/manifest.go (readRequiredJSON, readJSON, RequiredArtifacts list), internal/triage/state.go (decision sha256 + 'changed' tracking on raw maps), internal/triage/citation.go (ResolveCitationCWD, CollectCitationText, CheckCitations all return/consume map[string]any), internal/jsonutil/jsonutil.go (FinalJSONMap typed-asserts map[string]any), internal/artifact/artifact.go (json.NewDecoder + ad-hoc shape), internal/report/report.go, internal/commands/researchcmd/run.go (writes decision.json from opts.DecisionDoc map and reads source-run decisions via readOptionalJSONObject), internal/summary/summary.go (json.Unmarshal into any). Precedent for option (A): internal/workorder/io.go already uses json.NewDecoder, and internal/workorder/workorder.go defines a typed WorkOrder with per-field validators. Precedent for option (B): the same workorder package shows a working pattern of Validate / validateProviders / validateJudge / validateBudgets / validateBuildSpec / validateMetricSpec / validateVerifierSpec helpers that operate on map[string]any without committing to a full struct hierarchy. Migration-cost surface includes tests that build map[string]any literals (internal/manifest/manifest_test.go, internal/triage/state_test.go, internal/commands/buildcmd/run_test.go, internal/artifact/artifact_test.go, internal/ledger/ledger_test.go). Forward-compat constraint: older runs on disk may contain fields a newer binary does not yet model; the comparison must address how each option handles unknown/extra fields when reading historical artifacts.\n\nAcceptance criteria (the final report must contain all of these, observable on inspection):\n1. Side-by-side trade-off table covering: correctness/runtime safety, maintainability, performance (allocation and decode cost), migration cost expressed in named files/tests, forward compatibility with unknown fields written by older binaries, and ergonomics for decision.json consumers (bakeoff show, triage, ledger).\n2. Concrete migration sketch for each option that names files in the list above: for (A) the proposed struct names and which packages own them, plus the decoder configuration; for (B) the new validator entry points and the call sites that would adopt them.\n3. Named risks for each option (for example: DisallowUnknownFields breaking reads of older decision.json artifacts for A; combinatorial validator drift and continued any-typed reads for B).\n4. Explicit recommendation with reasoning grounded in this codebase, plus a 'would change if...' caveat that names the conditions under which the other option would win.",
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "sonnet",
+      "effort": "high",
+      "scope": "codebase"
+    },
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "effort": "high",
+      "scope": "codebase"
+    }
+  ],
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000
+  },
+  "scope_policy": {
+    "enforcement": "best_effort"
+  }
+}

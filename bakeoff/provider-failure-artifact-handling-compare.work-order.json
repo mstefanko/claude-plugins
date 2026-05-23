@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "id": "provider-failure-artifact-handling-compare",
+  "type": "compare",
+  "goal": "Recommend which of four strategies Bakeoff should adopt for handling provider failure output under runs/<id>/providers/<p>/... : (1) all-or-nothing trimming (current behavior), (2) structured compression, (3) section priority, or (4) clearer failure artifacts. Output: a single ranked recommendation with rationale plus a concrete implementation sketch keyed to existing files.",
+  "background": "Bakeoff writes provider artifacts to runs/<id>/providers/<participant-id>/. The on-disk failure surface today includes stderr.txt (see internal/decision/decision.go:32 setting status[\"stderr_path\"] = \"providers/\"+provider.ID+\"/stderr.txt\"), the per-provider final.json glob used by triage citation (internal/triage/citation.go:50), and the build-side artifacts surfaced in internal/commands/buildcmd/decision.go (verify_result.json, protected-paths.json, diff.patch, diffstat.txt, changed-files.txt, workspace.json). Research-mode provider directory writes happen in internal/commands/researchcmd/run.go around lines 456, 485, 851, 852, and 959. Output truncation today is byte-cap driven through the work-order budget fields max_output_bytes and max_output_overrun_bytes, with truncation/trim logic spread across internal/runner/runner.go, internal/artifact/artifact.go, internal/runresult/runresult.go, and internal/manifest/manifest.go. The canonical operator reference for these artifacts is docs/artifacts-and-ledger.md.\n\nFour strategies to compare, defined concretely:\n\n1. ALL-OR-NOTHING TRIMMING (status quo). Provider output is captured up to max_output_bytes; once the cap (plus overrun grace) is hit, the run is marked failed and the captured prefix is written verbatim. Stderr is captured separately. Nothing inside the captured bytes is reshaped or summarized. Triage and the judge work with whatever the cap let through.\n\n2. STRUCTURED COMPRESSION. The captured bytes are post-processed before write: collapse repeated lines, dedent verbose prompt echoes, fold large JSON blobs to schema+counts, and replace contiguous tool-call traces with a fixed-size summary. The cap stays the same, but more *useful* signal fits under it. Cost: a compression pass per provider, a new failure mode if compression drops something the judge needed.\n\n3. SECTION PRIORITY. Output is parsed into sections (preamble, prompt echo, tool calls, model reasoning, final answer, stderr-style errors, exit info). Sections carry priorities; under cap pressure, low-priority sections (prompt echo, mid-stream tool calls) are truncated first while high-priority sections (final answer, error tail, exit/status block) are preserved whole. Cost: a sectionizer that must work across all four prompt flavors (claude, codex, generic-terminal-agent for gemini/copilot), and the risk that the sectionizer mis-classifies novel output.\n\n4. CLEARER FAILURE ARTIFACTS. Trimming policy is left mostly alone, but a new structured artifact is written alongside the raw bytes — for example providers/<id>/failure.json containing: exit code, terminal-reason classification, byte-cap-hit flag, last N stderr lines, last N stdout lines, prompt-flavor, model, and pointers to the raw files. Judge and triage read failure.json instead of grepping raw output. Cost: schema design, additional write path, and the question of whether to also surface failure.json in decision.json status entries and the manifest.\n\nDecision criteria the comparison must use:\n- Operator triage-ability: how quickly a human reading runs/<id>/providers/<p>/ can tell what failed and why.\n- Judge-readability under cap: whether the judge sees enough signal to score or to mark decision-incomplete cleanly (exit 4).\n- Byte-budget headroom: how much real signal fits inside max_output_bytes.\n- Implementation cost in this codebase: lines touched, new schema fields, test surface (truncation tests already live in internal/runner/runner_test.go, internal/artifact/artifact*_test.go, internal/runresult/runresult_test.go, internal/manifest/manifest_test.go).\n- Regression risk for artifact-aware continuation: the plugin already reads decision.json + report.md to recommend continuations; any change must not break the contract that stderr_path, verify_result_path, patch_path, and friends remain stable.\n- Compatibility with prompt flavors claude / codex / generic-terminal-agent (see doctor output).\n\nWhat to produce:\n- A single ranked recommendation (1st choice + brief 2nd choice).\n- For the 1st choice, a concrete implementation sketch naming the files to touch and the schema change, if any.\n- Explicit callouts for any combination strategy (e.g., 4+2) if hybridization is justified.\n- Explicit non-recommendations: strategies that should be rejected and why.\n\nOut of scope:\n- Changing the byte-cap defaults themselves.\n- Changing build-mode patch/diff artifact layout.\n- Redesigning triage; only the inputs triage reads may change.",
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "sonnet",
+      "scope": "mixed",
+      "effort": "high"
+    },
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "scope": "mixed",
+      "effort": "high"
+    }
+  ],
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  },
+  "scope_policy": {
+    "enforcement": "best_effort"
+  }
+}

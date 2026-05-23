@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "id": "bakeoff-robustness-review",
+  "type": "gather",
+  "goal": "Audit whether Bakeoff's capability cache invalidation, transient-failure handling, and required-scope semantics are robust enough for production use.",
+  "background": [
+    "Independent review of three Bakeoff subsystems on the current main branch (no diff). For each subsystem, return a Strong / Adequate / Weak verdict backed by at least two pieces of code evidence (file path + symbol or line range), at least one concrete failure scenario for any non-Strong verdict, and the smallest change that would close each gap. Note cross-cutting interactions where one subsystem weakens another.",
+    "Subsystem 1 - Capability cache invalidation. Anchors: internal/provider/provider.go (CapabilityRegistry, capabilityEntry, ScopeCapabilities, DetectScopeCapabilities and related Detect/Probe methods, the sync.Mutex-guarded cache map[string]capabilityEntry, the ready chan struct{} single-flight pattern). Questions: Is the cache ever invalidated after a provider CLI is upgraded, reinstalled, or starts behaving differently mid-process? Is there a TTL, version stamp, or error-state re-probe? Can a transient probe failure get permanently cached? What is the registry's lifetime - per-run vs per-process? Trace at least one full read path from a caller back to the cache hit/miss code.",
+    "Subsystem 2 - Transient-failure handling. Anchors: internal/runner/classify.go (ClassifyFailure and helper matchers hasAny, hasHTTPStatus, hasStandaloneCode, hasAuthPermissionMarker, hasRateQuotaWording, clearFinalJSONError) plus every caller across internal/runner, internal/commands/researchcmd, internal/commands/buildcmd, internal/decision, internal/report, internal/artifact. Questions: Which classes (timeout, api_transient, rate_or_quota_limited, prompt_too_large, auth_or_permission, schema_error) actually trigger retry or backoff, and which are merely surfaced in artifacts? Are the substring heuristics over- or under-matching real provider error strings? Could a non-transient failure (auth, schema) be reclassified as transient and silently retried, or vice versa? Is there backoff/jitter, a retry cap, or per-class retry policy?",
+    "Subsystem 3 - Required-scope semantics. Anchors: internal/scope/scope.go (BuildExecution, EnforcementError, advisory/best_effort enforcement branches, mixed/codebase/web requested-scope branches, per-backend disallowed_tools / allowed_tools handling, fallbackReasons accumulator) and internal/commands/buildcmd/scope.go plus call sites in researchcmd and buildcmd. Questions: Does anything stronger than best_effort exist (e.g., a 'required' enforcement that hard-fails when capabilities are not advertised)? When a backend does not advertise --disallowedTools, does codebase scope silently degrade to mixed, and is the user informed via decision/report artifacts? Are fallbackReasons surfaced to the final report and triage, or only buried in metadata? For 'web' scope, is the isolated_cwd mechanism sufficient, or can web-fetched content leak into the codebase workspace? Should there be a strict mode where missing capabilities fail the run instead of falling back?",
+    "Deliverable shape: a top-level verdict matrix (subsystem x Strong/Adequate/Weak), then a section per subsystem with Evidence, Failure scenarios, Smallest fix, and Cross-cutting notes. Be specific - quote symbol names and line ranges, not paragraphs of prose. If the audit reveals a fourth issue worth flagging that was not asked for, add it under a final 'Additional observations' section."
+  ],
+  "facet": {
+    "id": "code-review",
+    "kind": "generic",
+    "focus": "Audit robustness of three Bakeoff subsystems: capability cache invalidation, transient-failure classification and retry coupling, and required-scope enforcement semantics.",
+    "include": [
+      "missing or wrong invalidation of capability probe results (TTL, version stamp, error-state re-probe, registry lifetime)",
+      "transient-failure heuristics that over-match or under-match real provider error strings, and whether retry/backoff is actually wired to the returned classes",
+      "scope enforcement gaps: silent fallback when a backend does not advertise required tool flags, missing 'required' enforcement mode, fallback reasons not surfaced to user-visible artifacts",
+      "cross-cutting interactions where one subsystem weakens another (e.g., a cached probe failure preventing future scope enforcement)",
+      "concurrency or single-flight bugs in CapabilityRegistry under mid-run probe failures",
+      "evidence must be file path plus symbol or line range, with a concrete failure scenario for any non-Strong verdict"
+    ],
+    "exclude": [
+      "style-only preferences without project convention evidence",
+      "broad rewrites unrelated to the three named subsystems",
+      "speculation without file:line evidence",
+      "findings about unrelated subsystems (judge, triage, decision aggregation) unless they directly weaken one of the three"
+    ]
+  },
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "sonnet",
+      "scope": "codebase",
+      "effort": "high"
+    },
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "scope": "codebase",
+      "effort": "high"
+    }
+  ],
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  },
+  "scope_policy": {
+    "enforcement": "best_effort"
+  }
+}

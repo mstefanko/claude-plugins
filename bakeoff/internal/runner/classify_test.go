@@ -45,3 +45,26 @@ func TestClassifyJudgeErrorDelegates(t *testing.T) {
 		t.Fatalf("ClassifyJudgeError() = %q, want rate_or_quota_limited", got)
 	}
 }
+
+func TestClassifyFailureWithStatsNoOutputWedge(t *testing.T) {
+	got := ClassifyFailureWithStats(StatusExitError, "", "", FailureStats{
+		WallSeconds:           120,
+		QuietThresholdSeconds: 20,
+	})
+	if got != "wedged_no_output" {
+		t.Fatalf("ClassifyFailureWithStats() = %q, want wedged_no_output", got)
+	}
+	quick := ClassifyFailureWithStats(StatusExitError, "", "", FailureStats{
+		WallSeconds:           1,
+		QuietThresholdSeconds: 20,
+	})
+	if quick != "" {
+		t.Fatalf("quick no-output exit should remain unclassified, got %q", quick)
+	}
+	defaultThreshold := ClassifyFailureWithStats(StatusExitError, "", "", FailureStats{
+		WallSeconds: DefaultNoOutputWedgeSeconds,
+	})
+	if defaultThreshold != "wedged_no_output" {
+		t.Fatalf("default no-output threshold = %q, want wedged_no_output", defaultThreshold)
+	}
+}

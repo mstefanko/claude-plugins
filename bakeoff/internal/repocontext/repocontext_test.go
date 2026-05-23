@@ -39,8 +39,8 @@ func TestValidateProsePathsWarnsAndSuggestsDirectoriesWithoutExtensions(t *testi
 func TestValidateProsePathsSkipsSlashDelimitedProse(t *testing.T) {
 	root := t.TempDir()
 	wo := validWorkOrder(t)
-	wo.Goal = "Tune include/exclude/focus and AI/LLM wording."
-	wo.Background = "Keep yes/no tradeoffs clear."
+	wo.Goal = "Tune include/exclude/focus and AI/LLM wording for build/research work orders."
+	wo.Background = "Keep yes/no tradeoffs clear; decision/manifest/triage and files/tests are prose here."
 
 	warnings, err := ValidateProsePaths(root, wo)
 	if err != nil {
@@ -48,6 +48,21 @@ func TestValidateProsePathsSkipsSlashDelimitedProse(t *testing.T) {
 	}
 	if len(warnings) != 0 {
 		t.Fatalf("unexpected warnings: %#v", warnings)
+	}
+}
+
+func TestValidateProsePathsStillWarnsKnownRootTypos(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "internal", "decision", "decision.go"), "package decision\n")
+	wo := validWorkOrder(t)
+	wo.Goal = "Inspect internal/decicision/decision.go."
+
+	warnings, err := ValidateProsePaths(root, wo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) != 1 || warnings[0].Token != "internal/decicision/decision.go" {
+		t.Fatalf("warnings = %#v", warnings)
 	}
 }
 

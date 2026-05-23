@@ -125,6 +125,7 @@ func Run(ctx context.Context, f commands.Factory, opts *TriageOptions) (int, err
 	targetTriageDir := filepath.Join(runDir, "triage")
 	triageDir := targetTriageDir
 	stagedTriageDir := ""
+	archivedPriorTriage := ""
 	if _, err := os.Stat(targetTriageDir); err == nil {
 		if !opts.Force {
 			return 0, &apperror.ValidationError{Message: fmt.Sprintf("%s already exists; run %s to replace", targetTriageDir, ledger.BakeoffTriageCommand(commandRunID, displayOutDir, true))}
@@ -211,15 +212,23 @@ func Run(ctx context.Context, f commands.Factory, opts *TriageOptions) (int, err
 			return 0, &apperror.RuntimeError{Err: err}
 		}
 		if stagedTriageDir != "" {
-			if err := replaceDirAtomically(targetTriageDir, stagedTriageDir); err != nil {
+			archivePath, err := replaceDirAtomicallyArchiving(targetTriageDir, stagedTriageDir)
+			if err != nil {
 				return 0, &apperror.RuntimeError{Err: err}
 			}
+			archivedPriorTriage = archivePath
 			stagedTriageDir = ""
 		}
 		if _, err := manifest.WriteRunManifest(runDir); err != nil {
 			return 0, &apperror.RuntimeError{Err: err}
 		}
+		if err := updateLatestForTriage(opts.Out, runDir, commandRunID); err != nil {
+			return 0, &apperror.RuntimeError{Err: err}
+		}
 		if humanOutput {
+			if archivedPriorTriage != "" {
+				f.Streams().Printf("archived prior triage to %s\n", archivedPriorTriage)
+			}
 			f.Streams().Printf("triage dry run: %s\n", filepath.Join(targetTriageDir, "prompt.txt"))
 			f.Streams().Printf("triage status:  %s\n", filepath.Join(targetTriageDir, "status.json"))
 			f.Streams().Printf("next:           %s\n", ledger.BakeoffTriageCommand(commandRunID, displayOutDir, true))
@@ -267,6 +276,9 @@ func Run(ctx context.Context, f commands.Factory, opts *TriageOptions) (int, err
 			if _, err := manifest.WriteRunManifest(runDir); err != nil {
 				return 0, &apperror.RuntimeError{Err: err}
 			}
+			if err := updateLatestForTriage(opts.Out, runDir, commandRunID); err != nil {
+				return 0, &apperror.RuntimeError{Err: err}
+			}
 		}
 		if humanOutput {
 			status, _ := result["status"].(string)
@@ -291,15 +303,23 @@ func Run(ctx context.Context, f commands.Factory, opts *TriageOptions) (int, err
 		return 0, &apperror.RuntimeError{Err: err}
 	}
 	if stagedTriageDir != "" {
-		if err := replaceDirAtomically(targetTriageDir, stagedTriageDir); err != nil {
+		archivePath, err := replaceDirAtomicallyArchiving(targetTriageDir, stagedTriageDir)
+		if err != nil {
 			return 0, &apperror.RuntimeError{Err: err}
 		}
+		archivedPriorTriage = archivePath
 		stagedTriageDir = ""
 	}
 	if _, err := manifest.WriteRunManifest(runDir); err != nil {
 		return 0, &apperror.RuntimeError{Err: err}
 	}
+	if err := updateLatestForTriage(opts.Out, runDir, commandRunID); err != nil {
+		return 0, &apperror.RuntimeError{Err: err}
+	}
 	if humanOutput {
+		if archivedPriorTriage != "" {
+			f.Streams().Printf("archived prior triage to %s\n", archivedPriorTriage)
+		}
 		f.Streams().Printf("triage: %s\n", filepath.Join(targetTriageDir, "triage.md"))
 		items, fixNow := triageResultCounts(finalJSON)
 		f.Streams().Printf("result: triage complete, items=%d, fix_now=%d\n", items, fixNow)
@@ -405,26 +425,51 @@ func stringList(value any) []string {
 	return out
 }
 
-func replaceDirAtomically(target string, replacement string) error {
+func replaceDirAtomicallyArchiving(target string, replacement string) (string, error) {
 	if _, err := os.Stat(target); err != nil {
 		if os.IsNotExist(err) {
-			return os.Rename(replacement, target)
+			return "", os.Rename(replacement, target)
 		}
-		return err
+		return "", err
 	}
-	backup, err := os.MkdirTemp(filepath.Dir(target), ".triage-backup-")
+	archive, err := uniqueTriageArchivePath(filepath.Dir(target))
 	if err != nil {
-		return err
+		return "", err
 	}
-	if err := os.RemoveAll(backup); err != nil {
-		return err
-	}
-	if err := os.Rename(target, backup); err != nil {
-		return err
+	if err := os.Rename(target, archive); err != nil {
+		return "", err
 	}
 	if err := os.Rename(replacement, target); err != nil {
-		_ = os.Rename(backup, target)
+		_ = os.Rename(archive, target)
+		return "", err
+	}
+	return archive, nil
+}
+
+func uniqueTriageArchivePath(runDir string) (string, error) {
+	base := filepath.Join(runDir, "triage.failed-"+artifact.UTCNow())
+	for i := 0; ; i++ {
+		candidate := base
+		if i > 0 {
+			candidate = fmt.Sprintf("%s-%d", base, i)
+		}
+		if _, err := os.Stat(candidate); os.IsNotExist(err) {
+			return candidate, nil
+		} else if err != nil {
+			return "", err
+		}
+	}
+}
+
+func updateLatestForTriage(outDir string, runDir string, commandRunID string) error {
+	runID := commandRunID
+	targetOut := outDir
+	if runID == "" || runID == "latest" || ledger.IsPathLikeRunID(runID) {
+		runID = filepath.Base(runDir)
+		targetOut = ledger.OutputDirForResolvedRun(outDir, runDir)
+	}
+	if err := ledger.ValidateRunID(runID); err != nil {
 		return err
 	}
-	return os.RemoveAll(backup)
+	return ledger.UpdateLatest(targetOut, runID)
 }

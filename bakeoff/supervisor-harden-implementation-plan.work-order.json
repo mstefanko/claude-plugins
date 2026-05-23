@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "id": "supervisor-harden-implementation-plan",
+  "type": "analyze",
+  "goal": "Produce a decision-ready implementation plan for Approach A (incremental hardening of internal/runner/ with race/leak tests), based on the bakeoff compare run 2026-05-23-db11. The plan must be ordered, concrete, and verifier-aware: every change names the file, function, line range, the race/leak class it forecloses, and the test that proves it.",
+  "background": "Source run: runs/2026-05-23-db11/report.md (compare run, winner=claude, two-pass judge converged). Decision: incrementally harden internal/runner/runner.go, internal/runner/process_unix.go, internal/runner/process_windows.go, and internal/runner/runner_test.go rather than introduce a typed state machine. Existing primitives that already serialize state and must be preserved: sync.Mutex on captureState (runner.go:173), sync.Once guards capOnce/hardStopOnce (runner.go:198-199), errgroup with bounded goroutine lifetimes (runner.go:281-307), and deterministic SIGTERM -> 1s grace -> SIGKILL ordering in terminateAndWait (runner.go:730-745). Gaps the plan must close: (1) no goleak coverage in TestMain; (2) no context.AfterFunc backstop on the errgroup; (3) missing targeted tests for cancel-during-copy, killed-before-exit, and stderr-overflow-during-stop; (4) Windows process_windows.go orphans child processes (no job objects, only process.Kill). The plan must also encode invariants surfaced by codex's kept-from-nonwinner material: no kill-after-reap, no duplicate terminal status, no close-before-drain, and pin os/exec WaitDelay plus StdoutPipe/Wait ordering contracts into tests. Acceptance criteria for the plan: (1) phases are ordered with explicit dependencies and no two phases edit the same function without sequencing; (2) every phase names file paths, line ranges, the named race/leak class it closes, and the verifier command that proves it (for example 'go test -race ./internal/runner/...' or 'go test -run TestRunProviderCancelDuringCopy ./internal/runner/'); (3) Windows job-object work appears as its own separate phase with build-tag scoping, not interleaved with POSIX changes; (4) each phase estimates net LOC added and gives a rollback note; (5) the plan must call out which gaps can be closed without API changes to the Runner type and which (if any) require signature changes. Out of scope: switching off os/exec, building a typed state machine, changes to verifier or artifact subsystems, CLI ergonomics. Source artifacts the analyze pass should read: runs/2026-05-23-db11/report.md, runs/2026-05-23-db11/decision.json, runs/2026-05-23-db11/providers/claude/stdout.txt, runs/2026-05-23-db11/providers/codex/stdout.txt.",
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "sonnet",
+      "scope": "mixed",
+      "effort": "high"
+    },
+    {
+      "id": "gemini",
+      "backend": "gemini",
+      "model": "gemini-2.5-pro",
+      "scope": "mixed",
+      "effort": "high"
+    }
+  ],
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  },
+  "scope_policy": {
+    "enforcement": "best_effort"
+  }
+}

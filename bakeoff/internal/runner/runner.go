@@ -94,6 +94,7 @@ type IOStats struct {
 	LastStderrAge         *float64 `json:"last_stderr_age"`
 	LastOutputAge         float64  `json:"last_output_age"`
 	HeartbeatCount        int      `json:"heartbeat_count"`
+	QuietTickObservations int      `json:"quiet_tick_observations"`
 	QuietTickCount        int      `json:"quiet_tick_count"`
 	QuietThresholdSeconds int      `json:"quiet_threshold_seconds"`
 	OutputCapGraceSeconds int      `json:"output_cap_grace_seconds"`
@@ -187,7 +188,9 @@ type captureState struct {
 	lastStdoutAt          *time.Time
 	lastStderrAt          *time.Time
 	heartbeatCount        int
+	quietTickObservations int
 	quietTickCount        int
+	inQuietWindow         bool
 	outputCapHit          bool
 	outputCapHardStop     bool
 	outputCapReason       string
@@ -580,6 +583,7 @@ func (s *captureState) appendStdout(chunk []byte, cmd *exec.Cmd) {
 	if s.outputCapHardStop {
 		return
 	}
+	s.inQuietWindow = false
 	s.stdoutObservedBytes += len(chunk)
 	if s.outputCapHit {
 		s.appendStdoutTailLocked(chunk)
@@ -645,6 +649,7 @@ func (s *captureState) appendStderr(chunk []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
+	s.inQuietWindow = false
 	s.stderrObservedBytes += len(chunk)
 	if s.stderrCapHit {
 		s.appendStderrTailLocked(chunk)
@@ -751,7 +756,7 @@ func (s *captureState) emitTick(now time.Time, budgets Budgets, onTick func(Tick
 		s.heartbeatCount++
 		ioStats := s.currentIOLocked(now)
 		if ioStats.LastOutputAge >= float64(s.quietThresholdSeconds) {
-			s.quietTickCount++
+			s.observeQuietTickLocked()
 		}
 		s.mu.Unlock()
 		return
@@ -762,7 +767,9 @@ func (s *captureState) emitTick(now time.Time, budgets Budgets, onTick func(Tick
 	phase := "running"
 	if ioStats.LastOutputAge >= float64(s.quietThresholdSeconds) {
 		phase = "quiet"
-		s.quietTickCount++
+		s.observeQuietTickLocked()
+		ioStats.QuietTickObservations = s.quietTickObservations
+		ioStats.QuietTickCount = s.quietTickCount
 	}
 	tick := Tick{
 		Elapsed:             round3(now.Sub(s.started).Seconds()),
@@ -781,6 +788,14 @@ func (s *captureState) emitTick(now time.Time, budgets Budgets, onTick func(Tick
 	}
 	s.mu.Unlock()
 	safeOnTick(onTick, tick)
+}
+
+func (s *captureState) observeQuietTickLocked() {
+	s.quietTickObservations++
+	if !s.inQuietWindow {
+		s.quietTickCount++
+		s.inQuietWindow = true
+	}
 }
 
 func (s *captureState) currentIO(now time.Time) IOStats {
@@ -817,6 +832,7 @@ func (s *captureState) currentIOLocked(now time.Time) IOStats {
 		LastStderrAge:         lastStderrAge,
 		LastOutputAge:         round3(now.Sub(lastOutputAt).Seconds()),
 		HeartbeatCount:        s.heartbeatCount,
+		QuietTickObservations: s.quietTickObservations,
 		QuietTickCount:        s.quietTickCount,
 		QuietThresholdSeconds: s.quietThresholdSeconds,
 		OutputCapGraceSeconds: s.outputCapGraceSeconds,

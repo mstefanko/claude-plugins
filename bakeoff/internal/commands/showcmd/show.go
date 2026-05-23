@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/apperror"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands"
@@ -81,6 +82,18 @@ func runShow(_ context.Context, f commands.Factory, opts *ShowOptions) error {
 	case "dry_run":
 		f.Streams().Printf("\ntriage dry run only: %s\n", ledger.BakeoffTriageCommand(opts.RunID, opts.Out, true))
 	default:
+		if status, stderrTail, ok := failedTriageDetail(runDir); ok {
+			f.Streams().Printf("\ntriage failed: %s\n", status)
+			f.Streams().Printf("triage stderr tail:\n")
+			if strings.TrimSpace(stderrTail) == "" {
+				f.Streams().Printf("  no stderr captured\n")
+			} else {
+				for _, line := range strings.Split(strings.TrimRight(stderrTail, "\n"), "\n") {
+					f.Streams().Printf("  %s\n", line)
+				}
+			}
+			return nil
+		}
 		woMap := map[string]any{}
 		if wo, err := workorder.Load(filepath.Join(runDir, "work-order.json")); err == nil {
 			woMap = wo.Raw
@@ -91,6 +104,36 @@ func runShow(_ context.Context, f commands.Factory, opts *ShowOptions) error {
 		}
 	}
 	return nil
+}
+
+func failedTriageDetail(runDir string) (string, string, bool) {
+	statusObj := readJSON(filepath.Join(runDir, "triage", "status.json"))
+	status := statusObj["status"]
+	statusText, _ := status.(string)
+	if statusText == "" || statusText == "ok" || statusText == "dry_run" {
+		return "", "", false
+	}
+	stderrPath := filepath.Join(runDir, "triage", "stderr.txt")
+	data, err := os.ReadFile(stderrPath)
+	if err != nil {
+		return statusText, "", true
+	}
+	return statusText, tailLines(string(data), 20), true
+}
+
+func tailLines(text string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	text = strings.TrimRight(text, "\n")
+	if text == "" {
+		return ""
+	}
+	lines := strings.Split(text, "\n")
+	if len(lines) <= n {
+		return strings.Join(lines, "\n")
+	}
+	return strings.Join(lines[len(lines)-n:], "\n")
 }
 
 func showTriage(f commands.Factory, opts *ShowOptions, runDir string) error {

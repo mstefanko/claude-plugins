@@ -305,10 +305,51 @@ func TestRenderProviderStatusInlinesObservedBytesWhenTruncated(t *testing.T) {
 		map[string]map[string]any{},
 		RenderOptions{},
 	)
-	if !strings.Contains(text, "4.0 KB (obs 18.2 KB)") {
+	if !strings.Contains(text, "4.0 KB (trunc, +14.2 KB)") {
 		t.Fatalf("report missing observed byte cell:\n%s", text)
 	}
 	if strings.Contains(text, "stdout observed") || strings.Contains(text, "stderr observed") {
 		t.Fatalf("observed bytes duplicated in notes:\n%s", text)
+	}
+}
+
+func TestRenderEscalationDisputeItemsAvoidRawMapLiterals(t *testing.T) {
+	text := RenderEscalation(
+		&workorder.WorkOrder{ID: "sample", Type: "compare"},
+		map[string]any{
+			"decision_kind":    "escalation_advisory_supported",
+			"escalation_mode":  "dispute",
+			"added_provider":   "gemini",
+			"source_providers": []any{"claude", "codex"},
+			"source_mode":      "compare",
+			"source_decision":  map[string]any{"decision_kind": "tie"},
+			"canonical_winner": nil,
+			"selection_basis":  "",
+			"dispute": map[string]any{
+				"outcome_effect": "no_material_change",
+				"resolved_points": []any{map[string]any{
+					"id":         "D-001",
+					"resolution": "The existing evidence is sufficient.",
+					"evidence":   []any{"report.md:42"},
+				}},
+				"unresolved_points": []any{},
+				"new_evidence":      []any{},
+			},
+		},
+		nil,
+		map[string]any{"points": []any{map[string]any{"id": "D-001"}}},
+		EscalationRenderOptions{RunID: "run-1", OutDir: "runs", SourceRunID: "source"},
+	)
+	for _, want := range []string{
+		"- **D-001** The existing evidence is sufficient.",
+		"Evidence: report.md:42",
+		"advisory escalation supports the source decision",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("report missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "map[") {
+		t.Fatalf("report leaked map literal:\n%s", text)
 	}
 }

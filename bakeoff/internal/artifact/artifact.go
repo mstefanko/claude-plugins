@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -86,6 +87,8 @@ func StatusWithoutPayload(result map[string]any) map[string]any {
 		"stderr_observed_bytes",
 		"stdout_truncated",
 		"stderr_truncated",
+		"stderr_filtered",
+		"stderr_filter_note",
 		"final_json_source",
 		"stderr_kind",
 		"failure_kind",
@@ -122,33 +125,53 @@ func codexTransportNoise(stderr string, finalJSON any) bool {
 	if finalJSON == nil {
 		return false
 	}
-	if !strings.HasPrefix(stderr, "Reading prompt from stdin...\nOpenAI Codex ") && !strings.HasPrefix(stderr, "OpenAI Codex ") {
+	tail, ok := validFinalJSONTail(stderr)
+	if !ok {
 		return false
 	}
-	return endsWithValidFinalJSON(stderr)
+	return trailingCodexDiagnosticsOnly(tail)
 }
 
-func endsWithValidFinalJSON(text string) bool {
+func validFinalJSONTail(text string) (string, bool) {
 	trimmed := strings.TrimSpace(text)
-	if !strings.HasSuffix(trimmed, runner.FinalJSONClose) {
-		return false
-	}
 	start := strings.LastIndex(trimmed, runner.FinalJSONOpen)
 	if start < 0 {
-		return false
+		return "", false
 	}
-	payload := strings.TrimSpace(trimmed[start+len(runner.FinalJSONOpen) : len(trimmed)-len(runner.FinalJSONClose)])
+	afterOpen := start + len(runner.FinalJSONOpen)
+	endRelative := strings.Index(trimmed[afterOpen:], runner.FinalJSONClose)
+	if endRelative < 0 {
+		return "", false
+	}
+	end := afterOpen + endRelative
+	payload := strings.TrimSpace(trimmed[afterOpen:end])
 	if payload == "" {
-		return false
+		return "", false
 	}
 	var obj map[string]any
 	decoder := json.NewDecoder(strings.NewReader(payload))
 	decoder.UseNumber()
 	if err := decoder.Decode(&obj); err != nil {
-		return false
+		return "", false
 	}
 	var extra any
-	return decoder.Decode(&extra) == io.EOF
+	if decoder.Decode(&extra) != io.EOF {
+		return "", false
+	}
+	tail := strings.TrimSpace(trimmed[end+len(runner.FinalJSONClose):])
+	return tail, true
+}
+
+func trailingCodexDiagnosticsOnly(tail string) bool {
+	if tail == "" {
+		return true
+	}
+	for _, line := range strings.Split(tail, "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" && !codexDiagnosticLineRE.MatchString(trimmed) {
+			return false
+		}
+	}
+	return true
 }
 
 func ProviderSucceeded(result map[string]any) bool {
@@ -160,7 +183,8 @@ func WriteProviderArtifacts(providerDir string, result map[string]any) error {
 	if err := workorder.WriteTextAtomic(filepath.Join(providerDir, "stdout.txt"), jsonutil.StringValue(result["stdout"])); err != nil {
 		return err
 	}
-	if err := workorder.WriteTextAtomic(filepath.Join(providerDir, "stderr.txt"), jsonutil.StringValue(result["stderr"])); err != nil {
+	stderr := stderrArtifactText(result)
+	if err := workorder.WriteTextAtomic(filepath.Join(providerDir, "stderr.txt"), stderr); err != nil {
 		return err
 	}
 	if err := WriteFormatRetryArtifacts(providerDir, result, ""); err != nil {
@@ -176,6 +200,45 @@ func WriteProviderArtifacts(providerDir string, result map[string]any) error {
 		return workorder.WriteJSONAtomic(filepath.Join(providerDir, "final.json"), result["final_json"])
 	}
 	return nil
+}
+
+var codexDiagnosticLineRE = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T.*\b(?:ERROR|WARN|FATAL)\b`)
+
+func stderrArtifactText(result map[string]any) string {
+	stderr := jsonutil.StringValue(result["stderr"])
+	if jsonutil.StringValue(result["stderr_kind"]) != "transport_noise" {
+		return stderr
+	}
+	filtered, ok := filterCodexTransportStderr(stderr)
+	if !ok {
+		return stderr
+	}
+	result["stderr_filtered"] = true
+	result["stderr_filter_note"] = "codex transport echo filtered; raw byte counts remain in status.json"
+	return filtered
+}
+
+func filterCodexTransportStderr(stderr string) (string, bool) {
+	lines := strings.Split(strings.TrimRight(stderr, "\n"), "\n")
+	kept := []string{}
+	for _, line := range lines {
+		if strings.HasPrefix(line, "Reading prompt from stdin") ||
+			strings.HasPrefix(line, "OpenAI Codex ") ||
+			codexDiagnosticLineRE.MatchString(line) {
+			kept = append(kept, line)
+		}
+	}
+	keptText := strings.Join(kept, "\n")
+	if keptText == strings.TrimRight(stderr, "\n") {
+		return stderr, false
+	}
+	var filtered strings.Builder
+	if keptText != "" {
+		filtered.WriteString(keptText)
+		filtered.WriteByte('\n')
+	}
+	filtered.WriteString("[codex stderr transport echo filtered; raw byte counts remain in status.json]\n")
+	return filtered.String(), true
 }
 
 func WriteJudgeArtifacts(judgeDir string, label string, result map[string]any) error {
@@ -271,7 +334,14 @@ func resultFailureKind(result runner.Result) string {
 	if status == runner.StatusTimeout {
 		return timeoutFailureKind(result)
 	}
-	return runner.ClassifyFailure(status, result.Stdout, result.Stderr)
+	return runner.ClassifyFailureWithStats(status, result.Stdout, result.Stderr, runner.FailureStats{
+		StdoutObservedBytes:   result.StdoutObservedBytes,
+		StderrObservedBytes:   result.StderrObservedBytes,
+		WallSeconds:           result.WallSeconds,
+		QuietThresholdSeconds: result.IO.QuietThresholdSeconds,
+		HeartbeatCount:        result.IO.HeartbeatCount,
+		QuietTickObservations: result.IO.QuietTickObservations,
+	})
 }
 
 func originalStatus(result runner.Result) string {
@@ -292,7 +362,7 @@ func timeoutFailureKind(result runner.Result) string {
 	if result.StdoutObservedBytes == 0 && result.IO.StdoutObservedBytes == 0 {
 		return "quiet_stdout"
 	}
-	if result.IO.QuietTickCount > 0 {
+	if result.IO.QuietTickObservations > 0 || result.IO.QuietTickCount > 0 {
 		return "quiet_stdout"
 	}
 	if result.IO.LastStdoutAge != nil && result.IO.QuietThresholdSeconds > 0 && *result.IO.LastStdoutAge >= float64(result.IO.QuietThresholdSeconds) {
