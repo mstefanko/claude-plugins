@@ -121,9 +121,12 @@ Provider-pair extraction rules:
 - If the user asks to replace one provider with another, keep exactly two
   providers and show the resulting pair in the preview.
 - If wording such as "add Gemini", "include Gemini too", or "use Gemini as
-  well" would add a third provider to the canonical pair, ask one
-  clarification: `Bakeoff supports exactly two providers for now. Should Gemini
-  replace Claude or Codex for this work order?`
+  well" applies to a just-completed run or an explicit source run id, do not
+  ask which provider to replace. Route to escalation preview instead.
+- If the same wording would add a third provider to a brand-new work order with
+  no source run context, ask one clarification: `Bakeoff normal work orders use
+  exactly two providers. Should Gemini replace Claude or Codex for this work
+  order, or do you want to escalate an existing run?`
 - If the user names fewer than two or more than two providers and the intended
   pair cannot be inferred without adding a third provider, ask one
   clarification.
@@ -141,6 +144,27 @@ Implicit provider selection rules:
   provider readiness from doctor.
 - Existing work-order paths, reruns, and replayed artifacts never substitute
   providers.
+
+Post-run escalation is separate from work-order drafting. Use
+`bakeoff escalate SOURCE_RUN_ID --provider BACKEND[:MODEL] --mode MODE
+--dry-run` after reading structured source artifacts and only when the source
+run is `gather`, `compare`, `analyze`, or `gather` with
+`facet.id: "code-review"`. Do not offer build escalation. Recommend one mode
+first, then list alternatives:
+
+- `independent` (fresh third answer): use when the source run is unresolved,
+  decision-incomplete, or the user wants independent evidence. Cost: one
+  provider call plus one escalation judge.
+- `witness` (audit the current result): use when the user wants a broad sanity
+  check of the report, decision, judge passes, or triage. Cost: one provider
+  call.
+- `dispute` (focus only on contested points): use when artifacts expose ties,
+  conflicts, unknowns, judge caveats, kept-from-nonwinner material, or triage
+  gaps. Cost: one provider call.
+
+Always require explicit mode approval before running a non-dry-run escalation.
+For code-review escalation, leave triage enabled unless the user supplied
+`--no-triage`.
 
 For build fast-path drafts, run `bakeoff draft-build` with the extracted id,
 goal, acceptance criteria, edit scope, gate verifier, optional base/protected
@@ -436,8 +460,9 @@ Preserve exact artifact paths, including custom `--out`; do not assume
 paths or `/bakeoff:inspect`/`/bakeoff:history`.
 
 Allowed recommendation shapes are stop, inspect, judge-only rerun for research,
-draft an implementation plan (`type: "analyze"`), gather/research, compare,
-review (`gather` plus `code-review`), or draft a build work order for approval.
+escalation preview for non-build research/review, draft an implementation plan
+(`type: "analyze"`), gather/research, compare, review (`gather` plus
+`code-review`), or draft a build work order for approval.
 Prefer planning between research and build unless the implementation is tiny,
 concrete, and verifier-ready. Review-to-build advice requires actionable
 current triage plus supplied or repo-discovered acceptance criteria and

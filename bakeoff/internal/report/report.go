@@ -36,6 +36,14 @@ type RenderOptions struct {
 	RunDir string
 }
 
+type EscalationRenderOptions struct {
+	RunID        string
+	OutDir       string
+	RunDir       string
+	SourceRunID  string
+	SourceRunDir string
+}
+
 func Render(wo *workorder.WorkOrder, decision map[string]any, workerResults map[string]map[string]any, judgeResults map[string]map[string]any, opts RenderOptions) string {
 	mode, _ := decision["mode"].(string)
 	lines := []string{
@@ -58,6 +66,190 @@ func Render(wo *workorder.WorkOrder, decision map[string]any, workerResults map[
 	}
 	lines = append(lines, caveats(decision)...)
 	return addFindingIDs(strings.TrimRight(strings.Join(lines, "\n"), "\n")) + "\n"
+}
+
+func RenderEscalation(wo *workorder.WorkOrder, decision map[string]any, addedFinal map[string]any, disputePacket map[string]any, opts EscalationRenderOptions) string {
+	lines := []string{
+		"# Bakeoff Escalation Report: " + wo.ID,
+		"",
+	}
+	lines = append(lines, renderEscalationAnswer(decision, opts)...)
+	lines = append(lines, "## Source Run", "")
+	lines = append(lines, "- Run: `"+opts.SourceRunID+"`")
+	if opts.SourceRunDir != "" {
+		lines = append(lines, "- Directory: `"+opts.SourceRunDir+"`")
+	}
+	lines = append(lines, "- Source mode: `"+jsonutil.StringValue(decision["source_mode"])+"`")
+	if sourceDecision, ok := decision["source_decision"].(map[string]any); ok {
+		lines = append(lines, "- Source decision: `"+jsonutil.StringValue(sourceDecision["decision_kind"])+"`")
+		if winner := jsonutil.StringValue(sourceDecision["canonical_winner"]); winner != "" {
+			lines = append(lines, "- Source winner: `"+winner+"`")
+		}
+	}
+	lines = append(lines, "")
+	lines = append(lines, "## Escalation", "")
+	lines = append(lines, "- Mode: `"+jsonutil.StringValue(decision["escalation_mode"])+"` ("+escalationModeLabel(jsonutil.StringValue(decision["escalation_mode"]))+")")
+	lines = append(lines, "- Added provider: `"+jsonutil.StringValue(decision["added_provider"])+"`")
+	lines = append(lines, "- Source providers: `"+joinList(decision["source_providers"], "`, `")+"`")
+	if jsonutil.StringValue(decision["escalation_mode"]) != "independent" {
+		lines = append(lines, "- Decision impact: advisory only; this mode does not replace the source winner.")
+	}
+	if jsonutil.StringValue(decision["selection_basis"]) == "escalation_synthesis" {
+		lines = append(lines, "- Selection basis: `escalation_synthesis`; this is one synthesis pass, not position-swapped judging.")
+	}
+	lines = append(lines, "")
+	lines = append(lines, renderEscalationPayload(decision, addedFinal, disputePacket)...)
+	lines = append(lines, caveats(decision)...)
+	return addFindingIDs(strings.TrimRight(strings.Join(lines, "\n"), "\n")) + "\n"
+}
+
+func renderEscalationAnswer(decision map[string]any, opts EscalationRenderOptions) []string {
+	kind := jsonutil.StringValue(decision["decision_kind"])
+	headline := firstString(nestedString(decision, "synthesis", "headline"), nestedString(decision, "assessment", "headline"), nestedString(decision, "dispute", "headline"))
+	if headline == "" {
+		headline = kind
+	}
+	effect := firstString(nestedString(decision, "synthesis", "source_decision_effect"), nestedString(decision, "assessment", "source_decision_effect"), nestedString(decision, "dispute", "source_decision_effect"))
+	confidence := firstString(nestedString(decision, "synthesis", "confidence"), nestedString(decision, "assessment", "confidence"), nestedString(decision, "dispute", "confidence"))
+	lines := []string{
+		"## Answer",
+		"",
+		"- Result: `" + kind + "` - " + headline,
+	}
+	if effect != "" {
+		lines = append(lines, "- Source decision effect: `"+effect+"`")
+	}
+	if confidence != "" {
+		lines = append(lines, "- Confidence: `"+confidence+"`")
+	}
+	if winner := jsonutil.StringValue(decision["canonical_winner"]); winner != "" {
+		lines = append(lines, "- Escalation winner: `"+winner+"`")
+	} else {
+		lines = append(lines, "- Escalation winner: none")
+	}
+	lines = append(lines, "- What changed: "+firstNonEmptyListSummary(
+		nestedList(decision, "synthesis", "what_changed"),
+		nestedList(decision, "synthesis", "material_new_evidence"),
+		nestedList(decision, "assessment", "missed_material"),
+		nestedList(decision, "assessment", "material_errors"),
+		nestedList(decision, "dispute", "new_evidence"),
+		nestedList(decision, "union", "new_or_changed_material"),
+	))
+	lines = append(lines, "- Still unresolved: "+firstNonEmptyListSummary(
+		nestedList(decision, "synthesis", "unresolved_questions"),
+		nestedList(decision, "dispute", "unresolved_points"),
+		nestedList(decision, "union", "unknowns_union"),
+	))
+	if action := firstString(nestedString(decision, "synthesis", "recommended_action"), nestedString(decision, "assessment", "recommended_action"), nestedString(decision, "dispute", "recommended_action")); action != "" {
+		lines = append(lines, "- Recommended action: `"+action+"`")
+	}
+	if opts.RunID != "" {
+		lines = append(lines, "- Next: `"+ledger.BakeoffShowCommand(opts.RunID, opts.OutDir, "")+"`")
+	}
+	lines = append(lines, "")
+	return lines
+}
+
+func renderEscalationPayload(decision map[string]any, addedFinal map[string]any, disputePacket map[string]any) []string {
+	mode := jsonutil.StringValue(decision["escalation_mode"])
+	switch mode {
+	case "witness":
+		return renderWitnessAssessment(decision)
+	case "dispute":
+		return renderDisputeAssessment(decision, disputePacket)
+	default:
+		if jsonutil.StringValue(decision["source_mode"]) == "gather" {
+			return renderEscalationUnion(decision)
+		}
+		return renderSynthesis(decision, addedFinal)
+	}
+}
+
+func renderWitnessAssessment(decision map[string]any) []string {
+	assessment, _ := decision["assessment"].(map[string]any)
+	lines := []string{"## Witness Assessment", "", "This result is advisory and does not select a new winner.", ""}
+	lines = append(lines, "- Assessment: `"+jsonutil.StringValue(assessment["assessment"])+"`")
+	lines = append(lines, "- Would change outcome: `"+strings.ToLower(fmt.Sprintf("%v", jsonutil.BoolValue(assessment["would_change_outcome"])))+"`")
+	lines = append(lines, "", "### Material Errors", "")
+	lines = append(lines, genericItemLines(jsonutil.ListValue(assessment["material_errors"]))...)
+	lines = append(lines, "", "### Missed Material", "")
+	lines = append(lines, genericItemLines(jsonutil.ListValue(assessment["missed_material"]))...)
+	lines = append(lines, "", "### Triage Concerns", "")
+	lines = append(lines, genericItemLines(jsonutil.ListValue(assessment["triage_concerns"]))...)
+	lines = append(lines, "")
+	return lines
+}
+
+func renderDisputeAssessment(decision map[string]any, packet map[string]any) []string {
+	dispute, _ := decision["dispute"].(map[string]any)
+	lines := []string{"## Dispute Assessment", "", "This result is advisory and does not select a new winner.", ""}
+	lines = append(lines, "- Outcome effect: `"+jsonutil.StringValue(dispute["outcome_effect"])+"`")
+	if points := jsonutil.ListValue(packet["points"]); len(points) > 0 {
+		lines = append(lines, "- Dispute points checked: `"+fmt.Sprintf("%d", len(points))+"`")
+	}
+	lines = append(lines, "", "### Resolved Points", "")
+	lines = append(lines, genericItemLines(jsonutil.ListValue(dispute["resolved_points"]))...)
+	lines = append(lines, "", "### Unresolved Points", "")
+	lines = append(lines, genericItemLines(jsonutil.ListValue(dispute["unresolved_points"]))...)
+	lines = append(lines, "", "### New Evidence", "")
+	lines = append(lines, genericItemLines(jsonutil.ListValue(dispute["new_evidence"]))...)
+	lines = append(lines, "")
+	return lines
+}
+
+func renderEscalationUnion(decision map[string]any) []string {
+	union, _ := decision["union"].(map[string]any)
+	lines := []string{"## Added Union", ""}
+	lines = append(lines, claimLines(withEscalationSources(jsonutil.ListValue(union["merged_claims"])), "", true)...)
+	lines = append(lines, "", "## Conflicts", "")
+	lines = append(lines, conflictLines(jsonutil.ListValue(union["conflicts"]))...)
+	lines = append(lines, "", "## Unknowns", "")
+	lines = append(lines, genericItemLines(jsonutil.ListValue(union["unknowns_union"]))...)
+	lines = append(lines, "", "## New Or Changed Material", "")
+	lines = append(lines, genericItemLines(jsonutil.ListValue(union["new_or_changed_material"]))...)
+	lines = append(lines, "")
+	return lines
+}
+
+func withEscalationSources(claims []any) []any {
+	out := []any{}
+	for _, item := range claims {
+		claim, ok := item.(map[string]any)
+		if !ok {
+			out = append(out, item)
+			continue
+		}
+		copy := cloneMap(claim)
+		if _, ok := copy["_source_providers"]; !ok {
+			copy["_source_providers"] = copy["sources"]
+		}
+		out = append(out, copy)
+	}
+	return out
+}
+
+func renderSynthesis(decision map[string]any, addedFinal map[string]any) []string {
+	synthesis, _ := decision["synthesis"].(map[string]any)
+	lines := []string{"## Synthesis", ""}
+	lines = append(lines, "- Effect: `"+jsonutil.StringValue(synthesis["source_decision_effect"])+"`")
+	if winner := jsonutil.StringValue(synthesis["recommended_winner"]); winner != "" {
+		lines = append(lines, "- Recommended provider: `"+winner+"`")
+	}
+	lines = append(lines, "", "### What Changed", "")
+	lines = append(lines, genericItemLines(jsonutil.ListValue(synthesis["what_changed"]))...)
+	lines = append(lines, "", "### Material New Evidence", "")
+	lines = append(lines, genericItemLines(jsonutil.ListValue(synthesis["material_new_evidence"]))...)
+	lines = append(lines, "", "### Unresolved Questions", "")
+	lines = append(lines, genericItemLines(jsonutil.ListValue(synthesis["unresolved_questions"]))...)
+	if len(addedFinal) > 0 {
+		lines = append(lines, "", "## Added Provider Output", "")
+		if position := jsonutil.StringValue(addedFinal["position"]); position != "" {
+			lines = append(lines, "Position: "+position, "")
+		}
+		lines = append(lines, claimLines(jsonutil.ListValue(addedFinal["claims"]), jsonutil.StringValue(decision["added_provider"]), false)...)
+	}
+	lines = append(lines, "")
+	return lines
 }
 
 func renderOutcome(wo *workorder.WorkOrder, decision map[string]any, workerResults map[string]map[string]any, opts RenderOptions) []string {
@@ -726,6 +918,48 @@ func caveats(decision map[string]any) []string {
 	}
 	lines = append(lines, "")
 	return lines
+}
+
+func nestedString(obj map[string]any, key string, nestedKey string) string {
+	nested, _ := obj[key].(map[string]any)
+	if nested == nil {
+		return ""
+	}
+	return jsonutil.StringValue(nested[nestedKey])
+}
+
+func nestedList(obj map[string]any, key string, nestedKey string) []any {
+	nested, _ := obj[key].(map[string]any)
+	if nested == nil {
+		return nil
+	}
+	return jsonutil.ListValue(nested[nestedKey])
+}
+
+func firstNonEmptyListSummary(groups ...[]any) string {
+	for _, group := range groups {
+		if len(group) == 0 {
+			continue
+		}
+		if len(group) == 1 {
+			return fmt.Sprint(group[0])
+		}
+		return fmt.Sprintf("%s (+%d more)", fmt.Sprint(group[0]), len(group)-1)
+	}
+	return "none reported"
+}
+
+func escalationModeLabel(mode string) string {
+	switch mode {
+	case "independent":
+		return "fresh third answer"
+	case "witness":
+		return "audit the current result"
+	case "dispute":
+		return "focus only on contested points"
+	default:
+		return "unknown"
+	}
 }
 
 func addFindingIDs(text string) string {

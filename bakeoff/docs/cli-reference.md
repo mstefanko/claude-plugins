@@ -31,7 +31,8 @@ Generated drafts keep exactly two providers. The canonical default pair is
 not available and exactly one optional peer (`gemini` or `copilot`) is ready,
 natural-language drafting may use `claude` plus that peer and call out the
 fallback in the preview. Existing work-order paths are never rewritten or
-substituted.
+substituted. Adding a third provider after a completed non-build run uses
+`bakeoff escalate`; it is not a work-order schema change.
 
 Recognized `/bakeoff:run` flags:
 
@@ -119,7 +120,7 @@ bakeoff [-h] [--version]
 Subcommands:
 
 ```text
-init, draft-build, validate, research, build, rerun, triage, runs, ls, show, doctor
+init, draft-build, validate, research, build, rerun, escalate, triage, runs, ls, show, doctor
 ```
 
 ## `bakeoff init`
@@ -276,6 +277,46 @@ Flags:
 judge has durable failed-attempt evidence in `decision.json` or
 `judge/status*.json`. It creates a fresh run directory, copies provider
 artifacts, updates `latest`, and leaves the source run unchanged.
+
+## `bakeoff escalate`
+
+```text
+bakeoff escalate SOURCE_RUN_ID --provider BACKEND[:MODEL] --mode independent|witness|dispute [flags]
+```
+
+Runs one post-run provider escalation for an existing `gather`, `compare`, or
+`analyze` source run. Code review is supported as `gather` with
+`facet.id: "code-review"`. Build escalation is unsupported.
+
+Escalation writes a new run directory with `source-run.json`,
+`escalation/mode.json`, `decision.json`, `report.md`, `meta.json`, and
+`manifest.json`; the source run is never mutated.
+
+Modes:
+
+| Mode | Meaning | Calls |
+| --- | --- | --- |
+| `independent` | Fresh third answer. Compare/analyze then run one escalation synthesis judge; gather/review run one union judge. | 1 provider + 1 judge |
+| `witness` | Audit the current report, decision, provider outputs, judge passes, and triage when present. Advisory only. | 1 provider |
+| `dispute` | Build `escalation/dispute-packet.json` from contested points and ask the added provider to answer only those. Advisory only. | 1 provider |
+
+Flags:
+
+| Flag | Meaning |
+| --- | --- |
+| `--out <dir>` | Run ledger directory. Default: `runs`. |
+| `--run-id <id>` | Explicit escalation run id. |
+| `--dry-run` | Validate source artifacts, mode, provider, scope, and print the call envelope without creating a run. |
+| `--provider <backend[:model]>` | Added provider. The provider id is the backend name. |
+| `--mode <mode>` | `independent`, `witness`, or `dispute`. |
+| `--scope <scope>` | Added-provider scope when it cannot be inferred. |
+| `--quiet` | Suppress provider heartbeat lines. |
+| `--json` | Emit a final JSON summary. |
+| `--no-triage` | Skip automatic triage for code-review escalation. |
+| `--no-repo-layout` | Suppress generated repo layout context for independent mode. |
+
+Always use `--dry-run` for a preview before spending provider calls unless the
+operator has already approved the exact mode.
 
 ## `bakeoff show`
 

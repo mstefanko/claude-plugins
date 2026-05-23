@@ -342,6 +342,32 @@ behavior.
     decision-incomplete parts. It states that `latest` may point to any one
     child run nondeterministically and does not direct the user to `latest`.
 
+- [ ] Post-run "have Gemini look too" offers escalation, not provider
+  replacement.
+  - Setup: the previous completed run is `compare` with `decision_kind: "tie"`
+    and parseable `decision.json`, `report.md`, `meta.json`, and provider
+    finals.
+  - Prompt: `have Gemini look too`
+  - Expect: plugin recommends `independent` with reason "fresh third answer
+    can make an unresolved source run decision-complete", gives cost `1
+    provider call, 1 synthesis judge pass`, and prints
+    `bakeoff escalate <run-id> --provider gemini --mode independent --dry-run`.
+    It also lists `witness` and `dispute` as alternatives and requires explicit
+    mode approval before running.
+
+- [ ] Explicit source run plus third provider previews escalation.
+  - Prompt: `/bakeoff:run add Gemini as a third read on parser-options`
+  - Expect: plugin treats `parser-options` as a source run id, reads structured
+    artifacts, rejects build source runs, and offers escalation modes instead
+    of asking whether Gemini should replace Claude or Codex.
+
+- [ ] Brand-new request naming three providers still keeps work orders
+  pair-shaped.
+  - Prompt: `/bakeoff:run compare parser libraries with Claude, Codex, and Gemini`
+  - Expect: plugin asks whether to choose a two-provider pair for a new work
+    order or escalate an existing source run. It does not draft a three-provider
+    work order.
+
 - [ ] Mixed-type splits route mode-specific flags per part.
   - Prompt: accept a two-part split where part 1 is `build` and part 2 is
     `gather`, with `--keep-worktrees --base main --diff` in the original

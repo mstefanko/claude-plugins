@@ -23,12 +23,18 @@ const SchemaVersion = 1
 
 var CoreFingerprintArtifacts = []string{
 	"work-order.json",
+	"source-run.json",
 	"source-work-order.json",
 	"review-context.md",
 	"review-context.json",
 	"decision.json",
 	"meta.json",
 	"report.md",
+	"escalation/mode.json",
+	"escalation/dispute-packet.json",
+	"escalation/synthesis-prompt.txt",
+	"escalation/witness-prompt.txt",
+	"escalation/dispute-prompt.txt",
 	"triage/status.json",
 	"triage/final.json",
 	"triage/triage.md",
@@ -72,7 +78,7 @@ func BuildRunManifest(runDir string) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{
+	out := map[string]any{
 		"schema_version":        SchemaVersion,
 		"run_id":                filepath.Base(runDir),
 		"bakeoff_version":       buildinfo.Current().Version,
@@ -92,7 +98,11 @@ func BuildRunManifest(runDir string) (map[string]any, error) {
 		"review_context":        reviewContextSummary(runDir),
 		"artifacts":             artifacts,
 		"artifact_fingerprints": artifactFingerprintsForType(runDir, runType),
-	}, nil
+	}
+	if isEscalationRun(meta, decision) {
+		addEscalationManifestFields(out, meta, decision, workOrder)
+	}
+	return out, nil
 }
 
 func WriteRunManifest(runDir string) (map[string]any, error) {
@@ -277,6 +287,24 @@ func reviewContextSummary(runDir string) map[string]any {
 	return map[string]any{"present": false}
 }
 
+func isEscalationRun(meta map[string]any, decision map[string]any) bool {
+	return jsonutil.StringValue(meta["type"]) == "escalation" || jsonutil.StringValue(decision["mode"]) == "escalation"
+}
+
+func addEscalationManifestFields(out map[string]any, meta map[string]any, decision map[string]any, workOrder map[string]any) {
+	out["type"] = "escalation"
+	out["source_type"] = jsonutil.FirstNonNil(meta["source_type"], decision["source_mode"], workOrder["type"])
+	out["source_run_id"] = jsonutil.FirstNonNil(meta["source_run_id"], decision["source_run_id"])
+	out["escalation_mode"] = jsonutil.FirstNonNil(meta["escalation_mode"], decision["escalation_mode"])
+	out["added_provider"] = jsonutil.FirstNonNil(meta["added_provider"], decision["added_provider"])
+	if sourceProviders, ok := decision["source_providers"]; ok {
+		out["source_providers"] = sourceProviders
+	}
+	if escalation, ok := meta["escalation"].(map[string]any); ok {
+		out["escalation"] = escalation
+	}
+}
+
 func artifactPathsForType(runDir string, runType string) (map[string]any, error) {
 	for _, relative := range RequiredArtifactsForType(runType) {
 		if err := requireFile(filepath.Join(runDir, relative)); err != nil {
@@ -299,6 +327,15 @@ func artifactPathsForType(runDir string, runType string) (map[string]any, error)
 	}
 	if runType == "build" {
 		artifacts["build_context"] = "build-context.json"
+	}
+	if fsutil.FileExists(filepath.Join(runDir, "source-run.json")) {
+		artifacts["source_run"] = "source-run.json"
+	}
+	if fsutil.FileExists(filepath.Join(runDir, "escalation", "mode.json")) {
+		artifacts["escalation_mode"] = "escalation/mode.json"
+	}
+	if fsutil.FileExists(filepath.Join(runDir, "escalation", "dispute-packet.json")) {
+		artifacts["dispute_packet"] = "escalation/dispute-packet.json"
 	}
 	optional := map[string]string{
 		"triage": "triage/triage.md",
@@ -356,6 +393,7 @@ func fingerprintArtifactPathsForType(runDir string, runType string) []string {
 	}
 	addProviderEvidencePaths(runDir, addFound)
 	addJudgeEvidencePaths(runDir, addFound)
+	addEscalationEvidencePaths(runDir, addFound)
 	if runType == "build" {
 		addVerifyEvidencePaths(runDir, filepath.Join("baseline", "verify"), addFound)
 		addBuildProviderEvidencePaths(runDir, addFound)
@@ -407,6 +445,22 @@ func addJudgeEvidencePaths(runDir string, add func(string)) {
 		name := entry.Name()
 		if matchesAny(name, "prompt*.txt", "status*.json", "result*.json", "last-message*.txt") {
 			addDirEntryFile(runDir, "judge", entry, add)
+		}
+	}
+}
+
+func addEscalationEvidencePaths(runDir string, add func(string)) {
+	entries, err := os.ReadDir(filepath.Join(runDir, "escalation"))
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if matchesAny(name, "*.txt", "*.json") {
+			addDirEntryFile(runDir, "escalation", entry, add)
 		}
 	}
 }

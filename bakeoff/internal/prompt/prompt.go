@@ -107,6 +107,99 @@ func BuildTriagePrompt(payload any, budgets workorder.Budgets) (string, error) {
 	return text, nil
 }
 
+func BuildEscalationWitnessPrompt(payload any, budgets workorder.Budgets) (string, error) {
+	return buildEscalationPrompt("escalation-witness.txt", payload, budgets)
+}
+
+func BuildEscalationDisputePrompt(payload any, budgets workorder.Budgets) (string, error) {
+	return buildEscalationPrompt("escalation-dispute.txt", payload, budgets)
+}
+
+func BuildEscalationGatherUnionPrompt(payload any, budgets workorder.Budgets) (string, error) {
+	return buildEscalationPrompt("escalation-gather-union.txt", payload, budgets)
+}
+
+func BuildEscalationSynthesisPrompt(payload any, budgets workorder.Budgets) (string, error) {
+	return buildEscalationPrompt("escalation-synthesis.txt", payload, budgets)
+}
+
+func buildEscalationPrompt(fixture string, payload any, budgets workorder.Budgets) (string, error) {
+	base, err := fixturePrompt(fixture)
+	if err != nil {
+		return "", err
+	}
+	payloadBlocks, err := renderEscalationPayloadBlocks(payload)
+	if err != nil {
+		return "", err
+	}
+	text := base
+	text = replaceBlock(text, fixtureRuntimeBudgetBlock(), RenderRuntimeBudgetBlock(budgets, "judge"))
+	text = replaceTagInner(text, "escalation_payload_blocks", payloadBlocks)
+	return text, nil
+}
+
+func renderEscalationPayloadBlocks(payload any) (string, error) {
+	obj, ok := payload.(map[string]any)
+	if !ok {
+		payloadJSON, err := sortedJSON(payload)
+		if err != nil {
+			return "", err
+		}
+		return "<escalation_payload>\n" + escapePromptBlockBody(payloadJSON) + "\n</escalation_payload>", nil
+	}
+	blocks := []struct {
+		tag string
+		key string
+	}{
+		{tag: "source_run", key: "source_run"},
+		{tag: "work_order_json", key: "work_order_json"},
+		{tag: "source_report_md", key: "source_report_md"},
+		{tag: "source_decision_json", key: "source_decision_json"},
+		{tag: "source_meta_json", key: "source_meta_json"},
+		{tag: "source_provider_finals", key: "source_provider_finals"},
+		{tag: "source_judge_results", key: "source_judge_results"},
+		{tag: "added_provider_final", key: "added_provider_final"},
+		{tag: "dispute_packet", key: "dispute_packet"},
+		{tag: "review_context_md", key: "review_context_md"},
+		{tag: "review_context_json", key: "review_context_json"},
+		{tag: "triage_artifacts", key: "triage_artifacts"},
+	}
+	lines := []string{}
+	for _, item := range blocks {
+		value, exists := obj[item.key]
+		if !exists || value == nil {
+			continue
+		}
+		rendered, err := renderEscalationBlockValue(item.tag, value)
+		if err != nil {
+			return "", err
+		}
+		lines = append(lines, rendered)
+	}
+	if len(lines) == 0 {
+		payloadJSON, err := sortedJSON(payload)
+		if err != nil {
+			return "", err
+		}
+		return "<escalation_payload>\n" + escapePromptBlockBody(payloadJSON) + "\n</escalation_payload>", nil
+	}
+	return strings.Join(lines, "\n\n"), nil
+}
+
+func renderEscalationBlockValue(tag string, value any) (string, error) {
+	var body string
+	if text, ok := value.(string); ok && (tag == "work_order_json" || strings.HasSuffix(tag, "_md")) {
+		body = strings.TrimRight(text, "\n")
+	} else {
+		payloadJSON, err := sortedJSON(value)
+		if err != nil {
+			return "", err
+		}
+		body = payloadJSON
+	}
+	return "<" + tag + ">\n" + escapePromptBlockBody(body) + "\n</" + tag + ">", nil
+}
+
 func renderTriagePayloadBlocks(payload any) (string, error) {
 	obj, ok := payload.(map[string]any)
 	if !ok {

@@ -13,6 +13,7 @@ import (
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/buildcmd"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/doctorcmd"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/draftbuildcmd"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/escalatecmd"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/initcmd"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/lscmd"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/reruncmd"
@@ -220,6 +221,22 @@ func TestCommandOptions(t *testing.T) {
 			t.Fatal(err)
 		}
 		want := &reruncmd.RerunOptions{SourceRunID: "source", Out: "ledger", NewRunID: "next", Quiet: true, NoTriage: true, JudgeOnly: true, NoRepoLayout: true}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("got %#v, want %#v", got, want)
+		}
+	})
+	t.Run("escalate", func(t *testing.T) {
+		var got *escalatecmd.EscalateOptions
+		cmd := escalatecmd.NewCmdEscalate(testFactory(), func(_ context.Context, opts *escalatecmd.EscalateOptions) error {
+			copy := *opts
+			got = &copy
+			return nil
+		})
+		err := execute(cmd, "source", "--out", "ledger", "--run-id", "next", "--provider", "gemini:pro", "--mode", "independent", "--dry-run", "--quiet", "--json", "--no-triage", "--scope", "web", "--no-repo-layout")
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := &escalatecmd.EscalateOptions{SourceRunID: "source", Out: "ledger", RunID: "next", Provider: "gemini:pro", Mode: "independent", DryRun: true, Quiet: true, JSON: true, NoTriage: true, Scope: "web", NoRepoLayout: true}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("got %#v, want %#v", got, want)
 		}

@@ -29,6 +29,16 @@ and decision paths cited in `background`; a review follow-up is still
 provide the usual acceptance criteria, edit scope, verifier, and protected-path
 constraints.
 
+Provider escalation is also not a work-order schema feature. Normal work orders
+still require exactly two providers. To add one more provider after a completed
+non-build research or review run, use `bakeoff escalate SOURCE_RUN_ID
+--provider BACKEND[:MODEL] --mode independent|witness|dispute --dry-run`.
+Escalation creates a separate run with `type: "escalation"` in its manifest and
+copies the source work order as evidence; it never changes
+`work-order.json` to contain three providers. `witness` and `dispute` are
+advisory. `independent` compare/analyze uses one escalation synthesis judge,
+not a full position-swapped three-provider tournament.
+
 The fastest way to start is the examples directory:
 
 - [examples/gather.work-order.json](../examples/gather.work-order.json)

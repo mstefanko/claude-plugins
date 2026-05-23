@@ -122,7 +122,7 @@ The evidence says independent attempts are stronger than one single answer. So
 Bakeoff asks two selected providers to work separately, then combines or judges
 their outputs ([Self-Consistency](https://arxiv.org/abs/2203.11171)).
 
-The evidence also says more agents are not automatically better. Parallel research can help, but coordination and token cost climb quickly ([Anthropic multi-agent research](https://www.anthropic.com/engineering/multi-agent-research-system)). That is why Bakeoff stays small: two providers, one judge, replayable artifacts.
+The evidence also says more agents are not automatically better. Parallel research can help, but coordination and token cost climb quickly ([Anthropic multi-agent research](https://www.anthropic.com/engineering/multi-agent-research-system)). That is why Bakeoff stays small: two providers, one judge, replayable artifacts. When a completed non-build run needs another view, `bakeoff escalate` can add one explicit third provider in a separate run without changing the normal two-provider work-order shape.
 
 For `compare` and `analyze`, Bakeoff also protects against judge order bias. The judge reads A/B and B/A, and a winner or reasoning spine only sticks if it survives the swap ([FairEval](https://arxiv.org/abs/2305.17926)).
 
@@ -274,12 +274,13 @@ Slash commands:
 - `/bakeoff:setup` — build or update the bundled Bakeoff Go CLI in persistent plugin data.
 - `/bakeoff:quickstart` — check CLI, local readiness, and provider auth/session state.
 - `/bakeoff:run <path or request> [--run-id ID] [--out runs] [--quiet] [--keep-worktrees] [--no-triage] [--no-repo-layout]` — validate and run, or draft from natural language.
+- `/bakeoff:escalate <run-id> --provider gemini --mode independent|witness|dispute --dry-run` — preview or run one post-run non-build provider escalation.
 - `/bakeoff:history [limit] [--out runs] [--facet ID] [--triage-state STATE] [--type TYPE]` — list recent runs with run ids and short goal summaries.
 - `/bakeoff:inspect [latest or run-id]` — open existing reports, decisions, triage, handoff.
 - `/bakeoff:doctor [--skip-auth-probe] [--build] [--quiet]` — readiness check. Reports the canonical pair, optional providers, and any draft-time fallback. `--build` runs live edit probes.
 - `/bakeoff:uninstall` — remove plugin state, then guide manual plugin uninstall.
 
-Core CLI: `bakeoff draft-build`, `bakeoff validate`, `bakeoff research`, `bakeoff build`, `bakeoff rerun`, `bakeoff ls`, `bakeoff show`, `bakeoff triage`, `bakeoff doctor`. Full reference in [docs/cli-reference.md](docs/cli-reference.md).
+Core CLI: `bakeoff draft-build`, `bakeoff validate`, `bakeoff research`, `bakeoff build`, `bakeoff rerun`, `bakeoff escalate`, `bakeoff ls`, `bakeoff show`, `bakeoff triage`, `bakeoff doctor`. Full reference in [docs/cli-reference.md](docs/cli-reference.md).
 
 ## Configuration
 

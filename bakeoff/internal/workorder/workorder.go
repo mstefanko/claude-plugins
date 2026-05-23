@@ -53,6 +53,7 @@ var (
 	triageClasses       = []string{"real_issue", "false_positive", "plan_doc_drift", "product_decision", "needs_repro", "already_fixed", "evidence_gap"}
 	triageActions       = []string{"fix_now", "document", "defer", "ignore", "reproduce"}
 	triageSeverities    = []string{"high", "medium", "low", "none"}
+	escalationActions   = []string{"stop", "inspect", "independent_escalation", "narrow_followup", "rerun"}
 	slugRE              = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 	todoIDRE            = regexp.MustCompile(`(?i)^TODO[-_]`)
 	facetControlRE      = regexp.MustCompile(`[\x00-\x1f\x7f]`)
@@ -1002,6 +1003,50 @@ func ValidateGatherJudgeResult(data any) (any, error) {
 	return data, nil
 }
 
+func ValidateEscalationGatherUnionResult(data any, sourceLabels []string) (any, error) {
+	obj, ok := data.(map[string]any)
+	if !ok {
+		return nil, Validationf("escalation gather union final_json must be an object")
+	}
+	for _, field := range []string{"merged_claims", "conflicts", "unknowns_union"} {
+		if _, ok := obj[field]; !ok {
+			return nil, Validationf("escalation gather union final_json.%s is required", field)
+		}
+	}
+	claims, ok := obj["merged_claims"].([]any)
+	if !ok {
+		return nil, Validationf("escalation gather union final_json.merged_claims must be an array")
+	}
+	for i, claim := range claims {
+		if err := validateEscalationMappingClaim(claim, fmt.Sprintf("escalation gather union final_json.merged_claims[%d]", i), sourceLabels); err != nil {
+			return nil, err
+		}
+	}
+	if _, ok := obj["conflicts"].([]any); !ok {
+		return nil, Validationf("escalation gather union final_json.conflicts must be an array")
+	}
+	if err := validateStringList(obj["unknowns_union"], "escalation gather union final_json.unknowns_union"); err != nil {
+		return nil, err
+	}
+	if raw, ok := obj["new_or_changed_material"]; ok {
+		if _, ok := raw.([]any); !ok {
+			return nil, Validationf("escalation gather union final_json.new_or_changed_material must be an array")
+		}
+	}
+	if raw, ok := obj["out_of_facet_claims"]; ok {
+		items, ok := raw.([]any)
+		if !ok {
+			return nil, Validationf("escalation gather union final_json.out_of_facet_claims must be an array")
+		}
+		for i, item := range items {
+			if err := validateEscalationOutOfFacetClaim(item, fmt.Sprintf("escalation gather union final_json.out_of_facet_claims[%d]", i), sourceLabels); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return data, nil
+}
+
 func ValidateCompareJudgeResult(data any) (any, error) {
 	obj, ok := data.(map[string]any)
 	if !ok {
@@ -1084,6 +1129,117 @@ func ValidateAnalyzeJudgeResult(data any) (any, error) {
 				return nil, err
 			}
 		}
+	}
+	return data, nil
+}
+
+func ValidateEscalationSynthesisResult(data any, sourceLabels []string) (any, error) {
+	obj, ok := data.(map[string]any)
+	if !ok {
+		return nil, Validationf("escalation synthesis final_json must be an object")
+	}
+	for _, field := range []string{"headline", "source_decision_effect", "recommended_winner", "confidence", "what_changed", "material_new_evidence", "unresolved_questions", "out_of_scope", "recommended_action", "rationale"} {
+		if _, ok := obj[field]; !ok {
+			return nil, Validationf("escalation synthesis final_json.%s is required", field)
+		}
+	}
+	if _, ok := obj["headline"].(string); !ok {
+		return nil, Validationf("escalation synthesis final_json.headline must be a string")
+	}
+	if effect, _ := obj["source_decision_effect"].(string); !contains([]string{"supports_source", "changes_winner", "recommends_winner", "still_unresolved", "insufficient_evidence"}, effect) {
+		return nil, Validationf("escalation synthesis final_json.source_decision_effect has unsupported value")
+	}
+	if winner := obj["recommended_winner"]; winner != nil {
+		text, ok := winner.(string)
+		if !ok || strings.TrimSpace(text) == "" || !contains(sourceLabels, text) {
+			return nil, Validationf("escalation synthesis final_json.recommended_winner must be null or one of: %s", strings.Join(sourceLabels, ", "))
+		}
+	}
+	if confidence, _ := obj["confidence"].(string); !contains(confidences, confidence) {
+		return nil, Validationf("escalation synthesis final_json.confidence must be one of: %s", strings.Join(confidences, ", "))
+	}
+	for _, field := range []string{"what_changed", "material_new_evidence", "unresolved_questions", "out_of_scope", "rationale"} {
+		if _, ok := obj[field].([]any); !ok {
+			return nil, Validationf("escalation synthesis final_json.%s must be an array", field)
+		}
+	}
+	if action, _ := obj["recommended_action"].(string); !contains(escalationActions, action) {
+		return nil, Validationf("escalation synthesis final_json.recommended_action must be one of: %s", strings.Join(escalationActions, ", "))
+	}
+	return data, nil
+}
+
+func ValidateEscalationWitnessResult(data any) (any, error) {
+	obj, ok := data.(map[string]any)
+	if !ok {
+		return nil, Validationf("escalation witness final_json must be an object")
+	}
+	for _, field := range []string{"status", "headline", "assessment", "source_decision_effect", "confidence", "would_change_outcome", "material_errors", "missed_material", "triage_concerns", "out_of_scope", "recommended_action", "recommended_next_checks", "rationale"} {
+		if _, ok := obj[field]; !ok {
+			return nil, Validationf("escalation witness final_json.%s is required", field)
+		}
+	}
+	if status, _ := obj["status"].(string); status != "complete" {
+		return nil, Validationf(`escalation witness final_json.status must equal "complete"`)
+	}
+	if _, ok := obj["headline"].(string); !ok {
+		return nil, Validationf("escalation witness final_json.headline must be a string")
+	}
+	if assessment, _ := obj["assessment"].(string); !contains([]string{"supported", "questionable", "unsupported", "insufficient_evidence"}, assessment) {
+		return nil, Validationf("escalation witness final_json.assessment has unsupported value")
+	}
+	if effect, _ := obj["source_decision_effect"].(string); !contains([]string{"supports_source", "questions_source", "challenges_source", "insufficient_evidence"}, effect) {
+		return nil, Validationf("escalation witness final_json.source_decision_effect has unsupported value")
+	}
+	if confidence, _ := obj["confidence"].(string); !contains(confidences, confidence) {
+		return nil, Validationf("escalation witness final_json.confidence must be one of: %s", strings.Join(confidences, ", "))
+	}
+	if _, ok := obj["would_change_outcome"].(bool); !ok {
+		return nil, Validationf("escalation witness final_json.would_change_outcome must be a boolean")
+	}
+	for _, field := range []string{"material_errors", "missed_material", "triage_concerns", "out_of_scope", "recommended_next_checks", "rationale"} {
+		if _, ok := obj[field].([]any); !ok {
+			return nil, Validationf("escalation witness final_json.%s must be an array", field)
+		}
+	}
+	if action, _ := obj["recommended_action"].(string); !contains(escalationActions, action) {
+		return nil, Validationf("escalation witness final_json.recommended_action must be one of: %s", strings.Join(escalationActions, ", "))
+	}
+	return data, nil
+}
+
+func ValidateEscalationDisputeResult(data any) (any, error) {
+	obj, ok := data.(map[string]any)
+	if !ok {
+		return nil, Validationf("escalation dispute final_json must be an object")
+	}
+	for _, field := range []string{"status", "headline", "resolved_points", "unresolved_points", "new_evidence", "outcome_effect", "source_decision_effect", "confidence", "out_of_scope", "recommended_action", "recommended_next_checks", "rationale"} {
+		if _, ok := obj[field]; !ok {
+			return nil, Validationf("escalation dispute final_json.%s is required", field)
+		}
+	}
+	if status, _ := obj["status"].(string); status != "complete" {
+		return nil, Validationf(`escalation dispute final_json.status must equal "complete"`)
+	}
+	if _, ok := obj["headline"].(string); !ok {
+		return nil, Validationf("escalation dispute final_json.headline must be a string")
+	}
+	if effect, _ := obj["outcome_effect"].(string); !contains([]string{"supports_existing", "challenges_existing", "no_material_change", "insufficient_evidence"}, effect) {
+		return nil, Validationf("escalation dispute final_json.outcome_effect has unsupported value")
+	}
+	if effect, _ := obj["source_decision_effect"].(string); !contains([]string{"supports_source", "questions_source", "challenges_source", "insufficient_evidence"}, effect) {
+		return nil, Validationf("escalation dispute final_json.source_decision_effect has unsupported value")
+	}
+	if confidence, _ := obj["confidence"].(string); !contains(confidences, confidence) {
+		return nil, Validationf("escalation dispute final_json.confidence must be one of: %s", strings.Join(confidences, ", "))
+	}
+	for _, field := range []string{"resolved_points", "unresolved_points", "new_evidence", "out_of_scope", "recommended_next_checks", "rationale"} {
+		if _, ok := obj[field].([]any); !ok {
+			return nil, Validationf("escalation dispute final_json.%s must be an array", field)
+		}
+	}
+	if action, _ := obj["recommended_action"].(string); !contains(escalationActions, action) {
+		return nil, Validationf("escalation dispute final_json.recommended_action must be one of: %s", strings.Join(escalationActions, ", "))
 	}
 	return data, nil
 }
@@ -1350,6 +1506,28 @@ func validateMappingClaim(value any, label string, requireSources bool) error {
 	return nil
 }
 
+func validateEscalationMappingClaim(value any, label string, sourceLabels []string) error {
+	obj, ok := value.(map[string]any)
+	if !ok {
+		return Validationf("%s must be an object", label)
+	}
+	for _, field := range []string{"claim", "evidence", "confidence", "sources"} {
+		if _, ok := obj[field]; !ok {
+			return Validationf("%s.%s is required", label, field)
+		}
+	}
+	if _, ok := obj["claim"].(string); !ok {
+		return Validationf("%s.claim must be a string", label)
+	}
+	if err := validateStringList(obj["evidence"], label+".evidence"); err != nil {
+		return err
+	}
+	if confidence, _ := obj["confidence"].(string); !contains(confidences, confidence) {
+		return Validationf("%s.confidence must be one of: %s", label, strings.Join(confidences, ", "))
+	}
+	return validateEscalationSources(obj["sources"], label+".sources", sourceLabels)
+}
+
 func validateOutOfFacetClaim(value any, label string) error {
 	obj, ok := value.(map[string]any)
 	if !ok {
@@ -1376,6 +1554,46 @@ func validateOutOfFacetClaim(value any, label string) error {
 	for _, source := range sources {
 		if source != "A" && source != "B" {
 			return Validationf(`%s.sources must contain only "A" and "B"`, label)
+		}
+	}
+	return nil
+}
+
+func validateEscalationOutOfFacetClaim(value any, label string, sourceLabels []string) error {
+	obj, ok := value.(map[string]any)
+	if !ok {
+		return Validationf("%s must be an object", label)
+	}
+	for _, field := range []string{"claim", "evidence", "sources", "reason"} {
+		if _, ok := obj[field]; !ok {
+			return Validationf("%s.%s is required", label, field)
+		}
+	}
+	if _, ok := obj["claim"].(string); !ok {
+		return Validationf("%s.claim must be a string", label)
+	}
+	if _, ok := obj["reason"].(string); !ok {
+		return Validationf("%s.reason must be a string", label)
+	}
+	if err := validateStringList(obj["evidence"], label+".evidence"); err != nil {
+		return err
+	}
+	return validateEscalationSources(obj["sources"], label+".sources", sourceLabels)
+}
+
+func validateEscalationSources(value any, label string, sourceLabels []string) error {
+	sources, ok := value.([]any)
+	if !ok || len(sources) == 0 {
+		return Validationf("%s must contain one or more provider ids: %s", label, strings.Join(sourceLabels, ", "))
+	}
+	allowed := map[string]bool{}
+	for _, source := range sourceLabels {
+		allowed[source] = true
+	}
+	for _, source := range sources {
+		text, ok := source.(string)
+		if !ok || !allowed[text] {
+			return Validationf("%s must contain only provider ids: %s", label, strings.Join(sourceLabels, ", "))
 		}
 	}
 	return nil

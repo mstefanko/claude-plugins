@@ -23,6 +23,9 @@ codes.
   stop and report an incomplete plugin install or routing failure.
 - `/bakeoff:inspect` inspects existing run artifacts through the command doc;
   it never applies, edits, combines, commits, branches, or publishes patches.
+- `/bakeoff:escalate` invokes one explicit non-build post-run escalation. It
+  must preview with `--dry-run` unless the user already approved a specific
+  mode.
 - `/bakeoff:history`, `/bakeoff:doctor`, `/bakeoff:setup`, `/bakeoff:quickstart`,
   and `/bakeoff:uninstall` follow their command docs and the global rules here.
 - For any Bakeoff command, do not call provider CLIs directly for the user task;
@@ -70,6 +73,10 @@ provider patch artifact only when `decision.json.canonical_winner` is non-null:
 cherry-pick, synthesize, commit, branch, push, open a PR, or edit source files
 from provider output without a separate explicit user request and fresh
 verification.
+
+Escalation never applies to build runs and never creates a third patch. Witness
+and dispute escalation are advisory; independent compare/analyze escalation
+uses one synthesis judge and must not be described as position-swapped.
 
 ## Environment And Auth
 

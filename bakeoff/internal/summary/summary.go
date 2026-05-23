@@ -62,12 +62,39 @@ type ResearchSummary struct {
 	Next            string                     `json:"next"`
 }
 
+type EscalationSummary struct {
+	SchemaVersion   int                        `json:"schema_version"`
+	Command         string                     `json:"command"`
+	Status          string                     `json:"status"`
+	ExitCode        int                        `json:"exit_code"`
+	Warnings        []string                   `json:"warnings"`
+	RunID           string                     `json:"run_id,omitempty"`
+	RunDir          string                     `json:"run_dir,omitempty"`
+	SourceRunID     string                     `json:"source_run_id"`
+	SourceRunDir    string                     `json:"source_run_dir,omitempty"`
+	Mode            string                     `json:"mode"`
+	AddedProvider   string                     `json:"added_provider"`
+	SourceProviders []string                   `json:"source_providers"`
+	DecisionKind    any                        `json:"decision_kind,omitempty"`
+	CanonicalWinner any                        `json:"canonical_winner,omitempty"`
+	DryRun          bool                       `json:"dry_run"`
+	EstimatedCalls  map[string]any             `json:"estimated_calls,omitempty"`
+	Providers       map[string]ProviderSummary `json:"providers,omitempty"`
+	Judge           JudgeSummary               `json:"judge,omitempty"`
+	Triage          ResearchTriageSummary      `json:"triage,omitempty"`
+	Artifacts       ResearchArtifacts          `json:"artifacts,omitempty"`
+	Next            string                     `json:"next,omitempty"`
+}
+
 type ResearchArtifacts struct {
 	WorkOrder         string `json:"work_order,omitempty"`
 	Decision          string `json:"decision,omitempty"`
 	Meta              string `json:"meta,omitempty"`
 	Manifest          string `json:"manifest,omitempty"`
 	Report            string `json:"report,omitempty"`
+	SourceRun         string `json:"source_run,omitempty"`
+	EscalationMode    string `json:"escalation_mode,omitempty"`
+	DisputePacket     string `json:"dispute_packet,omitempty"`
 	SourceWorkOrder   string `json:"source_work_order,omitempty"`
 	ReviewContextMD   string `json:"review_context_md,omitempty"`
 	ReviewContextJSON string `json:"review_context_json,omitempty"`
@@ -238,6 +265,36 @@ func BuildResearch(runDir string, runID string, outDir string, decision map[stri
 	}
 }
 
+func BuildEscalation(runDir string, runID string, outDir string, sourceRunID string, sourceRunDir string, mode string, addedProvider string, sourceProviders []string, decision map[string]any, providerResults map[string]map[string]any, exitCode int, dryRun bool, estimatedCalls map[string]any, autoTriageStarted bool, triageExitCode any) EscalationSummary {
+	providers := map[string]ProviderSummary{}
+	for providerID, result := range providerResults {
+		providers[providerID] = ProviderStatusSummary(result)
+	}
+	return EscalationSummary{
+		SchemaVersion:   1,
+		Command:         "escalate",
+		Status:          CommandStatus(exitCode),
+		ExitCode:        exitCode,
+		Warnings:        []string{},
+		RunID:           runID,
+		RunDir:          runDir,
+		SourceRunID:     sourceRunID,
+		SourceRunDir:    sourceRunDir,
+		Mode:            mode,
+		AddedProvider:   addedProvider,
+		SourceProviders: append([]string(nil), sourceProviders...),
+		DecisionKind:    valueFromMap(decision, "decision_kind"),
+		CanonicalWinner: valueFromMap(decision, "canonical_winner"),
+		DryRun:          dryRun,
+		EstimatedCalls:  estimatedCalls,
+		Providers:       providers,
+		Judge:           JudgeJSONSummary(runDir, decision),
+		Triage:          ResearchTriage(runDir, autoTriageStarted, triageExitCode),
+		Artifacts:       ResearchArtifactPaths(runDir),
+		Next:            ledger.BakeoffShowCommand(runID, outDir, ""),
+	}
+}
+
 func ResearchTriage(runDir string, autoStarted bool, triageExitCode any) ResearchTriageSummary {
 	state, staleInputs := triage.StateDetail(runDir)
 	statusData := readJSON(filepath.Join(runDir, "triage", "status.json"))
@@ -269,6 +326,13 @@ func ResearchTriage(runDir string, autoStarted bool, triageExitCode any) Researc
 	return out
 }
 
+func valueFromMap(obj map[string]any, key string) any {
+	if obj == nil {
+		return nil
+	}
+	return obj[key]
+}
+
 func ResearchArtifactPaths(runDir string) ResearchArtifacts {
 	out := ResearchArtifacts{}
 	set := func(relative string) string {
@@ -283,6 +347,9 @@ func ResearchArtifactPaths(runDir string) ResearchArtifacts {
 	out.Meta = set("meta.json")
 	out.Manifest = set("manifest.json")
 	out.Report = set("report.md")
+	out.SourceRun = set("source-run.json")
+	out.EscalationMode = set("escalation/mode.json")
+	out.DisputePacket = set("escalation/dispute-packet.json")
 	out.SourceWorkOrder = set("source-work-order.json")
 	out.ReviewContextMD = set("review-context.md")
 	out.ReviewContextJSON = set("review-context.json")

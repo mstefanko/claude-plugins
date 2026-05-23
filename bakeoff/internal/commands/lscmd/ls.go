@@ -44,7 +44,7 @@ func NewCmdLs(f commands.Factory, runF func(context.Context, *LsOptions) error) 
 			if err := commands.ValidateEnumFlag(opts.TriageState, "triage-state", "no", "dry_run", "yes", "stale"); err != nil {
 				return err
 			}
-			if err := commands.ValidateEnumFlag(opts.Type, "type", "gather", "compare", "analyze", "build"); err != nil {
+			if err := commands.ValidateEnumFlag(opts.Type, "type", "gather", "compare", "analyze", "build", "escalation"); err != nil {
 				return err
 			}
 			if opts.LimitSet && opts.Limit < 0 {
