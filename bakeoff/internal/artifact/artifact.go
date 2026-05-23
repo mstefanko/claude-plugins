@@ -22,6 +22,28 @@ import (
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
 )
 
+const failureTailBytes = 4096
+
+type ProviderMetadata struct {
+	ID           string
+	Backend      string
+	Model        string
+	Effort       string
+	Scope        string
+	PromptFlavor string
+}
+
+func ProviderMetadataFromParticipant(participant workorder.Participant) ProviderMetadata {
+	return ProviderMetadata{
+		ID:           participant.ID,
+		Backend:      participant.Backend,
+		Model:        participant.Model,
+		Effort:       participant.Effort,
+		Scope:        participant.Scope,
+		PromptFlavor: provider.PromptFlavor(participant.Backend),
+	}
+}
+
 func ResultMap(result runner.Result) map[string]any {
 	out := map[string]any{
 		"status":                result.Status,
@@ -179,7 +201,7 @@ func ProviderSucceeded(result map[string]any) bool {
 	return status == runner.StatusOK || status == runner.StatusOKAfterFormatRetry
 }
 
-func WriteProviderArtifacts(providerDir string, result map[string]any) error {
+func WriteProviderArtifacts(providerDir string, result map[string]any, metadata ...ProviderMetadata) error {
 	if err := workorder.WriteTextAtomic(filepath.Join(providerDir, "stdout.txt"), jsonutil.StringValue(result["stdout"])); err != nil {
 		return err
 	}
@@ -199,7 +221,121 @@ func WriteProviderArtifacts(providerDir string, result map[string]any) error {
 	if ProviderSucceeded(result) {
 		return workorder.WriteJSONAtomic(filepath.Join(providerDir, "final.json"), result["final_json"])
 	}
+	if err := workorder.WriteJSONAtomic(filepath.Join(providerDir, "failure.json"), FailureArtifact(result, providerDir, firstProviderMetadata(metadata))); err != nil {
+		return err
+	}
 	return nil
+}
+
+func FailureArtifact(result map[string]any, providerDir string, metadata ProviderMetadata) map[string]any {
+	status := jsonutil.StringValue(result["status"])
+	stdout := jsonutil.StringValue(result["stdout"])
+	stderr := jsonutil.StringValue(result["stderr"])
+	failureKind := jsonutil.StringValue(result["failure_kind"])
+	if failureKind == "" {
+		failureKind = runner.ClassifyFailure(status, stdout, stderr)
+	}
+	out := map[string]any{
+		"schema_version": 1,
+		"provider_id":    nilIfEmpty(metadata.ID),
+		"backend":        nilIfEmpty(metadata.Backend),
+		"model":          nilIfEmpty(metadata.Model),
+		"effort":         nilIfEmpty(metadata.Effort),
+		"scope":          nilIfEmpty(metadata.Scope),
+		"prompt_flavor":  nilIfEmpty(metadata.PromptFlavor),
+		"status":         status,
+		"failure_kind":   nilIfEmpty(failureKind),
+		"exit_code":      result["exit_code"],
+		"wall_seconds":   result["wall_seconds"],
+		"byte_counts": map[string]any{
+			"stdout_bytes":          result["stdout_bytes"],
+			"stderr_bytes":          result["stderr_bytes"],
+			"stdout_observed_bytes": result["stdout_observed_bytes"],
+			"stderr_observed_bytes": result["stderr_observed_bytes"],
+			"output_bytes":          result["output_bytes"],
+		},
+		"truncation": map[string]any{
+			"stdout_truncated": jsonutil.BoolValue(result["stdout_truncated"]),
+			"stderr_truncated": jsonutil.BoolValue(result["stderr_truncated"]),
+		},
+		"stdout_tail":    tailText(stdout, failureTailBytes),
+		"stderr_tail":    tailText(stderr, failureTailBytes),
+		"tail_max_bytes": failureTailBytes,
+		"raw_artifacts":  rawProviderArtifactPointers(providerDir, result),
+	}
+	if value, ok := result["io"]; ok {
+		out["io"] = value
+	}
+	if value, ok := result["output_cap"]; ok {
+		out["output_cap"] = value
+	}
+	if value, ok := result["salvage"]; ok {
+		out["salvage"] = value
+	}
+	if value, ok := result["format_retry"]; ok {
+		out["format_retry"] = value
+	}
+	if value, ok := result["repair_artifacts"]; ok {
+		out["repair_artifacts"] = value
+	}
+	return compactNilMap(out)
+}
+
+func firstProviderMetadata(items []ProviderMetadata) ProviderMetadata {
+	if len(items) == 0 {
+		return ProviderMetadata{}
+	}
+	return items[0]
+}
+
+func rawProviderArtifactPointers(providerDir string, result map[string]any) map[string]any {
+	out := map[string]any{
+		"stdout": "stdout.txt",
+		"stderr": "stderr.txt",
+		"status": "status.json",
+	}
+	if fsExists(filepath.Join(providerDir, "last-message.txt")) || jsonutil.StringValue(result["final_json_source"]) == runner.FinalJSONSourceLastMessage {
+		out["last_message"] = "last-message.txt"
+	}
+	if _, ok := result["format_retry"]; ok {
+		out["repair_prompt"] = "repair-prompt.txt"
+		out["repair_stdout"] = "repair-stdout.txt"
+		out["repair_stderr"] = "repair-stderr.txt"
+		out["repair_status"] = "repair-status.json"
+	}
+	if _, ok := result["salvage"]; ok {
+		out["salvage"] = "salvage.json"
+	}
+	return out
+}
+
+func tailText(text string, maxBytes int) string {
+	if maxBytes <= 0 || len(text) <= maxBytes {
+		return text
+	}
+	return text[len(text)-maxBytes:]
+}
+
+func nilIfEmpty(value string) any {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	return value
+}
+
+func compactNilMap(obj map[string]any) map[string]any {
+	out := map[string]any{}
+	for key, value := range obj {
+		if value != nil {
+			out[key] = value
+		}
+	}
+	return out
+}
+
+func fsExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
 
 var codexDiagnosticLineRE = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T.*\b(?:ERROR|WARN|FATAL)\b`)

@@ -51,6 +51,30 @@ func TestTriageValidatorRejectsUnknownCitationCheckIDs(t *testing.T) {
 	}
 }
 
+func TestProviderFailureSummariesExposeFailureArtifactPaths(t *testing.T) {
+	runDir := t.TempDir()
+	writeJSON(t, filepath.Join(runDir, "providers", "codex", "failure.json"), map[string]any{
+		"provider_id":   "codex",
+		"backend":       "codex",
+		"model":         "gpt",
+		"status":        "timeout",
+		"failure_kind":  "timeout",
+		"stderr_tail":   "timed out",
+		"raw_artifacts": map[string]any{"stderr": "stderr.txt"},
+	})
+	failures := providerFailureSummaries(runDir)
+	if len(failures) != 1 {
+		t.Fatalf("failures = %#v", failures)
+	}
+	got := failures[0]
+	if got["path"] != "providers/codex/failure.json" || got["provider_id"] != "codex" || got["failure_kind"] != "timeout" {
+		t.Fatalf("failure summary = %#v", got)
+	}
+	if raw, ok := got["raw_artifacts"].(map[string]any); !ok || raw["stderr"] != "stderr.txt" {
+		t.Fatalf("raw artifacts = %#v", got["raw_artifacts"])
+	}
+}
+
 func TestForceTriageProviderFailurePreservesPreviousTriage(t *testing.T) {
 	root := t.TempDir()
 	fakeBin := filepath.Join(root, "bin")

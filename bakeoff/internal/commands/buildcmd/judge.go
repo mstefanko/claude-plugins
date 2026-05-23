@@ -219,7 +219,7 @@ func compactRunnerStatus(result map[string]any) map[string]any {
 	delete(status, "output_bytes")
 	if scopeMetadata, ok := status["scope_enforcement"].(map[string]any); ok {
 		compactScope := map[string]any{}
-		for _, key := range []string{"requested_scope", "effective_scope", "enforcement_level", "policy", "mechanisms", "fallback_reason", "temporary_cwd", "cwd"} {
+		for _, key := range []string{"requested_scope", "effective_scope", "enforcement_level", "policy", "mechanisms", "fallback_reason", "minimum_controls", "minimum_controls_satisfied", "minimum_control_failures", "temporary_cwd", "cwd"} {
 			if value, exists := scopeMetadata[key]; exists {
 				compactScope[key] = value
 			}

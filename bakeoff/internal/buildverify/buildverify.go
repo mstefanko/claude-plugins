@@ -22,6 +22,7 @@ const (
 	StatusOutputCap      = "output_cap"
 	StatusMissingCommand = "missing_command"
 	StatusCancelled      = "cancelled"
+	StatusSkipped        = "skipped"
 )
 
 type Options struct {
@@ -67,6 +68,7 @@ type VerifierResult struct {
 	BaselineExpectation string                    `json:"baseline_expectation,omitempty"`
 	BaselineMatched     *bool                     `json:"baseline_matched,omitempty"`
 	Transition          string                    `json:"transition,omitempty"`
+	SkipReason          string                    `json:"skip_reason,omitempty"`
 	ArtifactError       string                    `json:"artifact_error,omitempty"`
 	Metric              *MetricResult             `json:"metric,omitempty"`
 }
@@ -111,62 +113,110 @@ func Run(ctx context.Context, opts Options) Result {
 	if opts.Baseline {
 		result.ProviderID = ""
 	}
-	for _, verifier := range opts.Verifiers {
+	gates, metrics := partitionVerifiers(opts.Verifiers)
+	for _, verifier := range gates {
 		if ctx.Err() != nil {
 			result.GatesPassed = false
 			break
 		}
-		label := labelPrefix + verifier.ID
-		commandResult := runner.RunCommand(ctx, runner.Options{
-			Argv: verifier.Argv,
-			Budgets: runner.Budgets{
-				WallClockSeconds:           verifier.WallClockSeconds,
-				MaxOutputBytes:             verifier.MaxOutputBytes,
-				HeartbeatSeconds:           opts.HeartbeatSeconds,
-				OutputCapGraceSeconds:      opts.OutputCapGraceSeconds,
-				MaxOutputOverrunBytes:      opts.MaxOutputOverrunBytes,
-				MaxOutputOverrunBytesIsSet: true,
-			},
-			CWD: opts.CWD,
-			Env: opts.Env,
-			OnTick: func(tick runner.Tick) {
-				if opts.OnTick != nil {
-					opts.OnTick(label, tick)
-				}
-			},
-		})
-		verifierResult := resultFromRunner(verifier, commandResult)
-		annotateBaselineFields(verifier, &verifierResult, opts)
-		if verifier.Kind == "metric" {
-			metric := ParseMetric(commandResult.Stdout, verifier.Metric)
-			if commandResult.Status != runner.StatusOK && metric.Error == "" {
-				metric.Error = "metric command did not exit successfully"
-			}
-			if commandResult.Status != runner.StatusOK {
-				metric.Conclusive = false
-				metric.Value = nil
-			}
-			verifierResult.Metric = metric
-		}
-		if opts.ArtifactDir != "" {
-			verifierDir := filepath.Join(opts.ArtifactDir, verifier.ID)
-			verifierResult.StdoutPath = filepath.Join(verifierDir, "stdout.txt")
-			verifierResult.StderrPath = filepath.Join(verifierDir, "stderr.txt")
-			verifierResult.StatusPath = filepath.Join(verifierDir, "status.json")
-			if verifierResult.Metric != nil {
-				verifierResult.MetricPath = filepath.Join(verifierDir, "metric.json")
-			}
-			writeErr := WriteVerifierArtifacts(verifierDir, verifierResult, commandResult)
-			if writeErr != nil {
-				verifierResult.ArtifactError = writeErr.Error()
-			}
-		}
+		verifierResult := runVerifier(ctx, verifier, opts, labelPrefix)
 		if verifier.Kind == "gate" && !gateMatchesExpectation(verifier, verifierResult.Status, opts.Baseline) {
 			result.GatesPassed = false
 		}
 		result.Results = append(result.Results, verifierResult)
 	}
+	if !result.GatesPassed {
+		for _, verifier := range metrics {
+			result.Results = append(result.Results, skippedMetricResult(verifier, opts, "skipped because one or more gate verifiers failed"))
+		}
+		return result
+	}
+	for _, verifier := range metrics {
+		if ctx.Err() != nil {
+			result.GatesPassed = false
+			break
+		}
+		result.Results = append(result.Results, runVerifier(ctx, verifier, opts, labelPrefix))
+	}
 	return result
+}
+
+func partitionVerifiers(verifiers []workorder.VerifierSpec) ([]workorder.VerifierSpec, []workorder.VerifierSpec) {
+	gates := []workorder.VerifierSpec{}
+	metrics := []workorder.VerifierSpec{}
+	for _, verifier := range verifiers {
+		if verifier.Kind == "metric" {
+			metrics = append(metrics, verifier)
+			continue
+		}
+		gates = append(gates, verifier)
+	}
+	return gates, metrics
+}
+
+func runVerifier(ctx context.Context, verifier workorder.VerifierSpec, opts Options, labelPrefix string) VerifierResult {
+	label := labelPrefix + verifier.ID
+	commandResult := runner.RunCommand(ctx, runner.Options{
+		Argv: verifier.Argv,
+		Budgets: runner.Budgets{
+			WallClockSeconds:           verifier.WallClockSeconds,
+			MaxOutputBytes:             verifier.MaxOutputBytes,
+			HeartbeatSeconds:           opts.HeartbeatSeconds,
+			OutputCapGraceSeconds:      opts.OutputCapGraceSeconds,
+			MaxOutputOverrunBytes:      opts.MaxOutputOverrunBytes,
+			MaxOutputOverrunBytesIsSet: true,
+		},
+		CWD: opts.CWD,
+		Env: opts.Env,
+		OnTick: func(tick runner.Tick) {
+			if opts.OnTick != nil {
+				opts.OnTick(label, tick)
+			}
+		},
+	})
+	verifierResult := resultFromRunner(verifier, commandResult)
+	annotateBaselineFields(verifier, &verifierResult, opts)
+	if verifier.Kind == "metric" {
+		metric := ParseMetric(commandResult.Stdout, verifier.Metric)
+		if commandResult.Status != runner.StatusOK && metric.Error == "" {
+			metric.Error = "metric command did not exit successfully"
+		}
+		if commandResult.Status != runner.StatusOK {
+			metric.Conclusive = false
+			metric.Value = nil
+		}
+		verifierResult.Metric = metric
+	}
+	writeVerifierArtifacts(opts, verifier, &verifierResult, commandResult)
+	return verifierResult
+}
+
+func skippedMetricResult(verifier workorder.VerifierSpec, opts Options, reason string) VerifierResult {
+	verifierResult := VerifierResult{
+		ID:         verifier.ID,
+		Kind:       verifier.Kind,
+		Status:     StatusSkipped,
+		SkipReason: reason,
+	}
+	writeVerifierArtifacts(opts, verifier, &verifierResult, runner.Result{Status: runner.StatusCancelled})
+	return verifierResult
+}
+
+func writeVerifierArtifacts(opts Options, verifier workorder.VerifierSpec, verifierResult *VerifierResult, commandResult runner.Result) {
+	if opts.ArtifactDir == "" {
+		return
+	}
+	verifierDir := filepath.Join(opts.ArtifactDir, verifier.ID)
+	verifierResult.StdoutPath = filepath.Join(verifierDir, "stdout.txt")
+	verifierResult.StderrPath = filepath.Join(verifierDir, "stderr.txt")
+	verifierResult.StatusPath = filepath.Join(verifierDir, "status.json")
+	if verifierResult.Metric != nil {
+		verifierResult.MetricPath = filepath.Join(verifierDir, "metric.json")
+	}
+	writeErr := WriteVerifierArtifacts(verifierDir, *verifierResult, commandResult)
+	if writeErr != nil {
+		verifierResult.ArtifactError = writeErr.Error()
+	}
 }
 
 func WriteVerifierArtifacts(dir string, result VerifierResult, commandResult runner.Result) error {

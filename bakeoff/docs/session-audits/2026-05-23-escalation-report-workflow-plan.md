@@ -119,10 +119,11 @@ Extend `bakeoff ls --json` rows for escalation runs with:
 - `escalation_mode`
 - `added_provider`
 
-Optionally add source rows with:
-
-- `child_escalation_count`
-- `child_escalations`
+These keys are omitted on source rows. Field presence is the JSON discriminator:
+consumers that need relationships should select rows with `source_run_id`
+present. Do not add source-row `child_escalation_count` or
+`child_escalations` in this round; reverse links remain derived by scanning
+escalation manifests.
 
 For tabular `bakeoff ls`, avoid making the default table too wide. Prefer a
 new filter first:
@@ -144,12 +145,6 @@ Add an explicit command for the reconstruction workflow:
 bakeoff bundle RUN_ID
 ```
 
-or:
-
-```text
-bakeoff report RUN_ID --with-escalations
-```
-
 Output should include:
 
 1. Source run header and decision.
@@ -164,14 +159,16 @@ Output should include:
    - inspect zero-selected triage,
    - open consolidated report if written to disk.
 
-A later extension can write a Markdown rollup artifact:
+`bakeoff bundle RUN_ID` prints to stdout by default. The optional Markdown
+rollup artifact is opt-in only:
 
 ```text
-runs/<source-id>/related-report.md
+bakeoff bundle RUN_ID --write
 ```
 
-If that file is added, it should be explicitly derived/regenerable and should
-not become part of the immutable source-run core contract.
+`--write` writes `runs/<source-id>/related-report.md`. That file is explicitly
+derived/regenerable and does not become part of the immutable source-run core
+contract. Plain `bakeoff bundle RUN_ID` must not write into the source run.
 
 Verifier:
 
@@ -204,6 +201,8 @@ Verifier:
 
 - Unit tests in `internal/report/report_test.go`.
 - Fixture tests for dispute, witness, and independent escalation render paths.
+- Snapshot-style tests on existing non-escalation generic item shapes prove no
+  rendering change outside unknown structured fallback cases.
 - Re-render historical reports for `95b9`, `0aee`, and `b6f3` and confirm no
   `map[` remains.
 
@@ -212,10 +211,7 @@ Verifier:
 Extend escalation metadata so a future bundle can explain the source state at
 the time of escalation.
 
-Options:
-
-- Add source triage fields to `source-run.json`.
-- Or write a sibling `source-triage.json`.
+Extend `source-run.json` with `source_triage`.
 
 Recommended fields:
 
@@ -229,37 +225,40 @@ Recommended fields:
 - `item_count`
 - `item_counts_by_classification`
 
+Missing source triage is represented explicitly:
+
+```json
+{
+  "state": "absent",
+  "stale_inputs": []
+}
+```
+
 Verifier:
 
 - Escalation command test where source has triage.
 - Assert source triage metadata is included.
-- Assert missing source triage is represented explicitly, not omitted silently.
+- Assert missing source triage is represented as `state: "absent"`, not omitted
+  silently.
 
 ### 6. Escalation triage semantics
 
-Pick one behavior and make it visible:
-
-Option A — index `D-NNN` dispute points as triage source findings.
-
-- Pros: dispute escalations with material resolved points can be triaged.
-- Cons: triage schema currently expects source findings; this broadens the
-  concept from source report findings to escalation assessment items.
-
-Option B — treat zero-selected escalation triage as intentional.
-
-- Pros: smaller change.
-- Cons: still less useful when escalation discovered actionable material.
-
-Minimum acceptable fix:
+Ship the minimum acceptable fix in this round:
 
 - When triage selected zero findings, surface that clearly in report/show/bundle:
   "triage completed; no triageable report findings were selected."
 
+Defer indexing `D-NNN` dispute points as triage source findings. The currently
+reliable D-items live in `escalation/dispute-packet.json`; rendered Markdown
+does not expose all dispute points as `D-NNN` report findings. A fuller Option A
+needs either JSON deserialization in the triage finder or a report rendering
+change that first emits those D-IDs into Markdown for `findingIDRE` to index.
+That is a separate scoping pass.
+
 Verifier:
 
 - Run against a dispute report containing `D-NNN` items.
-- Assert either selected D-items appear in triage input, or zero-selection is
-  explicitly marked in the output and manifest.
+- Assert zero-selection is explicitly marked in output and manifest.
 
 ## Suggested execution order
 

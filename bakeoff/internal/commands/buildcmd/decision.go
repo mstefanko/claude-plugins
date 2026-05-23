@@ -187,6 +187,9 @@ func verifierResultMap(result buildverify.VerifierResult) map[string]any {
 	if result.Transition != "" {
 		entry["transition"] = result.Transition
 	}
+	if result.SkipReason != "" {
+		entry["skip_reason"] = result.SkipReason
+	}
 	return entry
 }
 

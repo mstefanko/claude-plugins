@@ -26,18 +26,22 @@ func SetStalledAt(decision map[string]any, stage string) {
 
 func Base(wo *workorder.WorkOrder, workerResults map[string]map[string]any) map[string]any {
 	statuses := map[string]any{}
+	typedStatuses := map[string]map[string]any{}
+	providerIDs := []string{}
 	for _, provider := range wo.Providers {
 		result := workerResults[provider.ID]
 		status := artifact.StatusWithoutPayload(result)
 		status["stderr_path"] = "providers/" + provider.ID + "/stderr.txt"
 		statuses[provider.ID] = status
+		typedStatuses[provider.ID] = status
+		providerIDs = append(providerIDs, provider.ID)
 	}
 	return map[string]any{
 		"mode":              wo.Type,
 		"provider_statuses": statuses,
 		"canonical_winner":  nil,
 		"judge_rationale":   []string{},
-		"caveats":           []string{},
+		"caveats":           scopeFallbackCaveats(providerIDs, typedStatuses),
 	}
 }
 
@@ -46,7 +50,7 @@ func BothFailed(wo *workorder.WorkOrder, workerResults map[string]map[string]any
 	out["decision_kind"] = "both_failed"
 	out["judge_ran"] = false
 	out["canonical_winner"] = nil
-	out["caveats"] = []string{"both providers failed; judge skipped"}
+	out["caveats"] = appendCaveat(out["caveats"], "both providers failed; judge skipped")
 	SetStalledAt(out, StalledAtProviders)
 	return out
 }
@@ -73,7 +77,7 @@ func SingleProviderOnly(wo *workorder.WorkOrder, workerResults map[string]map[st
 	out["decision_kind"] = "single_provider_only"
 	out["judge_ran"] = false
 	out["canonical_winner"] = survivor
-	out["caveats"] = []string{SingleProviderCaveat(wo.Type, survivor, failed, status)}
+	out["caveats"] = appendCaveat(out["caveats"], SingleProviderCaveat(wo.Type, survivor, failed, status))
 	return out
 }
 
@@ -88,7 +92,6 @@ func GatherStructuredUnion(wo *workorder.WorkOrder, workerResults map[string]map
 	out["order_maps"] = map[string]any{"pass1": order}
 	out["canonical_winner"] = nil
 	out["judge_rationale"] = []string{}
-	out["caveats"] = []string{}
 	if !artifact.ProviderSucceeded(judgeResult) {
 		status, _ := judgeResult["status"].(string)
 		out["decision_kind"] = "provider_union_only"
@@ -96,7 +99,7 @@ func GatherStructuredUnion(wo *workorder.WorkOrder, workerResults map[string]map
 		if kind := jsonutil.StringValue(judgeResult["judge_error_kind"]); kind != "" {
 			out["judge_error_kind"] = kind
 		}
-		out["caveats"] = []string{"gather judge failed with " + status}
+		out["caveats"] = appendCaveat(out["caveats"], "gather judge failed with "+status)
 		SetStalledAt(out, StalledAtJudge)
 		return out, judgeResults, 4
 	}
@@ -117,7 +120,6 @@ func ResolveCompare(base map[string]any, judgeResults map[string]map[string]any,
 	}
 	out["canonical_winner"] = nil
 	out["judge_rationale"] = []string{rationale(pass1), rationale(pass2)}
-	out["caveats"] = []string{}
 	if pass1["relation"] == "consensus" && pass2["relation"] == "consensus" {
 		out["decision_kind"] = "consensus"
 		out["consensus_strongest"] = MergeItems(asList(pass1["consensus_strongest"]), asList(pass2["consensus_strongest"]))
@@ -136,7 +138,7 @@ func ResolveCompare(base map[string]any, judgeResults map[string]map[string]any,
 	}
 	preserved := MergeItems(PreservedCompareMaterial(pass1, pass1Order), PreservedCompareMaterial(pass2, pass2Order))
 	out["decision_kind"] = "tie"
-	out["caveats"] = []string{"position swap did not produce a stable winner"}
+	out["caveats"] = appendCaveat(out["caveats"], "position swap did not produce a stable winner")
 	SetStalledAt(out, StalledAtSelection)
 	if len(preserved) > 0 {
 		out["kept_from_nonwinner"] = preserved
@@ -196,9 +198,11 @@ func ResolveAnalyze(base map[string]any, workerResults map[string]map[string]any
 	out["additions_from_loser"] = AnnotateSource(asList(chosen["additions_from_loser"]), loser)
 	out["actionable_followups"] = valueOrList(chosen["actionable_followups"])
 	if tiebreak == "swap_agreement" {
-		out["caveats"] = []string{}
+		if _, ok := out["caveats"]; !ok {
+			out["caveats"] = []string{}
+		}
 	} else {
-		out["caveats"] = []string{"spine chosen by " + tiebreak + " after swap disagreement"}
+		out["caveats"] = appendCaveat(out["caveats"], "spine chosen by "+tiebreak+" after swap disagreement")
 	}
 	return out
 }
@@ -246,6 +250,9 @@ func ResolveBuild(input BuildResolutionInput) (map[string]any, int) {
 		out["provider_build"] = input.ProviderBuild
 	}
 	for _, caveat := range protectedPathCaveats(providerIDs, input.ProviderStatuses) {
+		out["caveats"] = appendCaveat(out["caveats"], caveat)
+	}
+	for _, caveat := range scopeFallbackCaveats(providerIDs, input.ProviderStatuses) {
 		out["caveats"] = appendCaveat(out["caveats"], caveat)
 	}
 
@@ -439,6 +446,36 @@ func protectedPathCaveats(providerIDs []string, statuses map[string]map[string]a
 	return out
 }
 
+func scopeFallbackCaveats(providerIDs []string, statuses map[string]map[string]any) []string {
+	providersByReason := map[string][]string{}
+	reasons := []string{}
+	for _, id := range providerIDs {
+		status := statuses[id]
+		scopeMetadata, _ := status["scope_enforcement"].(map[string]any)
+		if scopeMetadata == nil {
+			continue
+		}
+		reason := strings.TrimSpace(jsonutil.StringValue(scopeMetadata["fallback_reason"]))
+		if reason == "" {
+			continue
+		}
+		if _, ok := providersByReason[reason]; !ok {
+			reasons = append(reasons, reason)
+		}
+		providersByReason[reason] = append(providersByReason[reason], id)
+	}
+	out := []string{}
+	for _, reason := range reasons {
+		providers := providersByReason[reason]
+		if len(providers) == 1 {
+			out = append(out, "scope degraded for provider "+providers[0]+": "+reason)
+			continue
+		}
+		out = append(out, "scope degraded for providers "+strings.Join(providers, ", ")+": "+reason)
+	}
+	return out
+}
+
 func listStrings(value any) []string {
 	switch typed := value.(type) {
 	case []string:
@@ -464,10 +501,20 @@ func appendCaveat(value any, caveat string) []string {
 			out = append(out, stringify(item))
 		}
 	}
-	if strings.TrimSpace(caveat) != "" {
+	caveat = strings.TrimSpace(caveat)
+	if caveat != "" && !stringInSlice(out, caveat) {
 		out = append(out, caveat)
 	}
 	return out
+}
+
+func stringInSlice(items []string, value string) bool {
+	for _, item := range items {
+		if item == value {
+			return true
+		}
+	}
+	return false
 }
 
 func CanonicalWinner(verdict any, orderMap map[string]string) string {

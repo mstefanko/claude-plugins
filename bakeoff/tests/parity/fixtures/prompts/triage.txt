@@ -10,7 +10,7 @@ Your job is to classify only the provided actionable-looking source_findings.
 - Check supporting citations when possible using the provided <citation_checks> data.
 - Look for counterevidence in the provided artifacts and codebase.
 - Verify that each source finding faithfully describes its supporting citations; citation_checks prove location existence, not semantic accuracy.
-- Use the tagged blocks below as the triage payload: <work_order_json>, <report_md>, <decision_json>, <source_findings>, <source_finding_filter>, <citation_checks>, <meta>, <facet>, <caveats>, and <input_hashes> may be present.
+- Use the tagged blocks below as the triage payload: <work_order_json>, <report_md>, <decision_json>, <source_findings>, <source_finding_filter>, <provider_failures>, <citation_checks>, <meta>, <facet>, <caveats>, and <input_hashes> may be present.
 - A legacy <triage_payload> JSON block may appear only on fallback paths; if present, read the same fields from that object.
 - If <facet> is present, use it only as context for actionability and expected scope; do not invent new triage schema fields from it.
 - Decide whether it should be fixed now, deferred, documented, ignored, or reproduced.

@@ -219,6 +219,7 @@ func renderTriagePayloadBlocks(payload any) (string, error) {
 		{tag: "decision_json", key: "decision"},
 		{tag: "source_findings", key: "source_findings"},
 		{tag: "source_finding_filter", key: "source_finding_filter"},
+		{tag: "provider_failures", key: "provider_failures"},
 		{tag: "citation_checks", key: "citation_checks"},
 		{tag: "meta", key: "meta"},
 		{tag: "facet", key: "facet"},

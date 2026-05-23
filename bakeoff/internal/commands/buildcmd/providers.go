@@ -45,7 +45,7 @@ func runBuildProviders(ctx context.Context, f commands.Factory, wo *workorder.Wo
 				if mkdirErr := os.MkdirAll(run.ProviderArtifactDir, 0o700); mkdirErr != nil {
 					return mkdirErr
 				}
-				if writeErr := artifact.WriteProviderArtifacts(run.ProviderArtifactDir, run.WorkerResult); writeErr != nil {
+				if writeErr := artifact.WriteProviderArtifacts(run.ProviderArtifactDir, run.WorkerResult, artifact.ProviderMetadataFromParticipant(participant)); writeErr != nil {
 					return writeErr
 				}
 			} else if err != nil {
@@ -116,7 +116,7 @@ func runOneBuildProvider(ctx context.Context, f commands.Factory, wo *workorder.
 		result["scope_enforcement"] = scopeMetadata
 		run.WorkerResult = result
 		run.IneligibleReasons = append(run.IneligibleReasons, "scope enforcement failed")
-		if writeErr := artifact.WriteProviderArtifacts(providerDir, result); writeErr != nil {
+		if writeErr := artifact.WriteProviderArtifacts(providerDir, result, artifact.ProviderMetadataFromParticipant(participant)); writeErr != nil {
 			return run, writeErr
 		}
 	} else {
@@ -132,7 +132,7 @@ func runOneBuildProvider(ctx context.Context, f commands.Factory, wo *workorder.
 		}))
 		result["scope_enforcement"] = scopeMetadata
 		run.WorkerResult = result
-		if err := artifact.WriteProviderArtifacts(providerDir, result); err != nil {
+		if err := artifact.WriteProviderArtifacts(providerDir, result, artifact.ProviderMetadataFromParticipant(participant)); err != nil {
 			return run, err
 		}
 	}

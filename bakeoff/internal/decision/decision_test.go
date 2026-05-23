@@ -88,6 +88,24 @@ func TestBothFailedSetsProvidersStall(t *testing.T) {
 	}
 }
 
+func TestBasePromotesDeduplicatedScopeFallbackCaveats(t *testing.T) {
+	wo := &workorder.WorkOrder{
+		Type: "gather",
+		Providers: []workorder.Participant{
+			{ID: "claude"},
+			{ID: "codex"},
+		},
+	}
+	decision := Base(wo, map[string]map[string]any{
+		"claude": {"status": "ok", "scope_enforcement": map[string]any{"fallback_reason": "CLI scope controls are advisory"}},
+		"codex":  {"status": "ok", "scope_enforcement": map[string]any{"fallback_reason": "CLI scope controls are advisory"}},
+	})
+	caveats := decision["caveats"].([]string)
+	if len(caveats) != 1 || !strings.Contains(caveats[0], "providers claude, codex") {
+		t.Fatalf("caveats = %#v", caveats)
+	}
+}
+
 func TestResolveBuildSelectsGateWinner(t *testing.T) {
 	decision, exitCode := ResolveBuild(BuildResolutionInput{
 		ProviderIDs: []string{"claude", "codex"},
@@ -101,6 +119,20 @@ func TestResolveBuildSelectsGateWinner(t *testing.T) {
 	}
 	if _, ok := decision["stalled_at"]; ok {
 		t.Fatalf("successful winner should not set stalled_at: %#v", decision)
+	}
+}
+
+func TestResolveBuildPromotesScopeFallbackCaveats(t *testing.T) {
+	decision, _ := ResolveBuild(BuildResolutionInput{
+		ProviderIDs: []string{"claude", "codex"},
+		ProviderStatuses: map[string]map[string]any{
+			"claude": {"patch_state": "patch_captured", "verify_state": "gate_passed", "scope_enforcement": map[string]any{"fallback_reason": "claude CLI did not advertise --disallowedTools"}},
+			"codex":  {"patch_state": "patch_captured", "verify_state": "gate_passed"},
+		},
+	})
+	caveats := decision["caveats"].([]string)
+	if !strings.Contains(strings.Join(caveats, "\n"), "scope degraded for provider claude") {
+		t.Fatalf("missing scope caveat: %#v", caveats)
 	}
 }
 

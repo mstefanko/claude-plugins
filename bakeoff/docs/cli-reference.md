@@ -60,7 +60,7 @@ summary extraction. It prints the latest 10 runs by default. Recognized flags:
 | `--out <dir>` | Run ledger directory. Default: `runs`. |
 | `--facet <id>` | Filter by facet id. |
 | `--triage-state <state>` | Filter by `no`, `dry_run`, `yes`, or `stale`. |
-| `--type <type>` | Filter by `gather`, `compare`, `analyze`, or `build`. |
+| `--type <type>` | Filter by `gather`, `compare`, `analyze`, `build`, or `escalation`. |
 
 ## Launcher Resolution
 
@@ -120,7 +120,7 @@ bakeoff [-h] [--version]
 Subcommands:
 
 ```text
-init, draft-build, validate, research, build, rerun, escalate, triage, runs, ls, show, doctor
+init, draft-build, validate, research, build, rerun, escalate, triage, bundle, runs, ls, show, doctor
 ```
 
 ## `bakeoff init`
@@ -290,7 +290,9 @@ Runs one post-run provider escalation for an existing `gather`, `compare`, or
 
 Escalation writes a new run directory with `source-run.json`,
 `escalation/mode.json`, `decision.json`, `report.md`, `meta.json`, and
-`manifest.json`; the source run is never mutated.
+`manifest.json`; the source run is never mutated. `source-run.json` includes a
+source triage snapshot with `source_triage.state` set to `absent` when no source
+triage artifacts existed at escalation time.
 
 Modes:
 
@@ -325,6 +327,8 @@ bakeoff show RUN_ID [flags]
 ```
 
 Prints `report.md` for a run. Artifact flags are mutually exclusive.
+Normal report output also prints derived source/escalation relationships when
+the run's manifest links it to escalation children or a source run.
 
 Flags:
 
@@ -336,6 +340,25 @@ Flags:
 | `--triage` | Show triage output. |
 
 `RUN_ID` can be `latest`.
+
+## `bakeoff bundle`
+
+```text
+bakeoff bundle RUN_ID [flags]
+```
+
+Prints a derived source-run reconstruction report. Starting from a source run,
+it lists the source report, source triage state, child escalation reports, child
+triage states, and operator next steps for missing, stale, failed, or
+zero-selected triage. Starting from an escalation run resolves back to its
+source run first. The source run is not mutated unless `--write` is supplied.
+
+Flags:
+
+| Flag | Meaning |
+| --- | --- |
+| `--out <dir>` | Run ledger directory. Default: `runs`. |
+| `--write` | Write derived `related-report.md` under the source run. |
 
 ## `bakeoff triage`
 
@@ -372,9 +395,14 @@ Flags:
 | `--json` | Emit a manifest-backed JSON listing. |
 | `--facet <id>` | Filter by facet id. |
 | `--triage-state <state>` | Filter by `no`, `dry_run`, `yes`, or `stale`. |
-| `--type <type>` | Filter by `gather`, `compare`, `analyze`, or `build`. |
+| `--type <type>` | Filter by `gather`, `compare`, `analyze`, `build`, or `escalation`. |
+| `--source-run <run-id>` | Filter to escalation rows linked to the given source run id. |
 | `--limit <n>` | Limit rows after filtering. With `--history`, default is `10`; without it, no limit is applied unless this flag is set. |
 | `--history` | Emit a compact recent-run history table with `work-order.json` summaries for displayed rows. Cannot be combined with `--json`. |
+
+In `--json` mode, escalation rows include `source_run_id`, `source_type`,
+`escalation_mode`, and `added_provider`. These keys are omitted from source
+rows.
 
 ## `bakeoff runs verify`
 

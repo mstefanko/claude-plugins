@@ -124,7 +124,7 @@ func writeBundleRun(t *testing.T, outDir string, runID string, workOrderType str
 		"budgets": map[string]any{"wall_clock_seconds": 1, "max_output_bytes": 1000, "heartbeat_seconds": 0},
 	}
 	if workOrderType == "gather" {
-		workOrder["facet"] = map[string]any{"id": "code-review", "kind": "generic", "focus": "Find actionable defects."}
+		workOrder["facet"] = map[string]any{"id": "code-review", "kind": "generic", "focus": "Find actionable defects.", "include": []any{"correctness bugs"}}
 	}
 	writeBundleJSON(t, filepath.Join(runDir, "work-order.json"), workOrder)
 	if _, ok := decision["mode"]; !ok {
@@ -161,13 +161,13 @@ func writeZeroSelectedTriage(t *testing.T, runDir string) {
 	filter := map[string]any{"included": 0, "skipped_non_actionable": 1, "skipped_out_of_facet": 0}
 	writeBundleJSON(t, filepath.Join(runDir, "triage", "status.json"), map[string]any{"status": "ok", "source_finding_filter": filter})
 	writeBundleJSON(t, filepath.Join(runDir, "triage", "final.json"), map[string]any{
-		"schema_version":         1,
-		"status":                 "complete",
-		"summary":                "No findings selected.",
-		"items":                  []any{},
-		"input_hashes":           hashes,
-		"source_finding_filter":  filter,
-		"triage_participant":     map[string]any{"backend": "claude", "model": "judge"},
+		"schema_version":                1,
+		"status":                        "complete",
+		"summary":                       "No findings selected.",
+		"items":                         []any{},
+		"input_hashes":                  hashes,
+		"source_finding_filter":         filter,
+		"triage_participant":            map[string]any{"backend": "claude", "model": "judge"},
 		"item_counts_by_classification": map[string]any{},
 	})
 	if err := workorder.WriteTextAtomic(filepath.Join(runDir, "triage", "triage.md"), "# triage\n"); err != nil {

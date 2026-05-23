@@ -439,7 +439,7 @@ func artifactFingerprintsForType(runDir string, runType string) map[string]any {
 	return out
 }
 
-var providerEvidenceArtifactNames = []string{"prompt.txt", "status.json", "final.json", "last-message.txt"}
+var providerEvidenceArtifactNames = []string{"prompt.txt", "status.json", "final.json", "failure.json", "last-message.txt"}
 var buildProviderArtifactNames = []string{"workspace.json", "capture.json", "ineligible.json", "changed-files.txt", "diff.patch", "diffstat.txt", "test-files.json", "benchmark-files.json"}
 var verifyArtifactNames = []string{"status.json", "stdout.txt", "stderr.txt", "metric.json"}
 

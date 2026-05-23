@@ -30,6 +30,7 @@ Provider artifacts live under `providers/<provider-id>/`.
 | `stderr.txt` | Captured stderr. |
 | `status.json` | Status summary without the full payload. |
 | `final.json` | Parsed provider final JSON when the provider completed successfully. |
+| `failure.json` | Structured failure summary when the provider did not complete successfully. |
 | `last-message.txt` | Last-message capture when supported by the provider backend. |
 
 Repair artifacts such as `repair-prompt.txt`, `repair-stdout.txt`,
@@ -88,7 +89,10 @@ Triage artifacts live under `triage/`.
 | `triage/source_finding_filter.json` | Which source findings were selected, skipped as non-actionable, or skipped as out-of-facet. |
 | `triage/finding_index.json` | Present when finding IDs had to be synthesized from report order. |
 
-Triage state is one of `no`, `dry_run`, `yes`, or `stale`.
+Triage state is one of `no`, `dry_run`, `yes`, or `stale`. Manifests also
+include `triage.source_finding_filter` when available and set
+`triage.zero_selected: true` when completed triage selected zero source
+findings.
 
 ## Build Artifacts
 
@@ -125,6 +129,8 @@ Per-provider build artifacts live under `providers/<provider-id>/build/`.
 Gate verifier status objects may include `baseline_expectation`,
 `baseline_matched`, and `transition`. These fields are additive and explain how
 baseline status related to provider status, especially for fail-to-pass gates.
+Metric verifier status objects may be `skipped` when one or more gate verifiers
+failed for the same candidate.
 
 If there is a canonical winner, the selected handoff patch is:
 

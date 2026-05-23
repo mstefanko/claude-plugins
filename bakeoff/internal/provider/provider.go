@@ -43,13 +43,16 @@ type CapabilityRegistry struct {
 	lookup LookupFunc
 
 	mu    sync.Mutex
-	cache map[string]capabilityEntry
+	cache map[string]*capabilityEntry
 }
 
 type capabilityEntry struct {
-	ready chan struct{}
-	value any
+	ready     chan struct{}
+	value     ScopeCapabilities
+	expiresAt time.Time
 }
+
+const capabilityCacheTTL = 5 * time.Minute
 
 type ScopeCapabilities struct {
 	Backend    string          `json:"backend"`
@@ -167,7 +170,7 @@ func NewCapabilityRegistry(lookup LookupFunc) *CapabilityRegistry {
 	if lookup == nil {
 		lookup = exec.LookPath
 	}
-	return &CapabilityRegistry{lookup: lookup, cache: map[string]capabilityEntry{}}
+	return &CapabilityRegistry{lookup: lookup, cache: map[string]*capabilityEntry{}}
 }
 
 func BuildParticipantArgv(participant LaunchParticipant, cwd string, extraArgs []string, finalMessagePath string, outputLastMessage bool) ([]string, error) {
@@ -243,35 +246,79 @@ func ScopeHelpArgv(backend string) ([]string, error) {
 
 func (r *CapabilityRegistry) DetectScopeCapabilities(ctx context.Context, backend string) ScopeCapabilities {
 	key := "scope:" + backend
-	value := r.getOrProbe(key, func() any {
+	return r.getOrProbe(ctx, key, backend, func() ScopeCapabilities {
 		return r.probeScopeCapabilities(ctx, backend)
 	})
-	caps, ok := value.(ScopeCapabilities)
-	if !ok {
-		return ScopeCapabilities{Backend: backend, Available: false, Supports: map[string]bool{}, ProbeError: "invalid cached capability result"}
-	}
-	return caps
 }
 
-func (r *CapabilityRegistry) getOrProbe(key string, probe func() any) any {
-	r.mu.Lock()
-	if entry, ok := r.cache[key]; ok {
+func (r *CapabilityRegistry) getOrProbe(ctx context.Context, key string, backend string, probe func() ScopeCapabilities) (out ScopeCapabilities) {
+	for {
+		r.mu.Lock()
+		if entry, ok := r.cache[key]; ok {
+			r.mu.Unlock()
+			select {
+			case <-entry.ready:
+				if cacheableScopeCapabilities(entry.value) && time.Now().Before(entry.expiresAt) {
+					return entry.value
+				}
+				r.mu.Lock()
+				if r.cache[key] == entry {
+					delete(r.cache, key)
+				}
+				r.mu.Unlock()
+				if !cacheableScopeCapabilities(entry.value) {
+					return entry.value
+				}
+				continue
+			case <-ctx.Done():
+				return unavailableScopeCapabilities(backend, ctx.Err().Error())
+			}
+		}
+		entry := &capabilityEntry{ready: make(chan struct{})}
+		r.cache[key] = entry
 		r.mu.Unlock()
-		<-entry.ready
-		return entry.value
+
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				out = unavailableScopeCapabilities(backend, fmt.Sprintf("scope capability probe panicked: %v", recovered))
+				r.mu.Lock()
+				entry.value = out
+				entry.expiresAt = time.Now()
+				if r.cache[key] == entry {
+					delete(r.cache, key)
+				}
+				close(entry.ready)
+				r.mu.Unlock()
+			}
+		}()
+
+		out = probe()
+		if out.Supports == nil {
+			out.Supports = map[string]bool{}
+		}
+
+		r.mu.Lock()
+		entry.value = out
+		if cacheableScopeCapabilities(out) {
+			entry.expiresAt = time.Now().Add(capabilityCacheTTL)
+		} else {
+			entry.expiresAt = time.Now()
+			if r.cache[key] == entry {
+				delete(r.cache, key)
+			}
+		}
+		close(entry.ready)
+		r.mu.Unlock()
+		return out
 	}
-	entry := capabilityEntry{ready: make(chan struct{})}
-	r.cache[key] = entry
-	r.mu.Unlock()
+}
 
-	value := probe()
+func cacheableScopeCapabilities(caps ScopeCapabilities) bool {
+	return caps.Available && caps.ProbeError == ""
+}
 
-	r.mu.Lock()
-	entry.value = value
-	r.cache[key] = entry
-	close(entry.ready)
-	r.mu.Unlock()
-	return value
+func unavailableScopeCapabilities(backend string, message string) ScopeCapabilities {
+	return ScopeCapabilities{Backend: backend, Available: false, Supports: map[string]bool{}, ProbeError: message}
 }
 
 func (r *CapabilityRegistry) probeScopeCapabilities(ctx context.Context, backend string) ScopeCapabilities {

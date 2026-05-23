@@ -265,6 +265,57 @@ func TestWriteProviderArtifactsDoesNotMarkUnchangedTransportStderr(t *testing.T)
 	}
 }
 
+func TestWriteProviderArtifactsWritesFailureJSONForFailedProviders(t *testing.T) {
+	dir := t.TempDir()
+	result := ResultMap(runner.Result{
+		Status:              runner.StatusExitError,
+		ExitCode:            intPtr(42),
+		Stdout:              strings.Repeat("o", 5000),
+		Stderr:              "rate_limit_error: retry later",
+		StdoutBytes:         100,
+		StderrBytes:         29,
+		StdoutObservedBytes: 5000,
+		StderrObservedBytes: 29,
+		StdoutTruncated:     true,
+	})
+	if err := WriteProviderArtifacts(dir, result, ProviderMetadata{
+		ID:           "claude",
+		Backend:      "claude",
+		Model:        "sonnet",
+		Effort:       "high",
+		Scope:        "codebase",
+		PromptFlavor: "claude",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	failure := readArtifactJSON(t, filepath.Join(dir, "failure.json"))
+	if failure["provider_id"] != "claude" || failure["backend"] != "claude" || failure["prompt_flavor"] != "claude" {
+		t.Fatalf("failure metadata = %#v", failure)
+	}
+	if failure["status"] != runner.StatusExitError || failure["failure_kind"] != "rate_or_quota_limited" {
+		t.Fatalf("failure classification = %#v", failure)
+	}
+	raw := failure["raw_artifacts"].(map[string]any)
+	if raw["stdout"] != "stdout.txt" || raw["stderr"] != "stderr.txt" || raw["status"] != "status.json" {
+		t.Fatalf("raw artifact pointers = %#v", raw)
+	}
+	if len(failure["stdout_tail"].(string)) != failureTailBytes {
+		t.Fatalf("stdout tail length = %d", len(failure["stdout_tail"].(string)))
+	}
+	if _, err := os.Stat(filepath.Join(dir, "final.json")); !os.IsNotExist(err) {
+		t.Fatalf("failed provider should not write final.json: %v", err)
+	}
+
+	successDir := t.TempDir()
+	success := ResultMap(runner.Result{Status: runner.StatusOK, FinalJSON: map[string]any{"ok": true}})
+	if err := WriteProviderArtifacts(successDir, success); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(successDir, "failure.json")); !os.IsNotExist(err) {
+		t.Fatalf("successful provider should not write failure.json: %v", err)
+	}
+}
+
 func readArtifactJSON(t *testing.T, path string) map[string]any {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -276,6 +327,10 @@ func readArtifactJSON(t *testing.T, path string) map[string]any {
 		t.Fatal(err)
 	}
 	return value
+}
+
+func intPtr(value int) *int {
+	return &value
 }
 
 func TestWriteMetaIncludesDecisionAndExitCode(t *testing.T) {

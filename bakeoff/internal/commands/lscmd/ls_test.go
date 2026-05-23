@@ -241,12 +241,12 @@ func TestSortRowsByFinishedAt(t *testing.T) {
 }
 
 type runSpec struct {
-	ID         string
-	Type       string
-	FinishedAt string
-	Decision   string
-	Triage     string
-	Goal       string
+	ID             string
+	Type           string
+	FinishedAt     string
+	Decision       string
+	Triage         string
+	Goal           string
 	SourceRunID    string
 	SourceType     string
 	EscalationMode string

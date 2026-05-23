@@ -48,6 +48,7 @@ func CollectCitationText(runDir string, reportText string, decision map[string]a
 	}
 	for _, pattern := range []string{
 		filepath.Join(runDir, "providers", "*", "final.json"),
+		filepath.Join(runDir, "providers", "*", "failure.json"),
 		filepath.Join(runDir, "judge", "result*.json"),
 	} {
 		paths, _ := filepath.Glob(pattern)

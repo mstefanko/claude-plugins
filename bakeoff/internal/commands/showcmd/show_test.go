@@ -13,6 +13,7 @@ import (
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/buildinfo"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/output"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/provider"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/triage"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
 )
 

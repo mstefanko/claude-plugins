@@ -39,6 +39,41 @@ func TestRunGateVerifierStatusesAndArtifacts(t *testing.T) {
 	}
 }
 
+func TestRunExecutesGatesBeforeMetricsAndSkipsMetricsAfterGateFailure(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "metric-ran")
+	result := Run(context.Background(), Options{
+		CWD: dir,
+		Verifiers: []workorder.VerifierSpec{
+			{
+				ID:               "metric",
+				Kind:             "metric",
+				Argv:             []string{"sh", "-c", "touch " + marker + "; printf '{\"score\":1}\\n'"},
+				WallClockSeconds: 2,
+				MaxOutputBytes:   1000,
+				Metric:           &workorder.MetricSpec{Name: "score", Direction: "higher"},
+			},
+			{ID: "gate", Kind: "gate", Argv: []string{"test", "-f", "missing"}, WallClockSeconds: 2, MaxOutputBytes: 1000},
+		},
+		ArtifactDir: filepath.Join(dir, "artifacts"),
+	})
+	if result.GatesPassed || len(result.Results) != 2 {
+		t.Fatalf("result = %#v", result)
+	}
+	if result.Results[0].ID != "gate" || result.Results[0].Status != StatusFailed {
+		t.Fatalf("gate was not executed first: %#v", result.Results)
+	}
+	if got := result.Results[1]; got.ID != "metric" || got.Status != StatusSkipped || got.SkipReason == "" {
+		t.Fatalf("metric was not skipped explicitly: %#v", got)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("metric command should not have run, stat err=%v", err)
+	}
+	if _, err := os.Stat(result.Results[1].StatusPath); err != nil {
+		t.Fatalf("skipped metric status artifact missing: %v", err)
+	}
+}
+
 func TestRunBaselineVerifierExpectations(t *testing.T) {
 	dir := t.TempDir()
 	result := Run(context.Background(), Options{

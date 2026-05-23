@@ -276,6 +276,13 @@ func runProcess(ctx context.Context, opts Options, requireFinalJSON bool) Result
 	groupCtx, groupCancel := context.WithCancel(ctx)
 	defer groupCancel()
 	group, groupCtx := errgroup.WithContext(groupCtx)
+	cancelBackstop := context.AfterFunc(ctx, func() {
+		groupCancel()
+		if cmd.Process != nil {
+			_ = terminateProcessGroup(cmd.Process)
+		}
+	})
+	defer cancelBackstop()
 	processDone := make(chan struct{})
 	waitDone := make(chan error, 1)
 	stdoutDone := make(chan struct{})
@@ -738,9 +745,6 @@ func (s *captureState) terminateAndWait(cmd *exec.Cmd, waitDone <-chan error) {
 	}
 	select {
 	case <-waitDone:
-		if cmd.Process != nil {
-			_ = killProcessGroup(cmd.Process)
-		}
 		return
 	case <-time.After(DefaultKillGrace):
 		if cmd.Process != nil {

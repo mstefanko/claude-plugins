@@ -17,7 +17,12 @@ import (
 	"time"
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
+	"go.uber.org/goleak"
 )
+
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m)
+}
 
 func TestExtractFinalJSONUsesLastBlockAndIgnoresTagsInStrings(t *testing.T) {
 	payload, err := ExtractFinalJSON(`<final_json>{"first": true}</final_json>
@@ -403,6 +408,21 @@ func TestRunProviderReportsCancelledContext(t *testing.T) {
 	}
 }
 
+func TestRunProviderCancelsDuringStdoutAndStderrCopy(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(25 * time.Millisecond)
+		cancel()
+	}()
+	result := RunProvider(ctx, helperOptions("stream-both", Budgets{WallClockSeconds: 10, MaxOutputBytes: 2000}))
+	if result.Status != StatusCancelled {
+		t.Fatalf("status = %s stderr=%q", result.Status, result.Stderr)
+	}
+	if result.StdoutObservedBytes == 0 || result.StderrObservedBytes == 0 {
+		t.Fatalf("expected both streams to be observed before cancellation: %#v", result)
+	}
+}
+
 func TestRunProviderPrefersOutputCapWhenTimeoutAlsoFires(t *testing.T) {
 	result := RunProvider(context.Background(), helperOptions("ignore-term-output", Budgets{
 		WallClockSeconds:      1,
@@ -415,6 +435,35 @@ func TestRunProviderPrefersOutputCapWhenTimeoutAlsoFires(t *testing.T) {
 	}
 	if result.OutputCap == nil {
 		t.Fatalf("missing output cap metadata: %#v", result)
+	}
+}
+
+func TestRunProviderWaitDelayKillsProviderBeforeExit(t *testing.T) {
+	result := RunProvider(context.Background(), helperOptions("ignore-term-quiet", Budgets{
+		WallClockSeconds: 1,
+		MaxOutputBytes:   2000,
+	}))
+	if result.Status != StatusTimeout {
+		t.Fatalf("status = %s stderr=%q", result.Status, result.Stderr)
+	}
+	if result.WallSeconds >= 4 {
+		t.Fatalf("WaitDelay did not bound ignored termination: %.3fs", result.WallSeconds)
+	}
+}
+
+func TestRunProviderDrainsStderrOverflowDuringStop(t *testing.T) {
+	result := RunProvider(context.Background(), helperOptions("stderr-ignore-term", Budgets{
+		WallClockSeconds:           10,
+		MaxOutputBytes:             128,
+		MaxOutputOverrunBytes:      0,
+		MaxOutputOverrunBytesIsSet: true,
+		OutputCapGraceSeconds:      0,
+	}))
+	if result.Status != StatusSchemaError {
+		t.Fatalf("status = %s stderr=%q", result.Status, result.Stderr)
+	}
+	if !result.StderrTruncated || !strings.Contains(result.Stderr, "[STDERR TAIL]") {
+		t.Fatalf("stderr overflow was not retained in head/tail form: %#v", result)
 	}
 }
 
@@ -598,7 +647,21 @@ func TestHelperProcess(t *testing.T) {
 	case "quiet":
 		fmt.Print(`<final_json>{"status":"complete"}</final_json>`)
 		time.Sleep(5 * time.Second)
+	case "stream-both":
+		for i := 0; i < 1000; i++ {
+			fmt.Printf("stdout-%d\n", i)
+			fmt.Fprintf(os.Stderr, "stderr-%d\n", i)
+			time.Sleep(time.Millisecond)
+		}
+	case "ignore-term-quiet":
+		signalIgnoreTerm()
+		time.Sleep(10 * time.Second)
+	case "stderr-ignore-term":
+		signalIgnoreTerm()
+		fmt.Fprint(os.Stderr, "stderr-head-"+strings.Repeat("e", 5000)+"-stderr-tail")
+		time.Sleep(5 * time.Second)
 	case "spawn-child":
+		signalIgnoreTerm()
 		cmd := exec.Command(os.Args[0], "-test.run=TestHelperProcess", "--", "child-ignore", args[1])
 		cmd.Env = helperEnv()
 		if err := cmd.Start(); err != nil {

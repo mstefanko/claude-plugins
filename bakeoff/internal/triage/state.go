@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/fsutil"
@@ -39,10 +40,15 @@ func ComputeInputHashes(runDir string) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	providerFailures, err := providerFailureArtifactsHash(runDir)
+	if err != nil {
+		return nil, err
+	}
 	out := map[string]string{
-		"decision_sha256":   decision,
-		"report_sha256":     report,
-		"work_order_sha256": workOrder,
+		"decision_sha256":          decision,
+		"report_sha256":            report,
+		"work_order_sha256":        workOrder,
+		"provider_failures_sha256": providerFailures,
 	}
 	reviewArtifacts := map[string]string{
 		"source_work_order_sha256":   "source-work-order.json",
@@ -108,6 +114,9 @@ func StateDetail(runDir string) (string, []string) {
 	if _, ok := hashes["work_order_sha256"]; ok && jsonutil.StringValue(hashes["work_order_sha256"]) != current["work_order_sha256"] {
 		changed = append(changed, "work-order.json")
 	}
+	if _, ok := hashes["provider_failures_sha256"]; ok && jsonutil.StringValue(hashes["provider_failures_sha256"]) != current["provider_failures_sha256"] {
+		changed = append(changed, "providers/*/failure.json")
+	}
 	for key, relative := range map[string]string{
 		"source_work_order_sha256":   "source-work-order.json",
 		"review_context_md_sha256":   "review-context.md",
@@ -121,6 +130,30 @@ func StateDetail(runDir string) (string, []string) {
 		return "stale", changed
 	}
 	return "yes", []string{}
+}
+
+func providerFailureArtifactsHash(runDir string) (string, error) {
+	paths, err := filepath.Glob(filepath.Join(runDir, "providers", "*", "failure.json"))
+	if err != nil {
+		return "", err
+	}
+	sort.Strings(paths)
+	hash := sha256.New()
+	for _, path := range paths {
+		relative, err := filepath.Rel(runDir, path)
+		if err != nil {
+			return "", err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return "", err
+		}
+		hash.Write([]byte(filepath.ToSlash(relative)))
+		hash.Write([]byte{0})
+		hash.Write(data)
+		hash.Write([]byte{0})
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 func DisplayStateDetail(runDir string) (string, []string) {

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/manifest"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/triage"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/verify"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
 )
@@ -59,6 +60,7 @@ func TestWriteRunManifestFingerprintsProviderAndJudgeEvidence(t *testing.T) {
 	writeText(t, filepath.Join(runDir, "providers", "claude", "prompt.txt"), "provider prompt\n")
 	writeJSON(t, filepath.Join(runDir, "providers", "claude", "status.json"), map[string]any{"status": "ok", "final_json_source": "last_message"})
 	writeJSON(t, filepath.Join(runDir, "providers", "claude", "final.json"), map[string]any{"ok": true})
+	writeJSON(t, filepath.Join(runDir, "providers", "codex", "failure.json"), map[string]any{"status": "exit_error", "failure_kind": "api_transient"})
 	writeText(t, filepath.Join(runDir, "providers", "claude", "last-message.txt"), "<final_json>{}\n")
 	writeText(t, filepath.Join(runDir, "judge", "prompt.txt"), "judge prompt\n")
 	writeJSON(t, filepath.Join(runDir, "judge", "status.json"), map[string]any{"status": "ok"})
@@ -74,6 +76,7 @@ func TestWriteRunManifestFingerprintsProviderAndJudgeEvidence(t *testing.T) {
 		"providers/claude/prompt.txt",
 		"providers/claude/status.json",
 		"providers/claude/final.json",
+		"providers/codex/failure.json",
 		"providers/claude/last-message.txt",
 		"judge/prompt.txt",
 		"judge/status.json",
@@ -86,6 +89,7 @@ func TestWriteRunManifestFingerprintsProviderAndJudgeEvidence(t *testing.T) {
 	}
 
 	writeText(t, filepath.Join(runDir, "providers", "claude", "prompt.txt"), "changed provider prompt\n")
+	writeJSON(t, filepath.Join(runDir, "providers", "codex", "failure.json"), map[string]any{"status": "timeout", "failure_kind": "timeout"})
 	writeJSON(t, filepath.Join(runDir, "judge", "result.json"), map[string]any{"winner": "codex"})
 	result := verify.Run(runDir, filepath.Dir(runDir))
 	if result.ExitCode == 0 || result.Fingerprints.Status != "failed" {
@@ -96,7 +100,7 @@ func TestWriteRunManifestFingerprintsProviderAndJudgeEvidence(t *testing.T) {
 		paths = append(paths, mismatch["path"])
 	}
 	got := strings.Join(paths, ",")
-	if !strings.Contains(got, "providers/claude/prompt.txt") || !strings.Contains(got, "judge/result.json") {
+	if !strings.Contains(got, "providers/claude/prompt.txt") || !strings.Contains(got, "providers/codex/failure.json") || !strings.Contains(got, "judge/result.json") {
 		t.Fatalf("missing expected mismatches: %#v", result.Fingerprints.Mismatches)
 	}
 }
@@ -157,6 +161,32 @@ func TestWriteRunManifestProviderSummaryKeepsRawAndAddsCompactStatus(t *testing.
 	}
 	if value["judge_attempted"] != true || value["judge_completed"] != false {
 		t.Fatalf("judge fields = %#v", value)
+	}
+}
+
+func TestWriteRunManifestMarksZeroSelectedTriage(t *testing.T) {
+	runDir := filepath.Join(t.TempDir(), "runs", "r1")
+	writeMinimalRun(t, runDir)
+	hashes, err := triage.ComputeInputHashes(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	filter := map[string]any{"included": 0, "skipped_non_actionable": 2, "skipped_out_of_facet": 1}
+	writeJSON(t, filepath.Join(runDir, "triage", "status.json"), map[string]any{"status": "ok", "source_finding_filter": filter})
+	writeJSON(t, filepath.Join(runDir, "triage", "final.json"), map[string]any{"schema_version": 1, "status": "complete", "summary": "none", "items": []any{}, "input_hashes": hashes, "source_finding_filter": filter})
+	writeText(t, filepath.Join(runDir, "triage", "triage.md"), "# triage\n")
+
+	value, err := manifest.WriteRunManifest(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	triageSummary := value["triage"].(map[string]any)
+	if triageSummary["zero_selected"] != true {
+		t.Fatalf("triage summary = %#v", triageSummary)
+	}
+	sourceFilter := triageSummary["source_finding_filter"].(map[string]int)
+	if sourceFilter["included"] != 0 || sourceFilter["skipped_non_actionable"] != 2 || sourceFilter["skipped_out_of_facet"] != 1 {
+		t.Fatalf("source finding filter = %#v", sourceFilter)
 	}
 }
 

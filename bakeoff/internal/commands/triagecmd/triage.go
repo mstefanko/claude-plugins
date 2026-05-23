@@ -170,6 +170,7 @@ func Run(ctx context.Context, f commands.Factory, opts *TriageOptions) (int, err
 	if err := workorder.WriteJSONAtomic(filepath.Join(triageDir, "citation_checks.json"), citationChecks); err != nil {
 		return 0, &apperror.RuntimeError{Err: err}
 	}
+	providerFailures := providerFailureSummaries(runDir)
 	workOrderText, err := os.ReadFile(filepath.Join(runDir, "work-order.json"))
 	if err != nil {
 		return 0, &apperror.RuntimeError{Err: err}
@@ -184,6 +185,7 @@ func Run(ctx context.Context, f commands.Factory, opts *TriageOptions) (int, err
 		"report_md":             reportText,
 		"source_findings":       sourceFindings,
 		"source_finding_filter": sourceFindingFilter,
+		"provider_failures":     providerFailures,
 		"citation_checks":       citationChecks,
 		"caveats":               caveats,
 		"input_hashes":          inputHashes,
@@ -400,6 +402,51 @@ func triageParticipant(participant workorder.Participant) map[string]any {
 		"model":   participant.Model,
 		"effort":  participant.Effort,
 	}
+}
+
+func providerFailureSummaries(runDir string) []map[string]any {
+	paths, _ := filepath.Glob(filepath.Join(runDir, "providers", "*", "failure.json"))
+	sort.Strings(paths)
+	out := []map[string]any{}
+	for _, path := range paths {
+		value, err := workorder.ReadOptionalJSON(path)
+		if err != nil {
+			continue
+		}
+		obj, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		relative, err := filepath.Rel(runDir, path)
+		if err != nil {
+			relative = path
+		}
+		item := map[string]any{
+			"path":         filepath.ToSlash(relative),
+			"provider_id":  firstNonEmpty(jsonutil.StringValue(obj["provider_id"]), filepath.Base(filepath.Dir(path))),
+			"backend":      obj["backend"],
+			"model":        obj["model"],
+			"status":       obj["status"],
+			"failure_kind": obj["failure_kind"],
+			"exit_code":    obj["exit_code"],
+		}
+		for _, key := range []string{"stdout_tail", "stderr_tail", "raw_artifacts"} {
+			if value, ok := obj[key]; ok {
+				item[key] = value
+			}
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func triageResultCounts(final map[string]any) (int, int) {

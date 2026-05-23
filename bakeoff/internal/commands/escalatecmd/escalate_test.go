@@ -14,6 +14,7 @@ import (
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/buildinfo"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/output"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/provider"
+	triagepkg "github.com/mstefanko/claude-plugins/bakeoff/internal/triage"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
 )
 
@@ -293,6 +294,66 @@ JSON
 	}
 	if _, err := os.Stat(filepath.Join(outDir, "independent", "judge", "synthesis-result.json")); err != nil {
 		t.Fatalf("missing synthesis judge artifact: %v", err)
+	}
+}
+
+func TestSourceRunIdentityIncludesTriageSnapshotWithAbsentSentinel(t *testing.T) {
+	root := t.TempDir()
+	outDir := filepath.Join(root, "runs")
+	writeSourceRun(t, outDir, "source", "compare", map[string]any{"decision_kind": "pick_winner", "canonical_winner": "claude"})
+	src, err := loadSourceRun(filepath.Join(outDir, "source"), "source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := sourceRunIdentity(src)
+	sourceTriage := identity["source_triage"].(map[string]any)
+	if sourceTriage["state"] != "absent" {
+		t.Fatalf("source_triage = %#v", sourceTriage)
+	}
+}
+
+func TestSourceRunIdentityIncludesCompletedTriageSnapshot(t *testing.T) {
+	root := t.TempDir()
+	outDir := filepath.Join(root, "runs")
+	writeSourceRun(t, outDir, "source", "compare", map[string]any{"decision_kind": "pick_winner", "canonical_winner": "claude"})
+	runDir := filepath.Join(outDir, "source")
+	hashes, err := triagepkg.ComputeInputHashes(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	filter := map[string]any{"included": 1, "skipped_non_actionable": 0, "skipped_out_of_facet": 0}
+	if err := workorder.WriteJSONAtomic(filepath.Join(runDir, "triage", "status.json"), map[string]any{"status": "ok", "source_finding_filter": filter}); err != nil {
+		t.Fatal(err)
+	}
+	if err := workorder.WriteJSONAtomic(filepath.Join(runDir, "triage", "final.json"), map[string]any{
+		"schema_version":        1,
+		"status":                "complete",
+		"summary":               "triaged",
+		"input_hashes":          hashes,
+		"source_finding_filter": filter,
+		"items": []any{map[string]any{
+			"classification":     "real_issue",
+			"recommended_action": "fix_now",
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := workorder.WriteTextAtomic(filepath.Join(runDir, "triage", "triage.md"), "# triage\n"); err != nil {
+		t.Fatal(err)
+	}
+	src, err := loadSourceRun(runDir, "source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := sourceRunIdentity(src)
+	sourceTriage := identity["source_triage"].(map[string]any)
+	if sourceTriage["state"] != "yes" || sourceTriage["item_count"] != 1 {
+		t.Fatalf("source_triage = %#v", sourceTriage)
+	}
+	for _, key := range []string{"status_path", "status_sha256", "final_path", "final_sha256", "triage_md_path", "triage_md_sha256", "artifacts", "source_finding_filter"} {
+		if _, ok := sourceTriage[key]; !ok {
+			t.Fatalf("source_triage missing %s: %#v", key, sourceTriage)
+		}
 	}
 }
 

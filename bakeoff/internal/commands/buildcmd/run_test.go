@@ -56,6 +56,9 @@ func TestBuildParticipantArgvRequiresCodexWorkspaceWrite(t *testing.T) {
 	if metadata["enforcement_level"] != "failed" {
 		t.Fatalf("metadata = %#v", metadata)
 	}
+	if metadata["minimum_controls_satisfied"] != false || !strings.Contains(fmt.Sprint(metadata["minimum_control_failures"]), "workspace-write") {
+		t.Fatalf("metadata missing minimum controls = %#v", metadata)
+	}
 
 	argv, _, err = buildParticipantArgv(participant, workorder.ScopePolicy{Enforcement: "best_effort"}, "/tmp/worktree", provider.ScopeCapabilities{Backend: "codex", Supports: map[string]bool{"sandbox": true, "sandbox_workspace_write": true, "disable_feature": true}}, "/tmp/last-message.txt")
 	if err != nil {
@@ -64,6 +67,31 @@ func TestBuildParticipantArgvRequiresCodexWorkspaceWrite(t *testing.T) {
 	joined := strings.Join(argv, " ")
 	if !strings.Contains(joined, "--sandbox workspace-write") || !strings.Contains(joined, "-C /tmp/worktree") {
 		t.Fatalf("codex argv missing workspace controls: %v", argv)
+	}
+}
+
+func TestBuildParticipantArgvBestEffortOnlyHardFailsMinimumControls(t *testing.T) {
+	participant := workorder.Participant{ID: "codex", Backend: "codex", Model: "codex-test", Effort: "high", Scope: "codebase"}
+	argv, metadata, err := buildParticipantArgv(participant, workorder.ScopePolicy{Enforcement: "best_effort"}, "/tmp/worktree", provider.ScopeCapabilities{
+		Backend:  "codex",
+		Supports: map[string]bool{"sandbox_workspace_write": true},
+	}, "")
+	if err != nil || argv == nil {
+		t.Fatalf("best_effort should proceed when minimum controls are present: argv=%v metadata=%#v err=%v", argv, metadata, err)
+	}
+	if metadata["enforcement_level"] != "partial" || metadata["minimum_controls_satisfied"] != true {
+		t.Fatalf("best_effort metadata = %#v", metadata)
+	}
+	if !strings.Contains(fmt.Sprint(metadata["fallback_reason"]), "--disable") {
+		t.Fatalf("expected ordinary fallback reason, got %#v", metadata)
+	}
+
+	_, requiredMetadata, err := buildParticipantArgv(participant, workorder.ScopePolicy{Enforcement: "required"}, "/tmp/worktree", provider.ScopeCapabilities{
+		Backend:  "codex",
+		Supports: map[string]bool{"sandbox_workspace_write": true},
+	}, "")
+	if err == nil || requiredMetadata["enforcement_level"] != "failed" {
+		t.Fatalf("required should fail ordinary fallback: metadata=%#v err=%v", requiredMetadata, err)
 	}
 }
 
@@ -1023,6 +1051,9 @@ func TestRunBuildCodexMissingWorkspaceWriteRecordsScopeError(t *testing.T) {
 	scopeMetadata, _ := status["scope_enforcement"].(map[string]any)
 	if scopeMetadata["enforcement_level"] != "failed" || !strings.Contains(fmt.Sprint(scopeMetadata["fallback_reason"]), "workspace-write") {
 		t.Fatalf("codex scope metadata = %#v", scopeMetadata)
+	}
+	if scopeMetadata["minimum_controls_satisfied"] != false || !strings.Contains(fmt.Sprint(scopeMetadata["minimum_control_failures"]), "workspace-write") {
+		t.Fatalf("codex minimum controls metadata = %#v", scopeMetadata)
 	}
 	decision := readJSONFile(t, filepath.Join(outDir, "codex-scope", "decision.json"))
 	if decision["decision_kind"] != "single_provider_only" || decision["selection_basis"] != "gate" || decision["canonical_winner"] != "claude" {

@@ -457,7 +457,7 @@ func runWorkers(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder
 				if mkdirErr := os.MkdirAll(providerDir, 0o700); mkdirErr != nil {
 					return mkdirErr
 				}
-				if writeErr := artifact.WriteProviderArtifacts(providerDir, result); writeErr != nil {
+				if writeErr := artifact.WriteProviderArtifacts(providerDir, result, artifact.ProviderMetadataFromParticipant(participant)); writeErr != nil {
 					return writeErr
 				}
 			}
@@ -514,7 +514,7 @@ func runOneWorker(ctx context.Context, f commands.Factory, wo *workorder.WorkOrd
 	scopeExecution, err := scope.BuildExecution(ctx, f.Capabilities(), participant, wo.ScopePolicy, cwd, runDir, caps, finalMessagePath)
 	if err != nil {
 		result := scope.ScopeErrorResult(err, participant, wo.ScopePolicy, cwd)
-		if writeErr := artifact.WriteProviderArtifacts(providerDir, result); writeErr != nil {
+		if writeErr := artifact.WriteProviderArtifacts(providerDir, result, artifact.ProviderMetadataFromParticipant(participant)); writeErr != nil {
 			return nil, promptTrims, writeErr
 		}
 		return result, promptTrims, nil
@@ -531,7 +531,7 @@ func runOneWorker(ctx context.Context, f commands.Factory, wo *workorder.WorkOrd
 		FinalMessagePath: finalMessagePath,
 	}))
 	result["scope_enforcement"] = scopeExecution.Metadata
-	if err := artifact.WriteProviderArtifacts(providerDir, result); err != nil {
+	if err := artifact.WriteProviderArtifacts(providerDir, result, artifact.ProviderMetadataFromParticipant(participant)); err != nil {
 		return nil, promptTrims, err
 	}
 	return result, promptTrims, nil

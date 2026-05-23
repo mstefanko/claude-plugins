@@ -90,28 +90,35 @@ func buildParticipantArgv(participant workorder.Participant, policy workorder.Sc
 			fallbackReasons = append(fallbackReasons, "copilot CLI scope controls are advisory for codebase scope")
 		}
 	}
-	if mustFailBuildScope(participant.Backend, supports) {
+	minimumControls := buildMinimumControls(participant.Backend)
+	missingMinimumControls := missingBuildMinimumControls(participant.Backend, supports)
+	if len(missingMinimumControls) > 0 {
 		metadata := map[string]any{
-			"requested_scope":   requestedScope,
-			"policy":            enforcement,
-			"effective_scope":   "advisory",
-			"enforcement_level": "failed",
-			"mechanisms":        mechanisms,
-			"fallback_reason":   strings.Join(fallbackReasons, "; "),
-			"cwd":               worktreePath,
-			"temporary_cwd":     false,
+			"requested_scope":            requestedScope,
+			"policy":                     enforcement,
+			"effective_scope":            "advisory",
+			"enforcement_level":          "failed",
+			"mechanisms":                 mechanisms,
+			"fallback_reason":            strings.Join(fallbackReasons, "; "),
+			"minimum_controls":           minimumControls,
+			"minimum_controls_satisfied": false,
+			"minimum_control_failures":   missingMinimumControls,
+			"cwd":                        worktreePath,
+			"temporary_cwd":              false,
 		}
 		return nil, metadata, &scope.EnforcementError{Message: strings.Join(fallbackReasons, "; ")}
 	}
 	metadata := map[string]any{
-		"requested_scope":   requestedScope,
-		"policy":            enforcement,
-		"effective_scope":   requestedScope,
-		"enforcement_level": "enforced",
-		"mechanisms":        mechanisms,
-		"fallback_reason":   nil,
-		"cwd":               worktreePath,
-		"temporary_cwd":     false,
+		"requested_scope":            requestedScope,
+		"policy":                     enforcement,
+		"effective_scope":            requestedScope,
+		"enforcement_level":          "enforced",
+		"mechanisms":                 mechanisms,
+		"fallback_reason":            nil,
+		"minimum_controls":           minimumControls,
+		"minimum_controls_satisfied": len(minimumControls) == 0 || len(missingMinimumControls) == 0,
+		"cwd":                        worktreePath,
+		"temporary_cwd":              false,
 	}
 	if len(fallbackReasons) > 0 {
 		metadata["fallback_reason"] = strings.Join(fallbackReasons, "; ")
@@ -127,16 +134,38 @@ func buildParticipantArgv(participant workorder.Participant, policy workorder.Sc
 }
 
 func mustFailBuildScope(backend string, supports map[string]bool) bool {
+	return len(missingBuildMinimumControls(backend, supports)) > 0
+}
+
+func buildMinimumControls(backend string) []string {
 	switch backend {
 	case "codex":
-		return !supports["sandbox_workspace_write"]
+		return []string{"codex:sandbox=workspace-write"}
 	case "gemini":
-		return !supports["approval_auto_edit"] && !supports["approval_yolo"] && !supports["yolo_flag"]
+		return []string{"gemini:non-interactive-edit-mode"}
 	case "copilot":
-		return !supports["no_ask_user"]
+		return []string{"copilot:no-ask-user"}
 	default:
-		return false
+		return nil
 	}
+}
+
+func missingBuildMinimumControls(backend string, supports map[string]bool) []string {
+	switch backend {
+	case "codex":
+		if !supports["sandbox_workspace_write"] {
+			return []string{"codex:sandbox=workspace-write"}
+		}
+	case "gemini":
+		if !supports["approval_auto_edit"] && !supports["approval_yolo"] && !supports["yolo_flag"] {
+			return []string{"gemini:non-interactive-edit-mode"}
+		}
+	case "copilot":
+		if !supports["no_ask_user"] {
+			return []string{"copilot:no-ask-user"}
+		}
+	}
+	return nil
 }
 
 func providerCapabilities(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder) map[string]provider.ScopeCapabilities {

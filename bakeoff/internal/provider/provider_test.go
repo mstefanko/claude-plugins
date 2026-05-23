@@ -165,6 +165,75 @@ func TestMissingProbeUsesPythonStyleDiagnostic(t *testing.T) {
 	}
 }
 
+func TestScopeCapabilityProbeFailuresDoNotPoisonCache(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "fake-help")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf '%s\n' '--disallowedTools --output-last-message'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	registry := NewCapabilityRegistry(func(string) (string, error) {
+		calls++
+		if calls == 1 {
+			return "", exec.ErrNotFound
+		}
+		return script, nil
+	})
+
+	first := registry.DetectScopeCapabilities(context.Background(), "claude")
+	if first.Available || first.ProbeError == "" {
+		t.Fatalf("first capabilities = %#v, want failed probe", first)
+	}
+	second := registry.DetectScopeCapabilities(context.Background(), "claude")
+	if !second.Available || !second.Supports["disallowed_tools"] {
+		t.Fatalf("second capabilities = %#v, want successful re-probe", second)
+	}
+	if calls != 2 {
+		t.Fatalf("probe calls = %d, want 2", calls)
+	}
+}
+
+func TestGetOrProbeWaitersRespectContextAndProbePanicResolves(t *testing.T) {
+	registry := NewCapabilityRegistry(nil)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan ScopeCapabilities, 1)
+	go func() {
+		done <- registry.getOrProbe(context.Background(), "scope:test", "test", func() ScopeCapabilities {
+			close(started)
+			<-release
+			return ScopeCapabilities{Backend: "test", Available: true, Supports: map[string]bool{"ok": true}}
+		})
+	}()
+	<-started
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	waited := registry.getOrProbe(ctx, "scope:test", "test", func() ScopeCapabilities {
+		t.Fatal("waiter should not start a duplicate probe")
+		return ScopeCapabilities{}
+	})
+	if waited.Available || !strings.Contains(waited.ProbeError, "context canceled") {
+		t.Fatalf("wait result = %#v", waited)
+	}
+	close(release)
+	if got := <-done; !got.Available || !got.Supports["ok"] {
+		t.Fatalf("probe result = %#v", got)
+	}
+
+	panicked := registry.getOrProbe(context.Background(), "scope:panic", "panic", func() ScopeCapabilities {
+		panic("boom")
+	})
+	if panicked.Available || !strings.Contains(panicked.ProbeError, "panicked") {
+		t.Fatalf("panic result = %#v", panicked)
+	}
+	recovered := registry.getOrProbe(context.Background(), "scope:panic", "panic", func() ScopeCapabilities {
+		return ScopeCapabilities{Backend: "panic", Available: true, Supports: map[string]bool{"ok": true}}
+	})
+	if !recovered.Available || !recovered.Supports["ok"] {
+		t.Fatalf("panic should not poison cache, got %#v", recovered)
+	}
+}
+
 func TestBuildParticipantArgv(t *testing.T) {
 	claude, err := BuildParticipantArgv(testParticipant{backend: "claude", model: "sonnet", effort: "high"}, "", []string{"--disallowedTools", "WebFetch"}, "", false)
 	if err != nil {
