@@ -75,6 +75,8 @@ func State(runDir string) string {
 	return state
 }
 
+const ZeroSelectedMessage = "triage completed; no triageable report findings were selected."
+
 func StateDetail(runDir string) (string, []string) {
 	final := readJSON(filepath.Join(runDir, "triage", "final.json"))
 	if final == nil || !fsutil.FileExists(filepath.Join(runDir, "triage", "triage.md")) {
@@ -119,6 +121,55 @@ func StateDetail(runDir string) (string, []string) {
 		return "stale", changed
 	}
 	return "yes", []string{}
+}
+
+func DisplayStateDetail(runDir string) (string, []string) {
+	state, staleInputs := StateDetail(runDir)
+	if state != "no" {
+		return state, staleInputs
+	}
+	status := AttemptStatus(runDir)
+	if status != "" && status != "ok" && status != "dry_run" {
+		return "failed", []string{}
+	}
+	return state, staleInputs
+}
+
+func AttemptStatus(runDir string) string {
+	status := readJSON(filepath.Join(runDir, "triage", "status.json"))
+	if obj, ok := status.(map[string]any); ok {
+		return jsonutil.StringValue(obj["status"])
+	}
+	return ""
+}
+
+func SourceFindingFilterSummary(runDir string) (map[string]int, bool) {
+	triageDir := filepath.Join(runDir, "triage")
+	for _, value := range []any{
+		nestedValue(readJSON(filepath.Join(triageDir, "status.json")), "source_finding_filter"),
+		nestedValue(readJSON(filepath.Join(triageDir, "final.json")), "source_finding_filter"),
+		nestedValue(readJSON(filepath.Join(triageDir, "source_finding_filter.json")), "summary"),
+	} {
+		obj, ok := value.(map[string]any)
+		if !ok || len(obj) == 0 {
+			continue
+		}
+		return map[string]int{
+			"included":               jsonutil.IntValue(obj["included"]),
+			"skipped_non_actionable": jsonutil.IntValue(obj["skipped_non_actionable"]),
+			"skipped_out_of_facet":   jsonutil.IntValue(obj["skipped_out_of_facet"]),
+		}, true
+	}
+	return nil, false
+}
+
+func ZeroSelected(runDir string) bool {
+	state, _ := StateDetail(runDir)
+	if state != "yes" {
+		return false
+	}
+	filter, ok := SourceFindingFilterSummary(runDir)
+	return ok && filter["included"] == 0
 }
 
 func FacetID(workOrder map[string]any) string {
@@ -348,6 +399,14 @@ func readJSON(path string) any {
 		return nil
 	}
 	return value
+}
+
+func nestedValue(value any, key string) any {
+	obj, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	return obj[key]
 }
 
 func withSkipReason(finding map[string]string, reason string) map[string]string {

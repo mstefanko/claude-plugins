@@ -13,6 +13,7 @@ import (
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/apperror"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/jsonutil"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/ledger"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/manifest"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/summary"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
@@ -25,6 +26,7 @@ type LsOptions struct {
 	Facet       string
 	TriageState string
 	Type        string
+	SourceRun   string
 	Limit       int
 	LimitSet    bool
 	History     bool
@@ -47,6 +49,11 @@ func NewCmdLs(f commands.Factory, runF func(context.Context, *LsOptions) error) 
 			if err := commands.ValidateEnumFlag(opts.Type, "type", "gather", "compare", "analyze", "build", "escalation"); err != nil {
 				return err
 			}
+			if opts.SourceRun != "" {
+				if err := ledger.ValidateLookupRunID(opts.SourceRun); err != nil {
+					return &apperror.ValidationError{Message: err.Error(), Err: err}
+				}
+			}
 			if opts.LimitSet && opts.Limit < 0 {
 				return &apperror.ValidationError{Message: "--limit must be greater than or equal to 0"}
 			}
@@ -64,6 +71,7 @@ func NewCmdLs(f commands.Factory, runF func(context.Context, *LsOptions) error) 
 	cmd.Flags().StringVar(&opts.Facet, "facet", "", "filter by facet id")
 	cmd.Flags().StringVar(&opts.TriageState, "triage-state", "", "filter by triage state")
 	cmd.Flags().StringVar(&opts.Type, "type", "", "filter by run type")
+	cmd.Flags().StringVar(&opts.SourceRun, "source-run", "", "filter escalation rows by source run id")
 	cmd.Flags().IntVar(&opts.Limit, "limit", 0, "limit rows after filtering; 0 returns no rows")
 	cmd.Flags().BoolVar(&opts.History, "history", false, "emit a compact recent-run history with work-order summaries")
 	return cmd
@@ -101,6 +109,9 @@ func runLs(_ context.Context, f commands.Factory, opts *LsOptions) error {
 			continue
 		}
 		if opts.Type != "" && row["type"] != opts.Type {
+			continue
+		}
+		if opts.SourceRun != "" && row["source_run_id"] != opts.SourceRun {
 			continue
 		}
 		rows = append(rows, row)

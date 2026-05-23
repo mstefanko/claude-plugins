@@ -980,8 +980,75 @@ func sourceRunIdentity(src sourceRun) map[string]any {
 		"source_run_dir":  src.Dir,
 		"source_mode":     src.WorkOrder.Type,
 		"source_decision": decision.SourceDecisionSummary(src.Decision),
+		"source_triage":   sourceTriageSnapshot(src.Dir),
 		"artifacts":       artifacts,
 	}
+}
+
+func sourceTriageSnapshot(runDir string) map[string]any {
+	triageDir := filepath.Join(runDir, "triage")
+	state, staleInputs := triagepkg.DisplayStateDetail(runDir)
+	present := false
+	out := map[string]any{
+		"state":        state,
+		"stale_inputs": staleInputs,
+	}
+	artifacts := map[string]any{}
+	add := func(key string, relative string) {
+		path := filepath.Join(runDir, relative)
+		if !fsutil.FileExists(path) {
+			return
+		}
+		present = true
+		size, sha, err := workorder.FileFingerprint(path)
+		if err != nil {
+			return
+		}
+		artifacts[relative] = map[string]any{"path": path, "sha256": sha, "size_bytes": size}
+		out[key+"_path"] = path
+		out[key+"_sha256"] = sha
+	}
+	add("status", filepath.Join("triage", "status.json"))
+	add("final", filepath.Join("triage", "final.json"))
+	add("triage_md", filepath.Join("triage", "triage.md"))
+	if !present {
+		if info, err := os.Stat(triageDir); err != nil || !info.IsDir() {
+			out["state"] = "absent"
+		}
+	}
+	if len(artifacts) > 0 {
+		out["artifacts"] = artifacts
+	}
+	if final, err := workorder.ReadRequiredObject(filepath.Join(triageDir, "final.json")); err == nil {
+		items := jsonutil.ListValue(final["items"])
+		out["item_count"] = len(items)
+		out["item_counts_by_classification"] = triageClassificationCounts(items)
+	}
+	if filter, ok := triagepkg.SourceFindingFilterSummary(runDir); ok {
+		out["source_finding_filter"] = filter
+		if filter["included"] == 0 && state == "yes" {
+			out["zero_selected"] = true
+		}
+	}
+	return out
+}
+
+func triageClassificationCounts(items []any) map[string]int {
+	counts := map[string]int{}
+	for _, name := range triagepkg.Classifications {
+		counts[name] = 0
+	}
+	for _, item := range items {
+		obj, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		classification := jsonutil.StringValue(obj["classification"])
+		if _, ok := counts[classification]; ok {
+			counts[classification]++
+		}
+	}
+	return counts
 }
 
 func copyReviewContextArtifacts(sourceRunDir string, runDir string) error {

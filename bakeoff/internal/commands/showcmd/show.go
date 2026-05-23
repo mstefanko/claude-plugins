@@ -9,7 +9,9 @@ import (
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/apperror"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/jsonutil"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/ledger"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/runlinks"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/triage"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
 	"github.com/spf13/cobra"
@@ -73,10 +75,14 @@ func runShow(_ context.Context, f commands.Factory, opts *ShowOptions) error {
 		return &apperror.ValidationError{Message: runDir + " has no report.md", Err: err}
 	}
 	f.Streams().Printf("%s", string(data))
+	printRelatedRuns(f, opts, runDir)
 	state, staleInputs := triage.StateDetail(runDir)
 	switch state {
 	case "yes":
 		f.Streams().Printf("\ntriage available: %s\n", ledger.BakeoffShowCommand(opts.RunID, opts.Out, "--triage"))
+		if triage.ZeroSelected(runDir) {
+			f.Streams().Printf("%s\n", triage.ZeroSelectedMessage)
+		}
 	case "stale":
 		f.Streams().Printf("\ntriage stale%s: %s\n", triage.StaleInputsText(staleInputs), ledger.BakeoffTriageCommand(opts.RunID, opts.Out, true))
 	case "dry_run":
@@ -104,6 +110,65 @@ func runShow(_ context.Context, f commands.Factory, opts *ShowOptions) error {
 		}
 	}
 	return nil
+}
+
+func printRelatedRuns(f commands.Factory, opts *ShowOptions, runDir string) {
+	outDir := ledger.OutputDirForResolvedRun(opts.Out, runDir)
+	manifest, ok := runlinks.RunManifest(runDir)
+	if !ok {
+		return
+	}
+	runID := opts.RunID
+	if runID == "" || runID == "latest" || ledger.IsPathLikeRunID(runID) {
+		runID = filepath.Base(runDir)
+	}
+	if jsonutil.StringValue(manifest["type"]) == "escalation" {
+		sourceRunID := jsonutil.StringValue(manifest["source_run_id"])
+		if sourceRunID == "" {
+			return
+		}
+		f.Streams().Printf("\nsource run: %s\n", sourceRunID)
+		siblings := []runlinks.Escalation{}
+		for _, escalation := range runlinks.EscalationsForSource(outDir, sourceRunID) {
+			if escalation.RunID != runID {
+				siblings = append(siblings, escalation)
+			}
+		}
+		if len(siblings) == 0 {
+			f.Streams().Printf("sibling escalations: none\n")
+			return
+		}
+		f.Streams().Printf("sibling escalations:\n")
+		for _, escalation := range siblings {
+			printEscalationLine(f, escalation)
+		}
+		return
+	}
+	children := runlinks.EscalationsForSource(outDir, runID)
+	if len(children) == 0 {
+		return
+	}
+	f.Streams().Printf("\nrelated escalations:\n")
+	for _, escalation := range children {
+		printEscalationLine(f, escalation)
+	}
+}
+
+func printEscalationLine(f commands.Factory, escalation runlinks.Escalation) {
+	f.Streams().Printf("  %s  %s  %s  %s  triage:%s\n",
+		escalation.RunID,
+		defaultDisplay(escalation.Mode),
+		defaultDisplay(escalation.AddedProvider),
+		defaultDisplay(escalation.DecisionKind),
+		defaultDisplay(escalation.TriageState),
+	)
+}
+
+func defaultDisplay(value string) string {
+	if value == "" {
+		return "-"
+	}
+	return value
 }
 
 func failedTriageDetail(runDir string) (string, string, bool) {

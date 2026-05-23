@@ -147,18 +147,36 @@ func RowForLS(runDir string) map[string]any {
 	} else if fsutil.FileExists(filepath.Join(runDir, "report.md")) {
 		row["report_path"] = filepath.Join(runDir, "report.md")
 	}
+	if loaded.Type == "escalation" {
+		if loaded.SourceRunID != "" {
+			row["source_run_id"] = loaded.SourceRunID
+		}
+		if loaded.SourceType != "" {
+			row["source_type"] = loaded.SourceType
+		}
+		if loaded.EscalationMode != "" {
+			row["escalation_mode"] = loaded.EscalationMode
+		}
+		if loaded.AddedProvider != nil {
+			row["added_provider"] = loaded.AddedProvider
+		}
+	}
 	return row
 }
 
 type lsManifest struct {
-	SchemaVersion int               `json:"schema_version"`
-	RunID         string            `json:"run_id"`
-	Type          string            `json:"type"`
-	FacetID       *string           `json:"facet_id"`
-	DecisionKind  string            `json:"decision_kind"`
-	FinishedAt    string            `json:"finished_at"`
-	Artifacts     map[string]string `json:"artifacts"`
-	Triage        struct {
+	SchemaVersion  int               `json:"schema_version"`
+	RunID          string            `json:"run_id"`
+	Type           string            `json:"type"`
+	FacetID        *string           `json:"facet_id"`
+	DecisionKind   string            `json:"decision_kind"`
+	FinishedAt     string            `json:"finished_at"`
+	Artifacts      map[string]string `json:"artifacts"`
+	SourceRunID    string            `json:"source_run_id"`
+	SourceType     string            `json:"source_type"`
+	EscalationMode string            `json:"escalation_mode"`
+	AddedProvider  any               `json:"added_provider"`
+	Triage         struct {
 		State string `json:"state"`
 	} `json:"triage"`
 }
@@ -218,6 +236,12 @@ func triageSummary(runDir string, state string, staleInputs []string) map[string
 		summary["item_count"] = len(items)
 		summary["item_counts_by_classification"] = classificationCounts(items)
 		summary["highest_severity"] = highestSeverity(items)
+	}
+	if filter, ok := triage.SourceFindingFilterSummary(runDir); ok {
+		summary["source_finding_filter"] = filter
+		if filter["included"] == 0 {
+			summary["zero_selected"] = true
+		}
 	}
 	return summary
 }
@@ -590,6 +614,20 @@ func legacyLSRow(runDir string, manifestState string) map[string]any {
 	}
 	if fsutil.FileExists(filepath.Join(runDir, "report.md")) {
 		row["report_path"] = filepath.Join(runDir, "report.md")
+	}
+	if jsonutil.StringValue(row["type"]) == "escalation" {
+		if value := jsonutil.StringValue(jsonutil.FirstNonNil(metaObj["source_run_id"], decisionObj["source_run_id"])); value != "" {
+			row["source_run_id"] = value
+		}
+		if value := jsonutil.StringValue(jsonutil.FirstNonNil(metaObj["source_type"], decisionObj["source_mode"])); value != "" {
+			row["source_type"] = value
+		}
+		if value := jsonutil.StringValue(jsonutil.FirstNonNil(metaObj["escalation_mode"], decisionObj["escalation_mode"])); value != "" {
+			row["escalation_mode"] = value
+		}
+		if value := jsonutil.FirstNonNil(metaObj["added_provider"], decisionObj["added_provider"]); value != nil {
+			row["added_provider"] = value
+		}
 	}
 	return row
 }

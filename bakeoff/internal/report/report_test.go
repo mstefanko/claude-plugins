@@ -332,8 +332,14 @@ func TestRenderEscalationDisputeItemsAvoidRawMapLiterals(t *testing.T) {
 					"resolution": "The existing evidence is sufficient.",
 					"evidence":   []any{"report.md:42"},
 				}},
-				"unresolved_points": []any{},
-				"new_evidence":      []any{},
+				"unresolved_points": []any{map[string]any{
+					"id":     "D-002",
+					"answer": "The follow-up remains open.",
+				}},
+				"new_evidence": []any{
+					map[string]any{"point_id": "D-003", "evidence": []any{"packet:9"}},
+					map[string]any{"z": "last", "a": "first"},
+				},
 			},
 		},
 		nil,
@@ -343,6 +349,10 @@ func TestRenderEscalationDisputeItemsAvoidRawMapLiterals(t *testing.T) {
 	for _, want := range []string{
 		"- **D-001** The existing evidence is sufficient.",
 		"Evidence: report.md:42",
+		"- **D-002** The follow-up remains open.",
+		"- **D-003**",
+		"Evidence: packet:9",
+		`- {"a":"first","z":"last"}`,
 		"advisory escalation supports the source decision",
 	} {
 		if !strings.Contains(text, want) {
@@ -351,5 +361,38 @@ func TestRenderEscalationDisputeItemsAvoidRawMapLiterals(t *testing.T) {
 	}
 	if strings.Contains(text, "map[") {
 		t.Fatalf("report leaked map literal:\n%s", text)
+	}
+}
+
+func TestRenderKnownGenericItemsPreserveNonEscalationOutput(t *testing.T) {
+	text := Render(
+		&workorder.WorkOrder{ID: "sample", Type: "compare"},
+		map[string]any{
+			"mode":              "compare",
+			"decision_kind":     "consensus",
+			"judge_ran":         true,
+			"provider_statuses": map[string]any{},
+			"consensus_strongest": []any{map[string]any{
+				"claim":           "Same strongest point",
+				"evidence":        []any{"report.md:7"},
+				"source_provider": "claude",
+			}},
+			"consensus_disagreements": []any{},
+		},
+		map[string]map[string]any{},
+		map[string]map[string]any{},
+		RenderOptions{},
+	)
+	for _, want := range []string{
+		"- **F-001** Same strongest point",
+		"Evidence: report.md:7",
+		"Source: `claude`",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("report missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "map[") {
+		t.Fatalf("known generic item leaked map literal:\n%s", text)
 	}
 }

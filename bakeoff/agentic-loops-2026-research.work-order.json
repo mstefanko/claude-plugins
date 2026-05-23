@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "id": "agentic-loops-2026-research",
+  "type": "gather",
+  "goal": "Research the state of agentic coding loops in 2026: identify the best end-to-end build processes using AI agents, where human checkpoints belong, and whether multi-model orchestration outperforms single-model loops for efficiency.",
+  "background": "Producing a synthesis answer requires concrete evidence. Acceptance criteria: (1) name at least 3 distinct agentic loop patterns (e.g., plan-do-review, research/analyze/clarify/write/review pipelines, swarm orchestration, competitive implementation, ReAct-style, reflexion/critique loops) with strengths and weaknesses; (2) give an explicit answer on where human checkpoints belong (planning approval, work-order acceptance, mid-execution review, code review, merge/deploy gate) with rationale; (3) take a reasoned position on multi-model vs single-model efficiency, including conditions under which each wins across cost, latency, bias diversity, and judging overhead; (4) cover vendor patterns (Anthropic, OpenAI, Google) and open-source frameworks (LangGraph, AutoGen, CrewAI, swarm-style) and notable agentic CLIs (Claude Code, Codex, Cursor, Aider, Devin-style) where relevant. Cite sources where possible. Output is industry research — no local codebase context is required.",
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "sonnet",
+      "scope": "codebase",
+      "effort": "high"
+    },
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "scope": "web",
+      "effort": "high"
+    }
+  ],
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  },
+  "scope_policy": {
+    "enforcement": "best_effort"
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "id": "agentic-code-reviews-2026",
+  "type": "compare",
+  "goal": "Compare cross-model, multi-model, and single-model approaches for agentic code review in 2026 and recommend the best approach with tradeoffs across cost, accuracy, bias mitigation, latency, and operational complexity.",
+  "background": "Three approaches to define and compare — (1) single-model: one model/agent reviews a diff end-to-end; (2) multi-model: multiple instances of the same model family invoked with different prompts/lenses (e.g., security, performance, tests, UX); (3) cross-model: different model families (e.g., Claude + Codex/GPT + Gemini) reviewing the same diff with a judge or synthesis pass.\n\nDecision factors to weigh: false-positive rate and triage cost; blind-spot coverage and complementarity across families; same-family bias and judge convergence; escalation patterns (witness, dispute, independent); latency budget per PR; token/inference cost; infrastructure and orchestration complexity; integration with PR workflows (GitHub, GitLab); reproducibility and audit trail.\n\nCite 2025–2026 industry patterns where possible: Anthropic Claude Code reviewers, OpenAI/Codex review agents, Google Gemini Code Assist, GitHub Copilot review, and open-source orchestration frameworks (LangGraph, CrewAI, agent swarms). Discuss how multi-agent code review research (e.g., debate, jury, lens-based fanout) has matured.\n\nDeliverable: rank the three approaches by use case (high-stakes PRs, routine diffs, security audits, refactors, greenfield). Surface when to combine approaches (e.g., single-model for fast feedback, cross-model on merge to main). Explicitly call out failure modes and antipatterns for each approach.",
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "sonnet",
+      "scope": "mixed",
+      "effort": "high"
+    },
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "scope": "mixed",
+      "effort": "high"
+    }
+  ],
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  },
+  "scope_policy": {
+    "enforcement": "best_effort"
+  }
+}

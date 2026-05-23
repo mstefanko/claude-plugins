@@ -119,6 +119,57 @@ func TestLimitAppliesAfterRecentSortForJSON(t *testing.T) {
 	}
 }
 
+func TestJSONRowsProjectEscalationFieldsAndSourceRunFilter(t *testing.T) {
+	outDir := filepath.Join(t.TempDir(), "runs")
+	writeRun(t, outDir, runSpec{ID: "source", Type: "compare", FinishedAt: "2026-05-19T10:00:00Z", Decision: "pick_winner", Triage: "no", Goal: "source"})
+	writeRun(t, outDir, runSpec{ID: "child-a", Type: "escalation", FinishedAt: "2026-05-19T10:01:00Z", Decision: "escalation_advisory_supported", Triage: "no", Goal: "child", SourceRunID: "source", SourceType: "compare", EscalationMode: "dispute", AddedProvider: "gemini"})
+	writeRun(t, outDir, runSpec{ID: "child-b", Type: "escalation", FinishedAt: "2026-05-19T10:02:00Z", Decision: "escalation_advisory_supported", Triage: "no", Goal: "child", SourceRunID: "other", SourceType: "compare", EscalationMode: "witness", AddedProvider: "copilot"})
+
+	var stdout bytes.Buffer
+	f := testFactory{streams: output.NewStreams(&stdout, &bytes.Buffer{})}
+	err := runLs(context.Background(), f, &LsOptions{Out: outDir, JSON: true, SourceRun: "source"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		Runs []map[string]any `json:"runs"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Runs) != 1 {
+		t.Fatalf("filtered rows = %#v", payload.Runs)
+	}
+	row := payload.Runs[0]
+	for key, want := range map[string]any{
+		"run_id":          "child-a",
+		"source_run_id":   "source",
+		"source_type":     "compare",
+		"escalation_mode": "dispute",
+		"added_provider":  "gemini",
+	} {
+		if row[key] != want {
+			t.Fatalf("%s = %#v, want %#v in %#v", key, row[key], want, row)
+		}
+	}
+
+	stdout.Reset()
+	err = runLs(context.Background(), f, &LsOptions{Out: outDir, JSON: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range payload.Runs {
+		if row["run_id"] == "source" {
+			if _, ok := row["source_run_id"]; ok {
+				t.Fatalf("source row should omit escalation-only keys: %#v", row)
+			}
+		}
+	}
+}
+
 func TestSortRowsByFinishedAt(t *testing.T) {
 	t.Run("happy path newest first", func(t *testing.T) {
 		rows := []map[string]any{
@@ -196,6 +247,10 @@ type runSpec struct {
 	Decision   string
 	Triage     string
 	Goal       string
+	SourceRunID    string
+	SourceType     string
+	EscalationMode string
+	AddedProvider  string
 }
 
 func writeRun(t *testing.T, outDir string, spec runSpec) {
@@ -204,7 +259,7 @@ func writeRun(t *testing.T, outDir string, spec runSpec) {
 	if err := os.MkdirAll(runDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	writeJSON(t, filepath.Join(runDir, "manifest.json"), map[string]any{
+	manifestDoc := map[string]any{
 		"schema_version": manifest.SchemaVersion,
 		"run_id":         spec.ID,
 		"type":           spec.Type,
@@ -213,7 +268,14 @@ func writeRun(t *testing.T, outDir string, spec runSpec) {
 		"finished_at":    spec.FinishedAt,
 		"artifacts":      map[string]string{"report": "report.md"},
 		"triage":         map[string]any{"state": spec.Triage},
-	})
+	}
+	if spec.Type == "escalation" {
+		manifestDoc["source_run_id"] = spec.SourceRunID
+		manifestDoc["source_type"] = spec.SourceType
+		manifestDoc["escalation_mode"] = spec.EscalationMode
+		manifestDoc["added_provider"] = spec.AddedProvider
+	}
+	writeJSON(t, filepath.Join(runDir, "manifest.json"), manifestDoc)
 	writeJSON(t, filepath.Join(runDir, "work-order.json"), map[string]any{
 		"schema_version": 1,
 		"id":             spec.ID,

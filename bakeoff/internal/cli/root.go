@@ -8,6 +8,7 @@ import (
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/apperror"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/buildcmd"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/bundlecmd"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/doctorcmd"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/draftbuildcmd"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/escalatecmd"
@@ -42,12 +43,12 @@ Run ` + "`bakeoff doctor`" + ` to check.
 `
 
 const rootHelp = `usage: bakeoff [-h] [--version]
-               {init,draft-build,validate,research,build,rerun,escalate,triage,runs,ls,show,doctor} ...
+               {init,draft-build,validate,research,build,rerun,escalate,triage,bundle,runs,ls,show,doctor} ...
 
 Tiny research bakeoff harness.
 
 positional arguments:
-  {init,draft-build,validate,research,build,rerun,escalate,triage,runs,ls,show,doctor}
+  {init,draft-build,validate,research,build,rerun,escalate,triage,bundle,runs,ls,show,doctor}
     init                write an example work order
     draft-build         print a validated build work order
     validate            validate and dry-run a work order
@@ -56,6 +57,7 @@ positional arguments:
     rerun               replay a previous work order with a fresh run id
     escalate            run one post-run provider escalation
     triage              triage a completed bakeoff report
+    bundle              print a source run with related escalations
     runs                inspect run ledgers
     ls                  list past runs
     show                print a run report
@@ -122,6 +124,7 @@ func NewRootCommand(f *Factory) *cobra.Command {
 		reruncmd.NewCmdRerun(f, nil),
 		escalatecmd.NewCmdEscalate(f, nil),
 		triagecmd.NewCmdTriage(f, nil),
+		bundlecmd.NewCmdBundle(f, nil),
 		runscmd.NewCmdRuns(f, nil),
 		lscmd.NewCmdLs(f, nil),
 		showcmd.NewCmdShow(f, nil),

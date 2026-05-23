@@ -1,6 +1,7 @@
 package report
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -879,7 +880,10 @@ func genericItemLines(items []any) []string {
 				lines = append(lines, disputeLines...)
 				continue
 			}
-			claim := firstString(obj["claim"], obj["description"], obj["loser_note"], fmt.Sprint(obj))
+			claim := firstString(obj["claim"], obj["description"], obj["loser_note"])
+			if claim == "" {
+				claim = deterministicItemText(obj)
+			}
 			lines = append(lines, "- "+claim)
 			if evidence := joinList(obj["evidence"], ", "); evidence != "" {
 				lines = append(lines, "  Evidence: "+evidence)
@@ -889,23 +893,28 @@ func genericItemLines(items []any) []string {
 			}
 			continue
 		}
-		lines = append(lines, "- "+fmt.Sprint(item))
+		lines = append(lines, "- "+deterministicItemText(item))
 	}
 	return lines
 }
 
 func disputeItemLines(obj map[string]any) ([]string, bool) {
-	id := jsonutil.StringValue(obj["id"])
-	resolution := firstString(obj["resolution"], obj["assessment"], obj["summary"])
-	if id == "" || resolution == "" {
+	id := firstString(obj["id"], obj["point_id"])
+	resolution := firstString(obj["resolution"], obj["assessment"], obj["summary"], obj["answer"], obj["verdict"], obj["rationale"], obj["description"], obj["claim"])
+	evidence := joinList(obj["evidence"], ", ")
+	if id == "" || (resolution == "" && evidence == "") {
 		return nil, false
 	}
 	prefix := "**" + id + "**"
 	if materiality := jsonutil.StringValue(obj["materiality"]); materiality != "" {
 		prefix += " " + materiality + "."
 	}
-	lines := []string{"- " + prefix + " " + resolution}
-	if evidence := joinList(obj["evidence"], ", "); evidence != "" {
+	line := "- " + prefix
+	if resolution != "" {
+		line += " " + resolution
+	}
+	lines := []string{line}
+	if evidence != "" {
 		lines = append(lines, "  Evidence: "+evidence)
 	}
 	if source := jsonutil.StringValue(obj["source_provider"]); source != "" {
@@ -1013,9 +1022,9 @@ func firstNonEmptyListSummary(groups ...[]any) string {
 			continue
 		}
 		if len(group) == 1 {
-			return fmt.Sprint(group[0])
+			return deterministicItemText(group[0])
 		}
-		return fmt.Sprintf("%s (+%d more)", fmt.Sprint(group[0]), len(group)-1)
+		return fmt.Sprintf("%s (+%d more)", deterministicItemText(group[0]), len(group)-1)
 	}
 	return "none reported"
 }
@@ -1120,7 +1129,7 @@ func joinList(value any, sep string) string {
 	items := jsonutil.ListValue(value)
 	parts := []string{}
 	for _, item := range items {
-		parts = append(parts, fmt.Sprint(item))
+		parts = append(parts, deterministicItemText(item))
 	}
 	return strings.Join(parts, sep)
 }
@@ -1144,4 +1153,15 @@ func unique(items []string) []string {
 		}
 	}
 	return out
+}
+
+func deterministicItemText(value any) string {
+	switch value.(type) {
+	case map[string]any, []any:
+		data, err := json.Marshal(value)
+		if err == nil {
+			return string(data)
+		}
+	}
+	return fmt.Sprint(value)
 }

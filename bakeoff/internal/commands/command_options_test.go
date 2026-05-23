@@ -11,6 +11,7 @@ import (
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/buildinfo"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/buildcmd"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/bundlecmd"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/doctorcmd"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/draftbuildcmd"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands/escalatecmd"
@@ -278,10 +279,25 @@ func TestCommandOptions(t *testing.T) {
 			got = &copy
 			return nil
 		})
-		if err := execute(cmd, "--out", "ledger", "--json", "--facet", "code-review", "--triage-state", "yes", "--type", "gather", "--limit", "5"); err != nil {
+		if err := execute(cmd, "--out", "ledger", "--json", "--facet", "code-review", "--triage-state", "yes", "--type", "gather", "--source-run", "source", "--limit", "5"); err != nil {
 			t.Fatal(err)
 		}
-		want := &lscmd.LsOptions{Out: "ledger", JSON: true, Facet: "code-review", TriageState: "yes", Type: "gather", Limit: 5, LimitSet: true}
+		want := &lscmd.LsOptions{Out: "ledger", JSON: true, Facet: "code-review", TriageState: "yes", Type: "gather", SourceRun: "source", Limit: 5, LimitSet: true}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("got %#v, want %#v", got, want)
+		}
+	})
+	t.Run("bundle", func(t *testing.T) {
+		var got *bundlecmd.BundleOptions
+		cmd := bundlecmd.NewCmdBundle(testFactory(), func(_ context.Context, opts *bundlecmd.BundleOptions) error {
+			copy := *opts
+			got = &copy
+			return nil
+		})
+		if err := execute(cmd, "source", "--out", "ledger", "--write"); err != nil {
+			t.Fatal(err)
+		}
+		want := &bundlecmd.BundleOptions{RunID: "source", Out: "ledger", Write: true}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("got %#v, want %#v", got, want)
 		}
