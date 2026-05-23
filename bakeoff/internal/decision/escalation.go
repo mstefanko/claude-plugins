@@ -46,7 +46,7 @@ func EscalationBase(input EscalationBaseInput) map[string]any {
 		"added_provider":    input.AddedProvider,
 		"source_providers":  append([]string(nil), input.SourceProviders...),
 		"source_decision":   SourceDecisionSummary(input.SourceDecision),
-		"provider_statuses": cloneAnyMap(input.ProviderStatuses),
+		"provider_statuses": deepCloneAnyMap(input.ProviderStatuses),
 		"canonical_winner":  nil,
 		"judge_rationale":   []string{},
 		"caveats":           []string{},
@@ -134,6 +134,10 @@ func ResolveEscalationSynthesis(input EscalationBaseInput, synthesis map[string]
 			out["decision_kind"] = EscalationRecommendsWinner
 			out["canonical_winner"] = recommended
 			out["caveats"] = []string{"synthesis_judge_not_position_swapped"}
+		} else if sourceWinner != "" && recommended == sourceWinner {
+			out["decision_kind"] = EscalationSupportsSource
+			out["canonical_winner"] = sourceWinner
+			out["caveats"] = []string{"synthesis_judge_not_position_swapped"}
 		} else if sourceWinner != "" && recommended != "" && recommended != sourceWinner {
 			out["decision_kind"] = EscalationChangedWinner
 			out["canonical_winner"] = recommended
@@ -147,10 +151,25 @@ func ResolveEscalationSynthesis(input EscalationBaseInput, synthesis map[string]
 	return out
 }
 
-func cloneAnyMap(in map[string]any) map[string]any {
+func deepCloneAnyMap(in map[string]any) map[string]any {
 	out := map[string]any{}
 	for key, value := range in {
-		out[key] = value
+		out[key] = deepCloneAny(value)
 	}
 	return out
+}
+
+func deepCloneAny(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return deepCloneAnyMap(typed)
+	case []any:
+		out := make([]any, len(typed))
+		for i, item := range typed {
+			out[i] = deepCloneAny(item)
+		}
+		return out
+	default:
+		return value
+	}
 }

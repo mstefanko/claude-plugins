@@ -124,7 +124,7 @@ func Run(ctx context.Context, f commands.Factory, opts *EscalateOptions) error {
 	if err != nil {
 		return err
 	}
-	scopeValue, err := resolveAddedScope(src.WorkOrder, opts.Scope)
+	scopeValue, err := resolveAddedScope(src.WorkOrder, opts.Mode, opts.Scope)
 	if err != nil {
 		return err
 	}
@@ -809,16 +809,34 @@ func validateMode(mode string) error {
 	return nil
 }
 
-func resolveAddedScope(wo *workorder.WorkOrder, raw string) (string, error) {
+func resolveAddedScope(wo *workorder.WorkOrder, mode string, raw string) (string, error) {
 	if raw != "" {
+		if mode != ModeIndependent {
+			return "", &apperror.ValidationError{Message: "--scope is only supported for --mode independent"}
+		}
 		if !validScope(raw) {
 			return "", &apperror.ValidationError{Message: "--scope must be one of: codebase, web, mixed"}
 		}
 		return raw, nil
 	}
-	if triagepkg.FacetID(wo.Raw) == triagepkg.CodeReviewFacetID {
+	common, allShare := commonProviderScope(wo)
+	if allShare && common != "" {
+		return common, nil
+	}
+	if triagepkg.FacetID(wo.Raw) == triagepkg.CodeReviewFacetID || mode != ModeIndependent {
 		return "codebase", nil
 	}
+	if common == "" {
+		return "", &apperror.ValidationError{Message: "--scope is required because source provider scope could not be inferred"}
+	}
+	return "", &apperror.ValidationError{Message: "--scope is required because source providers used different scopes"}
+}
+
+func validScope(value string) bool {
+	return value == "codebase" || value == "web" || value == "mixed"
+}
+
+func commonProviderScope(wo *workorder.WorkOrder) (string, bool) {
 	common := ""
 	for _, participant := range wo.Providers {
 		if common == "" {
@@ -826,17 +844,10 @@ func resolveAddedScope(wo *workorder.WorkOrder, raw string) (string, error) {
 			continue
 		}
 		if common != participant.Scope {
-			return "", &apperror.ValidationError{Message: "--scope is required because source providers used different scopes"}
+			return common, false
 		}
 	}
-	if common == "" {
-		return "", &apperror.ValidationError{Message: "--scope is required because source provider scope could not be inferred"}
-	}
-	return common, nil
-}
-
-func validScope(value string) bool {
-	return value == "codebase" || value == "web" || value == "mixed"
+	return common, common != ""
 }
 
 func parseAddedProvider(raw string, scopeValue string, src sourceRun) (workorder.Participant, error) {

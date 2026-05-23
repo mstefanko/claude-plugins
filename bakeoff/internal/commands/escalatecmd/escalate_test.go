@@ -118,6 +118,41 @@ func TestDisputeWithoutPointsFailsBeforeMutation(t *testing.T) {
 	}
 }
 
+func TestResolveAddedScopePreservesCodeReviewCommonScope(t *testing.T) {
+	wo := scopeWorkOrder("mixed", "mixed", true)
+	scope, err := resolveAddedScope(wo, ModeIndependent, "")
+	if err != nil {
+		t.Fatalf("resolveAddedScope returned error: %v", err)
+	}
+	if scope != "mixed" {
+		t.Fatalf("scope = %q, want mixed", scope)
+	}
+}
+
+func TestResolveAddedScopeRejectsExplicitScopeForAdvisoryModes(t *testing.T) {
+	_, err := resolveAddedScope(scopeWorkOrder("codebase", "codebase", false), ModeWitness, "web")
+	if err == nil || !strings.Contains(err.Error(), "--scope is only supported for --mode independent") {
+		t.Fatalf("expected mode-specific scope error, got %v", err)
+	}
+}
+
+func TestResolveAddedScopeFallsBackForArtifactCenteredModes(t *testing.T) {
+	scope, err := resolveAddedScope(scopeWorkOrder("codebase", "web", false), ModeWitness, "")
+	if err != nil {
+		t.Fatalf("resolveAddedScope returned error: %v", err)
+	}
+	if scope != "codebase" {
+		t.Fatalf("scope = %q, want codebase", scope)
+	}
+}
+
+func TestResolveAddedScopeRequiresIndependentScopeForMixedSourceScopes(t *testing.T) {
+	_, err := resolveAddedScope(scopeWorkOrder("codebase", "web", false), ModeIndependent, "")
+	if err == nil || !strings.Contains(err.Error(), "source providers used different scopes") {
+		t.Fatalf("expected mixed-scope independent error, got %v", err)
+	}
+}
+
 func TestWitnessRunWritesEscalationArtifacts(t *testing.T) {
 	root := t.TempDir()
 	fakeBin := filepath.Join(root, "bin")
@@ -387,4 +422,18 @@ func readTestJSON(t *testing.T, path string) map[string]any {
 		t.Fatal(err)
 	}
 	return out
+}
+
+func scopeWorkOrder(left string, right string, codeReview bool) *workorder.WorkOrder {
+	raw := map[string]any{}
+	if codeReview {
+		raw["facet"] = map[string]any{"id": "code-review"}
+	}
+	return &workorder.WorkOrder{
+		Raw: raw,
+		Providers: []workorder.Participant{
+			{ID: "claude", Scope: left},
+			{ID: "codex", Scope: right},
+		},
+	}
 }
