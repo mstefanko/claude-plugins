@@ -24,12 +24,29 @@ const (
 	PromptFlavorGeneric = "generic-terminal-agent"
 )
 
+const (
+	ProviderFamilyUnknown       = "unknown"
+	ProviderFamilyAnthropic     = "anthropic"
+	ProviderFamilyOpenAI        = "openai"
+	ProviderFamilyGoogleGemini  = "google-gemini"
+	ProviderFamilyGitHubCopilot = "github-copilot"
+)
+
+const (
+	JudgeFamilyRelationUnknown          = "unknown"
+	JudgeFamilyRelationSameAsAll        = "same_as_all"
+	JudgeFamilyRelationSameAsSome       = "same_as_some"
+	JudgeFamilyRelationDifferentFromAll = "different_from_all"
+)
+
 type BackendSpec struct {
-	Name          string
-	Executable    string
-	DefaultModel  string
-	Optional      bool
-	PromptFlavor  string
+	Name         string
+	Executable   string
+	DefaultModel string
+	Optional     bool
+	PromptFlavor string
+	// Family is provider/catalog metadata, not verified underlying model lineage.
+	Family        string
 	SupportsBuild bool
 }
 
@@ -62,10 +79,10 @@ type ScopeCapabilities struct {
 }
 
 var backendCatalog = []BackendSpec{
-	{Name: "claude", Executable: "claude", DefaultModel: modeldefaults.ClaudeSonnet, PromptFlavor: PromptFlavorClaude, SupportsBuild: true},
-	{Name: "codex", Executable: "codex", DefaultModel: modeldefaults.CodexDefault, PromptFlavor: PromptFlavorCodex, SupportsBuild: true},
-	{Name: "gemini", Executable: "gemini", DefaultModel: modeldefaults.GeminiDefault, Optional: true, PromptFlavor: PromptFlavorGeneric, SupportsBuild: true},
-	{Name: "copilot", Executable: "copilot", DefaultModel: modeldefaults.CopilotDefault, Optional: true, PromptFlavor: PromptFlavorGeneric, SupportsBuild: true},
+	{Name: "claude", Executable: "claude", DefaultModel: modeldefaults.ClaudeSonnet, PromptFlavor: PromptFlavorClaude, Family: ProviderFamilyAnthropic, SupportsBuild: true},
+	{Name: "codex", Executable: "codex", DefaultModel: modeldefaults.CodexDefault, PromptFlavor: PromptFlavorCodex, Family: ProviderFamilyOpenAI, SupportsBuild: true},
+	{Name: "gemini", Executable: "gemini", DefaultModel: modeldefaults.GeminiDefault, Optional: true, PromptFlavor: PromptFlavorGeneric, Family: ProviderFamilyGoogleGemini, SupportsBuild: true},
+	{Name: "copilot", Executable: "copilot", DefaultModel: modeldefaults.CopilotDefault, Optional: true, PromptFlavor: PromptFlavorGeneric, Family: ProviderFamilyGitHubCopilot, SupportsBuild: true},
 }
 
 func KnownBackends() []BackendSpec {
@@ -122,6 +139,46 @@ func PromptFlavor(name string) string {
 		return spec.PromptFlavor
 	}
 	return PromptFlavorGeneric
+}
+
+func FamilyForBackend(name string) string {
+	if spec, ok := Backend(name); ok && spec.Family != "" {
+		return spec.Family
+	}
+	return ProviderFamilyUnknown
+}
+
+func SameBackendFamily(aBackend, bBackend string) bool {
+	aFamily := FamilyForBackend(aBackend)
+	bFamily := FamilyForBackend(bBackend)
+	if aFamily == ProviderFamilyUnknown || bFamily == ProviderFamilyUnknown {
+		return false
+	}
+	return aFamily == bFamily
+}
+
+func JudgeFamilyRelation(judgeBackend string, providerBackends []string) string {
+	judgeFamily := FamilyForBackend(judgeBackend)
+	if judgeFamily == ProviderFamilyUnknown || len(providerBackends) == 0 {
+		return JudgeFamilyRelationUnknown
+	}
+	matches := 0
+	for _, backend := range providerBackends {
+		family := FamilyForBackend(backend)
+		if family == ProviderFamilyUnknown {
+			return JudgeFamilyRelationUnknown
+		}
+		if family == judgeFamily {
+			matches++
+		}
+	}
+	if matches == len(providerBackends) {
+		return JudgeFamilyRelationSameAsAll
+	}
+	if matches > 0 {
+		return JudgeFamilyRelationSameAsSome
+	}
+	return JudgeFamilyRelationDifferentFromAll
 }
 
 type DefaultPairResolution struct {

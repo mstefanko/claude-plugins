@@ -40,6 +40,104 @@ func TestProviderCatalog(t *testing.T) {
 	}
 }
 
+func TestProviderFamilyMetadata(t *testing.T) {
+	expected := map[string]string{
+		"claude":  ProviderFamilyAnthropic,
+		"codex":   ProviderFamilyOpenAI,
+		"gemini":  ProviderFamilyGoogleGemini,
+		"copilot": ProviderFamilyGitHubCopilot,
+	}
+	if len(KnownBackends()) != len(expected) {
+		t.Fatalf("expected family metadata for every known backend")
+	}
+	for backend, family := range expected {
+		if got := FamilyForBackend(backend); got != family {
+			t.Fatalf("FamilyForBackend(%q) = %q, want %q", backend, got, family)
+		}
+		spec, ok := Backend(backend)
+		if !ok {
+			t.Fatalf("Backend(%q) not found", backend)
+		}
+		if spec.Family != family {
+			t.Fatalf("Backend(%q).Family = %q, want %q", backend, spec.Family, family)
+		}
+	}
+	if got := FamilyForBackend("unknown"); got != ProviderFamilyUnknown {
+		t.Fatalf("unknown family = %q, want %q", got, ProviderFamilyUnknown)
+	}
+	if !SameBackendFamily("claude", "claude") {
+		t.Fatalf("same backend should have same family")
+	}
+	if SameBackendFamily("claude", "codex") {
+		t.Fatalf("claude and codex should not have same family")
+	}
+	if SameBackendFamily("claude", "missing") {
+		t.Fatalf("known and unknown families should not compare equal")
+	}
+	if SameBackendFamily("missing-a", "missing-b") {
+		t.Fatalf("unknown families should not compare equal")
+	}
+
+	backends := KnownBackends()
+	backends[0].Family = "mutated"
+	if got := FamilyForBackend("claude"); got != ProviderFamilyAnthropic {
+		t.Fatalf("KnownBackends mutation changed catalog family to %q", got)
+	}
+}
+
+func TestJudgeFamilyRelation(t *testing.T) {
+	cases := []struct {
+		name      string
+		judge     string
+		providers []string
+		want      string
+	}{
+		{
+			name:      "same as all",
+			judge:     "claude",
+			providers: []string{"claude", "claude"},
+			want:      JudgeFamilyRelationSameAsAll,
+		},
+		{
+			name:      "same as some",
+			judge:     "claude",
+			providers: []string{"claude", "codex"},
+			want:      JudgeFamilyRelationSameAsSome,
+		},
+		{
+			name:      "different from all",
+			judge:     "claude",
+			providers: []string{"codex", "gemini"},
+			want:      JudgeFamilyRelationDifferentFromAll,
+		},
+		{
+			name:      "unknown judge",
+			judge:     "missing",
+			providers: []string{"claude", "codex"},
+			want:      JudgeFamilyRelationUnknown,
+		},
+		{
+			name:      "unknown provider",
+			judge:     "claude",
+			providers: []string{"claude", "missing"},
+			want:      JudgeFamilyRelationUnknown,
+		},
+		{
+			name:      "no providers",
+			judge:     "claude",
+			providers: nil,
+			want:      JudgeFamilyRelationUnknown,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := JudgeFamilyRelation(tc.judge, tc.providers); got != tc.want {
+				t.Fatalf("JudgeFamilyRelation(%q, %#v) = %q, want %q", tc.judge, tc.providers, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestScopeCapabilitiesFromHelp(t *testing.T) {
 	claude := ScopeCapabilitiesFromHelp("claude", "--allowedTools --disallowed-tools --tools --permission-mode --output-last-message")
 	if !claude.Available || !claude.Supports["allowed_tools"] || !claude.Supports["disallowed_tools"] || !claude.Supports["tools"] || !claude.Supports["permission_mode"] || !claude.Supports["output_last_message"] {
