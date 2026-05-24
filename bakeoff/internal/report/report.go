@@ -94,12 +94,10 @@ func RenderEscalation(wo *workorder.WorkOrder, decision map[string]any, addedFin
 	lines = append(lines, "- Mode: `"+jsonutil.StringValue(decision["escalation_mode"])+"` ("+escalationModeLabel(jsonutil.StringValue(decision["escalation_mode"]))+")")
 	lines = append(lines, "- Added provider: `"+jsonutil.StringValue(decision["added_provider"])+"`")
 	lines = append(lines, "- Source providers: `"+joinList(decision["source_providers"], "`, `")+"`")
-	if jsonutil.StringValue(decision["escalation_mode"]) != "independent" {
-		lines = append(lines, "- Decision impact: advisory only; this mode does not replace the source winner.")
-	}
-	if jsonutil.StringValue(decision["selection_basis"]) == "escalation_synthesis" {
-		lines = append(lines, "- Selection basis: `escalation_synthesis`; this is one synthesis pass, not position-swapped judging.")
-	}
+	lines = append(lines, escalationAdvisoryImpactLines(
+		jsonutil.StringValue(decision["escalation_mode"]),
+		jsonutil.StringValue(decision["selection_basis"]),
+	)...)
 	lines = append(lines, "")
 	lines = append(lines, renderEscalationPayload(decision, addedFinal, disputePacket)...)
 	lines = append(lines, caveats(decision)...)
@@ -126,7 +124,7 @@ func renderEscalationAnswer(decision map[string]any, opts EscalationRenderOption
 		lines = append(lines, "- Source decision effect: `"+effect+"`")
 	}
 	if confidence != "" {
-		lines = append(lines, "- Confidence: `"+confidence+"`")
+		lines = append(lines, selectorStrengthLine(confidence))
 	}
 	if winner := jsonutil.StringValue(decision["canonical_winner"]); winner != "" {
 		lines = append(lines, "- Escalation winner: `"+winner+"`")
@@ -150,7 +148,7 @@ func renderEscalationAnswer(decision map[string]any, opts EscalationRenderOption
 		lines = append(lines, "- Recommended action: `"+action+"`")
 	}
 	if opts.RunID != "" {
-		lines = append(lines, "- Next: `"+ledger.BakeoffShowCommand(opts.RunID, opts.OutDir, "")+"`")
+		lines = append(lines, "- "+compactNextStep(opts.RunID, opts.OutDir))
 	}
 	lines = append(lines, "")
 	return lines
@@ -173,7 +171,7 @@ func renderEscalationPayload(decision map[string]any, addedFinal map[string]any,
 
 func renderWitnessAssessment(decision map[string]any) []string {
 	assessment, _ := decision["assessment"].(map[string]any)
-	lines := []string{"## Witness Assessment", "", "This result is advisory and does not select a new winner.", ""}
+	lines := []string{"## Witness Assessment", "", advisoryOnlyNote(), ""}
 	lines = append(lines, "- Assessment: `"+jsonutil.StringValue(assessment["assessment"])+"`")
 	lines = append(lines, "- Would change outcome: `"+strings.ToLower(fmt.Sprintf("%v", jsonutil.BoolValue(assessment["would_change_outcome"])))+"`")
 	lines = append(lines, "", "### Material Errors", "")
@@ -188,7 +186,7 @@ func renderWitnessAssessment(decision map[string]any) []string {
 
 func renderDisputeAssessment(decision map[string]any, packet map[string]any) []string {
 	dispute, _ := decision["dispute"].(map[string]any)
-	lines := []string{"## Dispute Assessment", "", "This result is advisory and does not select a new winner.", ""}
+	lines := []string{"## Dispute Assessment", "", advisoryOnlyNote(), ""}
 	lines = append(lines, "- Outcome effect: `"+jsonutil.StringValue(dispute["outcome_effect"])+"`")
 	if points := jsonutil.ListValue(packet["points"]); len(points) > 0 {
 		lines = append(lines, "- Dispute points checked: `"+fmt.Sprintf("%d", len(points))+"`")
@@ -302,7 +300,7 @@ func renderOutcome(wo *workorder.WorkOrder, decision map[string]any, workerResul
 		}
 	}
 	if opts.RunID != "" {
-		lines = append(lines, "Next: `"+ledger.BakeoffShowCommand(opts.RunID, opts.OutDir, "")+"`")
+		lines = append(lines, compactNextStep(opts.RunID, opts.OutDir))
 	}
 	lines = append(lines, "")
 	return lines
@@ -1083,6 +1081,33 @@ func firstNonEmptyListSummary(groups ...[]any) string {
 		return fmt.Sprintf("%s (+%d more)", deterministicItemText(group[0]), len(group)-1)
 	}
 	return "none reported"
+}
+
+// advisoryOnlyNote is the standard opening phrase for advisory-mode assessment sections.
+func advisoryOnlyNote() string {
+	return "This result is advisory and does not select a new winner."
+}
+
+// compactNextStep returns the formatted next-step run command line (no bullet prefix).
+func compactNextStep(runID, outDir string) string {
+	return "Next: `" + ledger.BakeoffShowCommand(runID, outDir, "") + "`"
+}
+
+// selectorStrengthLine returns the confidence bullet for an advisory escalation answer.
+func selectorStrengthLine(confidence string) string {
+	return "- Confidence: `" + confidence + "`"
+}
+
+// escalationAdvisoryImpactLines returns advisory decision-impact bullet lines for non-independent escalation modes.
+func escalationAdvisoryImpactLines(mode, selectionBasis string) []string {
+	var lines []string
+	if mode != "independent" {
+		lines = append(lines, "- Decision impact: advisory only; this mode does not replace the source winner.")
+	}
+	if selectionBasis == "escalation_synthesis" {
+		lines = append(lines, "- Selection basis: `escalation_synthesis`; this is one synthesis pass, not position-swapped judging.")
+	}
+	return lines
 }
 
 func escalationModeLabel(mode string) string {

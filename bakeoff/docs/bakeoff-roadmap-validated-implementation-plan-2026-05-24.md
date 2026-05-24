@@ -373,6 +373,15 @@ Implementation details:
   - `internal/report/report_test.go`
   - `internal/commands/buildcmd/report.go`
   - `internal/commands/buildcmd/*_test.go` where build report fixtures live
+- Slice 0 report prep is now the intended base. The Bakeoff run
+  `2026-05-24-60d8` selected the `claude` patch and added these local helper
+  seams:
+  - `internal/report/report.go`: `advisoryOnlyNote`, `compactNextStep`,
+    `selectorStrengthLine`, and `escalationAdvisoryImpactLines`.
+  - `internal/commands/buildcmd/report.go`: `buildNextStep` and
+    `winnerHandoffAdvisoryLines`.
+  - Reuse or narrowly extend these helpers; do not start another broad report
+    rewrite.
 - Use existing `decision.json` fields:
   - `mode`
   - `decision_kind`
@@ -383,6 +392,16 @@ Implementation details:
   - `stalled_at`
   - `judge_passes`
   - `caveats`
+- Add one compact selector/advisory block per renderer:
+  - In research reports, render it after `renderOutcome` and before
+    `decisionAudit`. Preserve the existing failed-judge status banner that
+    currently appears before outcome.
+  - In build reports, render it inside the top outcome area after the raw
+    `Selection basis` / verifier-gate lines and before source context or
+    baseline verification. Do not print a second `Selection basis:` line.
+  - In escalation reports, prefer the existing answer/escalation area and
+    `escalationAdvisoryImpactLines`; do not add a second advisory block that
+    repeats the same claim.
 - Add categorical labels, not numeric confidence:
   - `gate`
   - `metric`
@@ -391,13 +410,38 @@ Implementation details:
   - `union/dedupe`
   - `advisory witness`
   - `focused dispute`
+  - `fresh third answer`
   - `unresolved`
+- Use this initial derivation:
+  - Build `selection_basis == "gate"` -> `gate`.
+  - Build `selection_basis == "metric"` -> `metric`.
+  - Build `selection_basis == "judge"` -> `judge-only`; copy must say the
+    winner depended on LLM preference after gates/metrics did not select a
+    winner, and is weaker than gate or metric evidence.
+  - Build `selection_basis == "identical_patch"` or `selection_basis == "none"`
+    -> `unresolved`, with `stalled_at` and caveats carrying the specific reason.
+  - Research compare/analyze `decision_kind == "pick_winner"` with completed
+    judge passes -> `swapped judge`.
+  - Research compare/analyze `decision_kind == "consensus"` -> `swapped judge`,
+    but copy should say the stable result is agreement, not a winner.
+  - Research gather `decision_kind == "structured_union"` -> `union/dedupe`.
+  - Research `single_provider_only`, `both_failed`, `provider_union_only`,
+    `judge_failed`, or `tie` -> `unresolved`; copy should avoid implying a
+    two-provider selector succeeded.
+  - Escalation `escalation_mode == "witness"` -> `advisory witness`.
+  - Escalation `escalation_mode == "dispute"` -> `focused dispute`.
+  - Escalation `escalation_mode == "independent"` with
+    `selection_basis == "escalation_synthesis"` -> `fresh third answer`; keep
+    the existing copy that this is one synthesis pass, not position-swapped
+    judging.
 - Add judge-only degraded confidence copy:
   - weaker than gate/metric evidence;
   - still useful as preference evidence;
   - not equal to executed verifier evidence.
 - Add provider-authored tests reminder in build reports near test/probe listings:
   provider-authored tests are supporting evidence, not selector truth.
+- Keep each selector/advisory block to 3-5 short lines. The block should explain
+  evidence type and decision effect, not assert calibrated probability.
 
 Risk and concerns:
 
@@ -418,15 +462,25 @@ Validation:
   - judge winner;
   - judge failure;
   - tie/unresolved;
+  - single-provider-only partial result;
   - gather union;
   - witness advisory;
   - dispute advisory;
+  - independent/fresh-third-answer synthesis;
   - provider-authored tests.
+- Build report tests should assert:
+  - `Selection basis:` still appears at most once;
+  - `selection_basis == "judge"` gets degraded-confidence copy;
+  - no copy suggests build `--judge-only` rerun is supported;
+  - provider-authored tests/probes are described as supporting evidence only.
+- No production measurement is required before this slice. The measurement gates
+  apply to later policy changes, not categorical report rendering.
 
 Open questions:
 
-- Exact label for research compare/analyze stable judge: `swapped judge` versus
-  `stable judge`. Default: `swapped judge`, because the bias control matters.
+- Whether helper names from Slice 0 should be kept verbatim or renamed while
+  adding the real selector taxonomy. Default: keep existing names unless a local
+  rename makes the selector helper clearer without increasing the diff.
 
 ## Slice 5: Post-Run Guidance, Stop-Here, Triage Freshness, And Bundle Guidance
 

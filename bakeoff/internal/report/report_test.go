@@ -435,6 +435,107 @@ func TestRenderEscalationWitnessStructuredItems(t *testing.T) {
 	}
 }
 
+func TestAdvisoryOnlyNote(t *testing.T) {
+	note := advisoryOnlyNote()
+	if note != "This result is advisory and does not select a new winner." {
+		t.Fatalf("unexpected advisory note: %q", note)
+	}
+}
+
+func TestSelectorStrengthLine(t *testing.T) {
+	line := selectorStrengthLine("high")
+	if line != "- Confidence: `high`" {
+		t.Fatalf("unexpected selector strength line: %q", line)
+	}
+}
+
+func TestEscalationAdvisoryImpactLines(t *testing.T) {
+	cases := []struct {
+		mode           string
+		selectionBasis string
+		wantCount      int
+		wantSubstr     []string
+		wantAbsent     []string
+	}{
+		{
+			mode: "independent", selectionBasis: "",
+			wantCount: 0,
+		},
+		{
+			mode: "witness", selectionBasis: "",
+			wantCount: 1, wantSubstr: []string{"advisory only"},
+		},
+		{
+			mode: "witness", selectionBasis: "escalation_synthesis",
+			wantCount: 2, wantSubstr: []string{"advisory only", "one synthesis pass"},
+		},
+		{
+			mode: "independent", selectionBasis: "escalation_synthesis",
+			wantCount: 1, wantSubstr: []string{"one synthesis pass"}, wantAbsent: []string{"advisory only"},
+		},
+	}
+	for _, tc := range cases {
+		lines := escalationAdvisoryImpactLines(tc.mode, tc.selectionBasis)
+		if len(lines) != tc.wantCount {
+			t.Errorf("mode=%q basis=%q: want %d lines, got %d: %v", tc.mode, tc.selectionBasis, tc.wantCount, len(lines), lines)
+		}
+		joined := strings.Join(lines, "\n")
+		for _, sub := range tc.wantSubstr {
+			if !strings.Contains(joined, sub) {
+				t.Errorf("mode=%q basis=%q: missing %q in %v", tc.mode, tc.selectionBasis, sub, lines)
+			}
+		}
+		for _, absent := range tc.wantAbsent {
+			if strings.Contains(joined, absent) {
+				t.Errorf("mode=%q basis=%q: unexpected %q in %v", tc.mode, tc.selectionBasis, absent, lines)
+			}
+		}
+	}
+}
+
+func TestAdvisoryHelpersUsedInWitnessAndDisputeReports(t *testing.T) {
+	base := map[string]any{
+		"source_mode":      "compare",
+		"source_decision":  map[string]any{"decision_kind": "pick_winner", "canonical_winner": "claude"},
+		"source_providers": []any{"claude", "codex"},
+		"added_provider":   "gemini",
+		"canonical_winner": nil,
+		"selection_basis":  "",
+	}
+
+	for _, mode := range []string{"witness", "dispute"} {
+		decision := map[string]any{}
+		for k, v := range base {
+			decision[k] = v
+		}
+		decision["escalation_mode"] = mode
+		if mode == "witness" {
+			decision["decision_kind"] = "escalation_advisory_supported"
+			decision["assessment"] = map[string]any{
+				"assessment": "supported", "would_change_outcome": false,
+				"material_errors": []any{}, "missed_material": []any{}, "triage_concerns": []any{},
+			}
+		} else {
+			decision["decision_kind"] = "escalation_advisory_supported"
+			decision["dispute"] = map[string]any{
+				"outcome_effect":  "no_material_change",
+				"resolved_points": []any{}, "unresolved_points": []any{}, "new_evidence": []any{},
+			}
+		}
+		text := RenderEscalation(
+			&workorder.WorkOrder{ID: "sample", Type: "compare"},
+			decision, nil, nil,
+			EscalationRenderOptions{SourceRunID: "source"},
+		)
+		if !strings.Contains(text, advisoryOnlyNote()) {
+			t.Errorf("mode=%q: advisory note missing from report", mode)
+		}
+		if !strings.Contains(text, "advisory only") {
+			t.Errorf("mode=%q: advisory impact line missing from report", mode)
+		}
+	}
+}
+
 func TestRenderKnownGenericItemsPreserveNonEscalationOutput(t *testing.T) {
 	text := Render(
 		&workorder.WorkOrder{ID: "sample", Type: "compare"},

@@ -36,7 +36,7 @@ func renderBuildReport(wo *workorder.WorkOrder, runID string, outDir string, run
 	}
 	lines = append(lines, "Verifier gates: "+buildVerifierGateSummary(baseline, runs))
 	if runID != "" {
-		lines = append(lines, "Next: `"+ledger.BakeoffShowCommand(runID, outDir, "")+"`")
+		lines = append(lines, buildNextStep(runID, outDir))
 	}
 	if len(diagnostics.SourceWarnings) > 0 {
 		lines = append(lines, "", "## Source Context", "")
@@ -221,9 +221,7 @@ func renderBuildReport(wo *workorder.WorkOrder, runID string, outDir string, run
 	}
 	if winner, _ := decision["canonical_winner"].(string); winner != "" {
 		lines = append(lines, "## Winner Handoff", "", "Winner: `"+winner+"`")
-		lines = append(lines, "Checkpoint: Bakeoff selected this exact provider patch and has not applied it.")
-		lines = append(lines, "Use this report and the selected patch artifact as handoff material for a fresh session before any repository changes.")
-		lines = append(lines, "Post-run edits, synthesis, or reimplementation are outside this bakeoff decision. Treat any such result as a derived patch and rerun verification before citing it as ready.")
+		lines = append(lines, winnerHandoffAdvisoryLines()...)
 		if rationale := jsonutil.ListValue(decision["judge_rationale"]); len(rationale) > 0 && jsonutil.StringValue(decision["selection_basis"]) == "judge" {
 			lines = append(lines, "Why: "+fmt.Sprint(rationale[0]))
 		}
@@ -370,4 +368,18 @@ func providerRunByID(runs []providerRun, id string) *providerRun {
 		}
 	}
 	return nil
+}
+
+// buildNextStep returns the formatted next-step run command line for a build report.
+func buildNextStep(runID, outDir string) string {
+	return "Next: `" + ledger.BakeoffShowCommand(runID, outDir, "") + "`"
+}
+
+// winnerHandoffAdvisoryLines returns the standard advisory block explaining patch handoff semantics.
+func winnerHandoffAdvisoryLines() []string {
+	return []string{
+		"Checkpoint: Bakeoff selected this exact provider patch and has not applied it.",
+		"Use this report and the selected patch artifact as handoff material for a fresh session before any repository changes.",
+		"Post-run edits, synthesis, or reimplementation are outside this bakeoff decision. Treat any such result as a derived patch and rerun verification before citing it as ready.",
+	}
 }
