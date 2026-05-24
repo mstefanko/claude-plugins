@@ -51,7 +51,8 @@ func buildSummary(repo buildworkspace.Repository, runDir string, runID string, o
 		"artifacts":        buildArtifactPaths(runDir),
 		"next":             ledger.BakeoffShowCommand(runID, outDir, ""),
 	}
-	if selectedPatch, ok := selectedBuildPatchPath(runDir, decision); ok {
+	if selectedPatch, ok := selectedBuildPatchPath(decision); ok {
+		out["selected_patch_status"] = "selected"
 		out["selected_patch_path"] = selectedPatch
 	} else {
 		out["selected_patch_status"] = "no selected patch"

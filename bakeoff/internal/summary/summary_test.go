@@ -67,6 +67,7 @@ func TestBuildResearchIncludesStalledAt(t *testing.T) {
 
 func TestBuildResearchRecommendsJudgeOnlyForResearchExit4WithSucceededProvidersAndFailedJudge(t *testing.T) {
 	runDir := t.TempDir()
+	writeSummaryJSON(t, filepath.Join(runDir, "work-order.json"), summaryWorkOrder("gather", "claude", "codex"))
 	writeSummaryJSON(t, filepath.Join(runDir, "judge", "status.json"), map[string]any{"status": "exit_error"})
 
 	got := BuildResearch(runDir, "run-1", "runs", map[string]any{
@@ -88,8 +89,29 @@ func TestBuildResearchRecommendsJudgeOnlyForResearchExit4WithSucceededProvidersA
 	}
 }
 
+func TestBuildResearchRecommendsJudgeOnlyWhenJudgeStatusMissingAfterAttempt(t *testing.T) {
+	runDir := t.TempDir()
+	writeSummaryJSON(t, filepath.Join(runDir, "work-order.json"), summaryWorkOrder("gather", "claude", "codex"))
+
+	got := BuildResearch(runDir, "run-1", "runs", map[string]any{
+		"mode":            "gather",
+		"decision_kind":   "provider_union_only",
+		"judge_ran":       true,
+		"judge_completed": false,
+		"provider_statuses": map[string]any{
+			"claude": map[string]any{"status": "ok"},
+			"codex":  map[string]any{"status": "ok"},
+		},
+	}, nil, 4, false, nil)
+
+	if got.Next != "bakeoff rerun run-1 --judge-only" {
+		t.Fatalf("next = %q", got.Next)
+	}
+}
+
 func TestBuildResearchSuppressesJudgeOnlyWhenAProviderFailed(t *testing.T) {
 	runDir := t.TempDir()
+	writeSummaryJSON(t, filepath.Join(runDir, "work-order.json"), summaryWorkOrder("gather", "claude", "codex"))
 	writeSummaryJSON(t, filepath.Join(runDir, "judge", "status.json"), map[string]any{"status": "exit_error"})
 	writeSummaryFile(t, filepath.Join(runDir, "report.md"), "prose says bakeoff rerun run-1 --judge-only\n")
 
@@ -114,6 +136,7 @@ func TestBuildResearchSuppressesJudgeOnlyWhenAProviderFailed(t *testing.T) {
 
 func TestBuildResearchSuppressesJudgeOnlyForBuildMode(t *testing.T) {
 	runDir := t.TempDir()
+	writeSummaryJSON(t, filepath.Join(runDir, "work-order.json"), summaryWorkOrder("build", "claude", "codex"))
 	writeSummaryJSON(t, filepath.Join(runDir, "judge", "status.json"), map[string]any{"status": "exit_error"})
 
 	got := BuildResearch(runDir, "run-1", "runs", map[string]any{
@@ -135,9 +158,11 @@ func TestBuildResearchSuppressesJudgeOnlyForBuildMode(t *testing.T) {
 	}
 }
 
-func TestBuildResearchSuppressesJudgeOnlyWhenJudgeSucceeded(t *testing.T) {
+func TestBuildResearchIgnoresReportMarkdownWhenStructuredJudgeSucceeded(t *testing.T) {
 	runDir := t.TempDir()
+	writeSummaryJSON(t, filepath.Join(runDir, "work-order.json"), summaryWorkOrder("gather", "claude", "codex"))
 	writeSummaryJSON(t, filepath.Join(runDir, "judge", "status.json"), map[string]any{"status": "ok"})
+	writeSummaryFile(t, filepath.Join(runDir, "report.md"), "prose says bakeoff rerun run-1 --judge-only\n")
 
 	got := BuildResearch(runDir, "run-1", "runs", map[string]any{
 		"mode":            "gather",
@@ -156,6 +181,80 @@ func TestBuildResearchSuppressesJudgeOnlyWhenJudgeSucceeded(t *testing.T) {
 	if len(got.NextAlternatives) != 0 {
 		t.Fatalf("next alternatives = %#v", got.NextAlternatives)
 	}
+}
+
+func TestBuildResearchRequiresAllDeclaredProvidersToSucceed(t *testing.T) {
+	runDir := t.TempDir()
+	writeSummaryJSON(t, filepath.Join(runDir, "work-order.json"), summaryWorkOrder("gather", "claude", "codex"))
+	writeSummaryJSON(t, filepath.Join(runDir, "judge", "status.json"), map[string]any{"status": "exit_error"})
+
+	got := BuildResearch(runDir, "run-1", "runs", map[string]any{
+		"mode":            "gather",
+		"decision_kind":   "provider_union_only",
+		"judge_ran":       true,
+		"judge_completed": false,
+		"provider_statuses": map[string]any{
+			"claude": map[string]any{"status": "ok"},
+		},
+	}, nil, 4, false, nil)
+
+	if got.Next != "bakeoff show run-1" {
+		t.Fatalf("next = %q", got.Next)
+	}
+}
+
+func summaryWorkOrder(mode string, providerIDs ...string) map[string]any {
+	providers := make([]any, 0, len(providerIDs))
+	for i, id := range providerIDs {
+		backend := "claude"
+		model := "sonnet"
+		if i == 1 {
+			backend = "codex"
+			model = "gpt-5.5"
+		}
+		providers = append(providers, map[string]any{
+			"id":      id,
+			"backend": backend,
+			"model":   model,
+			"scope":   "codebase",
+			"effort":  "high",
+		})
+	}
+	out := map[string]any{
+		"schema_version": 1,
+		"id":             "summary-test",
+		"type":           mode,
+		"goal":           "test summary routing",
+		"background":     "test",
+		"providers":      providers,
+		"judge": map[string]any{
+			"backend": "gemini",
+			"model":   "pro",
+			"effort":  "high",
+		},
+		"budgets": map[string]any{
+			"wall_clock_seconds":       60,
+			"max_output_bytes":         1000,
+			"heartbeat_seconds":        10,
+			"output_cap_grace_seconds": 10,
+			"max_output_overrun_bytes": 1000,
+		},
+		"scope_policy": map[string]any{"enforcement": "best_effort"},
+	}
+	if mode == "build" {
+		out["build"] = map[string]any{
+			"base_ref":        "HEAD",
+			"comparison_goal": "test",
+			"verify": []any{map[string]any{
+				"id":                 "test",
+				"kind":               "gate",
+				"argv":               []any{"true"},
+				"wall_clock_seconds": 5,
+				"max_output_bytes":   1000,
+			}},
+		}
+	}
+	return out
 }
 
 func writeSummaryJSON(t *testing.T, path string, value any) {

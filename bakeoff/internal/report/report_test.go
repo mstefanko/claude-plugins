@@ -568,7 +568,7 @@ func TestEscalationAdvisoryImpactLines(t *testing.T) {
 	}{
 		{
 			mode: "independent", selectionBasis: "",
-			wantCount: 0,
+			wantCount: 1, wantSubstr: []string{"fresh third answer"},
 		},
 		{
 			mode: "witness", selectionBasis: "",

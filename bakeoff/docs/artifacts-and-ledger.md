@@ -138,7 +138,10 @@ If there is a canonical winner, the selected handoff patch is:
 runs/<run-id>/providers/<winner>/build/diff.patch
 ```
 
-Bakeoff does not apply it.
+Inside `report.md` and `bakeoff build --json`, selected patch artifact paths are
+run-relative, for example `providers/<winner>/build/diff.patch`. Interactive
+terminal output may print the full path as an operator convenience. Bakeoff does
+not apply it.
 
 ## Manifest Verification
 

@@ -25,6 +25,9 @@ to rebuild the CLI from the updated source.
    go test ./...
    ```
 
+   Review [release notes](release-notes.md) before tagging so externally
+   visible CLI contract changes are called out.
+
 3. Optionally run a local archive smoke if GoReleaser is installed:
 
    ```bash

@@ -292,7 +292,7 @@ func finalizeBuildRun(ctx context.Context, f commands.Factory, opts *BuildOption
 		f.Streams().Printf("manifest: %s\n", filepath.Join(runDir, "manifest.json"))
 		f.Streams().Printf("report: %s\n", filepath.Join(runDir, "report.md"))
 		f.Streams().Printf("result: %s\n", buildResultLine(decision))
-		if selectedPatch, ok := selectedBuildPatchPath(runDir, decision); ok {
+		if selectedPatch, ok := selectedBuildPatchAbsolutePath(runDir, decision); ok {
 			f.Streams().Printf("selected patch: %s\n", selectedPatch)
 		} else {
 			f.Streams().Printf("selected patch: no selected patch\n")

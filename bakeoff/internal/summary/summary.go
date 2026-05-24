@@ -14,6 +14,7 @@ import (
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/ledger"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/runner"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/triage"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
 )
 
 var okStatuses = map[string]bool{runner.StatusOK: true, runner.StatusOKAfterFormatRetry: true}
@@ -300,9 +301,22 @@ func isResearchMode(mode string) bool {
 }
 
 func allProviderStatusesSucceeded(runDir string, decision map[string]any) bool {
-	statuses := providerStatusMapsFromDecision(decision)
+	statuses := providerStatusMapFromDecision(decision)
 	if len(statuses) == 0 {
-		statuses = providerStatusMapsFromArtifacts(runDir)
+		statuses = providerStatusMapFromArtifacts(runDir)
+	}
+	providerIDs := declaredProviderIDs(runDir)
+	if len(providerIDs) > 0 {
+		if len(statuses) != len(providerIDs) {
+			return false
+		}
+		for _, providerID := range providerIDs {
+			status, ok := statuses[providerID]
+			if !ok || !rawStatusSucceeded(status["status"]) {
+				return false
+			}
+		}
+		return true
 	}
 	if len(statuses) < 2 {
 		return false
@@ -315,36 +329,50 @@ func allProviderStatusesSucceeded(runDir string, decision map[string]any) bool {
 	return true
 }
 
-func providerStatusMapsFromDecision(decision map[string]any) []map[string]any {
+func providerStatusMapFromDecision(decision map[string]any) map[string]map[string]any {
 	raw, _ := valueFromMap(decision, "provider_statuses").(map[string]any)
 	if len(raw) == 0 {
 		return nil
 	}
-	statuses := make([]map[string]any, 0, len(raw))
-	for _, value := range raw {
+	statuses := make(map[string]map[string]any, len(raw))
+	for providerID, value := range raw {
 		if status, ok := value.(map[string]any); ok {
-			statuses = append(statuses, status)
+			statuses[providerID] = status
 		}
 	}
 	return statuses
 }
 
-func providerStatusMapsFromArtifacts(runDir string) []map[string]any {
+func providerStatusMapFromArtifacts(runDir string) map[string]map[string]any {
 	entries, err := os.ReadDir(filepath.Join(runDir, "providers"))
 	if err != nil {
 		return nil
 	}
-	statuses := []map[string]any{}
+	statuses := map[string]map[string]any{}
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
 		status, _ := readJSON(filepath.Join(runDir, "providers", entry.Name(), "status.json")).(map[string]any)
 		if status != nil {
-			statuses = append(statuses, status)
+			statuses[entry.Name()] = status
 		}
 	}
 	return statuses
+}
+
+func declaredProviderIDs(runDir string) []string {
+	wo, err := workorder.Load(filepath.Join(runDir, "work-order.json"))
+	if err != nil || wo == nil {
+		return nil
+	}
+	ids := make([]string, 0, len(wo.Providers))
+	for _, provider := range wo.Providers {
+		if provider.ID != "" {
+			ids = append(ids, provider.ID)
+		}
+	}
+	return ids
 }
 
 func rawStatusSucceeded(raw any) bool {
@@ -352,7 +380,7 @@ func rawStatusSucceeded(raw any) bool {
 }
 
 func judgeStatusFailedOrIncomplete(judge JudgeSummary) bool {
-	if judge.Status == runner.StatusOK || judge.Status == "not_run" || judge.RawStatus == "missing_status" {
+	if judge.Status == runner.StatusOK || judge.Status == "not_run" {
 		return false
 	}
 	return judge.Status == "failed" || judge.Status == "warn"

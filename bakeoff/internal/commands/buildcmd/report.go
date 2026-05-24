@@ -30,7 +30,7 @@ func renderBuildReport(wo *workorder.WorkOrder, runID string, outDir string, run
 		lines = append(lines, "Result: `"+jsonutil.StringValue(decision["decision_kind"])+"`")
 	}
 	lines = append(lines, "Selection basis: `"+jsonutil.StringValue(decision["selection_basis"])+"`")
-	if selectedPatch, ok := selectedBuildPatchPath(runDir, decision); ok {
+	if selectedPatch, ok := selectedBuildPatchPath(decision); ok {
 		lines = append(lines, "Selected patch: `"+selectedPatch+"`")
 	} else {
 		lines = append(lines, "Selected patch: no selected patch")
@@ -229,7 +229,7 @@ func renderBuildReport(wo *workorder.WorkOrder, runID string, outDir string, run
 		}
 		if run := providerRunByID(runs, winner); run != nil {
 			if run.Capture != nil {
-				if selectedPatch, ok := selectedBuildPatchPath(runDir, decision); ok {
+				if selectedPatch, ok := selectedBuildPatchPath(decision); ok {
 					lines = append(lines, "Selected patch artifact: `"+selectedPatch+"`")
 				}
 				lines = append(lines, "Diffstat artifact: `"+filepath.Join("providers", winner, "build", "diffstat.txt")+"`")
@@ -443,12 +443,20 @@ func providerRunByID(runs []providerRun, id string) *providerRun {
 	return nil
 }
 
-func selectedBuildPatchPath(runDir string, decision map[string]any) (string, bool) {
+func selectedBuildPatchPath(decision map[string]any) (string, bool) {
 	winner := strings.TrimSpace(jsonutil.StringValue(decision["canonical_winner"]))
 	if winner == "" {
 		return "", false
 	}
-	return filepath.Join(runDir, "providers", winner, "build", "diff.patch"), true
+	return filepath.Join("providers", winner, "build", "diff.patch"), true
+}
+
+func selectedBuildPatchAbsolutePath(runDir string, decision map[string]any) (string, bool) {
+	path, ok := selectedBuildPatchPath(decision)
+	if !ok {
+		return "", false
+	}
+	return filepath.Join(runDir, path), true
 }
 
 // buildNextStep returns the formatted next-step run command line for a build report.

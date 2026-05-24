@@ -1191,7 +1191,7 @@ func selectorLabelLine(label string) string {
 	return "- Selector label: `" + label + "`"
 }
 
-// escalationAdvisoryImpactLines returns advisory decision-impact bullet lines for non-independent escalation modes.
+// escalationAdvisoryImpactLines returns selector and advisory decision-impact bullet lines for escalation modes.
 func escalationAdvisoryImpactLines(mode, selectionBasis string) []string {
 	var lines []string
 	if label := escalationSelectorLabel(mode, selectionBasis); label != "" {
@@ -1213,9 +1213,7 @@ func escalationSelectorLabel(mode, selectionBasis string) string {
 	case "dispute":
 		return "focused dispute"
 	case "independent":
-		if selectionBasis == "escalation_synthesis" {
-			return "fresh third answer"
-		}
+		return "fresh third answer"
 	}
 	return ""
 }

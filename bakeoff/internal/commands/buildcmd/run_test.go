@@ -212,7 +212,7 @@ func TestRenderBuildReportOutcomeAndSingleSelectionBasis(t *testing.T) {
 		"Decision: `pick_winner`",
 		"Winner: `claude`",
 		"Selection basis: `metric`",
-		"Selected patch: `" + filepath.Join(runDir, "providers", "claude", "build", "diff.patch") + "`",
+		"Selected patch: `providers/claude/build/diff.patch`",
 		"## Selector Confidence",
 		"- Selector label: `metric`",
 		"metric comparisons selected the winner under configured thresholds.",
@@ -526,7 +526,10 @@ func TestRunBuildMutatesIsolatedWorktreesAndCapturesPatches(t *testing.T) {
 	if !strings.Contains(out.String(), `"command": "build"`) || !strings.Contains(out.String(), `"winner": "claude"`) {
 		t.Fatalf("summary stdout missing build winner:\n%s", out.String())
 	}
-	if !strings.Contains(out.String(), `"selected_patch_path": "`+filepath.Join(runDir, "providers", "claude", "build", "diff.patch")+`"`) {
+	if !strings.Contains(out.String(), `"selected_patch_status": "selected"`) {
+		t.Fatalf("summary stdout missing selected patch status:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), `"selected_patch_path": "providers/claude/build/diff.patch"`) {
 		t.Fatalf("summary stdout missing selected patch path:\n%s", out.String())
 	}
 	if strings.Contains(out.String(), "--judge-only") {
@@ -541,7 +544,7 @@ func TestRunBuildMutatesIsolatedWorktreesAndCapturesPatches(t *testing.T) {
 		"Checkpoint: Bakeoff selected this exact provider patch and has not applied it.",
 		"Use this report and the selected patch artifact as handoff material for a fresh session",
 		"Post-run edits, synthesis, or reimplementation are outside this bakeoff decision.",
-		"Selected patch artifact: `" + filepath.Join(runDir, "providers", "claude", "build", "diff.patch") + "`",
+		"Selected patch artifact: `providers/claude/build/diff.patch`",
 		"score=1, unit=points, n=10, statistic=sample, method=fake metric",
 	} {
 		if !strings.Contains(reportText, want) {

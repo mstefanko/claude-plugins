@@ -482,6 +482,11 @@ These commands have `--json` output intended for scripts:
 
 JSON mode also implies quieter operation for run-style commands.
 
+For `bakeoff build --json`, `selected_patch_status` is always present.
+`selected_patch_path` is present only when `selected_patch_status` is
+`selected` and is relative to the run directory, for example
+`providers/claude/build/diff.patch`.
+
 ## Exit Codes
 
 | Exit | Meaning |
@@ -490,7 +495,7 @@ JSON mode also implies quieter operation for run-style commands.
 | `1` | Runtime, provider, verifier, or build failure. |
 | `2` | Usage, config, validation, or missing-input error. |
 | `3` | Completed run with unresolved judge disagreement. |
-| `4` | Decision incomplete: judge failed or did not converge. Research runs with successful providers can use `bakeoff rerun <run-id> --judge-only`; build runs have no selected patch unless `decision.json.canonical_winner` is non-null. |
+| `4` | Decision incomplete: judge failed or did not converge. Research runs with successful providers can use `bakeoff rerun <run-id> --judge-only`; build judge failures also use exit `4`, but build runs have no selected patch unless `decision.json.canonical_winner` is non-null. |
 | `130` | Interrupted. |
 
 Exit code `3` is a completed Bakeoff handoff. Inspect `decision.json` and
