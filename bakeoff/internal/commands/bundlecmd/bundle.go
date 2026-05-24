@@ -243,9 +243,5 @@ func defaultText(value string, fallback string) string {
 }
 
 func bundleWriteCommand(runID string, outDir string) string {
-	cmd := "bakeoff bundle " + runID
-	if outDir != "runs" {
-		cmd += " --out " + outDir
-	}
-	return cmd + " --write"
+	return ledger.BakeoffBundleCommand(runID, outDir, true)
 }

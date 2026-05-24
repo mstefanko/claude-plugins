@@ -190,11 +190,12 @@ func TestRenderBuildReportOutcomeAndSingleSelectionBasis(t *testing.T) {
 		"canonical_winner": "claude",
 		"selection_basis":  "metric",
 	}
+	runDir := filepath.Join(t.TempDir(), "run")
 	report := renderBuildReport(
 		&workorder.WorkOrder{ID: "build-report"},
 		"build-run",
 		"runs",
-		filepath.Join(t.TempDir(), "run"),
+		runDir,
 		decision,
 		buildverify.Result{GatesPassed: true},
 		[]providerRun{{
@@ -211,7 +212,7 @@ func TestRenderBuildReportOutcomeAndSingleSelectionBasis(t *testing.T) {
 		"Decision: `pick_winner`",
 		"Winner: `claude`",
 		"Selection basis: `metric`",
-		"Patch: `providers/claude/build/diff.patch`",
+		"Selected patch: `" + filepath.Join(runDir, "providers", "claude", "build", "diff.patch") + "`",
 		"## Selector Confidence",
 		"- Selector label: `metric`",
 		"metric comparisons selected the winner under configured thresholds.",
@@ -229,6 +230,41 @@ func TestRenderBuildReportOutcomeAndSingleSelectionBasis(t *testing.T) {
 	}
 	if strings.Index(report, "Verifier gates:") > strings.Index(report, "## Selector Confidence") || strings.Index(report, "## Selector Confidence") > strings.Index(report, "Next:") {
 		t.Fatalf("selector confidence should render after verifier gates and before next step:\n%s", report)
+	}
+	if strings.Contains(report, "--judge-only") {
+		t.Fatalf("build report should not recommend judge-only rerun:\n%s", report)
+	}
+}
+
+func TestRenderBuildReportNoSelectedPatchWhenCanonicalWinnerAbsent(t *testing.T) {
+	runDir := filepath.Join(t.TempDir(), "run")
+	report := renderBuildReport(
+		&workorder.WorkOrder{ID: "build-report"},
+		"build-run",
+		"runs",
+		runDir,
+		map[string]any{"decision_kind": "tie", "selection_basis": "none"},
+		buildverify.Result{GatesPassed: true},
+		[]providerRun{
+			{ID: "claude", WorkerResult: map[string]any{"status": "complete"}, Capture: &buildworkspace.CaptureResult{PatchBytes: 123}, Verify: buildverify.Result{GatesPassed: true}},
+			{ID: "codex", WorkerResult: map[string]any{"status": "complete"}, Capture: &buildworkspace.CaptureResult{PatchBytes: 456}, Verify: buildverify.Result{GatesPassed: true}},
+		},
+		nil,
+		buildDiagnostics{},
+	)
+	for _, want := range []string{
+		"Selected patch: no selected patch",
+		"- Candidate patch: `providers/claude/build/diff.patch`",
+		"- Candidate patch: `providers/codex/build/diff.patch`",
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing %q:\n%s", want, report)
+		}
+	}
+	for _, forbidden := range []string{"Selected patch: `", "--judge-only"} {
+		if strings.Contains(report, forbidden) {
+			t.Fatalf("report should not contain %q without a canonical winner:\n%s", forbidden, report)
+		}
 	}
 }
 
@@ -490,6 +526,12 @@ func TestRunBuildMutatesIsolatedWorktreesAndCapturesPatches(t *testing.T) {
 	if !strings.Contains(out.String(), `"command": "build"`) || !strings.Contains(out.String(), `"winner": "claude"`) {
 		t.Fatalf("summary stdout missing build winner:\n%s", out.String())
 	}
+	if !strings.Contains(out.String(), `"selected_patch_path": "`+filepath.Join(runDir, "providers", "claude", "build", "diff.patch")+`"`) {
+		t.Fatalf("summary stdout missing selected patch path:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "--judge-only") {
+		t.Fatalf("build summary should not recommend judge-only rerun:\n%s", out.String())
+	}
 	report, err := os.ReadFile(filepath.Join(runDir, "report.md"))
 	if err != nil {
 		t.Fatal(err)
@@ -499,7 +541,7 @@ func TestRunBuildMutatesIsolatedWorktreesAndCapturesPatches(t *testing.T) {
 		"Checkpoint: Bakeoff selected this exact provider patch and has not applied it.",
 		"Use this report and the selected patch artifact as handoff material for a fresh session",
 		"Post-run edits, synthesis, or reimplementation are outside this bakeoff decision.",
-		"Patch artifact: `providers/claude/build/diff.patch`",
+		"Selected patch artifact: `" + filepath.Join(runDir, "providers", "claude", "build", "diff.patch") + "`",
 		"score=1, unit=points, n=10, statistic=sample, method=fake metric",
 	} {
 		if !strings.Contains(reportText, want) {
@@ -909,6 +951,21 @@ func TestRunBuildJudgeDisagreementExitsThree(t *testing.T) {
 	if decision["stalled_at"] != "selection" {
 		t.Fatalf("stalled_at = %#v", decision["stalled_at"])
 	}
+	runDir := filepath.Join(outDir, "judge-disagree")
+	if !strings.Contains(out, `"selected_patch_status": "no selected patch"`) || strings.Contains(out, `"selected_patch_path"`) {
+		t.Fatalf("unresolved build summary should say no selected patch and omit selected_patch_path:\n%s", out)
+	}
+	report, readErr := os.ReadFile(filepath.Join(runDir, "report.md"))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	reportText := string(report)
+	if !strings.Contains(reportText, "Selected patch: no selected patch") {
+		t.Fatalf("unresolved build report should state no selected patch:\n%s", reportText)
+	}
+	if strings.Contains(reportText, "Selected patch: `") || strings.Contains(reportText, "--judge-only") {
+		t.Fatalf("unresolved build report should not include selected patch path or judge-only advice:\n%s", reportText)
+	}
 }
 
 func TestRunBuildJudgeFailureDoesNotResolveAsJudgeRun(t *testing.T) {
@@ -924,6 +981,12 @@ func TestRunBuildJudgeFailureDoesNotResolveAsJudgeRun(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected judge failure\nstdout:\n%s\nstderr:\n%s", out, errOut)
 	}
+	if !strings.Contains(out, `"exit_code": 4`) || !strings.Contains(out, `"status": "decision_incomplete"`) || !strings.Contains(out, `"selected_patch_status": "no selected patch"`) {
+		t.Fatalf("judge-failed summary should report exit 4 and no selected patch:\n%s", out)
+	}
+	if strings.Contains(out, `"selected_patch_path"`) || strings.Contains(out, "--judge-only") {
+		t.Fatalf("judge-failed summary should not contain selected_patch_path or judge-only advice:\n%s", out)
+	}
 	decision := readJSONFile(t, filepath.Join(outDir, "judge-fails", "decision.json"))
 	if decision["judge_ran"] != false || decision["selection_basis"] != "none" {
 		t.Fatalf("decision = %#v", decision)
@@ -934,6 +997,17 @@ func TestRunBuildJudgeFailureDoesNotResolveAsJudgeRun(t *testing.T) {
 	caveats, _ := decision["caveats"].([]any)
 	if len(caveats) == 0 || !strings.Contains(fmt.Sprint(caveats), "build judge failed") {
 		t.Fatalf("missing judge failure caveat: %#v", decision)
+	}
+	report, readErr := os.ReadFile(filepath.Join(outDir, "judge-fails", "report.md"))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	reportText := string(report)
+	if !strings.Contains(reportText, "Selected patch: no selected patch") {
+		t.Fatalf("judge-failed report should state no selected patch:\n%s", reportText)
+	}
+	if strings.Contains(reportText, "Selected patch: `") || strings.Contains(reportText, "--judge-only") {
+		t.Fatalf("judge-failed report should not include selected patch path or judge-only advice:\n%s", reportText)
 	}
 }
 

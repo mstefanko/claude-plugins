@@ -292,8 +292,10 @@ func finalizeBuildRun(ctx context.Context, f commands.Factory, opts *BuildOption
 		f.Streams().Printf("manifest: %s\n", filepath.Join(runDir, "manifest.json"))
 		f.Streams().Printf("report: %s\n", filepath.Join(runDir, "report.md"))
 		f.Streams().Printf("result: %s\n", buildResultLine(decision))
-		if winner, _ := decision["canonical_winner"].(string); winner != "" {
-			f.Streams().Printf("winner patch artifact: %s\n", filepath.Join(runDir, "providers", winner, "build", "diff.patch"))
+		if selectedPatch, ok := selectedBuildPatchPath(runDir, decision); ok {
+			f.Streams().Printf("selected patch: %s\n", selectedPatch)
+		} else {
+			f.Streams().Printf("selected patch: no selected patch\n")
 		}
 		f.Streams().Printf("next:   %s\n", ledger.BakeoffShowCommand(runID, opts.Out, ""))
 	}

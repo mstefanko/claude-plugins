@@ -58,26 +58,8 @@ func TestShowIncludesFailedTriageStderrTail(t *testing.T) {
 	}
 }
 
-func TestShowPrintsRelatedEscalationsAndSiblings(t *testing.T) {
-	root := t.TempDir()
-	outDir := filepath.Join(root, "runs")
-	writeShowRun(t, outDir, "source", "compare", map[string]any{"decision_kind": "pick_winner"}, map[string]any{"type": "compare"})
-	writeShowRun(t, outDir, "child-a", "compare", map[string]any{"decision_kind": "escalation_advisory_supported"}, map[string]any{
-		"type":            "escalation",
-		"source_run_id":   "source",
-		"source_type":     "compare",
-		"escalation_mode": "dispute",
-		"added_provider":  "gemini",
-	})
-	writeShowJSON(t, filepath.Join(outDir, "child-a", "triage", "status.json"), map[string]any{"status": "dry_run"})
-	writeShowRun(t, outDir, "child-b", "compare", map[string]any{"decision_kind": "escalation_advisory_challenged"}, map[string]any{
-		"type":            "escalation",
-		"source_run_id":   "source",
-		"source_type":     "compare",
-		"escalation_mode": "witness",
-		"added_provider":  "copilot",
-	})
-
+func TestShowSourceWithEscalationChildrenPrintsBundleHint(t *testing.T) {
+	outDir := writeShowEscalationFixture(t)
 	var out, errOut bytes.Buffer
 	err := runShow(context.Background(), showTestFactory{streams: output.NewStreams(&out, &errOut)}, &ShowOptions{
 		RunID: "source",
@@ -96,16 +78,23 @@ func TestShowPrintsRelatedEscalationsAndSiblings(t *testing.T) {
 			t.Fatalf("source show missing %q:\n%s", want, text)
 		}
 	}
+	wantHint := "bundle: bakeoff bundle source --out " + outDir
+	if got := countShowLine(text, wantHint); got != 1 {
+		t.Fatalf("source show bundle hint count = %d, want 1 for %q:\n%s", got, wantHint, text)
+	}
+}
 
-	out.Reset()
-	err = runShow(context.Background(), showTestFactory{streams: output.NewStreams(&out, &errOut)}, &ShowOptions{
+func TestShowEscalationChildWithSiblingsPrintsSourceBundleHint(t *testing.T) {
+	outDir := writeShowEscalationFixture(t)
+	var out, errOut bytes.Buffer
+	err := runShow(context.Background(), showTestFactory{streams: output.NewStreams(&out, &errOut)}, &ShowOptions{
 		RunID: "child-b",
 		Out:   outDir,
 	})
 	if err != nil {
 		t.Fatalf("runShow escalation returned error: %v", err)
 	}
-	text = out.String()
+	text := out.String()
 	for _, want := range []string{
 		"source run: source",
 		"sibling escalations:",
@@ -117,6 +106,27 @@ func TestShowPrintsRelatedEscalationsAndSiblings(t *testing.T) {
 	}
 	if strings.Contains(text, "child-b  witness") {
 		t.Fatalf("escalation show should not list itself as sibling:\n%s", text)
+	}
+	wantHint := "bundle: bakeoff bundle source --out " + outDir
+	if got := countShowLine(text, wantHint); got != 1 {
+		t.Fatalf("escalation show bundle hint count = %d, want 1 for %q:\n%s", got, wantHint, text)
+	}
+}
+
+func TestShowRunWithoutEscalationRelationsKeepsBaselineOutput(t *testing.T) {
+	outDir := filepath.Join(t.TempDir(), "runs")
+	writeShowRun(t, outDir, "solo", "compare", map[string]any{"decision_kind": "pick_winner"}, map[string]any{"type": "compare"})
+
+	var out, errOut bytes.Buffer
+	err := runShow(context.Background(), showTestFactory{streams: output.NewStreams(&out, &errOut)}, &ShowOptions{
+		RunID: "solo",
+		Out:   outDir,
+	})
+	if err != nil {
+		t.Fatalf("runShow returned error: %v", err)
+	}
+	if got, want := out.String(), "# solo\n"; got != want {
+		t.Fatalf("baseline show output changed:\nwant:\n%s\ngot:\n%s", want, got)
 	}
 }
 
@@ -171,6 +181,38 @@ func (showTestFactory) LookupProvider(name string) (string, error) {
 
 func (showTestFactory) Capabilities() *provider.CapabilityRegistry {
 	return provider.NewCapabilityRegistry(exec.LookPath)
+}
+
+func writeShowEscalationFixture(t *testing.T) string {
+	t.Helper()
+	outDir := filepath.Join(t.TempDir(), "runs")
+	writeShowRun(t, outDir, "source", "compare", map[string]any{"decision_kind": "pick_winner"}, map[string]any{"type": "compare"})
+	writeShowRun(t, outDir, "child-a", "compare", map[string]any{"decision_kind": "escalation_advisory_supported"}, map[string]any{
+		"type":            "escalation",
+		"source_run_id":   "source",
+		"source_type":     "compare",
+		"escalation_mode": "dispute",
+		"added_provider":  "gemini",
+	})
+	writeShowJSON(t, filepath.Join(outDir, "child-a", "triage", "status.json"), map[string]any{"status": "dry_run"})
+	writeShowRun(t, outDir, "child-b", "compare", map[string]any{"decision_kind": "escalation_advisory_challenged"}, map[string]any{
+		"type":            "escalation",
+		"source_run_id":   "source",
+		"source_type":     "compare",
+		"escalation_mode": "witness",
+		"added_provider":  "copilot",
+	})
+	return outDir
+}
+
+func countShowLine(text string, want string) int {
+	count := 0
+	for _, line := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
+		if line == want {
+			count++
+		}
+	}
+	return count
 }
 
 func writeShowJSON(t *testing.T, path string, value any) {

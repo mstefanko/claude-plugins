@@ -13,7 +13,6 @@ import (
 )
 
 func renderBuildReport(wo *workorder.WorkOrder, runID string, outDir string, runDir string, decision map[string]any, baseline buildverify.Result, runs []providerRun, metrics []buildverify.MetricComparison, diagnostics buildDiagnostics) string {
-	_ = runDir
 	lines := []string{
 		"# Bakeoff Report: " + wo.ID,
 		"",
@@ -31,8 +30,10 @@ func renderBuildReport(wo *workorder.WorkOrder, runID string, outDir string, run
 		lines = append(lines, "Result: `"+jsonutil.StringValue(decision["decision_kind"])+"`")
 	}
 	lines = append(lines, "Selection basis: `"+jsonutil.StringValue(decision["selection_basis"])+"`")
-	if winner := jsonutil.StringValue(decision["canonical_winner"]); winner != "" {
-		lines = append(lines, "Patch: `"+filepath.Join("providers", winner, "build", "diff.patch")+"`")
+	if selectedPatch, ok := selectedBuildPatchPath(runDir, decision); ok {
+		lines = append(lines, "Selected patch: `"+selectedPatch+"`")
+	} else {
+		lines = append(lines, "Selected patch: no selected patch")
 	}
 	lines = append(lines, "Verifier gates: "+buildVerifierGateSummary(baseline, runs))
 	lines = append(lines, buildSelectorConfidenceLines(decision)...)
@@ -54,7 +55,7 @@ func renderBuildReport(wo *workorder.WorkOrder, runID string, outDir string, run
 		lines = append(lines, fmt.Sprintf("- Gates passed: `%t`", run.Verify.GatesPassed))
 		if run.Capture != nil {
 			lines = append(lines, fmt.Sprintf("- Patch bytes: `%d`", run.Capture.PatchBytes))
-			lines = append(lines, fmt.Sprintf("- Patch: `%s`", filepath.Join("providers", run.ID, "build", "diff.patch")))
+			lines = append(lines, fmt.Sprintf("- Candidate patch: `%s`", filepath.Join("providers", run.ID, "build", "diff.patch")))
 			lines = append(lines, fmt.Sprintf("- Changed files: `%d`", len(run.Capture.ChangedFiles)))
 			if len(run.ScopeDiagnostics.OutOfInvocationFiles) > 0 || len(run.ScopeDiagnostics.AgentInstructionFiles) > 0 {
 				lines = append(lines, "- Scope diagnostics:")
@@ -228,7 +229,9 @@ func renderBuildReport(wo *workorder.WorkOrder, runID string, outDir string, run
 		}
 		if run := providerRunByID(runs, winner); run != nil {
 			if run.Capture != nil {
-				lines = append(lines, "Patch artifact: `"+filepath.Join("providers", winner, "build", "diff.patch")+"`")
+				if selectedPatch, ok := selectedBuildPatchPath(runDir, decision); ok {
+					lines = append(lines, "Selected patch artifact: `"+selectedPatch+"`")
+				}
 				lines = append(lines, "Diffstat artifact: `"+filepath.Join("providers", winner, "build", "diffstat.txt")+"`")
 				if len(run.Capture.TestFiles) > 0 {
 					lines = append(lines, fmt.Sprintf("Provider-authored tests: `%d` (supporting evidence, not selector truth)", len(run.Capture.TestFiles)))
@@ -438,6 +441,14 @@ func providerRunByID(runs []providerRun, id string) *providerRun {
 		}
 	}
 	return nil
+}
+
+func selectedBuildPatchPath(runDir string, decision map[string]any) (string, bool) {
+	winner := strings.TrimSpace(jsonutil.StringValue(decision["canonical_winner"]))
+	if winner == "" {
+		return "", false
+	}
+	return filepath.Join(runDir, "providers", winner, "build", "diff.patch"), true
 }
 
 // buildNextStep returns the formatted next-step run command line for a build report.

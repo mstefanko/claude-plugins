@@ -51,6 +51,11 @@ func buildSummary(repo buildworkspace.Repository, runDir string, runID string, o
 		"artifacts":        buildArtifactPaths(runDir),
 		"next":             ledger.BakeoffShowCommand(runID, outDir, ""),
 	}
+	if selectedPatch, ok := selectedBuildPatchPath(runDir, decision); ok {
+		out["selected_patch_path"] = selectedPatch
+	} else {
+		out["selected_patch_status"] = "no selected patch"
+	}
 	if stalledAt, _ := decision["stalled_at"].(string); stalledAt != "" {
 		out["stalled_at"] = stalledAt
 	}
@@ -63,6 +68,9 @@ func buildCommandStatus(exitCode int) string {
 	}
 	if exitCode == 3 {
 		return "unresolved"
+	}
+	if exitCode == 4 {
+		return "decision_incomplete"
 	}
 	return "failed"
 }

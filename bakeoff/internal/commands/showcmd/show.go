@@ -142,6 +142,7 @@ func printRelatedRuns(f commands.Factory, opts *ShowOptions, runDir string) {
 		for _, escalation := range siblings {
 			printEscalationLine(f, escalation)
 		}
+		printBundleHint(f, sourceRunID, outDir)
 		return
 	}
 	children := runlinks.EscalationsForSource(outDir, runID)
@@ -152,6 +153,7 @@ func printRelatedRuns(f commands.Factory, opts *ShowOptions, runDir string) {
 	for _, escalation := range children {
 		printEscalationLine(f, escalation)
 	}
+	printBundleHint(f, runID, outDir)
 }
 
 func printEscalationLine(f commands.Factory, escalation runlinks.Escalation) {
@@ -162,6 +164,10 @@ func printEscalationLine(f commands.Factory, escalation runlinks.Escalation) {
 		defaultDisplay(escalation.DecisionKind),
 		defaultDisplay(escalation.TriageState),
 	)
+}
+
+func printBundleHint(f commands.Factory, sourceRunID string, outDir string) {
+	f.Streams().Printf("bundle: %s\n", ledger.BakeoffBundleCommand(sourceRunID, outDir, false))
 }
 
 func defaultDisplay(value string) string {

@@ -203,6 +203,14 @@ func BakeoffTriageCommand(runID string, outDir string, force bool) string {
 	return cmd
 }
 
+func BakeoffBundleCommand(runID string, outDir string, write bool) string {
+	cmd := "bakeoff bundle " + shellQuote(runID) + outDirSuffix(outDir)
+	if write {
+		cmd += " --write"
+	}
+	return cmd
+}
+
 func BakeoffRerunCommand(runID string, outDir string) string {
 	return "bakeoff rerun " + shellQuote(runID) + outDirSuffix(outDir)
 }
@@ -212,7 +220,7 @@ func BakeoffJudgeOnlyRerunCommand(runID string, outDir string) string {
 }
 
 func outDirSuffix(outDir string) string {
-	if outDir == "runs" {
+	if outDir == "" || outDir == "runs" {
 		return ""
 	}
 	return " --out " + shellQuote(outDir)

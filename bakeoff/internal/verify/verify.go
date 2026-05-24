@@ -147,7 +147,7 @@ func Run(runDir string, displayOutDir string) Result {
 	if len(missingRequired) > 0 {
 		requiredStatus = "failed"
 	}
-	state, staleInputs := triage.StateDetail(runDir)
+	state, staleInputs := triage.DisplayStateDetail(runDir)
 	exitCode := 0
 	if len(problems) > 0 {
 		exitCode = 1
@@ -286,7 +286,7 @@ func VerifyFingerprintEntry(runDir string, relative string, expected any) string
 func Next(runDir string, outDir string, exitCode int, triageState string) string {
 	runID := filepath.Base(runDir)
 	if exitCode == 0 {
-		if triageState == "stale" {
+		if triageState == "stale" || triageState == "dry_run" || triageState == "failed" {
 			return ledger.BakeoffTriageCommand(runID, outDir, true)
 		}
 		if triageState == "yes" {

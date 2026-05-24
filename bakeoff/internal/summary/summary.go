@@ -44,22 +44,23 @@ type ResearchTriageSummary struct {
 }
 
 type ResearchSummary struct {
-	SchemaVersion   int                        `json:"schema_version"`
-	Command         string                     `json:"command"`
-	Status          string                     `json:"status"`
-	ExitCode        int                        `json:"exit_code"`
-	Warnings        []string                   `json:"warnings"`
-	RunID           string                     `json:"run_id"`
-	RunDir          string                     `json:"run_dir"`
-	DecisionKind    any                        `json:"decision_kind"`
-	StalledAt       string                     `json:"stalled_at,omitempty"`
-	CanonicalWinner any                        `json:"canonical_winner"`
-	JudgeRan        bool                       `json:"judge_ran"`
-	Providers       map[string]ProviderSummary `json:"providers"`
-	Judge           JudgeSummary               `json:"judge"`
-	Triage          ResearchTriageSummary      `json:"triage"`
-	Artifacts       ResearchArtifacts          `json:"artifacts"`
-	Next            string                     `json:"next"`
+	SchemaVersion    int                        `json:"schema_version"`
+	Command          string                     `json:"command"`
+	Status           string                     `json:"status"`
+	ExitCode         int                        `json:"exit_code"`
+	Warnings         []string                   `json:"warnings"`
+	RunID            string                     `json:"run_id"`
+	RunDir           string                     `json:"run_dir"`
+	DecisionKind     any                        `json:"decision_kind"`
+	StalledAt        string                     `json:"stalled_at,omitempty"`
+	CanonicalWinner  any                        `json:"canonical_winner"`
+	JudgeRan         bool                       `json:"judge_ran"`
+	Providers        map[string]ProviderSummary `json:"providers"`
+	Judge            JudgeSummary               `json:"judge"`
+	Triage           ResearchTriageSummary      `json:"triage"`
+	Artifacts        ResearchArtifacts          `json:"artifacts"`
+	Next             string                     `json:"next"`
+	NextAlternatives []string                   `json:"next_alternatives,omitempty"`
 }
 
 type EscalationSummary struct {
@@ -245,24 +246,116 @@ func BuildResearch(runDir string, runID string, outDir string, decision map[stri
 	for providerID, result := range workerResults {
 		providers[providerID] = ProviderStatusSummary(result)
 	}
+	judge := JudgeJSONSummary(runDir, decision)
+	next, alternatives := ResearchNextCommands(runDir, runID, outDir, decision, exitCode)
 	return ResearchSummary{
-		SchemaVersion:   1,
-		Command:         "research",
-		Status:          CommandStatus(exitCode),
-		ExitCode:        exitCode,
-		Warnings:        []string{},
-		RunID:           runID,
-		RunDir:          runDir,
-		DecisionKind:    decision["decision_kind"],
-		StalledAt:       jsonutil.StringValue(decision["stalled_at"]),
-		CanonicalWinner: decision["canonical_winner"],
-		JudgeRan:        jsonutil.BoolValue(decision["judge_ran"]),
-		Providers:       providers,
-		Judge:           JudgeJSONSummary(runDir, decision),
-		Triage:          ResearchTriage(runDir, autoTriageStarted, triageExitCode),
-		Artifacts:       ResearchArtifactPaths(runDir),
-		Next:            ledger.BakeoffShowCommand(runID, outDir, ""),
+		SchemaVersion:    1,
+		Command:          "research",
+		Status:           CommandStatus(exitCode),
+		ExitCode:         exitCode,
+		Warnings:         []string{},
+		RunID:            runID,
+		RunDir:           runDir,
+		DecisionKind:     decision["decision_kind"],
+		StalledAt:        jsonutil.StringValue(decision["stalled_at"]),
+		CanonicalWinner:  decision["canonical_winner"],
+		JudgeRan:         jsonutil.BoolValue(decision["judge_ran"]),
+		Providers:        providers,
+		Judge:            judge,
+		Triage:           ResearchTriage(runDir, autoTriageStarted, triageExitCode),
+		Artifacts:        ResearchArtifactPaths(runDir),
+		Next:             next,
+		NextAlternatives: alternatives,
 	}
+}
+
+func ResearchNextCommands(runDir string, runID string, outDir string, decision map[string]any, exitCode int) (string, []string) {
+	if shouldRecommendJudgeOnlyRerun(runDir, decision, exitCode) {
+		return ledger.BakeoffJudgeOnlyRerunCommand(runID, outDir), []string{ledger.BakeoffRerunCommand(runID, outDir)}
+	}
+	return ledger.BakeoffShowCommand(runID, outDir, ""), nil
+}
+
+func shouldRecommendJudgeOnlyRerun(runDir string, decision map[string]any, exitCode int) bool {
+	if exitCode != 4 {
+		return false
+	}
+	if !isResearchMode(jsonutil.StringValue(valueFromMap(decision, "mode"))) {
+		return false
+	}
+	if !allProviderStatusesSucceeded(runDir, decision) {
+		return false
+	}
+	judge := JudgeJSONSummary(runDir, decision)
+	return judgeStatusFailedOrIncomplete(judge)
+}
+
+func isResearchMode(mode string) bool {
+	switch mode {
+	case "gather", "compare", "analyze":
+		return true
+	default:
+		return false
+	}
+}
+
+func allProviderStatusesSucceeded(runDir string, decision map[string]any) bool {
+	statuses := providerStatusMapsFromDecision(decision)
+	if len(statuses) == 0 {
+		statuses = providerStatusMapsFromArtifacts(runDir)
+	}
+	if len(statuses) < 2 {
+		return false
+	}
+	for _, status := range statuses {
+		if !rawStatusSucceeded(status["status"]) {
+			return false
+		}
+	}
+	return true
+}
+
+func providerStatusMapsFromDecision(decision map[string]any) []map[string]any {
+	raw, _ := valueFromMap(decision, "provider_statuses").(map[string]any)
+	if len(raw) == 0 {
+		return nil
+	}
+	statuses := make([]map[string]any, 0, len(raw))
+	for _, value := range raw {
+		if status, ok := value.(map[string]any); ok {
+			statuses = append(statuses, status)
+		}
+	}
+	return statuses
+}
+
+func providerStatusMapsFromArtifacts(runDir string) []map[string]any {
+	entries, err := os.ReadDir(filepath.Join(runDir, "providers"))
+	if err != nil {
+		return nil
+	}
+	statuses := []map[string]any{}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		status, _ := readJSON(filepath.Join(runDir, "providers", entry.Name(), "status.json")).(map[string]any)
+		if status != nil {
+			statuses = append(statuses, status)
+		}
+	}
+	return statuses
+}
+
+func rawStatusSucceeded(raw any) bool {
+	return okStatuses[strings.TrimSpace(jsonutil.StringValue(raw))]
+}
+
+func judgeStatusFailedOrIncomplete(judge JudgeSummary) bool {
+	if judge.Status == runner.StatusOK || judge.Status == "not_run" || judge.RawStatus == "missing_status" {
+		return false
+	}
+	return judge.Status == "failed" || judge.Status == "warn"
 }
 
 func BuildEscalation(runDir string, runID string, outDir string, sourceRunID string, sourceRunDir string, mode string, addedProvider string, sourceProviders []string, decision map[string]any, providerResults map[string]map[string]any, exitCode int, dryRun bool, estimatedCalls map[string]any, autoTriageStarted bool, triageExitCode any) EscalationSummary {

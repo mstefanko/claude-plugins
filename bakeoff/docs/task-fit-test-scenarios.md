@@ -699,6 +699,78 @@ paths, and stay within the normal `/bakeoff:run` preview and approval flow.
   - Approval behavior when drafted: no build follow-up is drafted from exit
     `4` alone.
 
+## Slice 5 Post-Run Guidance Scenarios
+
+Date added: 2026-05-24
+
+Status: manual regression checklist for post-run, stop-here, triage freshness,
+and bundle guidance.
+
+Every scenario must produce at most one primary continuation recommendation.
+The recommendation must be based on structured artifacts first; `report.md` may
+explain the result but must not override missing, stale, failed, or
+contradictory structured signals.
+
+- [ ] `slice5-stop-sufficient` stops cleanly when artifacts are sufficient.
+  - Source artifact summary: completed `gather` or `compare` run with
+    parseable `decision.json`, provider statuses `ok`, no stale triage, and no
+    structured unresolved/tie/judge-failed signal.
+  - Expected recommendation text: no follow-up Bakeoff run is recommended, or a
+    single `inspect`/`show` command is provided.
+  - Forbidden recommendation text: blind `continue`, extra provider calls, or
+    multiple equal-weight next steps.
+
+- [ ] `slice5-review-triage-missing` recommends triage before escalation.
+  - Source artifact summary: `work-order.json.type=gather` with
+    `facet.id=code-review`; `triage/final.json` is absent.
+  - Expected recommendation text: `bakeoff triage <run-id>` as the primary next
+    command.
+  - Forbidden recommendation text: escalation or build as an equal sibling to
+    triage.
+
+- [ ] `slice5-review-triage-failed` recommends forced triage retry first.
+  - Source artifact summary: durable review run with
+    `triage/status.json.status` set to a failure value and optional
+    `triage/stderr.txt`.
+  - Expected recommendation text: `bakeoff triage <run-id> --force`, plus the
+    failed triage status or stderr tail when available.
+  - Forbidden recommendation text: treating raw findings as verified.
+
+- [ ] `slice5-research-judge-failed` recommends research judge-only rerun.
+  - Source artifact summary: research-shaped run (`gather`, `compare`, or
+    `analyze`) with exit `4`, successful provider statuses, and failed or
+    incomplete judge status.
+  - Expected recommendation text: `bakeoff rerun <run-id> --judge-only` as the
+    primary next command, with full rerun only secondary.
+  - Forbidden recommendation text: judge-only for build runs.
+
+- [ ] `slice5-unresolved-compare` recommends focused inspect or escalation
+  preview, not build.
+  - Source artifact summary: `work-order.json.type=compare`;
+    `decision.json.decision_kind` is unresolved, disagreement, tie-like, or has
+    non-empty structured disagreement material.
+  - Expected recommendation text: inspect the report/decision or preview a
+    focused non-build escalation.
+  - Forbidden recommendation text: selected patch, build judge-only rerun, or
+    direct build drafting.
+
+- [ ] `slice5-build-winner` surfaces selected patch only for a canonical winner.
+  - Source artifact summary: `work-order.json.type=build`;
+    `decision.json.canonical_winner` is non-null and that provider has
+    `providers/<winner>/build/diff.patch`.
+  - Expected recommendation text: selected patch path and inspection/review of
+    that patch.
+  - Forbidden recommendation text: automatic apply, merge, commit, PR, or
+    synthesized third patch.
+
+- [ ] `slice5-source-escalations-bundle` prefers the bundle reader.
+  - Source artifact summary: source run with one or more escalation children, or
+    an escalation child whose manifest has `source_run_id`.
+  - Expected recommendation text: `bakeoff bundle <source-run-id>` with the
+    correct `--out` value.
+  - Forbidden recommendation text: only reading one child report when the user
+    asked for source plus escalation context.
+
 ## Fast-Path Drafting Scenarios
 
 Date added: 2026-05-20

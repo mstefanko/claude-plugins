@@ -59,7 +59,7 @@ type outputTruncationRecord struct {
 type patchIntegrityCheck struct {
 	ProviderID string `json:"provider_id"`
 	Status     string `json:"status"`
-	PatchPath  string `json:"patch_path"`
+	PatchPath  string `json:"patch_path,omitempty"`
 	CheckBase  string `json:"check_base"`
 	BaseCommit string `json:"base_commit,omitempty"`
 	Output     string `json:"output,omitempty"`

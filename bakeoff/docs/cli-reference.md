@@ -490,7 +490,7 @@ JSON mode also implies quieter operation for run-style commands.
 | `1` | Runtime, provider, verifier, or build failure. |
 | `2` | Usage, config, validation, or missing-input error. |
 | `3` | Completed run with unresolved judge disagreement. |
-| `4` | Decision incomplete: judge failed or did not converge; provider artifacts are durable and `bakeoff rerun <run-id> --judge-only` is recommended when providers succeeded. |
+| `4` | Decision incomplete: judge failed or did not converge. Research runs with successful providers can use `bakeoff rerun <run-id> --judge-only`; build runs have no selected patch unless `decision.json.canonical_winner` is non-null. |
 | `130` | Interrupted. |
 
 Exit code `3` is a completed Bakeoff handoff. Inspect `decision.json` and

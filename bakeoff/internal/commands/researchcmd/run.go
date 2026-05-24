@@ -340,7 +340,11 @@ func finalizeResearchRun(ctx context.Context, f commands.Factory, opts researchF
 		}
 		f.Streams().Printf("manifest: %s\n", filepath.Join(opts.RunDir, "manifest.json"))
 		f.Streams().Printf("report: %s\n", filepath.Join(opts.RunDir, "report.md"))
-		f.Streams().Printf("next:   %s\n", ledger.BakeoffShowCommand(opts.RunID, opts.Out, ""))
+		next, alternatives := summary.ResearchNextCommands(opts.RunDir, opts.RunID, opts.Out, opts.DecisionDoc, exitCode)
+		f.Streams().Printf("next:   %s\n", next)
+		for _, alternative := range alternatives {
+			f.Streams().Printf("also:   %s\n", alternative)
+		}
 		f.Streams().Printf("result: %s\n", researchResultLine(opts.WorkOrder, opts.DecisionDoc, reportText))
 	}
 	autoTriageReason := ""

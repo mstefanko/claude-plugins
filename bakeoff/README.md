@@ -296,11 +296,11 @@ Slash commands:
 - `/bakeoff:run <path or request> [--run-id ID] [--out runs] [--quiet] [--keep-worktrees] [--no-triage] [--no-repo-layout]` — validate and run, or draft from natural language.
 - `/bakeoff:escalate <run-id> --provider gemini --mode independent|witness|dispute --dry-run` — preview or run one post-run non-build provider escalation.
 - `/bakeoff:history [limit] [--out runs] [--facet ID] [--triage-state STATE] [--type TYPE]` — list recent runs with run ids and short goal summaries.
-- `/bakeoff:inspect [latest or run-id]` — open existing reports, decisions, triage, handoff.
+- `/bakeoff:inspect [latest or run-id] [--bundle]` — open existing reports, decisions, triage, handoff, or source-plus-escalation bundles.
 - `/bakeoff:doctor [--skip-auth-probe] [--build] [--quiet]` — readiness check. Reports the canonical pair, optional providers, and any draft-time fallback. `--build` runs live edit probes.
 - `/bakeoff:uninstall` — remove plugin state, then guide manual plugin uninstall.
 
-Core CLI: `bakeoff draft-build`, `bakeoff validate`, `bakeoff research`, `bakeoff build`, `bakeoff rerun`, `bakeoff escalate`, `bakeoff ls`, `bakeoff show`, `bakeoff triage`, `bakeoff doctor`. Full reference in [docs/cli-reference.md](docs/cli-reference.md).
+Core CLI: `bakeoff draft-build`, `bakeoff validate`, `bakeoff research`, `bakeoff build`, `bakeoff rerun`, `bakeoff escalate`, `bakeoff ls`, `bakeoff show`, `bakeoff bundle`, `bakeoff triage`, `bakeoff doctor`. Full reference in [docs/cli-reference.md](docs/cli-reference.md).
 
 ## Configuration
 

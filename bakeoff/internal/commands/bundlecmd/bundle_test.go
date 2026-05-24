@@ -83,6 +83,46 @@ func TestBundleIncludesSourceChildrenTriageWarningsAndWriteGate(t *testing.T) {
 	}
 }
 
+func TestBundleWriteCommandUsesLedgerShellQuoting(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		runID string
+		out   string
+		want  string
+	}{
+		{
+			name:  "default runs out",
+			runID: "source",
+			out:   "runs",
+			want:  "bakeoff bundle source --write",
+		},
+		{
+			name:  "empty out uses default shape",
+			runID: "source",
+			out:   "",
+			want:  "bakeoff bundle source --write",
+		},
+		{
+			name:  "quoted custom out",
+			runID: "source",
+			out:   "custom runs/$(bad)",
+			want:  "bakeoff bundle source --out 'custom runs/$(bad)' --write",
+		},
+		{
+			name:  "quoted run id",
+			runID: "source run's $(bad)",
+			out:   "runs",
+			want:  "bakeoff bundle 'source run'\"'\"'s $(bad)' --write",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := bundleWriteCommand(tc.runID, tc.out); got != tc.want {
+				t.Fatalf("bundleWriteCommand(%q, %q) = %q, want %q", tc.runID, tc.out, got, tc.want)
+			}
+		})
+	}
+}
+
 type bundleTestFactory struct {
 	streams output.Streams
 }

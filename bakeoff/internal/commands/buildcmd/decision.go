@@ -38,7 +38,7 @@ func resolveBuildDecision(wo *workorder.WorkOrder, workerResults map[string]map[
 		decision["caveats"] = append(jsonutil.ListStrings(decision["caveats"]), fmt.Sprintf("build judge failed: pass1=%v, pass2=%v", judgeFailure["pass1_status"], judgeFailure["pass2_status"]))
 		decisionpkg.SetStalledAt(decision, decisionpkg.StalledAtJudge)
 		if exitCode == 3 {
-			exitCode = 1
+			exitCode = 4
 		}
 	}
 	return decision, exitCode

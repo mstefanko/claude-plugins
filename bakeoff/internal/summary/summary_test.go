@@ -1,6 +1,8 @@
 package summary
 
 import (
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -60,5 +62,117 @@ func TestBuildResearchIncludesStalledAt(t *testing.T) {
 	}, map[string]map[string]any{}, 1, false, nil)
 	if got.StalledAt != "providers" {
 		t.Fatalf("stalled_at = %q", got.StalledAt)
+	}
+}
+
+func TestBuildResearchRecommendsJudgeOnlyForResearchExit4WithSucceededProvidersAndFailedJudge(t *testing.T) {
+	runDir := t.TempDir()
+	writeSummaryJSON(t, filepath.Join(runDir, "judge", "status.json"), map[string]any{"status": "exit_error"})
+
+	got := BuildResearch(runDir, "run-1", "runs", map[string]any{
+		"mode":            "gather",
+		"decision_kind":   "provider_union_only",
+		"judge_ran":       true,
+		"judge_completed": false,
+		"provider_statuses": map[string]any{
+			"claude": map[string]any{"status": "ok"},
+			"codex":  map[string]any{"status": "ok_after_format_retry"},
+		},
+	}, nil, 4, false, nil)
+
+	if got.Next != "bakeoff rerun run-1 --judge-only" {
+		t.Fatalf("next = %q", got.Next)
+	}
+	if len(got.NextAlternatives) != 1 || got.NextAlternatives[0] != "bakeoff rerun run-1" {
+		t.Fatalf("next alternatives = %#v", got.NextAlternatives)
+	}
+}
+
+func TestBuildResearchSuppressesJudgeOnlyWhenAProviderFailed(t *testing.T) {
+	runDir := t.TempDir()
+	writeSummaryJSON(t, filepath.Join(runDir, "judge", "status.json"), map[string]any{"status": "exit_error"})
+	writeSummaryFile(t, filepath.Join(runDir, "report.md"), "prose says bakeoff rerun run-1 --judge-only\n")
+
+	got := BuildResearch(runDir, "run-1", "runs", map[string]any{
+		"mode":            "gather",
+		"decision_kind":   "provider_union_only",
+		"judge_ran":       true,
+		"judge_completed": false,
+		"provider_statuses": map[string]any{
+			"claude": map[string]any{"status": "ok"},
+			"codex":  map[string]any{"status": "schema_error"},
+		},
+	}, nil, 4, false, nil)
+
+	if got.Next != "bakeoff show run-1" {
+		t.Fatalf("next = %q", got.Next)
+	}
+	if len(got.NextAlternatives) != 0 {
+		t.Fatalf("next alternatives = %#v", got.NextAlternatives)
+	}
+}
+
+func TestBuildResearchSuppressesJudgeOnlyForBuildMode(t *testing.T) {
+	runDir := t.TempDir()
+	writeSummaryJSON(t, filepath.Join(runDir, "judge", "status.json"), map[string]any{"status": "exit_error"})
+
+	got := BuildResearch(runDir, "run-1", "runs", map[string]any{
+		"mode":            "build",
+		"decision_kind":   "judge_failed",
+		"judge_ran":       true,
+		"judge_completed": false,
+		"provider_statuses": map[string]any{
+			"claude": map[string]any{"status": "ok"},
+			"codex":  map[string]any{"status": "ok"},
+		},
+	}, nil, 4, false, nil)
+
+	if got.Next != "bakeoff show run-1" {
+		t.Fatalf("next = %q", got.Next)
+	}
+	if len(got.NextAlternatives) != 0 {
+		t.Fatalf("next alternatives = %#v", got.NextAlternatives)
+	}
+}
+
+func TestBuildResearchSuppressesJudgeOnlyWhenJudgeSucceeded(t *testing.T) {
+	runDir := t.TempDir()
+	writeSummaryJSON(t, filepath.Join(runDir, "judge", "status.json"), map[string]any{"status": "ok"})
+
+	got := BuildResearch(runDir, "run-1", "runs", map[string]any{
+		"mode":            "gather",
+		"decision_kind":   "provider_union_only",
+		"judge_ran":       true,
+		"judge_completed": false,
+		"provider_statuses": map[string]any{
+			"claude": map[string]any{"status": "ok"},
+			"codex":  map[string]any{"status": "ok"},
+		},
+	}, nil, 4, false, nil)
+
+	if got.Next != "bakeoff show run-1" {
+		t.Fatalf("next = %q", got.Next)
+	}
+	if len(got.NextAlternatives) != 0 {
+		t.Fatalf("next alternatives = %#v", got.NextAlternatives)
+	}
+}
+
+func writeSummaryJSON(t *testing.T, path string, value any) {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeSummaryFile(t, path, string(data))
+}
+
+func writeSummaryFile(t *testing.T, path string, text string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
