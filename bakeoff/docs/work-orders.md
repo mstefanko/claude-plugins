@@ -227,11 +227,11 @@ Verifier fields:
 | `baseline` | Optional for gate verifiers only. One of `must_pass`, `may_fail`, or `must_fail`; omitted gates default to `must_pass`. |
 
 Metric verifier specs require `name`, `direction` (`lower` or `higher`), and
-`min_delta_percent`; this is a hard schema requirement, so
-`bakeoff validate` rejects missing `min_delta_percent` before warning-level
-lint runs. `noise_floor_percent` and `min_runs` are optional schema fields, but
-`bakeoff validate` warns when a metric omits `noise_floor_percent` and when a
-declared noise floor is paired with absent or `1` `min_runs`. Metric commands
+`min_delta_percent`. Because `min_delta_percent` is required by schema parsing,
+work orders that omit it fail validation rather than producing warning-level
+metric lint. `noise_floor_percent` and `min_runs` are optional schema fields,
+but `bakeoff validate` warns when a metric omits `noise_floor_percent` and when
+a declared noise floor is paired with absent or `1` `min_runs`. Metric commands
 should print one final aggregate JSON object as the last non-empty stdout line
 with the metric name as a finite numeric field.
 

@@ -90,6 +90,8 @@ exactly one optional peer is ready, `/bakeoff:run` may draft Claude + that peer
 and call out the fallback in the preview. Use full model ids in the work order
 to pin exact versions.
 
+### Route Examples
+
 Route examples stay compact in the preview:
 
 | User phrase | Route advisor |

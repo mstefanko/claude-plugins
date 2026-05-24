@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "id": "slice-0-report-renderer-prep",
+  "type": "build",
+  "goal": "Extract small report helpers in internal/report/report.go and internal/commands/buildcmd/report.go for advisory blocks, selector-strength lines, compact next-step blocks, and shared 'advisory only' / 'does not change source decision' wording, preserving existing report output.",
+  "background": [
+    "Acceptance criteria:\n- Existing report section ordering remains stable (Outcome; Selector confidence or advisory status; Status/caveats; Evidence details; Next step).\n- Research and escalation reports still render the same content as before for current fixtures.\n- Build reports still render the same content as before for current fixtures.\n- New helper functions exist for advisory blocks, selector-strength lines, compact next-step blocks, and shared advisory wording, and are called from existing render sites instead of inlined code.\n- No Slice 4 selector confidence label behavior is introduced; no new product claims are added; report.go and buildcmd/report.go are not broadly rewritten.\n- go test ./internal/report ./internal/commands/buildcmd ./internal/decision passes.",
+    "Edit boundary:\n- internal/report/report.go\n- internal/report/report_test.go\n- internal/commands/buildcmd/report.go\n- internal/commands/buildcmd",
+    "Slice 0 of docs/bakeoff-roadmap-validated-implementation-plan-2026-05-24.md: prep PR that lowers review collision risk for later report slices.",
+    "Keep build report helpers local to internal/commands/buildcmd/report.go unless shared code naturally emerges; default is to share wording conventions only.",
+    "Bakeoff will capture candidate patches from isolated worktrees and will not apply them to this checkout."
+  ],
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "sonnet",
+      "effort": "high",
+      "scope": "codebase"
+    },
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "effort": "high",
+      "scope": "codebase"
+    }
+  ],
+  "scope_policy": {
+    "enforcement": "best_effort"
+  },
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "build": {
+    "base_ref": "HEAD",
+    "comparison_goal": "Prefer the patch that satisfies the acceptance criteria with the smallest maintainable change.",
+    "verify": [
+      {
+        "id": "tests",
+        "kind": "gate",
+        "argv": [
+          "sh",
+          "-c",
+          "go test ./internal/report ./internal/commands/buildcmd ./internal/decision"
+        ],
+        "wall_clock_seconds": 300,
+        "max_output_bytes": 60000
+      }
+    ]
+  },
+  "budgets": {
+    "wall_clock_seconds": 1200,
+    "max_output_bytes": 80000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 80000
+  }
+}
