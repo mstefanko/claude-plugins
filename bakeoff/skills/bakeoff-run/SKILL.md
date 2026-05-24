@@ -151,6 +151,11 @@ Implicit provider selection rules:
   choose providers.
 - If `selected_default_pair` is present, draft that pair. If it is not the
   canonical pair, call out the fallback in the preview.
+- If doctor JSON includes `judge_family_advisory` with relation `same_as_some`
+  or `same_as_all` and non-empty `ready_non_contestant_judges`, include one
+  compact preview note that a ready non-contestant provider-family judge exists.
+  Do not infer provider families yourself, do not auto-switch the judge, and do
+  not add `judge_policy` fields.
 - If `fallback_requires_user_choice` is true, ask which fallback peer to use
   and do not draft until the user chooses.
 - If `runnable_default_pair_available` is false, stop and summarize the missing

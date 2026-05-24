@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -104,6 +105,53 @@ func TestRunDoctorJSONReportsModelDefaults(t *testing.T) {
 		if defaults[key] != value {
 			t.Fatalf("defaults[%s] = %#v, want %q (all %#v)", key, defaults[key], value, defaults)
 		}
+	}
+}
+
+func TestRunDoctorJSONReportsJudgeFamilyAdvisory(t *testing.T) {
+	f, out := newDoctorFakeFactoryWithBackends(t, true, "claude", "codex", "gemini")
+
+	err := runDoctor(context.Background(), f, &DoctorOptions{SkipAuthProbe: true, Quiet: true, JSON: true})
+	if err != nil {
+		t.Fatalf("%v\nreport = %#v", err, decodeDoctorReport(t, out))
+	}
+
+	report := decodeDoctorReport(t, out)
+	providers := report["providers"].(map[string]any)
+	claude := providers["claude"].(map[string]any)
+	if claude["family"] != provider.ProviderFamilyAnthropic {
+		t.Fatalf("claude family = %#v", claude["family"])
+	}
+	advisory := report["judge_family_advisory"].(map[string]any)
+	if advisory["judge_backend"] != "claude" || advisory["judge_family"] != provider.ProviderFamilyAnthropic || advisory["relation"] != provider.JudgeFamilyRelationSameAsSome || advisory["advisory_only"] != true {
+		t.Fatalf("judge family advisory = %#v", advisory)
+	}
+	if got := stringSliceFromJSON(t, advisory["provider_backends"]); !reflect.DeepEqual(got, []string{"claude", "codex"}) {
+		t.Fatalf("provider_backends = %#v", got)
+	}
+	if got := stringSliceFromJSON(t, advisory["ready_non_contestant_judges"]); !reflect.DeepEqual(got, []string{"gemini"}) {
+		t.Fatalf("ready_non_contestant_judges = %#v", got)
+	}
+}
+
+func TestRunDoctorHumanJudgeFamilyAdvisoryIsActionableOnly(t *testing.T) {
+	f, out := newDoctorFakeFactoryWithBackends(t, true, "claude", "codex", "gemini")
+
+	err := runDoctor(context.Background(), f, &DoctorOptions{SkipAuthProbe: true, Quiet: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "- judge family advisory: default judge claude shares provider-family metadata with a selected provider; ready non-contestant judge backends: gemini. Advisory only; no defaults changed.") {
+		t.Fatalf("missing human advisory:\n%s", out.String())
+	}
+
+	f, out = newDoctorFakeFactory(t, true)
+	err = runDoctor(context.Background(), f, &DoctorOptions{SkipAuthProbe: true, Quiet: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "judge family advisory") {
+		t.Fatalf("unexpected human advisory without a ready alternative:\n%s", out.String())
 	}
 }
 
@@ -278,4 +326,21 @@ func decodeDoctorReport(t *testing.T, out *bytes.Buffer) map[string]any {
 		t.Fatalf("doctor JSON did not decode: %v\n%s", err, out.String())
 	}
 	return report
+}
+
+func stringSliceFromJSON(t *testing.T, value any) []string {
+	t.Helper()
+	items, ok := value.([]any)
+	if !ok {
+		t.Fatalf("value is not a JSON array: %#v", value)
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		text, ok := item.(string)
+		if !ok {
+			t.Fatalf("array item is not a string: %#v", item)
+		}
+		out = append(out, text)
+	}
+	return out
 }

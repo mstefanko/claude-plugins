@@ -768,7 +768,10 @@ Needs measured before policy features:
 
 ## Slice 9: Third-Party Judge Advisory
 
-Recommendation: build after provider-family metadata; advisory only.
+Recommendation: build after provider-family metadata; advisory only. The
+current code already has provider-family constants, `BackendSpec.Family`,
+`FamilyForBackend`, `SameBackendFamily`, and `JudgeFamilyRelation`, so this
+slice should consume that metadata rather than introduce a new policy layer.
 
 Evidence and reason for inclusion:
 
@@ -784,50 +787,128 @@ User value:
 - Useful for high-risk or judge-heavy runs.
 - Helps users see when a non-contestant judge family exists, without implying
   it is always better.
+- Gives users a concrete pre-run signal before they trust a judge-heavy result:
+  "the judge shares provider-family metadata with one side" plus, when known,
+  "a ready non-contestant judge backend exists."
+- Reduces accidental same-family judging without changing work orders or
+  surprising users.
 
 Implementation details:
 
-- Depends on Slice 6 provider-family metadata.
+- Depends on Slice 6 provider-family metadata. As of this plan update, the
+  provider package has this metadata and helper layer; do not duplicate family
+  inference in commands or skills.
 - Primary files:
   - `internal/provider/provider.go`
   - `internal/commands/doctorcmd/doctor.go`
   - `internal/commands/validatecmd/validate.go`
   - `skills/bakeoff-run/SKILL.md`
-  - possibly `internal/workorder/draft.go` for preview/draft advisory
-- Advisory surfaces:
-  - `bakeoff doctor`;
-  - `bakeoff validate` warnings;
-  - `/bakeoff:run` preview;
-  - draft comments or summary copy.
+- Avoid `internal/workorder/draft.go` unless implementation proves the CLI
+  needs a structured preview field. The first version should not make draft
+  generation family-aware.
+- Add, at most, one small provider helper if needed:
+  - `NonContestantJudgeBackends(providerBackends []string, ready map[string]bool) []string`
+  - It should return known backends whose family is known, not in the provider
+    family set, and optionally ready according to the supplied map.
+- `bakeoff doctor` surface:
+  - Add provider family to each JSON provider entry.
+  - Add a small `judge_family_advisory` JSON object for the default generated
+    judge and selected default pair:
+    - `judge_backend`
+    - `judge_family`
+    - `provider_backends`
+    - `relation`
+    - `ready_non_contestant_judges`
+    - `advisory_only: true`
+  - Human output may print one line only when a ready non-contestant judge
+    exists for a selected default pair. Do not make this a failure, and do not
+    add it to the status-gating path.
+- `bakeoff validate` surface:
+  - Add a warning only for judge-heavy/high-risk work orders when
+    `JudgeFamilyRelation` is `same_as_some` or `same_as_all`.
+  - Initial trigger set: `compare`, `analyze`, `build`, and `gather` with
+    `facet.id == "code-review"`.
+  - Suppress the warning for `different_from_all`, `unknown`, generic
+    `gather`, and any unknown family relation.
+  - Do not run auth probes or spendful provider checks from `validate`. If
+    validate mentions alternatives, point to `bakeoff doctor` for readiness.
+- `/bakeoff:run` preview surface:
+  - Do not add model-side family inference.
+  - For natural-language drafts that already ran `bakeoff doctor --json`, show
+    one compact preview note only when `judge_family_advisory` says a ready
+    non-contestant judge backend exists for the selected default pair.
+  - For existing work-order paths and approved drafts, surface `bakeoff
+    validate` warnings verbatim; do not add a second assistant-generated
+    warning.
 - Do not auto-switch judge.
 - Do not add `judge_policy` schema in this slice.
+- Do not add work-order fields, new CLI flags, telemetry fields, rerun
+  behavior, default changes, or rotation commands.
+- Do not warn in final reports yet; this is a pre-run/setup advisory, not a
+  retroactive confidence score.
 
 Risk and concerns:
 
-- Complexity: M after metadata; M-L if bundled with policy.
-- Risk: Medium.
+- Complexity: S-M after metadata; M-L if bundled with policy or reporting.
+- Risk: Low-Medium if kept to doctor/validate/skill copy.
 - Concerns:
   - Warning fatigue.
   - Third backend might be weaker or unauthenticated.
   - Family metadata might overstate independence.
+  - A validate warning could look like a required schema rule if wording is too
+    strong.
+  - Skill preview copy could drift from command behavior if it reimplements the
+    family logic.
 - Mitigation:
   - advisory copy only;
   - include "not measured locally yet";
-  - suppress warning when no ready alternative exists.
+  - suppress doctor human output when no ready alternative exists;
+  - suppress validate warnings outside judge-heavy/high-risk contexts;
+  - use provider helpers as the single source of family relation logic;
+  - phrase as "consider" or "for high-stakes runs", never "must".
+
+Bloat guardrails:
+
+- One helper maximum in `internal/provider`, unless implementation shows the
+  existing `JudgeFamilyRelation` helper is enough.
+- One JSON object in `doctor`; no schema migration and no version bump.
+- One validate warning function; no new package.
+- One skill instruction paragraph that consumes CLI output; no embedded table
+  of family mappings in the skill.
+- No persisted artifacts in this slice. Telemetry captures judge-family
+  relation later in Slice 8.
 
 Validation:
 
 - Doctor/validate tests for:
-  - only two ready families;
+  - selected default pair with only two ready families;
   - third family ready;
   - third backend missing/unavailable;
-  - judge same family as provider;
-  - judge non-contestant family.
+  - judge same family as one provider;
+  - judge same family as all providers;
+  - judge non-contestant family;
+  - unknown family suppresses advisory;
+  - generic gather suppresses warning;
+  - code-review gather emits warning.
+- Skill/docs validation:
+  - `/bakeoff:run` preview guidance says to reuse doctor/validate output and
+    does not include its own family mapping.
 
 Open questions:
 
 - Should advisory trigger for every same-family judge or only judge-heavy modes.
   Default: judge-heavy decisions and preview/draft contexts only.
+- Should `doctor` print the human advisory only when a ready non-contestant
+  judge exists, while still including JSON relation metadata in all cases?
+  Default: yes.
+- Exact validate warning text. It should be short, advisory, and clear that
+  validation still succeeds.
+- Should `build` always warn, or only when the work order has no decisive gate
+  or metric? Default: warn for all build work orders first because selector
+  basis is known only after execution.
+- Should `copilot` be recommended as a judge alternative despite uncertain
+  underlying model lineage? Default: yes, because family means provider/catalog
+  family and the warning should say it is not measured local independence.
 
 Needs measured before stronger policy:
 

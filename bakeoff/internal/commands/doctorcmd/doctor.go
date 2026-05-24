@@ -107,6 +107,7 @@ func runDoctor(ctx context.Context, f commands.Factory, opts *DoctorOptions) err
 			"path":                          toolStatus["path"],
 			"version":                       toolStatus["version"],
 			"default_model":                 spec.DefaultModel,
+			"family":                        spec.Family,
 			"prompt_flavor":                 spec.PromptFlavor,
 			"supports_build":                spec.SupportsBuild,
 		}
@@ -141,6 +142,7 @@ func runDoctor(ctx context.Context, f commands.Factory, opts *DoctorOptions) err
 			}
 		}
 	}
+	report["judge_family_advisory"] = defaultJudgeFamilyAdvisory(resolution, readyForDefault)
 	if !readyForDefault["claude"] {
 		failed = true
 		report["warnings"] = appendStringAny(report["warnings"], "claude is required because generated judges default to claude/opus")
@@ -161,7 +163,7 @@ func runDoctor(ctx context.Context, f commands.Factory, opts *DoctorOptions) err
 	if !writable {
 		failed = true
 	}
-	report["bias"] = "Default judge is claude/opus alongside claude/sonnet workers. Position-swap is the primary bias mitigation; same-family bias is an accepted v1 risk."
+	report["bias"] = "Default generated judge is claude/opus. Position-swap is the primary order-bias mitigation; judge_family_advisory reports provider-family relation without changing defaults."
 
 	if !opts.JSON {
 		streams := f.Streams()
@@ -217,6 +219,9 @@ func runDoctor(ctx context.Context, f commands.Factory, opts *DoctorOptions) err
 			status = "ok"
 		}
 		streams.Printf("- cwd writable: %s (%s)\n", status, detail)
+		if line := doctorJudgeFamilyAdvisoryLine(report["judge_family_advisory"].(map[string]any)); line != "" {
+			streams.Printf("- judge family advisory: %s\n", line)
+		}
 		streams.Printf("- bias: %s\n", report["bias"])
 	}
 	if opts.Build {
@@ -548,6 +553,45 @@ func installedBackends(toolOK map[string]bool) []string {
 		}
 	}
 	return backends
+}
+
+func defaultJudgeFamilyAdvisory(resolution provider.DefaultPairResolution, ready map[string]bool) map[string]any {
+	const judgeBackend = "claude"
+	providerBackends := append([]string(nil), resolution.SelectedDefaultPair...)
+	if providerBackends == nil {
+		providerBackends = []string{}
+	}
+	relation := provider.JudgeFamilyRelation(judgeBackend, providerBackends)
+	readyAlternatives := provider.NonContestantJudgeBackends(providerBackends, ready)
+	if readyAlternatives == nil {
+		readyAlternatives = []string{}
+	}
+	return map[string]any{
+		"judge_backend":                 judgeBackend,
+		"judge_family":                  provider.FamilyForBackend(judgeBackend),
+		"provider_backends":             providerBackends,
+		"relation":                      relation,
+		"ready_non_contestant_judges":   readyAlternatives,
+		"advisory_only":                 true,
+		"independence_not_measured_yet": true,
+	}
+}
+
+func doctorJudgeFamilyAdvisoryLine(advisory map[string]any) string {
+	relation, _ := advisory["relation"].(string)
+	if relation != provider.JudgeFamilyRelationSameAsSome && relation != provider.JudgeFamilyRelationSameAsAll {
+		return ""
+	}
+	readyAlternatives, _ := advisory["ready_non_contestant_judges"].([]string)
+	if len(readyAlternatives) == 0 {
+		return ""
+	}
+	judgeBackend, _ := advisory["judge_backend"].(string)
+	target := "a selected provider"
+	if relation == provider.JudgeFamilyRelationSameAsAll {
+		target = "all selected providers"
+	}
+	return "default judge " + judgeBackend + " shares provider-family metadata with " + target + "; ready non-contestant judge backends: " + joinComma(readyAlternatives) + ". Advisory only; no defaults changed."
 }
 
 func participantForBackend(backend string, effort string) workorder.Participant {

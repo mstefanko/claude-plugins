@@ -209,6 +209,11 @@ unprotected repo-relative metric commands, and final JSON `n` requirements when
 `metric.min_runs > 1`.
 Validation also warns when `goal` or `background` mention path-like tokens that
 do not exist under the current invocation directory.
+For judge-heavy work orders (`compare`, `analyze`, `build`, and code-review
+`gather`), validation may also emit an advisory-only warning when the judge
+shares provider-family metadata with one or both providers. It does not probe
+provider readiness; use `bakeoff doctor` to check ready non-contestant judge
+backends.
 
 `bakeoff validate context` previews the prompt context blocks providers would
 receive from the current invocation directory. It prints the resolved context
@@ -467,7 +472,9 @@ JSON output includes `canonical_default_pair`, `selected_default_pair`,
 `fallback_candidates`, `fallback_requires_user_choice`,
 `canonical_default_available`, `runnable_default_pair_available`, and a
 `providers` map with per-backend availability, default model, auth probe, scope
-capabilities, and build preflight details when requested.
+capabilities, provider family, and build preflight details when requested. It
+also includes `judge_family_advisory`, an advisory-only provider-family
+relation for the default generated judge and selected default pair.
 
 ## JSON Modes
 

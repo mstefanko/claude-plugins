@@ -181,6 +181,31 @@ func JudgeFamilyRelation(judgeBackend string, providerBackends []string) string 
 	return JudgeFamilyRelationDifferentFromAll
 }
 
+func NonContestantJudgeBackends(providerBackends []string, ready map[string]bool) []string {
+	if len(providerBackends) == 0 {
+		return nil
+	}
+	providerFamilies := map[string]bool{}
+	for _, backend := range providerBackends {
+		family := FamilyForBackend(backend)
+		if family == ProviderFamilyUnknown {
+			return nil
+		}
+		providerFamilies[family] = true
+	}
+	out := []string{}
+	for _, spec := range backendCatalog {
+		if spec.Family == "" || spec.Family == ProviderFamilyUnknown || providerFamilies[spec.Family] {
+			continue
+		}
+		if ready != nil && !ready[spec.Name] {
+			continue
+		}
+		out = append(out, spec.Name)
+	}
+	return out
+}
+
 type DefaultPairResolution struct {
 	CanonicalDefaultPair       []string
 	SelectedDefaultPair        []string

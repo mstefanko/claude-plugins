@@ -138,6 +138,27 @@ func TestJudgeFamilyRelation(t *testing.T) {
 	}
 }
 
+func TestNonContestantJudgeBackends(t *testing.T) {
+	ready := map[string]bool{
+		"claude":  true,
+		"codex":   true,
+		"gemini":  true,
+		"copilot": false,
+	}
+	got := NonContestantJudgeBackends([]string{"claude", "codex"}, ready)
+	if !reflect.DeepEqual(got, []string{"gemini"}) {
+		t.Fatalf("ready non-contestant backends = %#v", got)
+	}
+	got = NonContestantJudgeBackends([]string{"claude", "codex"}, nil)
+	if !reflect.DeepEqual(got, []string{"gemini", "copilot"}) {
+		t.Fatalf("all non-contestant backends = %#v", got)
+	}
+	got = NonContestantJudgeBackends([]string{"claude", "missing"}, ready)
+	if got != nil {
+		t.Fatalf("unknown provider family should suppress alternatives, got %#v", got)
+	}
+}
+
 func TestScopeCapabilitiesFromHelp(t *testing.T) {
 	claude := ScopeCapabilitiesFromHelp("claude", "--allowedTools --disallowed-tools --tools --permission-mode --output-last-message")
 	if !claude.Available || !claude.Supports["allowed_tools"] || !claude.Supports["disallowed_tools"] || !claude.Supports["tools"] || !claude.Supports["permission_mode"] || !claude.Supports["output_last_message"] {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/apperror"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/commands"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/provider"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/repocontext"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
 	"github.com/spf13/cobra"
@@ -171,6 +172,9 @@ func validateWarnings(root string, wo *workorder.WorkOrder) []string {
 			warnings = append(warnings, message)
 		}
 	}
+	if warning := judgeFamilyWarning(wo); warning != "" {
+		warnings = append(warnings, warning)
+	}
 	if wo == nil || wo.Build == nil {
 		return warnings
 	}
@@ -195,6 +199,61 @@ func validateWarnings(root string, wo *workorder.WorkOrder) []string {
 		}
 	}
 	return warnings
+}
+
+func judgeFamilyWarning(wo *workorder.WorkOrder) string {
+	if wo == nil || !judgeFamilyAdvisoryContext(wo) {
+		return ""
+	}
+	providerBackends := make([]string, 0, len(wo.Providers))
+	for _, participant := range wo.Providers {
+		providerBackends = append(providerBackends, participant.Backend)
+	}
+	relation := provider.JudgeFamilyRelation(wo.Judge.Backend, providerBackends)
+	switch relation {
+	case provider.JudgeFamilyRelationSameAsAll:
+		return judgeFamilyWarningText(wo.Judge.Backend, "all providers")
+	case provider.JudgeFamilyRelationSameAsSome:
+		matches := matchingProviderBackends(wo.Judge.Backend, wo.Providers)
+		if len(matches) == 0 {
+			return ""
+		}
+		target := "provider " + matches[0]
+		if len(matches) > 1 {
+			target = "providers " + strings.Join(matches, ", ")
+		}
+		return judgeFamilyWarningText(wo.Judge.Backend, target)
+	default:
+		return ""
+	}
+}
+
+func judgeFamilyAdvisoryContext(wo *workorder.WorkOrder) bool {
+	switch wo.Type {
+	case "compare", "analyze", "build":
+		return true
+	case "gather":
+		return wo.Facet != nil && wo.Facet.ID == "code-review"
+	default:
+		return false
+	}
+}
+
+func matchingProviderBackends(judgeBackend string, providers []workorder.Participant) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, participant := range providers {
+		if seen[participant.Backend] || !provider.SameBackendFamily(judgeBackend, participant.Backend) {
+			continue
+		}
+		seen[participant.Backend] = true
+		out = append(out, participant.Backend)
+	}
+	return out
+}
+
+func judgeFamilyWarningText(judgeBackend string, target string) string {
+	return "judge family advisory: judge " + judgeBackend + " shares provider-family metadata with " + target + "; for high-stakes judge-heavy runs, run bakeoff doctor to check ready non-contestant judge backends. Advisory only; validation still succeeds."
 }
 
 func repoRelativeCommand(command string) bool {
