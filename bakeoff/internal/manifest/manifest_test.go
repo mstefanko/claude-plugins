@@ -2,10 +2,12 @@ package manifest_test
 
 import (
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/manifest"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/provider"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/triage"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/verify"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
@@ -164,6 +166,118 @@ func TestWriteRunManifestProviderSummaryKeepsRawAndAddsCompactStatus(t *testing.
 	}
 }
 
+func TestWriteRunManifestAddsDerivedLocalTelemetry(t *testing.T) {
+	runDir := filepath.Join(t.TempDir(), "runs", "r1")
+	writeMinimalRun(t, runDir)
+	writeJSON(t, filepath.Join(runDir, "work-order.json"), map[string]any{
+		"schema_version": 1,
+		"id":             "sample",
+		"type":           "gather",
+		"goal":           "test",
+		"background":     "",
+		"facet":          map[string]any{"id": "code-review", "kind": "generic", "focus": "bugs", "include": []string{"correctness"}},
+		"providers": []map[string]any{
+			{"id": "claude", "backend": "claude", "model": "m", "scope": "codebase"},
+			{"id": "codex", "backend": "codex", "model": "m", "scope": "web"},
+		},
+		"judge":   map[string]any{"backend": "claude", "model": "judge"},
+		"budgets": map[string]any{"wall_clock_seconds": 3, "max_output_bytes": 1000},
+	})
+	writeJSON(t, filepath.Join(runDir, "decision.json"), map[string]any{
+		"decision_kind":   "structured_union",
+		"judge_ran":       true,
+		"judge_attempted": true,
+		"judge_completed": true,
+		"prompt_trim":     map[string]any{"dropped": []any{map[string]any{"prompt": "worker:claude"}, map[string]any{"prompt": "judge:pass1"}}},
+		"provider_statuses": map[string]any{
+			"claude": map[string]any{"status": "ok", "stdout_truncated": true},
+			"codex":  map[string]any{"status": "ok", "stderr_truncated": true},
+		},
+	})
+	writeJSON(t, filepath.Join(runDir, "meta.json"), map[string]any{
+		"run_id": "r1",
+		"type":   "gather",
+		"facet":  map[string]any{"id": "code-review"},
+		"resolved_models": map[string]any{
+			"providers": map[string]any{
+				"codex":  map[string]any{"backend": "codex", "model": "gpt"},
+				"claude": map[string]any{"backend": "claude", "model": "sonnet"},
+			},
+			"judge": map[string]any{"backend": "claude", "model": "opus"},
+		},
+	})
+
+	value, err := manifest.WriteRunManifest(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	telemetry := value["telemetry"].(map[string]any)
+	if telemetry["schema_version"] != 1 {
+		t.Fatalf("telemetry schema = %#v", telemetry)
+	}
+	route := telemetry["route"].(map[string]any)
+	if route["type"] != "gather" || route["facet_id"] != "code-review" || route["escalation_mode"] != nil || route["source_type"] != nil {
+		t.Fatalf("route telemetry = %#v", route)
+	}
+	providers := telemetry["providers"].(map[string]any)
+	if providers["count"] != 2 || providers["family_diversity"] != "mixed" {
+		t.Fatalf("provider telemetry = %#v", providers)
+	}
+	if !reflect.DeepEqual(providers["backends"], []string{"claude", "codex"}) {
+		t.Fatalf("provider backends = %#v", providers["backends"])
+	}
+	if !reflect.DeepEqual(providers["families"], []string{provider.ProviderFamilyAnthropic, provider.ProviderFamilyOpenAI}) {
+		t.Fatalf("provider families = %#v", providers["families"])
+	}
+	judge := telemetry["judge"].(map[string]any)
+	if judge["backend"] != "claude" || judge["family"] != provider.ProviderFamilyAnthropic || judge["family_relation"] != provider.JudgeFamilyRelationSameAsSome || judge["ran"] != true || judge["completed"] != true {
+		t.Fatalf("judge telemetry = %#v", judge)
+	}
+	artifacts := telemetry["artifacts"].(map[string]any)
+	if artifacts["prompt_trim_count"] != 2 || artifacts["output_truncation_count"] != 2 {
+		t.Fatalf("artifact telemetry = %#v", artifacts)
+	}
+	triageTelemetry := telemetry["triage"].(map[string]any)
+	if triageTelemetry["state"] != "no" {
+		t.Fatalf("triage telemetry = %#v", triageTelemetry)
+	}
+}
+
+func TestWriteRunManifestTelemetryJudgeFamilyRelations(t *testing.T) {
+	tests := []struct {
+		name      string
+		judge     string
+		providers []string
+		relation  string
+		diversity string
+	}{
+		{name: "same all", judge: "claude", providers: []string{"claude"}, relation: provider.JudgeFamilyRelationSameAsAll, diversity: "single"},
+		{name: "same some", judge: "claude", providers: []string{"claude", "codex"}, relation: provider.JudgeFamilyRelationSameAsSome, diversity: "mixed"},
+		{name: "different all", judge: "claude", providers: []string{"codex"}, relation: provider.JudgeFamilyRelationDifferentFromAll, diversity: "single"},
+		{name: "unknown", judge: "claude", providers: []string{"mystery"}, relation: provider.JudgeFamilyRelationUnknown, diversity: "unknown"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runDir := filepath.Join(t.TempDir(), "runs", "r1")
+			writeTelemetryBackendRun(t, runDir, tt.judge, tt.providers)
+
+			value, err := manifest.WriteRunManifest(runDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			telemetry := value["telemetry"].(map[string]any)
+			judge := telemetry["judge"].(map[string]any)
+			if judge["family_relation"] != tt.relation {
+				t.Fatalf("judge telemetry = %#v", judge)
+			}
+			providers := telemetry["providers"].(map[string]any)
+			if providers["family_diversity"] != tt.diversity {
+				t.Fatalf("provider telemetry = %#v", providers)
+			}
+		})
+	}
+}
+
 func TestWriteRunManifestMarksZeroSelectedTriage(t *testing.T) {
 	runDir := filepath.Join(t.TempDir(), "runs", "r1")
 	writeMinimalRun(t, runDir)
@@ -187,6 +301,69 @@ func TestWriteRunManifestMarksZeroSelectedTriage(t *testing.T) {
 	sourceFilter := triageSummary["source_finding_filter"].(map[string]int)
 	if sourceFilter["included"] != 0 || sourceFilter["skipped_non_actionable"] != 2 || sourceFilter["skipped_out_of_facet"] != 1 {
 		t.Fatalf("source finding filter = %#v", sourceFilter)
+	}
+	telemetry := value["telemetry"].(map[string]any)
+	triageTelemetry := telemetry["triage"].(map[string]any)
+	if triageTelemetry["state"] != "yes" || triageTelemetry["item_count"] != 0 || triageTelemetry["highest_severity"] != nil {
+		t.Fatalf("triage telemetry = %#v", triageTelemetry)
+	}
+}
+
+func TestWriteRunManifestTelemetryTriageStates(t *testing.T) {
+	tests := []struct {
+		name      string
+		setup     func(t *testing.T, runDir string)
+		wantState string
+		wantItems any
+	}{
+		{name: "no", wantState: "no", wantItems: nil},
+		{name: "dry run", wantState: "dry_run", wantItems: nil, setup: func(t *testing.T, runDir string) {
+			writeJSON(t, filepath.Join(runDir, "triage", "status.json"), map[string]any{"status": "dry_run"})
+		}},
+		{name: "yes", wantState: "yes", wantItems: 2, setup: func(t *testing.T, runDir string) {
+			hashes, err := triage.ComputeInputHashes(runDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeJSON(t, filepath.Join(runDir, "triage", "final.json"), map[string]any{
+				"schema_version": 1,
+				"status":         "complete",
+				"input_hashes":   hashes,
+				"items": []any{
+					map[string]any{"classification": "real_issue", "severity": "medium"},
+					map[string]any{"classification": "false_positive", "severity": "high"},
+				},
+			})
+			writeText(t, filepath.Join(runDir, "triage", "triage.md"), "# triage\n")
+		}},
+		{name: "stale", wantState: "stale", wantItems: 1, setup: func(t *testing.T, runDir string) {
+			writeJSON(t, filepath.Join(runDir, "triage", "final.json"), map[string]any{
+				"schema_version": 1,
+				"status":         "complete",
+				"input_hashes":   map[string]any{"decision_sha256": "stale", "report_sha256": "stale"},
+				"items":          []any{map[string]any{"classification": "real_issue", "severity": "low"}},
+			})
+			writeText(t, filepath.Join(runDir, "triage", "triage.md"), "# triage\n")
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runDir := filepath.Join(t.TempDir(), "runs", "r1")
+			writeMinimalRun(t, runDir)
+			if tt.setup != nil {
+				tt.setup(t, runDir)
+			}
+
+			value, err := manifest.WriteRunManifest(runDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			telemetry := value["telemetry"].(map[string]any)
+			triageTelemetry := telemetry["triage"].(map[string]any)
+			if triageTelemetry["state"] != tt.wantState || triageTelemetry["item_count"] != tt.wantItems {
+				t.Fatalf("triage telemetry = %#v", triageTelemetry)
+			}
+		})
 	}
 }
 
@@ -242,6 +419,65 @@ func TestBuildManifestRequiresContextAndFingerprintsBuildArtifacts(t *testing.T)
 	row := manifest.RowForLS(runDir)
 	if row["type"] != "build" || row["decision_kind"] != "pick_winner" || !strings.HasSuffix(row["report_path"].(string), filepath.Join("build1", "report.md")) {
 		t.Fatalf("ls row = %#v", row)
+	}
+}
+
+func TestBuildManifestTelemetryUsesDiagnosticsTruncationCount(t *testing.T) {
+	runDir := filepath.Join(t.TempDir(), "runs", "build1")
+	writeMinimalBuildRun(t, runDir, true)
+	writeJSON(t, filepath.Join(runDir, "decision.json"), map[string]any{
+		"decision_kind":     "pick_winner",
+		"selection_basis":   "gate",
+		"canonical_winner":  "claude",
+		"judge_ran":         false,
+		"provider_statuses": map[string]any{"claude": map[string]any{"status": "ok", "stdout_truncated": true}},
+	})
+	writeJSON(t, filepath.Join(runDir, "diagnostics.json"), map[string]any{
+		"schema_version": 1,
+		"output_truncation": []any{
+			map[string]any{"scope": "provider", "provider_id": "claude", "stream": "stdout"},
+			map[string]any{"scope": "verify", "provider_id": "claude", "verifier_id": "unit", "stream": "stderr"},
+			map[string]any{"scope": "baseline", "verifier_id": "unit", "stream": "stdout"},
+		},
+	})
+
+	value, err := manifest.WriteRunManifest(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	telemetry := value["telemetry"].(map[string]any)
+	artifacts := telemetry["artifacts"].(map[string]any)
+	if artifacts["output_truncation_count"] != 3 {
+		t.Fatalf("artifact telemetry = %#v", artifacts)
+	}
+}
+
+func TestWriteRunManifestTelemetryEscalationRoute(t *testing.T) {
+	runDir := filepath.Join(t.TempDir(), "runs", "child")
+	writeMinimalRun(t, runDir)
+	writeJSON(t, filepath.Join(runDir, "meta.json"), map[string]any{
+		"run_id":          "child",
+		"type":            "escalation",
+		"source_type":     "gather",
+		"escalation_mode": "witness",
+		"resolved_models": map[string]any{},
+	})
+	writeJSON(t, filepath.Join(runDir, "decision.json"), map[string]any{
+		"decision_kind":     "escalation_advisory_supported",
+		"judge_ran":         false,
+		"source_mode":       "gather",
+		"escalation_mode":   "witness",
+		"provider_statuses": map[string]any{},
+	})
+
+	value, err := manifest.WriteRunManifest(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	telemetry := value["telemetry"].(map[string]any)
+	route := telemetry["route"].(map[string]any)
+	if route["type"] != "escalation" || route["source_type"] != "gather" || route["escalation_mode"] != "witness" {
+		t.Fatalf("route telemetry = %#v", route)
 	}
 }
 
@@ -354,6 +590,41 @@ func writeMinimalBuildRun(t *testing.T, runDir string, includeContext bool) {
 	if includeContext {
 		writeJSON(t, filepath.Join(runDir, "build-context.json"), map[string]any{"schema_version": 1, "run_id": "build1"})
 	}
+}
+
+func writeTelemetryBackendRun(t *testing.T, runDir string, judge string, backends []string) {
+	t.Helper()
+	providers := make([]map[string]any, 0, len(backends))
+	statuses := map[string]any{}
+	for i, backend := range backends {
+		id := backend
+		if id == "" {
+			id = "provider"
+		}
+		if _, ok := statuses[id]; ok {
+			id = id + "-" + string(rune('a'+i))
+		}
+		providers = append(providers, map[string]any{"id": id, "backend": backend, "model": "m", "scope": "codebase"})
+		statuses[id] = map[string]any{"status": "ok"}
+	}
+	writeJSON(t, filepath.Join(runDir, "work-order.json"), map[string]any{
+		"schema_version": 1,
+		"id":             "sample",
+		"type":           "gather",
+		"goal":           "test",
+		"background":     "",
+		"providers":      providers,
+		"judge":          map[string]any{"backend": judge, "model": "judge"},
+		"budgets":        map[string]any{"wall_clock_seconds": 3, "max_output_bytes": 1000},
+	})
+	writeJSON(t, filepath.Join(runDir, "decision.json"), map[string]any{
+		"decision_kind":     "structured_union",
+		"judge_ran":         true,
+		"judge_completed":   true,
+		"provider_statuses": statuses,
+	})
+	writeJSON(t, filepath.Join(runDir, "meta.json"), map[string]any{"run_id": "r1", "type": "gather", "resolved_models": map[string]any{}})
+	writeText(t, filepath.Join(runDir, "report.md"), "# report\n")
 }
 
 func contains(items []string, want string) bool {

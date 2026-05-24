@@ -685,7 +685,10 @@ Needs measured before policy features:
 
 ## Slice 8: Local Telemetry Fields
 
-Recommendation: build after feedback shape is defined, before policy changes.
+Recommendation: build a manifest-only v1 now, after provider-family metadata and
+before policy changes. Do not wait for accepted-finding feedback unless the first
+telemetry implementation tries to model accepted outcomes. Feedback can be added
+later as an optional `telemetry.feedback` summary once Slice 7 exists.
 
 Evidence and reason for inclusion:
 
@@ -699,37 +702,113 @@ Evidence and reason for inclusion:
 User value:
 
 - Strategic high value.
-- Direct value is delayed, but it makes future default changes defensible.
+- Immediate direct value is modest but real: a run can explain its route,
+  provider-family relation, trim/truncation events, judge status, and triage
+  state without making a maintainer open five artifacts.
+- Future direct value is stronger: judge-family policy, advisory defaults,
+  rotation, and benchmarks can be evaluated from local run facts rather than
+  anecdotes.
+
+Pinned v1 decisions:
+
+- Store only a compact `telemetry` object in `manifest.json`.
+- Do not create `telemetry.json` in v1.
+- Do not add a telemetry export command in v1.
+- Do not add new work-order fields, CLI flags, or policy behavior.
+- Keep telemetry entirely derived from existing artifacts. No command should
+  write telemetry directly except by regenerating `manifest.json`.
+- Do not expose telemetry in `show`, `bundle`, or `ls --json` in v1 unless a
+  specific user story requires it. Manifest consumers can read the object.
+- Omit feedback fields until `triage/human-feedback.json` exists. Do not
+  pre-model human outcomes beyond leaving room for `telemetry.feedback`.
+
+Recommended v1 schema:
+
+```json
+{
+  "telemetry": {
+    "schema_version": 1,
+    "route": {
+      "type": "gather",
+      "facet_id": "code-review",
+      "escalation_mode": null,
+      "source_type": null
+    },
+    "providers": {
+      "count": 2,
+      "backends": ["claude", "codex"],
+      "families": ["anthropic", "openai"],
+      "family_diversity": "mixed"
+    },
+    "judge": {
+      "backend": "claude",
+      "family": "anthropic",
+      "family_relation": "same_as_some",
+      "ran": true,
+      "completed": true
+    },
+    "artifacts": {
+      "prompt_trim_count": 0,
+      "output_truncation_count": 0
+    },
+    "triage": {
+      "state": "yes",
+      "item_count": 3,
+      "highest_severity": "high"
+    }
+  }
+}
+```
 
 Implementation details:
 
 - Primary files:
-  - `internal/artifact/artifact.go`
   - `internal/manifest/manifest.go`
-  - `internal/summary`
-  - `internal/commands/lscmd`
-  - `internal/commands/showcmd`
-  - `internal/commands/bundlecmd`
-  - build diagnostics code
-- Prefer additive fields in existing local artifacts:
-  - `meta.json`
-  - `decision.json`
-  - `diagnostics.json`
-  - `triage/status.json`
-  - `manifest.json`
-- Add `telemetry.json` only if existing files become confusing or too large.
-- Include:
-  - route classification;
-  - selector path;
-  - provider family diversity;
-  - judge-family relation;
-  - prompt trims;
-  - output caps;
-  - triage state;
-  - escalation follow-ups;
-  - feedback summary if present.
-- Do not store source text, prompts, or provider output content in telemetry
-  fields.
+  - `internal/manifest/manifest_test.go`
+- Secondary files only if implementation shows a gap:
+  - `internal/provider/provider.go` for helper reuse only; do not duplicate
+    family mappings.
+  - `internal/commands/buildcmd/diagnostics.go` only if build truncation facts
+    need a tiny exported/readable helper. Prefer reading `diagnostics.json` from
+    manifest code first.
+- Data sources:
+  - route: `work-order.json`, `meta.json`, escalation manifest fields.
+  - provider backends/models: `meta.resolved_models.providers` with
+    `work-order.json` as fallback.
+  - provider families: `provider.FamilyForBackend`.
+  - provider family diversity:
+    - `unknown` if any provider family is unknown or no providers are known;
+    - `single` if all known providers share one family;
+    - `mixed` if two or more known families are present.
+  - judge backend/model: `meta.resolved_models.judge` with `work-order.json` as
+    fallback.
+  - judge family relation: `provider.JudgeFamilyRelation`.
+  - prompt trim count: count `decision.prompt_trim.dropped`.
+  - output truncation count: count provider status `stdout_truncated` and
+    `stderr_truncated`; for build runs, use `diagnostics.output_truncation` as
+    the authoritative count when present because it already includes provider
+    worker and verifier truncation records.
+  - triage: reuse the existing manifest triage summary.
+- Include only counts and categorical labels. Paths may remain in the existing
+  manifest `artifacts` and fingerprint sections, not in telemetry.
+- Do not store source text, prompt text, report snippets, provider output,
+  triage rationales, comments, or human feedback comments in telemetry fields.
+
+Suggested implementation shape:
+
+- Add `telemetrySummary(runDir, workOrder, meta, decision, triageSummary)` in
+  `internal/manifest/manifest.go`.
+- Call it from `BuildRunManifest` after `triageSummary` is built.
+- Add tiny local helpers for:
+  - sorted provider backends from resolved models/work order;
+  - provider family list and diversity label;
+  - output truncation count from decision provider statuses and optional
+    `diagnostics.json`;
+  - prompt trim count from `decision.prompt_trim.dropped`.
+- Keep helper visibility package-local unless tests need exported behavior.
+- Do not increment `manifest.SchemaVersion` for this additive field unless
+  existing verification semantics require it. Current manifest readers already
+  tolerate additional fields.
 
 Risk and concerns:
 
@@ -744,20 +823,54 @@ Risk and concerns:
   - local-only;
   - content-light;
   - additive schema;
-  - stable names before implementation.
+  - stable names before implementation;
+  - derived-only manifest summary;
+  - no v1 CLI/UI surface beyond `manifest.json`.
 
 Validation:
 
-- Artifact and manifest tests.
-- `ls --json` tests only if fields are exposed there.
-- Dogfood matrix across gather, compare, analyze, review, build, witness,
-  dispute, and independent escalation.
+- Manifest unit tests are necessary before building because the feature is a
+  manifest contract and easy to regress silently.
+- Add tests for:
+  - normal gather route, provider families, and judge relation;
+  - `same_as_all`, `same_as_some`, `different_from_all`, and `unknown` judge
+    family relation cases;
+  - prompt trim count from `decision.prompt_trim.dropped`;
+  - output truncation count from provider status fields;
+  - build output truncation count from `diagnostics.output_truncation`;
+  - triage state/item/severity passthrough for `yes`, `stale`, `dry_run`, and
+    `no`;
+  - escalation route fields including `escalation_mode` and `source_type`.
+- `ls --json`, `show`, and `bundle` tests are not necessary in v1 because those
+  commands should not expose telemetry yet.
+- Artifact write-path tests are not necessary in v1 if telemetry is only
+  derived during manifest generation.
+- Dogfood after implementation across at least one gather/code-review run, one
+  build run, and one escalation run. Full matrix across gather, compare,
+  analyze, review, build, witness, dispute, and independent escalation is useful
+  before using telemetry to justify policy changes, not required for the first
+  additive manifest field.
+
+Bakeoff CLI usage recommendation:
+
+- Do not build this competitively by default. The v1 change is small,
+  deterministic, and mostly a manifest helper plus table-driven tests; a
+  competitive build risks schema bloat and extra review noise.
+- If maintainers want to dogfood Bakeoff here, use it before implementation as
+  an `analyze` or `compare` run over the pinned schema choices, not as a
+  competing code-generation step.
+- After the direct implementation lands, a `witness` or review-style Bakeoff run
+  can be useful to challenge privacy/bloat risks and missed test cases.
 
 Open questions:
 
-- Whether to include telemetry in `manifest.json` or keep only summaries there.
-- Whether to create a local export command now. Default: no export command until
-  schema settles.
+- Exact final enum name for provider family diversity. Default:
+  `unknown|single|mixed`.
+- Whether `manifest.SchemaVersion` should bump for additive telemetry. Default:
+  no, because existing consumers should tolerate added fields.
+- Whether build `diagnostics.json` should be parsed from manifest code or exposed
+  through a small helper. Default: parse locally first; extract only if it
+  becomes awkward.
 
 Needs measured before policy features:
 
@@ -1157,7 +1270,9 @@ The audits validate the prior reject/avoid bucket.
 | Should unknown provider family block warnings? | Slice 6/9 | No. Unknown suppresses family advisories. |
 | Which command owns human feedback? | Slice 7 | Prefer `bakeoff triage feedback`. |
 | What does "accepted" mean? | Slice 7 | Real issue accepted by human; separate from `fixed`. |
-| Should telemetry get a new file? | Slice 8 | Prefer existing artifacts first; add `telemetry.json` only if needed. |
+| Should telemetry get a new file? | Slice 8 | No for v1. Store compact derived telemetry in `manifest.json`; add `telemetry.json` only after manifest bloat is demonstrated. |
+| Should local telemetry get an export command? | Slice 8 | No for v1. Read `manifest.json`; add export only after the schema proves useful. |
+| Should telemetry wait for human feedback? | Slice 8 | No if v1 omits accepted-outcome fields. Add `telemetry.feedback` only after Slice 7 exists. |
 | Should third-party judge advisory fire for all same-family judges? | Slice 9 | No. Start with judge-heavy/high-risk contexts. |
 | Which repositories form the first internal benchmark set? | Slice 10 | Pick a fixed small set of real code-review runs with feedback. |
 | When is vendor maturity scan required? | Slice 11 | Before changing provider defaults, adding background-agent behavior, or adopting orchestration persistence. |

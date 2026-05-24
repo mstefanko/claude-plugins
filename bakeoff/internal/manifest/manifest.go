@@ -14,6 +14,7 @@ import (
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/buildinfo"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/fsutil"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/jsonutil"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/provider"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/summary"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/triage"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
@@ -102,6 +103,7 @@ func BuildRunManifest(runDir string) (map[string]any, error) {
 	if isEscalationRun(meta, decision) {
 		addEscalationManifestFields(out, meta, decision, workOrder)
 	}
+	out["telemetry"] = telemetrySummary(runDir, workOrder, meta, decision, out, triageSummary)
 	return out, nil
 }
 
@@ -327,6 +329,172 @@ func addEscalationManifestFields(out map[string]any, meta map[string]any, decisi
 	if escalation, ok := meta["escalation"].(map[string]any); ok {
 		out["escalation"] = escalation
 	}
+}
+
+func telemetrySummary(runDir string, workOrder map[string]any, meta map[string]any, decision map[string]any, manifest map[string]any, triageSummary map[string]any) map[string]any {
+	runType := jsonutil.StringValue(manifest["type"])
+	providerBackends := telemetryProviderBackends(workOrder, meta)
+	families, diversity := telemetryProviderFamilies(providerBackends)
+	judgeBackend := telemetryJudgeBackend(workOrder, meta)
+	judgeFamily := provider.ProviderFamilyUnknown
+	if judgeBackend != "" {
+		judgeFamily = provider.FamilyForBackend(judgeBackend)
+	}
+	return map[string]any{
+		"schema_version": 1,
+		"route": map[string]any{
+			"type":            nilIfEmpty(runType),
+			"facet_id":        manifest["facet_id"],
+			"escalation_mode": nilIfEmpty(jsonutil.StringValue(manifest["escalation_mode"])),
+			"source_type":     nilIfEmpty(jsonutil.StringValue(manifest["source_type"])),
+		},
+		"providers": map[string]any{
+			"count":            len(providerBackends),
+			"backends":         providerBackends,
+			"families":         families,
+			"family_diversity": diversity,
+		},
+		"judge": map[string]any{
+			"backend":         nilIfEmpty(judgeBackend),
+			"family":          judgeFamily,
+			"family_relation": provider.JudgeFamilyRelation(judgeBackend, providerBackends),
+			"ran":             truthy(decision["judge_ran"]),
+			"completed":       truthy(decision["judge_completed"]),
+		},
+		"artifacts": map[string]any{
+			"prompt_trim_count":       promptTrimCount(decision),
+			"output_truncation_count": outputTruncationCount(runDir, runType, decision),
+		},
+		"triage": telemetryTriageSummary(triageSummary),
+	}
+}
+
+func telemetryProviderBackends(workOrder map[string]any, meta map[string]any) []string {
+	fallback := workOrderProviderBackendsByID(workOrder)
+	resolved := nestedMap(nestedMap(meta, "resolved_models"), "providers")
+	if len(resolved) == 0 {
+		return orderedWorkOrderProviderBackends(workOrder)
+	}
+	ids := map[string]bool{}
+	for id := range resolved {
+		ids[id] = true
+	}
+	for id := range fallback {
+		ids[id] = true
+	}
+	out := []string{}
+	for _, id := range sortedKeys(ids) {
+		modelInfo, _ := resolved[id].(map[string]any)
+		backend := jsonutil.StringValue(modelInfo["backend"])
+		if backend == "" {
+			backend = fallback[id]
+		}
+		if backend != "" {
+			out = append(out, backend)
+		}
+	}
+	return out
+}
+
+func workOrderProviderBackendsByID(workOrder map[string]any) map[string]string {
+	out := map[string]string{}
+	for _, item := range jsonutil.ListValue(workOrder["providers"]) {
+		obj, _ := item.(map[string]any)
+		id := jsonutil.StringValue(obj["id"])
+		backend := jsonutil.StringValue(obj["backend"])
+		if id != "" && backend != "" {
+			out[id] = backend
+		}
+	}
+	return out
+}
+
+func orderedWorkOrderProviderBackends(workOrder map[string]any) []string {
+	out := []string{}
+	for _, item := range jsonutil.ListValue(workOrder["providers"]) {
+		obj, _ := item.(map[string]any)
+		if backend := jsonutil.StringValue(obj["backend"]); backend != "" {
+			out = append(out, backend)
+		}
+	}
+	return out
+}
+
+func telemetryProviderFamilies(backends []string) ([]string, string) {
+	if len(backends) == 0 {
+		return []string{}, "unknown"
+	}
+	seen := map[string]bool{}
+	unknown := false
+	for _, backend := range backends {
+		family := provider.FamilyForBackend(backend)
+		if family == provider.ProviderFamilyUnknown {
+			unknown = true
+		}
+		seen[family] = true
+	}
+	families := sortedKeys(seen)
+	if unknown {
+		return families, "unknown"
+	}
+	if len(families) == 1 {
+		return families, "single"
+	}
+	return families, "mixed"
+}
+
+func telemetryJudgeBackend(workOrder map[string]any, meta map[string]any) string {
+	judge := nestedMap(nestedMap(meta, "resolved_models"), "judge")
+	if backend := jsonutil.StringValue(judge["backend"]); backend != "" {
+		return backend
+	}
+	if judge, ok := workOrder["judge"].(map[string]any); ok {
+		return jsonutil.StringValue(judge["backend"])
+	}
+	return ""
+}
+
+func promptTrimCount(decision map[string]any) int {
+	promptTrim, _ := decision["prompt_trim"].(map[string]any)
+	return len(jsonutil.ListValue(promptTrim["dropped"]))
+}
+
+func outputTruncationCount(runDir string, runType string, decision map[string]any) int {
+	if runType == "build" {
+		if count, ok := buildDiagnosticsOutputTruncationCount(runDir); ok {
+			return count
+		}
+	}
+	count := 0
+	for _, status := range nestedMap(decision, "provider_statuses") {
+		obj, _ := status.(map[string]any)
+		if jsonutil.BoolValue(obj["stdout_truncated"]) {
+			count++
+		}
+		if jsonutil.BoolValue(obj["stderr_truncated"]) {
+			count++
+		}
+	}
+	return count
+}
+
+func buildDiagnosticsOutputTruncationCount(runDir string) (int, bool) {
+	obj, ok := readJSON(filepath.Join(runDir, "diagnostics.json")).(map[string]any)
+	if !ok {
+		return 0, false
+	}
+	if _, ok := obj["output_truncation"]; !ok {
+		return 0, true
+	}
+	return len(jsonutil.ListValue(obj["output_truncation"])), true
+}
+
+func telemetryTriageSummary(triageSummary map[string]any) map[string]any {
+	return compactNilMap(map[string]any{
+		"state":            triageSummary["state"],
+		"item_count":       triageSummary["item_count"],
+		"highest_severity": triageSummary["highest_severity"],
+	})
 }
 
 func artifactPathsForType(runDir string, runType string) (map[string]any, error) {
