@@ -9,6 +9,9 @@ allowed-tools: Read, Write, Edit, Glob, Grep, Bash(${CLAUDE_PLUGIN_ROOT}/scripts
 Use the `bakeoff-run` skill for the entire workflow. Treat this command's
 arguments and the user's request as input to that skill.
 
+Keep route-advisor wording and mode-routing examples in the skill/docs; this
+shim only delegates to `bakeoff-run`.
+
 Do not satisfy the requested research, review, comparison, analysis, or build
 inline. Do not call provider CLIs directly; only the Bakeoff CLI may launch
 providers. If the `bakeoff-run` skill is unavailable, stop and report that the

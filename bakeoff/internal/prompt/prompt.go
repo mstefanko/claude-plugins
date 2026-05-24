@@ -344,6 +344,9 @@ func isCodeReviewWitnessPayload(payload any) bool {
 	if obj == nil {
 		return false
 	}
+	// Production escalation payloads carry the work order as JSON text.
+	// The map/facet branches keep direct prompt callers and tests from needing
+	// to serialize metadata just to exercise this conditional rule block.
 	if facetIDFromValue(obj["facet"]) == "code-review" {
 		return true
 	}

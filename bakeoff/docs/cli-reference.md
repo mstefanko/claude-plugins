@@ -34,6 +34,19 @@ fallback in the preview. Existing work-order paths are never rewritten or
 substituted. Adding a third provider after a completed non-build run uses
 `bakeoff escalate`; it is not a work-order schema change.
 
+Natural-language route cues used by `/bakeoff:run` previews:
+
+| User phrase | Route advisor |
+| --- | --- |
+| `build ...` with acceptance criteria, edit scope, and a gate | `Why this loop: build-verifier path` |
+| `audit this report`, `second opinion on this report`, `fight the findings`, or bare `dispute this report` | `Why this loop: witness audit of current report` |
+| `is finding F-007 real` | `Why this loop: focused dispute packet` |
+| `second opinion on the question` or `add Gemini to this completed run` | `Why this loop: fresh third answer` |
+| Formatter-only, vague one-pass, or otherwise weak-fit requests | `Why this loop: single-agent advised`; reply `draft anyway` to continue |
+
+`Why this loop: build-verifier path` belongs to normal build previews, not
+`bakeoff escalate`; build escalation is unsupported.
+
 Recognized `/bakeoff:run` flags:
 
 | Flag | Routed to | Meaning |
@@ -190,6 +203,10 @@ bakeoff validate context WORK_ORDER [--provider ID] [--no-repo-layout]
 
 Loads JSON or JSONC, validates schema fields, prints the mode, facet, budgets,
 scope policy, providers, and judge, then exits without running providers.
+For build metric verifiers, validation rejects missing `metric.min_delta_percent`
+and warns about omitted `metric.noise_floor_percent`, one-run noise floors,
+unprotected repo-relative metric commands, and final JSON `n` requirements when
+`metric.min_runs > 1`.
 Validation also warns when `goal` or `background` mention path-like tokens that
 do not exist under the current invocation directory.
 
@@ -252,6 +269,9 @@ Flags:
 Build work orders require at least one `kind: "gate"` verifier. Metric
 verifiers are optional. A provider patch is eligible only after a successful
 provider run, patch capture, scope checks, and gate verification.
+Metric selectors remain conservative: `metric.min_delta_percent` is required,
+`metric.noise_floor_percent` should be explicit, and repeated metric runs should
+emit a final aggregate JSON object with `n`.
 
 ## `bakeoff rerun`
 

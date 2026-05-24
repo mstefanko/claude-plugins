@@ -181,6 +181,15 @@ func validateWarnings(root string, wo *workorder.WorkOrder) []string {
 		if len(wo.Build.ProtectedPaths) == 0 && len(verifier.Argv) > 0 && repoRelativeCommand(verifier.Argv[0]) {
 			warnings = append(warnings, `metric verifier "`+verifier.ID+`" runs repo-relative command "`+verifier.Argv[0]+`" while build.protected_paths is empty; add the verifier script and any data fixtures to build.protected_paths if providers should not edit them`)
 		}
+		if verifier.Metric != nil {
+			_, hasNoiseFloor := verifier.Metric.Raw["noise_floor_percent"]
+			if !hasNoiseFloor {
+				warnings = append(warnings, `metric verifier "`+verifier.ID+`" omits metric.noise_floor_percent; declare a conservative noise floor so small differences do not look decisive`)
+			}
+			if hasNoiseFloor && verifier.Metric.MinRuns <= 1 {
+				warnings = append(warnings, `metric verifier "`+verifier.ID+`" declares metric.noise_floor_percent but leaves metric.min_runs=1; use repeated runs so the noise floor reflects aggregate measurements`)
+			}
+		}
 		if verifier.Metric != nil && verifier.Metric.MinRuns > 1 {
 			warnings = append(warnings, `metric verifier "`+verifier.ID+`" sets metric.min_runs=`+strconv.Itoa(verifier.Metric.MinRuns)+`; final metric JSON must include "n" >= `+strconv.Itoa(verifier.Metric.MinRuns)+` or the metric comparison will be inconclusive`)
 		}

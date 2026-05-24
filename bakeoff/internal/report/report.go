@@ -177,11 +177,11 @@ func renderWitnessAssessment(decision map[string]any) []string {
 	lines = append(lines, "- Assessment: `"+jsonutil.StringValue(assessment["assessment"])+"`")
 	lines = append(lines, "- Would change outcome: `"+strings.ToLower(fmt.Sprintf("%v", jsonutil.BoolValue(assessment["would_change_outcome"])))+"`")
 	lines = append(lines, "", "### Material Errors", "")
-	lines = append(lines, genericItemLines(jsonutil.ListValue(assessment["material_errors"]))...)
+	lines = append(lines, witnessAssessmentItemLines(jsonutil.ListValue(assessment["material_errors"]))...)
 	lines = append(lines, "", "### Missed Material", "")
-	lines = append(lines, genericItemLines(jsonutil.ListValue(assessment["missed_material"]))...)
+	lines = append(lines, witnessAssessmentItemLines(jsonutil.ListValue(assessment["missed_material"]))...)
 	lines = append(lines, "", "### Triage Concerns", "")
-	lines = append(lines, genericItemLines(jsonutil.ListValue(assessment["triage_concerns"]))...)
+	lines = append(lines, witnessAssessmentItemLines(jsonutil.ListValue(assessment["triage_concerns"]))...)
 	lines = append(lines, "")
 	return lines
 }
@@ -876,10 +876,6 @@ func genericItemLines(items []any) []string {
 			continue
 		}
 		if obj, ok := item.(map[string]any); ok {
-			if witnessLines, ok := witnessItemLines(obj); ok {
-				lines = append(lines, witnessLines...)
-				continue
-			}
 			if disputeLines, ok := disputeItemLines(obj); ok {
 				lines = append(lines, disputeLines...)
 				continue
@@ -902,8 +898,25 @@ func genericItemLines(items []any) []string {
 	return lines
 }
 
+func witnessAssessmentItemLines(items []any) []string {
+	if len(items) == 0 {
+		return []string{"- None reported."}
+	}
+	lines := []string{}
+	for _, item := range items {
+		if obj, ok := item.(map[string]any); ok {
+			if witnessLines, ok := witnessItemLines(obj); ok {
+				lines = append(lines, witnessLines...)
+				continue
+			}
+		}
+		lines = append(lines, genericItemLines([]any{item})...)
+	}
+	return lines
+}
+
 func witnessItemLines(obj map[string]any) ([]string, bool) {
-	hasWitnessShape := firstString(obj["source_finding_id"], obj["challenge_type"], obj["counterexample"], obj["effect"]) != "" || len(jsonutil.ListValue(obj["counterevidence"])) > 0
+	hasWitnessShape := firstString(obj["source_finding_id"], obj["challenge_type"], obj["counterexample"], obj["effect"]) != ""
 	if !hasWitnessShape {
 		return nil, false
 	}

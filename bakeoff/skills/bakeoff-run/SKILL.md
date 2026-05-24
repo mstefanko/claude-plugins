@@ -187,6 +187,16 @@ findings", "challenge this report", "challenge this research result",
 this report" without finding IDs maps to `witness`; "fresh answer", "second
 opinion on the question", or "run another review" maps to `independent`.
 
+Primary escalation previews must include exactly one route-advisor line for the
+recommended mode:
+
+- `Why this loop: witness audit of current report`
+- `Why this loop: focused dispute packet`
+- `Why this loop: fresh third answer`
+
+Never use `Why this loop: build-verifier path` for escalation; build
+escalation is unsupported.
+
 Escalation previews for `witness` and `dispute` must disclose before approval:
 "advisory only - cannot pick a new winner" and "escalation triage operates on
 the escalation provider's new findings, not the source run's findings." For
@@ -223,10 +233,11 @@ when practical, but the enforced safety gate is the on-disk
 
 For natural-language input, run task fit before type inference or JSON
 drafting. If weak fit, stop with "This may not need Bakeoff because <reason>"
-and ask for `draft anyway` or narrowing; do not answer directly. `draft
-anyway` clears only the task-fit or duplicate-work warning for the current turn
-and does not waive required fields. Combine the warning with missing-field
-choices when both apply: `inspect <run-id>`, `draft anyway`, or
+and `Why this loop: single-agent advised`, then ask for `draft anyway` or
+narrowing; do not answer directly. `draft anyway` clears only the task-fit or
+duplicate-work warning for the current turn and does not waive required fields.
+Combine the warning with missing-field choices when both apply:
+`inspect <run-id>`, `draft anyway`, or
 `provide fields`.
 
 Weak-fit cases include formatter-only work, build requests lacking verifier or
@@ -278,6 +289,9 @@ seconds/80000 bytes. Build drafts require `build.base_ref`, non-empty
 `build.verify`, at least one `kind: "gate"` verifier, and codebase-scoped
 providers. Do not include `build.patch_max_bytes`. For metric verifiers,
 protect benchmark harnesses, fixtures, goldens, and expected-output files.
+Require `metric.min_delta_percent`; prefer explicit `metric.noise_floor_percent`
+and `metric.min_runs >= 2` when a noise floor is declared. If `metric.min_runs`
+is greater than 1, the verifier's final JSON must include `n`.
 
 For code-review requests, gather read-only git context when useful
 (`git status --short`, `git diff --stat`, `git rev-parse --show-toplevel`,
@@ -292,7 +306,8 @@ command. Bold or visually anchor the mutation target path as
 `./<basename>.work-order.json`. Note that the run id is assigned by the CLI on
 launch unless a `--run-id` was supplied; preview-time id is the file basename.
 Include full JSON only if at most 120 lines and 10 KB; otherwise say `show` can
-print it.
+print it. For build previews, include `Why this loop: build-verifier path`.
+This line is for `/bakeoff:run` build drafting only, not escalation.
 
 Choice-label conventions: `yes`, `approve`, and `run it` accept every approved
 single-work-order preview. Mode-specific aliases such as `approve witness` are

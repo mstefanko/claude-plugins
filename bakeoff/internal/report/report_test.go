@@ -335,6 +335,10 @@ func TestRenderEscalationDisputeItemsAvoidRawMapLiterals(t *testing.T) {
 				"unresolved_points": []any{map[string]any{
 					"id":     "D-002",
 					"answer": "The follow-up remains open.",
+				}, map[string]any{
+					"id":              "D-004",
+					"claim":           "A disputed item can carry counterevidence without using witness rendering.",
+					"counterevidence": []any{"report.md:55"},
 				}},
 				"new_evidence": []any{
 					map[string]any{"point_id": "D-003", "evidence": []any{"packet:9"}},
@@ -350,6 +354,7 @@ func TestRenderEscalationDisputeItemsAvoidRawMapLiterals(t *testing.T) {
 		"- **D-001** The existing evidence is sufficient.",
 		"Evidence: report.md:42",
 		"- **D-002** The follow-up remains open.",
+		"- **D-004** A disputed item can carry counterevidence without using witness rendering.",
 		"- **D-003**",
 		"Evidence: packet:9",
 		`- {"a":"first","z":"last"}`,
@@ -361,6 +366,9 @@ func TestRenderEscalationDisputeItemsAvoidRawMapLiterals(t *testing.T) {
 	}
 	if strings.Contains(text, "map[") {
 		t.Fatalf("report leaked map literal:\n%s", text)
+	}
+	if strings.Contains(text, "Counter-evidence: report.md:55") {
+		t.Fatalf("dispute item used witness rendering:\n%s", text)
 	}
 }
 

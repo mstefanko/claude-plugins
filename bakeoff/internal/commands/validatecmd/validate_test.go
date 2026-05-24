@@ -65,8 +65,8 @@ func TestValidateSuppressesMetricCommandWarningWhenProtectedPathsExist(t *testin
 	if err := runValidate(context.Background(), f, &ValidateOptions{WorkOrder: path}); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(out.String(), "warning:") {
-		t.Fatalf("unexpected warning:\n%s", out.String())
+	if strings.Contains(out.String(), "build.protected_paths is empty") {
+		t.Fatalf("unexpected protected_paths warning:\n%s", out.String())
 	}
 }
 
@@ -85,6 +85,97 @@ func TestValidateWarnsWhenMetricMinRunsNeedsN(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "build.protected_paths is empty") {
 		t.Fatalf("unexpected protected_paths warning:\n%s", out.String())
+	}
+}
+
+func TestValidateWarnsWhenMetricNoiseFloorMissing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "build.work-order.json")
+	if err := writeValidateBuildWorkOrderWithMetric(path, []any{"scripts/bench-json"}, map[string]any{"name": "score", "direction": "higher", "min_delta_percent": 1}); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	f := validateTestFactory{streams: output.NewStreams(&out, &errOut)}
+	if err := runValidate(context.Background(), f, &ValidateOptions{WorkOrder: path}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `warning: metric verifier "score" omits metric.noise_floor_percent; declare a conservative noise floor so small differences do not look decisive`) {
+		t.Fatalf("missing noise_floor_percent warning:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "build.protected_paths is empty") {
+		t.Fatalf("unexpected protected_paths warning:\n%s", out.String())
+	}
+}
+
+func TestValidateSuppressesMissingNoiseFloorWarningWhenDeclared(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "build.work-order.json")
+	if err := writeValidateBuildWorkOrderWithMetric(path, []any{"scripts/bench-json"}, map[string]any{"name": "score", "direction": "higher", "min_delta_percent": 1, "noise_floor_percent": 5}); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	f := validateTestFactory{streams: output.NewStreams(&out, &errOut)}
+	if err := runValidate(context.Background(), f, &ValidateOptions{WorkOrder: path}); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	if strings.Contains(text, "omits metric.noise_floor_percent") {
+		t.Fatalf("unexpected missing noise_floor_percent warning:\n%s", text)
+	}
+	if !strings.Contains(text, `warning: metric verifier "score" declares metric.noise_floor_percent but leaves metric.min_runs=1`) {
+		t.Fatalf("missing low min_runs warning:\n%s", text)
+	}
+}
+
+func TestValidateWarnsWhenMetricNoiseFloorHasTooFewRuns(t *testing.T) {
+	tests := []struct {
+		name   string
+		metric map[string]any
+	}{
+		{
+			name:   "min_runs absent",
+			metric: map[string]any{"name": "score", "direction": "higher", "min_delta_percent": 1, "noise_floor_percent": 5},
+		},
+		{
+			name:   "min_runs one",
+			metric: map[string]any{"name": "score", "direction": "higher", "min_delta_percent": 1, "noise_floor_percent": 5, "min_runs": 1},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "build.work-order.json")
+			if err := writeValidateBuildWorkOrderWithMetric(path, []any{"scripts/bench-json"}, tt.metric); err != nil {
+				t.Fatal(err)
+			}
+			var out, errOut bytes.Buffer
+			f := validateTestFactory{streams: output.NewStreams(&out, &errOut)}
+			if err := runValidate(context.Background(), f, &ValidateOptions{WorkOrder: path}); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(out.String(), `warning: metric verifier "score" declares metric.noise_floor_percent but leaves metric.min_runs=1; use repeated runs so the noise floor reflects aggregate measurements`) {
+				t.Fatalf("missing low min_runs warning:\n%s", out.String())
+			}
+		})
+	}
+}
+
+func TestValidateMetricNoiseFloorWithRepeatedRunsWarnsOnlyForFinalN(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "build.work-order.json")
+	if err := writeValidateBuildWorkOrderWithMetric(path, []any{"scripts/bench-json"}, map[string]any{"name": "score", "direction": "higher", "min_delta_percent": 1, "noise_floor_percent": 5, "min_runs": 10}); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	f := validateTestFactory{streams: output.NewStreams(&out, &errOut)}
+	if err := runValidate(context.Background(), f, &ValidateOptions{WorkOrder: path}); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	if strings.Contains(text, "leaves metric.min_runs=1") {
+		t.Fatalf("unexpected low min_runs warning:\n%s", text)
+	}
+	if strings.Contains(text, "omits metric.noise_floor_percent") {
+		t.Fatalf("unexpected missing noise_floor_percent warning:\n%s", text)
+	}
+	if !strings.Contains(text, `warning: metric verifier "score" sets metric.min_runs=10; final metric JSON must include "n" >= 10 or the metric comparison will be inconclusive`) {
+		t.Fatalf("missing final n warning:\n%s", text)
 	}
 }
 

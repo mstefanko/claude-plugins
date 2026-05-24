@@ -90,6 +90,19 @@ exactly one optional peer is ready, `/bakeoff:run` may draft Claude + that peer
 and call out the fallback in the preview. Use full model ids in the work order
 to pin exact versions.
 
+Route examples stay compact in the preview:
+
+| User phrase | Route advisor |
+| --- | --- |
+| `build ...` with acceptance criteria, edit scope, and a gate | `Why this loop: build-verifier path` |
+| `audit this report`, `second opinion on this report`, `fight the findings`, or bare `dispute this report` | `Why this loop: witness audit of current report` |
+| `is finding F-007 real` | `Why this loop: focused dispute packet` |
+| `second opinion on the question` or `add Gemini to this completed run` | `Why this loop: fresh third answer` |
+| Formatter-only, vague one-pass, or otherwise weak-fit requests | `Why this loop: single-agent advised`; reply `draft anyway` to continue |
+
+The build route is a normal `/bakeoff:run` build preview. Build escalation is
+not supported.
+
 ## Research
 
 Think of research as:
@@ -200,6 +213,11 @@ Use `build` when verification can actually help: performance work, robustness fi
 ```
 
 Minimum build work order: `type: "build"`, two `codebase` providers, and at least one `kind: "gate"` verifier. If verifier scripts or fixtures must not be edited, list them in `build.protected_paths`; patches that touch protected paths become ineligible.
+
+Metric verifiers require `metric.min_delta_percent`. `bakeoff validate` also
+warns when `metric.noise_floor_percent` is omitted, when a declared noise floor
+still uses one run, when a repo-relative metric command is not protected, and
+when `metric.min_runs > 1` means the final JSON must include `n`.
 
 When the id, goal, acceptance criteria, edit scope, and gate command are already
 known, `bakeoff draft-build` prints validated build JSON to stdout without

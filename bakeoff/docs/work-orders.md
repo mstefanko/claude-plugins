@@ -227,9 +227,13 @@ Verifier fields:
 | `baseline` | Optional for gate verifiers only. One of `must_pass`, `may_fail`, or `must_fail`; omitted gates default to `must_pass`. |
 
 Metric verifier specs require `name`, `direction` (`lower` or `higher`), and
-`min_delta_percent`; `noise_floor_percent` and `min_runs` are optional.
-Metric commands should print one final aggregate JSON object as the last
-non-empty stdout line with the metric name as a finite numeric field.
+`min_delta_percent`; this is a hard schema requirement, so
+`bakeoff validate` rejects missing `min_delta_percent` before warning-level
+lint runs. `noise_floor_percent` and `min_runs` are optional schema fields, but
+`bakeoff validate` warns when a metric omits `noise_floor_percent` and when a
+declared noise floor is paired with absent or `1` `min_runs`. Metric commands
+should print one final aggregate JSON object as the last non-empty stdout line
+with the metric name as a finite numeric field.
 
 Gate baseline expectations control only the pre-patch baseline run. Provider
 verification still requires every gate to pass after the patch. Use
@@ -284,7 +288,10 @@ and emit one final JSON object:
 ```
 
 When `metric.min_runs` is greater than `1`, both provider metric outputs must
-include `n` at or above that value before the metric can decide a winner.
+include `n` at or above that value before the metric can decide a winner;
+`bakeoff validate` warns about that output requirement. When
+`noise_floor_percent` is declared, prefer repeated runs (`min_runs >= 2`) so
+the noise floor is backed by aggregate measurements instead of a single sample.
 Bakeoff reports `min_delta_percent` and `noise_floor_percent` separately so the
 decision shows whether the practical effect-size gate and the configured noise
 gate both passed. Bakeoff does not currently set provider or judge temperature
