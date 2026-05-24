@@ -11,6 +11,9 @@ advisory and require later triage before they become actionable.
 <runtime_budget>
 </runtime_budget>
 
+<review_witness_rules>
+</review_witness_rules>
+
 <escalation_payload_blocks>
 </escalation_payload_blocks>
 

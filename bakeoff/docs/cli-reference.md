@@ -299,7 +299,7 @@ Modes:
 | Mode | Meaning | Calls |
 | --- | --- | --- |
 | `independent` | Fresh third answer. Compare/analyze then run one escalation synthesis judge; gather/review run one union judge. | 1 provider + 1 judge |
-| `witness` | Audit the current report, decision, provider outputs, judge passes, and triage when present. Advisory only. | 1 provider |
+| `witness` | Audit the current report, decision, provider outputs, judge passes, and triage when present; code-review runs get an adversarial audit contract. Advisory only. | 1 provider |
 | `dispute` | Build `escalation/dispute-packet.json` from contested points and ask the added provider to answer only those. Advisory only. | 1 provider |
 
 Flags:
@@ -310,7 +310,7 @@ Flags:
 | `--run-id <id>` | Explicit escalation run id. |
 | `--dry-run` | Validate source artifacts, mode, provider, scope, and print the call envelope without creating a run. |
 | `--provider <backend[:model]>` | Added provider. The provider id is the backend name. |
-| `--mode <mode>` | `independent`, `witness`, or `dispute`. |
+| `--mode <mode>` | `independent`, `witness` (audit/adversarial audit for code-review runs), or `dispute`. |
 | `--scope <scope>` | Added-provider scope when it cannot be inferred. |
 | `--quiet` | Suppress provider heartbeat lines. |
 | `--json` | Emit a final JSON summary. |

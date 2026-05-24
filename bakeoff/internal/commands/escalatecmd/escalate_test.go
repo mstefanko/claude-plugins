@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -357,7 +358,130 @@ func TestSourceRunIdentityIncludesCompletedTriageSnapshot(t *testing.T) {
 	}
 }
 
+func TestBuildReviewClaimTargetsRanksAndCapsFreshCodeReviewTriage(t *testing.T) {
+	items := []any{
+		triageTargetTestItem("T-001", "F-001", "false_positive", "high", "high", "ignore"),
+		triageTargetTestItem("T-002", "F-002", "real_issue", "high", "low", "defer"),
+		triageTargetTestItem("T-003", "F-003", "needs_repro", "low", "medium", "reproduce"),
+	}
+	for i := 4; i <= 13; i++ {
+		items = append(items, triageTargetTestItem(fmt.Sprintf("T-%03d", i), fmt.Sprintf("F-%03d", i), "evidence_gap", "low", "low", "ignore"))
+	}
+	items = append(items, triageTargetTestItem("T-014", "F-014", "real_issue", "medium", "high", "fix_now"))
+
+	src := sourceRun{
+		WorkOrder: &workorder.WorkOrder{
+			Type: "gather",
+			Raw:  map[string]any{"facet": map[string]any{"id": "code-review"}},
+		},
+		TriageArtifacts: map[string]any{
+			"state": "yes",
+			"final": map[string]any{"items": items},
+		},
+	}
+	targets := buildReviewClaimTargets(src)
+	if targets == nil {
+		t.Fatal("expected review claim targets")
+	}
+	if targets["selected"] != 12 || targets["omitted_count"] != 2 {
+		t.Fatalf("unexpected target counts: %#v", targets)
+	}
+	selected := targets["targets"].([]any)
+	first := selected[0].(map[string]any)
+	if first["source_finding_id"] != "F-014" || first["triage_id"] != "T-014" {
+		t.Fatalf("fix_now target should rank first: %#v", first)
+	}
+	second := selected[1].(map[string]any)
+	if second["source_finding_id"] != "F-003" {
+		t.Fatalf("reproduce/needs_repro target should rank second: %#v", second)
+	}
+}
+
+func TestBuildReviewClaimTargetsRequiresFreshCodeReviewTriage(t *testing.T) {
+	src := sourceRun{
+		WorkOrder: &workorder.WorkOrder{
+			Type: "gather",
+			Raw:  map[string]any{"facet": map[string]any{"id": "code-review"}},
+		},
+		TriageArtifacts: map[string]any{
+			"state": "stale",
+			"final": map[string]any{"items": []any{triageTargetTestItem("T-001", "F-001", "real_issue", "high", "high", "fix_now")}},
+		},
+	}
+	if targets := buildReviewClaimTargets(src); targets != nil {
+		t.Fatalf("stale triage should not build targets: %#v", targets)
+	}
+	src.TriageArtifacts["state"] = "yes"
+	src.WorkOrder.Raw = map[string]any{"facet": map[string]any{"id": "docs"}}
+	if targets := buildReviewClaimTargets(src); targets != nil {
+		t.Fatalf("non-code-review facet should not build targets: %#v", targets)
+	}
+	src.WorkOrder.Raw = map[string]any{"facet": map[string]any{"id": "code-review"}}
+	src.WorkOrder.Type = "analyze"
+	if targets := buildReviewClaimTargets(src); targets != nil {
+		t.Fatalf("non-gather source should not build targets: %#v", targets)
+	}
+}
+
+func TestWitnessRunIncludesReviewRulesAndClaimTargets(t *testing.T) {
+	root := t.TempDir()
+	fakeBin := filepath.Join(root, "bin")
+	writeFakeProvider(t, fakeBin, "gemini", `<final_json>{"status":"complete","headline":"Review report has concerns.","assessment":"questionable","source_decision_effect":"questions_source","confidence":"medium","would_change_outcome":false,"material_errors":[],"missed_material":[],"triage_concerns":[],"out_of_scope":[],"recommended_action":"inspect","recommended_next_checks":[],"rationale":["review witness ran"]}</final_json>`)
+	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	outDir := filepath.Join(root, "runs")
+	writeCodeReviewSourceRun(t, outDir, "source-review", map[string]any{"decision_kind": "structured_union", "canonical_winner": nil})
+	runDir := filepath.Join(outDir, "source-review")
+	writeFreshTriage(t, runDir, []any{
+		triageTargetTestItem("T-001", "F-001", "real_issue", "medium", "high", "fix_now"),
+	})
+
+	var out, errOut bytes.Buffer
+	err := Run(context.Background(), escalateTestFactory{streams: output.NewStreams(&out, &errOut)}, &EscalateOptions{
+		SourceRunID: "source-review",
+		Out:         outDir,
+		RunID:       "witness-review",
+		Mode:        ModeWitness,
+		Provider:    "gemini",
+		Quiet:       true,
+		NoTriage:    true,
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v\nstdout:\n%s\nstderr:\n%s", err, out.String(), errOut.String())
+	}
+	promptData, err := os.ReadFile(filepath.Join(outDir, "witness-review", "escalation", "witness-prompt.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	promptText := string(promptData)
+	for _, want := range []string{
+		"This is a code-review witness pass.",
+		"<review_claim_targets>",
+		`"source_finding_id": "F-001"`,
+		`"recommended_action": "fix_now"`,
+	} {
+		if !strings.Contains(promptText, want) {
+			t.Fatalf("witness prompt missing %q:\n%s", want, promptText)
+		}
+	}
+}
+
 func writeSourceRun(t *testing.T, outDir string, runID string, mode string, decisionDoc map[string]any) {
+	t.Helper()
+	writeSourceRunWithFacet(t, outDir, runID, mode, decisionDoc, nil)
+}
+
+func writeCodeReviewSourceRun(t *testing.T, outDir string, runID string, decisionDoc map[string]any) {
+	t.Helper()
+	writeSourceRunWithFacet(t, outDir, runID, "gather", decisionDoc, map[string]any{
+		"id":      "code-review",
+		"kind":    "generic",
+		"focus":   "Find actionable defects introduced or exposed by the change.",
+		"include": []any{"correctness bugs and edge cases"},
+		"exclude": []any{"style-only preferences"},
+	})
+}
+
+func writeSourceRunWithFacet(t *testing.T, outDir string, runID string, mode string, decisionDoc map[string]any, facet map[string]any) {
 	t.Helper()
 	runDir := filepath.Join(outDir, runID)
 	if err := os.MkdirAll(runDir, 0o755); err != nil {
@@ -367,7 +491,7 @@ func writeSourceRun(t *testing.T, outDir string, runID string, mode string, deci
 		{"id": "claude", "backend": "claude", "model": "claude-test", "scope": "codebase"},
 		{"id": "codex", "backend": "codex", "model": "codex-test", "scope": "codebase"},
 	}
-	if err := workorder.WriteJSONAtomic(filepath.Join(runDir, "work-order.json"), map[string]any{
+	workOrder := map[string]any{
 		"schema_version": 1,
 		"id":             "source-" + mode,
 		"type":           mode,
@@ -377,7 +501,11 @@ func writeSourceRun(t *testing.T, outDir string, runID string, mode string, deci
 		"judge":          map[string]any{"backend": "claude", "model": "judge-test", "effort": "high"},
 		"budgets":        map[string]any{"wall_clock_seconds": 3, "max_output_bytes": 20000, "heartbeat_seconds": 0},
 		"scope_policy":   map[string]any{"enforcement": "best_effort"},
-	}); err != nil {
+	}
+	if facet != nil {
+		workOrder["facet"] = facet
+	}
+	if err := workorder.WriteJSONAtomic(filepath.Join(runDir, "work-order.json"), workOrder); err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"claude", "codex"} {
@@ -418,6 +546,48 @@ func writeSourceRun(t *testing.T, outDir string, runID string, mode string, deci
 		t.Fatal(err)
 	}
 	if err := workorder.WriteJSONAtomic(filepath.Join(runDir, "meta.json"), map[string]any{"run_id": runID, "type": mode, "started_at": "2026-05-22T00:00:00Z", "finished_at": "2026-05-22T00:00:01Z"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func triageTargetTestItem(id string, sourceFindingID string, classification string, severity string, confidence string, action string) map[string]any {
+	return map[string]any{
+		"id":                  id,
+		"source_finding_id":   sourceFindingID,
+		"source_finding":      "Finding " + sourceFindingID,
+		"classification":      classification,
+		"severity":            severity,
+		"confidence":          confidence,
+		"supporting_evidence": []any{"internal/example.go:12"},
+		"counterevidence":     []any{},
+		"citation_check_ids":  []any{},
+		"recommended_action":  action,
+		"rationale":           "test rationale",
+	}
+}
+
+func writeFreshTriage(t *testing.T, runDir string, items []any) {
+	t.Helper()
+	hashes, err := triagepkg.ComputeInputHashes(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	filter := map[string]any{"included": len(items), "skipped_non_actionable": 0, "skipped_out_of_facet": 0}
+	if err := workorder.WriteJSONAtomic(filepath.Join(runDir, "triage", "status.json"), map[string]any{"status": "ok", "source_finding_filter": filter}); err != nil {
+		t.Fatal(err)
+	}
+	if err := workorder.WriteJSONAtomic(filepath.Join(runDir, "triage", "final.json"), map[string]any{
+		"schema_version":        1,
+		"status":                "complete",
+		"summary":               "triaged",
+		"input_hashes":          hashes,
+		"source_finding_filter": filter,
+		"items":                 items,
+		"unknowns":              []any{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := workorder.WriteTextAtomic(filepath.Join(runDir, "triage", "triage.md"), "# triage\n"); err != nil {
 		t.Fatal(err)
 	}
 }

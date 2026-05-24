@@ -99,6 +99,48 @@ func TestFacetValidationNormalizesAndRejectsUnsafeText(t *testing.T) {
 	}
 }
 
+func TestValidateEscalationWitnessResultAcceptsStructuredObjects(t *testing.T) {
+	_, err := ValidateEscalationWitnessResult(map[string]any{
+		"status":                 "complete",
+		"headline":               "Report has challenged findings.",
+		"assessment":             "questionable",
+		"source_decision_effect": "questions_source",
+		"confidence":             "medium",
+		"would_change_outcome":   false,
+		"material_errors": []any{map[string]any{
+			"source_finding_id": "F-001",
+			"challenge_type":    "unsupported_citation",
+			"claim":             "The cited code does not support the report claim.",
+			"evidence":          []any{"internal/example.go:12"},
+			"counterevidence":   []any{"internal/example.go:18"},
+			"counterexample":    "Call trace shows the guard runs before mutation.",
+			"effect":            "questions_source",
+			"confidence":        "high",
+			"rationale":         "The source report overstates the defect.",
+		}},
+		"missed_material": []any{map[string]any{
+			"claim":      "A missed validation gap remains.",
+			"evidence":   []any{"internal/example.go:22"},
+			"confidence": "medium",
+			"rationale":  "The report did not discuss this path.",
+			"effect":     "questions_source",
+		}},
+		"triage_concerns": []any{map[string]any{
+			"source_finding_id": "F-002",
+			"claim":             "Severity is overstated.",
+			"evidence":          []any{"triage/final.json"},
+			"confidence":        "medium",
+		}},
+		"out_of_scope":            []any{},
+		"recommended_action":      "inspect",
+		"recommended_next_checks": []any{},
+		"rationale":               []any{"objects are accepted for witness buckets"},
+	})
+	if err != nil {
+		t.Fatalf("structured witness objects should validate: %v", err)
+	}
+}
+
 func TestScopePolicyRepoLayoutValidation(t *testing.T) {
 	data := validWorkOrder()
 	data["scope_policy"] = map[string]any{"enforcement": "best_effort", "repo_layout": "off"}

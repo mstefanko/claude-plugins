@@ -364,6 +364,69 @@ func TestRenderEscalationDisputeItemsAvoidRawMapLiterals(t *testing.T) {
 	}
 }
 
+func TestRenderEscalationWitnessStructuredItems(t *testing.T) {
+	text := RenderEscalation(
+		&workorder.WorkOrder{ID: "sample", Type: "gather"},
+		map[string]any{
+			"decision_kind":    "escalation_advisory_challenged",
+			"escalation_mode":  "witness",
+			"added_provider":   "gemini",
+			"source_providers": []any{"claude", "codex"},
+			"source_mode":      "gather",
+			"source_decision":  map[string]any{"decision_kind": "structured_union"},
+			"canonical_winner": nil,
+			"selection_basis":  "",
+			"assessment": map[string]any{
+				"assessment":             "questionable",
+				"source_decision_effect": "questions_source",
+				"confidence":             "medium",
+				"would_change_outcome":   false,
+				"recommended_action":     "inspect",
+				"material_errors": []any{map[string]any{
+					"source_finding_id": "F-001",
+					"challenge_type":    "unsupported_citation",
+					"claim":             "The cited code does not support the source claim.",
+					"evidence":          []any{"internal/example.go:12"},
+					"counterevidence":   []any{"internal/example.go:18"},
+					"counterexample":    "Request with an empty body returns before mutation.",
+					"effect":            "questions_source",
+					"confidence":        "high",
+				}},
+				"missed_material": []any{map[string]any{
+					"claim":      "A validation gap was missed.",
+					"evidence":   []any{"internal/example.go:22"},
+					"confidence": "medium",
+					"effect":     "questions_source",
+				}},
+				"triage_concerns": []any{map[string]any{
+					"source_finding_id": "F-002",
+					"claim":             "Recommended action should be reproduce, not fix_now.",
+					"evidence":          []any{"triage/final.json"},
+				}},
+			},
+		},
+		nil,
+		nil,
+		EscalationRenderOptions{RunID: "run-1", OutDir: "runs", SourceRunID: "source"},
+	)
+	for _, want := range []string{
+		"- **F-001** `unsupported_citation`: The cited code does not support the source claim.",
+		"Evidence: internal/example.go:12",
+		"Counter-evidence: internal/example.go:18",
+		"Counterexample: Request with an empty body returns before mutation.",
+		"effect `questions_source`, confidence `high`",
+		"- A validation gap was missed.",
+		"- **F-002** Recommended action should be reproduce, not fix_now.",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("report missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "map[") {
+		t.Fatalf("report leaked map literal:\n%s", text)
+	}
+}
+
 func TestRenderKnownGenericItemsPreserveNonEscalationOutput(t *testing.T) {
 	text := Render(
 		&workorder.WorkOrder{ID: "sample", Type: "compare"},

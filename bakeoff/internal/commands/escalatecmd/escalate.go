@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/apperror"
@@ -34,6 +35,8 @@ const (
 	ModeIndependent = "independent"
 	ModeWitness     = "witness"
 	ModeDispute     = "dispute"
+
+	reviewClaimTargetLimit = 12
 )
 
 type EscalateOptions struct {
@@ -98,7 +101,7 @@ func NewCmdEscalate(f commands.Factory, runF func(context.Context, *EscalateOpti
 	cmd.Flags().BoolVar(&opts.JSON, "json", false, "emit a final JSON summary")
 	cmd.Flags().BoolVar(&opts.NoTriage, "no-triage", false, "skip automatic triage for code-review escalation runs")
 	cmd.Flags().BoolVar(&opts.NoRepoLayout, "no-repo-layout", false, "suppress generated repo layout context for independent mode")
-	cmd.Flags().StringVar(&opts.Mode, "mode", "", "escalation mode: independent, witness, or dispute")
+	cmd.Flags().StringVar(&opts.Mode, "mode", "", "escalation mode: independent, witness (audit/adversarial audit for code-review runs), or dispute")
 	cmd.Flags().StringVar(&opts.Provider, "provider", "", "added provider backend and optional model, e.g. gemini or gemini:pro")
 	cmd.Flags().StringVar(&opts.Scope, "scope", "", "added-provider scope for independent mode: codebase, web, or mixed")
 	return cmd
@@ -254,6 +257,9 @@ func runEscalationMode(ctx context.Context, f commands.Factory, src sourceRun, a
 
 func runWitness(ctx context.Context, f commands.Factory, src sourceRun, added workorder.Participant, opts *EscalateOptions, runDir string, quiet bool, humanOutput bool) (modeResult, error) {
 	payload := sourcePayload(src)
+	if targets := buildReviewClaimTargets(src); targets != nil {
+		payload["review_claim_targets"] = targets
+	}
 	witnessPrompt, err := prompt.BuildEscalationWitnessPrompt(payload, src.WorkOrder.Budgets)
 	if err != nil {
 		return modeResult{}, err
@@ -1106,6 +1112,137 @@ func sourcePayload(src sourceRun) map[string]any {
 		payload["triage_artifacts"] = src.TriageArtifacts
 	}
 	return payload
+}
+
+func buildReviewClaimTargets(src sourceRun) map[string]any {
+	if src.WorkOrder.Type != "gather" || triagepkg.FacetID(src.WorkOrder.Raw) != triagepkg.CodeReviewFacetID {
+		return nil
+	}
+	if jsonutil.StringValue(triageState(src.TriageArtifacts)) != "yes" {
+		return nil
+	}
+	final, _ := src.TriageArtifacts["final"].(map[string]any)
+	if final == nil {
+		return nil
+	}
+	items := jsonutil.ListValue(final["items"])
+	if len(items) == 0 {
+		return nil
+	}
+	type candidate struct {
+		index  int
+		source map[string]any
+		target map[string]any
+	}
+	candidates := []candidate{}
+	for i, item := range items {
+		obj, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		supportingEvidence := jsonutil.ListValue(obj["supporting_evidence"])
+		target := map[string]any{
+			"triage_id":           jsonutil.StringValue(obj["id"]),
+			"source_finding_id":   jsonutil.StringValue(obj["source_finding_id"]),
+			"source_finding":      jsonutil.StringValue(obj["source_finding"]),
+			"classification":      jsonutil.StringValue(obj["classification"]),
+			"severity":            jsonutil.StringValue(obj["severity"]),
+			"confidence":          jsonutil.StringValue(obj["confidence"]),
+			"recommended_action":  jsonutil.StringValue(obj["recommended_action"]),
+			"supporting_evidence": supportingEvidence,
+			"counterevidence":     jsonutil.ListValue(obj["counterevidence"]),
+		}
+		candidates = append(candidates, candidate{index: i, source: obj, target: target})
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		left := candidates[i].source
+		right := candidates[j].source
+		keys := []struct {
+			left  int
+			right int
+		}{
+			{reviewActionRank(jsonutil.StringValue(left["recommended_action"])), reviewActionRank(jsonutil.StringValue(right["recommended_action"]))},
+			{reviewClassificationRank(jsonutil.StringValue(left["classification"])), reviewClassificationRank(jsonutil.StringValue(right["classification"]))},
+			{reviewSeverityRank(jsonutil.StringValue(left["severity"])), reviewSeverityRank(jsonutil.StringValue(right["severity"]))},
+			{reviewConfidenceRank(jsonutil.StringValue(left["confidence"])), reviewConfidenceRank(jsonutil.StringValue(right["confidence"]))},
+			{candidates[i].index, candidates[j].index},
+		}
+		for _, key := range keys {
+			if key.left != key.right {
+				return key.left < key.right
+			}
+		}
+		return false
+	})
+	limit := reviewClaimTargetLimit
+	if len(candidates) < limit {
+		limit = len(candidates)
+	}
+	targets := []any{}
+	for _, candidate := range candidates[:limit] {
+		targets = append(targets, candidate.target)
+	}
+	return map[string]any{
+		"source":        "triage.final.items",
+		"selected":      len(targets),
+		"omitted_count": len(candidates) - len(targets),
+		"targets":       targets,
+	}
+}
+
+func reviewActionRank(value string) int {
+	switch value {
+	case "fix_now":
+		return 0
+	case "reproduce":
+		return 1
+	default:
+		return 2
+	}
+}
+
+func reviewClassificationRank(value string) int {
+	switch value {
+	case "real_issue":
+		return 0
+	case "needs_repro":
+		return 1
+	case "evidence_gap":
+		return 2
+	default:
+		return 3
+	}
+}
+
+func reviewSeverityRank(value string) int {
+	switch value {
+	case "high":
+		return 0
+	case "medium":
+		return 1
+	case "low":
+		return 2
+	case "none":
+		return 3
+	default:
+		return 4
+	}
+}
+
+func reviewConfidenceRank(value string) int {
+	switch value {
+	case "high":
+		return 0
+	case "medium":
+		return 1
+	case "low":
+		return 2
+	default:
+		return 3
+	}
 }
 
 func escalationBaseInput(src sourceRun, added workorder.Participant, mode string, statuses map[string]any) decision.EscalationBaseInput {

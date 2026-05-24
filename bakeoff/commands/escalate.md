@@ -16,7 +16,7 @@ run. It writes a new run directory and never mutates the source run.
 Modes:
 
 - `independent`: fresh third answer.
-- `witness`: audit the current result.
+- `witness`: audit the current result; code-review runs get an adversarial audit contract.
 - `dispute`: focus only on contested points.
 
 Do not offer build escalation, patch application, branch/commit/PR automation,

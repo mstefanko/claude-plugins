@@ -876,6 +876,10 @@ func genericItemLines(items []any) []string {
 			continue
 		}
 		if obj, ok := item.(map[string]any); ok {
+			if witnessLines, ok := witnessItemLines(obj); ok {
+				lines = append(lines, witnessLines...)
+				continue
+			}
 			if disputeLines, ok := disputeItemLines(obj); ok {
 				lines = append(lines, disputeLines...)
 				continue
@@ -896,6 +900,45 @@ func genericItemLines(items []any) []string {
 		lines = append(lines, "- "+deterministicItemText(item))
 	}
 	return lines
+}
+
+func witnessItemLines(obj map[string]any) ([]string, bool) {
+	hasWitnessShape := firstString(obj["source_finding_id"], obj["challenge_type"], obj["counterexample"], obj["effect"]) != "" || len(jsonutil.ListValue(obj["counterevidence"])) > 0
+	if !hasWitnessShape {
+		return nil, false
+	}
+	claim := firstString(obj["claim"], obj["description"], obj["rationale"])
+	if claim == "" {
+		return nil, false
+	}
+	prefix := "- "
+	if sourceID := jsonutil.StringValue(obj["source_finding_id"]); sourceID != "" {
+		prefix += "**" + sourceID + "** "
+	}
+	if challengeType := jsonutil.StringValue(obj["challenge_type"]); challengeType != "" {
+		prefix += "`" + challengeType + "`: "
+	}
+	lines := []string{prefix + claim}
+	if evidence := joinList(obj["evidence"], ", "); evidence != "" {
+		lines = append(lines, "  Evidence: "+evidence)
+	}
+	if counterevidence := joinList(obj["counterevidence"], ", "); counterevidence != "" {
+		lines = append(lines, "  Counter-evidence: "+counterevidence)
+	}
+	if counterexample := jsonutil.StringValue(obj["counterexample"]); counterexample != "" {
+		lines = append(lines, "  Counterexample: "+counterexample)
+	}
+	details := []string{}
+	if effect := jsonutil.StringValue(obj["effect"]); effect != "" {
+		details = append(details, "effect `"+effect+"`")
+	}
+	if confidence := jsonutil.StringValue(obj["confidence"]); confidence != "" {
+		details = append(details, "confidence `"+confidence+"`")
+	}
+	if len(details) > 0 {
+		lines = append(lines, "  "+strings.Join(details, ", "))
+	}
+	return lines, true
 }
 
 func disputeItemLines(obj map[string]any) ([]string, bool) {

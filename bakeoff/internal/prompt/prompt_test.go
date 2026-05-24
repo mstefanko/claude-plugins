@@ -258,6 +258,95 @@ func TestTriageReviewContractRulesOnlyForCodeReviewFacet(t *testing.T) {
 	}
 }
 
+func TestBuildEscalationWitnessPromptReviewRulesAndTargets(t *testing.T) {
+	budgets := workorder.Budgets{WallClockSeconds: 3, MaxOutputBytes: 20000}
+	codeReviewWorkOrder := `{"type":"gather","facet":{"id":"code-review"}}`
+	genericWorkOrder := `{"type":"gather","facet":{"id":"docs"}}`
+	cases := []struct {
+		name          string
+		payload       map[string]any
+		want          []string
+		forbidden     []string
+		targetPayload bool
+	}{
+		{
+			name: "review rules and targets",
+			payload: map[string]any{
+				"work_order_json": codeReviewWorkOrder,
+				"review_claim_targets": map[string]any{
+					"source":        "triage.final.items",
+					"selected":      1,
+					"omitted_count": 0,
+					"targets": []any{map[string]any{
+						"triage_id":         "T-001",
+						"source_finding_id": "F-001",
+						"source_finding":    "Finding text",
+					}},
+				},
+			},
+			want: []string{
+				"<review_witness_rules>",
+				"This is a code-review witness pass.",
+				"<review_claim_targets>",
+				`"source_finding_id": "F-001"`,
+			},
+			targetPayload: true,
+		},
+		{
+			name: "generic witness stays generic",
+			payload: map[string]any{
+				"work_order_json":  genericWorkOrder,
+				"source_report_md": "# Report\n\nGeneric result.",
+			},
+			want: []string{
+				"You are the escalation witness for a Bakeoff research or code-review run.",
+				"<source_report_md>",
+			},
+			forbidden: []string{
+				"<review_witness_rules>",
+				"This is a code-review witness pass.",
+				"<review_claim_targets>",
+			},
+		},
+		{
+			name: "review without targets still assembles",
+			payload: map[string]any{
+				"work_order_json":  codeReviewWorkOrder,
+				"source_report_md": "# Report\n\nNo triage final.",
+			},
+			want: []string{
+				"<review_witness_rules>",
+				"<source_report_md>",
+				"Return exactly one <final_json> object",
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			prompt, err := BuildEscalationWitnessPrompt(tc.payload, budgets)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(prompt, want) {
+					t.Fatalf("prompt missing %q:\n%s", want, prompt)
+				}
+			}
+			for _, forbidden := range tc.forbidden {
+				if strings.Contains(prompt, forbidden) {
+					t.Fatalf("prompt contains forbidden %q:\n%s", forbidden, prompt)
+				}
+			}
+			if strings.Contains(prompt, "<review_witness_rules>\n</review_witness_rules>") {
+				t.Fatalf("prompt kept empty witness rules placeholder:\n%s", prompt)
+			}
+			if !tc.targetPayload && strings.Contains(prompt, "<review_claim_targets>\n") {
+				t.Fatalf("prompt unexpectedly rendered review_claim_targets:\n%s", prompt)
+			}
+		})
+	}
+}
+
 func TestBuildJudgePromptOmitsProtectedPathsWhenEmpty(t *testing.T) {
 	wo := fixtureWorkOrder(t, "build")
 	wo.Build.ProtectedPaths = nil

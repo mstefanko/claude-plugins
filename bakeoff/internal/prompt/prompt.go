@@ -2,6 +2,7 @@ package prompt
 
 import (
 	"embed"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -134,6 +135,7 @@ func buildEscalationPrompt(fixture string, payload any, budgets workorder.Budget
 	}
 	text := base
 	text = replaceBlock(text, fixtureRuntimeBudgetBlock(), RenderRuntimeBudgetBlock(budgets, "judge"))
+	text = replaceBlock(text, fixtureReviewWitnessRulesBlock(), RenderReviewWitnessRulesBlock(payload))
 	text = replaceTagInner(text, "escalation_payload_blocks", payloadBlocks)
 	return text, nil
 }
@@ -163,6 +165,7 @@ func renderEscalationPayloadBlocks(payload any) (string, error) {
 		{tag: "review_context_md", key: "review_context_md"},
 		{tag: "review_context_json", key: "review_context_json"},
 		{tag: "triage_artifacts", key: "triage_artifacts"},
+		{tag: "review_claim_targets", key: "review_claim_targets"},
 	}
 	lines := []string{}
 	for _, item := range blocks {
@@ -273,6 +276,93 @@ For code-review facets:
 - Use classification, severity, confidence, and recommended_action to distinguish real defects from warnings, product decisions, evidence gaps, and style-only findings.
 </review_contract_rules>
 `
+}
+
+func RenderReviewWitnessRulesBlock(payload any) string {
+	if !isCodeReviewWitnessPayload(payload) {
+		return ""
+	}
+	return `<review_witness_rules>
+This is a code-review witness pass. Treat report findings and triage items as
+hypotheses to falsify, not as conclusions to summarize. Your job is to test
+the report, not defend it.
+
+Assume the source report contains some real findings, some false positives,
+some stale comments, and some missed defects. For each target in
+<review_claim_targets>, ask:
+1. Is the issue introduced or exposed by the reviewed change?
+2. Do the cited files and lines semantically support the claim?
+3. Is there counterevidence in code, tests, docs, or triage artifacts?
+4. Is this out of the source facet or acceptance criteria?
+5. Is the severity, confidence, or recommended action overstated?
+6. For behavioral or security claims, can you produce a concrete
+   counterexample, call trace, failing scenario, or static proof where
+   applicable?
+7. Did the source report miss a defect adjacent to a target?
+
+Challenge a report finding when it is unsupported by its cited file:line
+evidence, stale or already fixed, not introduced or exposed by the reviewed
+change, out of facet or acceptance criteria, duplicated, severity- or
+confidence-overstated, missing a reproducer for a behavioral claim, or
+contradicted by code, tests, docs, or triage artifacts.
+
+Put challenged source findings in material_errors. Put likely real defects the
+source report missed in missed_material. Put bad classifications, severities,
+confidences, or recommended actions in triage_concerns.
+
+Prefer object items in material_errors, missed_material, and triage_concerns:
+{
+  "source_finding_id": "F-001",
+  "challenge_type": "unsupported_citation",
+  "claim": "Short display-ready claim.",
+  "evidence": ["path/file.go:123"],
+  "counterevidence": ["path/file.go:145"],
+  "counterexample": "Input, sequence, call trace, failing scenario, or static proof.",
+  "effect": "questions_source",
+  "confidence": "high",
+  "rationale": "Why this matters."
+}
+
+Every actionable claim, new or challenged, must cite at least one file:line in
+evidence or counterevidence. For security or behavioral claims, include a
+concrete counterexample, call trace, failing scenario, or static proof where
+applicable. If you cannot produce one, put the concern in
+recommended_next_checks instead of missed_material.
+
+Also do a missing-control pass that does not depend on the target list: look
+for absent input validation, missing authorization checks, missing error
+handling, or missing test coverage that the report did not raise.
+
+All output from this pass is advisory. Do not assume your challenges or
+additions are actionable until a later triage pass classifies them.
+</review_witness_rules>
+`
+}
+
+func isCodeReviewWitnessPayload(payload any) bool {
+	obj, _ := payload.(map[string]any)
+	if obj == nil {
+		return false
+	}
+	if facetIDFromValue(obj["facet"]) == "code-review" {
+		return true
+	}
+	if workOrderText, ok := obj["work_order_json"].(string); ok {
+		var workOrder map[string]any
+		if json.Unmarshal([]byte(workOrderText), &workOrder) == nil && facetIDFromValue(workOrder["facet"]) == "code-review" {
+			return true
+		}
+	}
+	if workOrder, ok := obj["work_order_json"].(map[string]any); ok && facetIDFromValue(workOrder["facet"]) == "code-review" {
+		return true
+	}
+	return false
+}
+
+func facetIDFromValue(value any) string {
+	facet, _ := value.(map[string]any)
+	id, _ := facet["id"].(string)
+	return id
 }
 
 func RenderRuntimeBudgetBlock(b workorder.Budgets, role string) string {
@@ -526,6 +616,10 @@ func fixtureBuildSpecBlock() string {
 
 func fixtureTriageReviewContractBlock() string {
 	return "<review_contract_rules>\n</review_contract_rules>\n"
+}
+
+func fixtureReviewWitnessRulesBlock() string {
+	return "<review_witness_rules>\n</review_witness_rules>\n"
 }
 
 func fixtureTriagePayloadBlocks() string {

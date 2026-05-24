@@ -179,9 +179,13 @@ first, then list all three alternatives with equal-shape one-liners
 If source artifacts show failed or missing triage, recommend
 `bakeoff triage <run-id> --force` first with the rationale "retry - first
 failure is most often transient"; offer escalation only as fallback. Mode
-mapping: triage/verification/"is this finding real" maps to `dispute`; "is the
-conclusion sound" or broad sanity checking maps to `witness`; "fresh answer" or
-"second opinion" maps to `independent`.
+mapping: triage/verification/"is this finding real" and "verify these specific
+findings" map to `dispute`; "is the conclusion sound", "is this conclusion
+supported?", "second opinion on this report", "audit this report", "fight the
+findings", "challenge this report", "challenge this research result",
+"adversarial audit", or broad sanity checking map to `witness`; bare "dispute
+this report" without finding IDs maps to `witness`; "fresh answer", "second
+opinion on the question", or "run another review" maps to `independent`.
 
 Escalation previews for `witness` and `dispute` must disclose before approval:
 "advisory only - cannot pick a new winner" and "escalation triage operates on
