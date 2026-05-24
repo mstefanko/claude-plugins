@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "id": "slice5-research-exit4-next",
+  "type": "build",
+  "goal": "For research-shaped runs that exit 4 with both providers succeeded and the judge failed or did not converge, surface 'bakeoff rerun <run-id> --judge-only' as the primary deterministic next command, while leaving build runs unchanged.",
+  "background": [
+    "Acceptance criteria:\n- When a research-shaped run (work-order type 'gather', 'compare', or 'analyze') completes with exit code 4 AND structured artifacts show every provider status is 'ok' or 'ok_after_format_retry' AND the judge status indicates failure or non-convergence, the summary surfaces 'bakeoff rerun <run-id> --judge-only' as the primary deterministic next command, with a full 'bakeoff rerun <run-id>' mentioned only secondarily.\n- The judge-only rerun recommendation never appears for build-shaped runs (work-order type 'build'), regardless of exit code or judge status.\n- The recommendation rule reads only from decision.json and the provider/judge status artifacts produced by the CLI; report.md prose is never consulted to decide whether to recommend judge-only rerun.\n- When exit code is 4 but at least one provider status is not 'ok' or 'ok_after_format_retry', the judge-only rerun recommendation is suppressed in favor of the existing default recommendation.\n- Focused unit tests cover at least: (a) research exit 4 + all providers ok + judge failed -> judge-only rerun recommended; (b) research exit 4 + a non-ok provider + judge failed -> judge-only rerun NOT recommended; (c) build exit 4 + all providers ok + judge failed -> judge-only rerun NOT recommended; (d) research exit 4 + all providers ok + judge succeeded -> judge-only rerun NOT recommended.\n- 'go test ./internal/summary ./internal/commands/researchcmd ./internal/commands/reruncmd' passes with the new behavior and the new tests in place.",
+    "Edit boundary:\n- internal/summary\n- internal/commands/researchcmd\n- internal/commands/reruncmd",
+    "Bakeoff exit codes: 0 = decided; 3 = completed with unresolved disagreement; 4 = decision incomplete because the judge failed or did not converge, with durable provider artifacts. Today the summary path treats exit 4 uniformly; this slice adds a deterministic, artifact-driven exception for research-shaped exit-4 runs where both providers actually produced usable output.",
+    "The rule must be based on structured signals only: the work-order type from decision.json (or equivalent stable artifact) determines research vs. build; provider status entries determine 'both providers succeeded' ('ok' or 'ok_after_format_retry'); the judge status determines failed/non-convergent. Do not parse report.md prose. Do not couple to triage state.",
+    "Edit scope is limited to internal/summary (summary/recommendation builder), internal/commands/researchcmd (research command exit handling/summary integration), and internal/commands/reruncmd (only if the rerun command surface or its tests need adjusting to support the recommendation contract). The build command and build summary path must be untouched.",
+    "Bakeoff will capture candidate patches from isolated worktrees and will not apply them to this checkout."
+  ],
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "sonnet",
+      "effort": "high",
+      "scope": "codebase"
+    },
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "effort": "high",
+      "scope": "codebase"
+    }
+  ],
+  "scope_policy": {
+    "enforcement": "best_effort"
+  },
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "build": {
+    "base_ref": "HEAD",
+    "comparison_goal": "Prefer the patch that satisfies the acceptance criteria with the smallest maintainable change.",
+    "verify": [
+      {
+        "id": "test",
+        "kind": "gate",
+        "argv": [
+          "sh",
+          "-c",
+          "go test ./internal/summary ./internal/commands/researchcmd ./internal/commands/reruncmd"
+        ],
+        "wall_clock_seconds": 300,
+        "max_output_bytes": 60000
+      }
+    ]
+  },
+  "budgets": {
+    "wall_clock_seconds": 1200,
+    "max_output_bytes": 80000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 80000
+  }
+}

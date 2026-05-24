@@ -212,6 +212,9 @@ func TestRenderBuildReportOutcomeAndSingleSelectionBasis(t *testing.T) {
 		"Winner: `claude`",
 		"Selection basis: `metric`",
 		"Patch: `providers/claude/build/diff.patch`",
+		"## Selector Confidence",
+		"- Selector label: `metric`",
+		"metric comparisons selected the winner under configured thresholds.",
 		"Next: `bakeoff show build-run`",
 	} {
 		if !strings.Contains(report, want) {
@@ -223,6 +226,9 @@ func TestRenderBuildReportOutcomeAndSingleSelectionBasis(t *testing.T) {
 	}
 	if strings.Index(report, "## Outcome") > strings.Index(report, "## Baseline Verification") {
 		t.Fatalf("outcome should be first substantive report section:\n%s", report)
+	}
+	if strings.Index(report, "Verifier gates:") > strings.Index(report, "## Selector Confidence") || strings.Index(report, "## Selector Confidence") > strings.Index(report, "Next:") {
+		t.Fatalf("selector confidence should render after verifier gates and before next step:\n%s", report)
 	}
 }
 
@@ -240,6 +246,122 @@ func TestRenderBuildReportShowsStalledAt(t *testing.T) {
 	)
 	if !strings.Contains(report, "Stalled at: `selection`") {
 		t.Fatalf("report missing stalled_at:\n%s", report)
+	}
+}
+
+func TestRenderBuildReportSelectorConfidenceByBasis(t *testing.T) {
+	cases := []struct {
+		name     string
+		decision map[string]any
+		want     []string
+		forbid   []string
+	}{
+		{
+			name: "gate",
+			decision: map[string]any{
+				"decision_kind":    "pick_winner",
+				"canonical_winner": "claude",
+				"selection_basis":  "gate",
+			},
+			want: []string{
+				"- Selector label: `gate`",
+				"required gate verifiers selected or eliminated a candidate.",
+				"selected `claude` using executed verifier evidence.",
+			},
+		},
+		{
+			name: "judge-only",
+			decision: map[string]any{
+				"decision_kind":    "pick_winner",
+				"canonical_winner": "claude",
+				"selection_basis":  "judge",
+			},
+			want: []string{
+				"- Selector label: `judge-only`",
+				"gates and metrics did not select a winner; the swapped LLM judge supplied preference evidence.",
+				"selected `claude` using useful LLM preference evidence; weaker than gate or metric evidence.",
+			},
+			forbid: []string{"--judge-only"},
+		},
+		{
+			name: "unresolved",
+			decision: map[string]any{
+				"decision_kind":   "tie",
+				"selection_basis": "none",
+				"stalled_at":      "selection",
+			},
+			want: []string{
+				"- Selector label: `unresolved`",
+				"the build selector stopped at `selection`.",
+				"no canonical winner; inspect stalled stage, caveats, and artifacts.",
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			report := renderBuildReport(
+				&workorder.WorkOrder{ID: "build-report"},
+				"build-run",
+				"runs",
+				filepath.Join(t.TempDir(), "run"),
+				tc.decision,
+				buildverify.Result{GatesPassed: true},
+				nil,
+				nil,
+				buildDiagnostics{},
+			)
+			for _, want := range tc.want {
+				if !strings.Contains(report, want) {
+					t.Fatalf("report missing %q:\n%s", want, report)
+				}
+			}
+			for _, forbid := range tc.forbid {
+				if strings.Contains(report, forbid) {
+					t.Fatalf("report should not contain %q:\n%s", forbid, report)
+				}
+			}
+			if strings.Count(report, "Selection basis:") != 1 {
+				t.Fatalf("report should render selection basis once:\n%s", report)
+			}
+		})
+	}
+}
+
+func TestRenderBuildReportProviderAuthoredTestsReminder(t *testing.T) {
+	decision := map[string]any{
+		"decision_kind":    "pick_winner",
+		"canonical_winner": "claude",
+		"selection_basis":  "gate",
+	}
+	report := renderBuildReport(
+		&workorder.WorkOrder{ID: "build-report"},
+		"build-run",
+		"runs",
+		filepath.Join(t.TempDir(), "run"),
+		decision,
+		buildverify.Result{GatesPassed: true},
+		[]providerRun{{
+			ID:           "claude",
+			WorkerResult: map[string]any{"status": "complete"},
+			Capture: &buildworkspace.CaptureResult{
+				PatchBytes:     123,
+				TestFiles:      []buildworkspace.ChangedFile{{Status: "M", Path: "internal/report/report_test.go"}},
+				BenchmarkFiles: []buildworkspace.ChangedFile{{Status: "A", Path: "bench_test.go"}},
+			},
+			Verify: buildverify.Result{GatesPassed: true},
+		}},
+		nil,
+		buildDiagnostics{},
+	)
+	for _, want := range []string{
+		"- Provider-authored tests (supporting evidence, not selector truth):",
+		"- Provider-authored benchmarks/probes (supporting evidence, not selector truth):",
+		"Provider-authored tests: `1` (supporting evidence, not selector truth)",
+		"Provider-authored benchmarks/probes: `1` (supporting evidence, not selector truth)",
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing %q:\n%s", want, report)
+		}
 	}
 }
 

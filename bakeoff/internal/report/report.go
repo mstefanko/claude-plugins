@@ -54,6 +54,7 @@ func Render(wo *workorder.WorkOrder, decision map[string]any, workerResults map[
 	lines = append(lines, reportGlossary()...)
 	lines = append(lines, renderJudgeFailureStatus(decision, opts)...)
 	lines = append(lines, renderOutcome(wo, decision, workerResults, opts)...)
+	lines = append(lines, renderSelectorConfidence(decision)...)
 	lines = append(lines, decisionAudit(decision)...)
 	lines = append(lines, renderProviderStatusTable(decision)...)
 	switch mode {
@@ -304,6 +305,94 @@ func renderOutcome(wo *workorder.WorkOrder, decision map[string]any, workerResul
 	}
 	lines = append(lines, "")
 	return lines
+}
+
+func renderSelectorConfidence(decision map[string]any) []string {
+	label := researchSelectorLabel(decision)
+	if label == "" {
+		return nil
+	}
+	return []string{
+		"## Selector Confidence",
+		"",
+		selectorLabelLine(label),
+		"- Evidence: " + researchSelectorEvidence(decision, label),
+		"- Decision effect: " + researchSelectorEffect(decision, label),
+		"",
+	}
+}
+
+func researchSelectorLabel(decision map[string]any) string {
+	mode := jsonutil.StringValue(decision["mode"])
+	kind := jsonutil.StringValue(decision["decision_kind"])
+	switch mode {
+	case "gather":
+		if kind == "structured_union" {
+			return "union/dedupe"
+		}
+	case "compare", "analyze":
+		if (kind == "pick_winner" || kind == "consensus") && jsonutil.BoolValue(decision["judge_completed"]) {
+			return "swapped judge"
+		}
+	}
+	switch kind {
+	case "single_provider_only", "both_failed", "provider_union_only", "judge_failed", "tie":
+		return "unresolved"
+	default:
+		if jsonutil.StringValue(decision["stalled_at"]) != "" {
+			return "unresolved"
+		}
+	}
+	return ""
+}
+
+func researchSelectorEvidence(decision map[string]any, label string) string {
+	mode := jsonutil.StringValue(decision["mode"])
+	kind := jsonutil.StringValue(decision["decision_kind"])
+	switch label {
+	case "union/dedupe":
+		return "gather merged and deduped provider findings without selecting a winner."
+	case "swapped judge":
+		if kind == "consensus" {
+			return "position-swapped judge passes found agreement rather than a winner."
+		}
+		return "position-swapped judge passes produced a stable decision."
+	case "unresolved":
+		if kind == "single_provider_only" {
+			if winner := jsonutil.StringValue(decision["canonical_winner"]); winner != "" {
+				return "only `" + winner + "` completed successfully; no two-provider selector ran."
+			}
+			return "only one provider completed successfully; no two-provider selector ran."
+		}
+		if stalledAt := jsonutil.StringValue(decision["stalled_at"]); stalledAt != "" {
+			return "the selector stopped at `" + stalledAt + "`."
+		}
+		if mode != "" {
+			return "the `" + mode + "` selector did not produce a stable two-provider result."
+		}
+	}
+	return "the selector path did not produce a stable two-provider result."
+}
+
+func researchSelectorEffect(decision map[string]any, label string) string {
+	kind := jsonutil.StringValue(decision["decision_kind"])
+	switch label {
+	case "union/dedupe":
+		return "no canonical winner; report claims are grouped by source overlap."
+	case "swapped judge":
+		if kind == "consensus" {
+			return "no winner; the report carries consensus material and sub-claim divergences."
+		}
+		if winner := jsonutil.StringValue(decision["canonical_winner"]); winner != "" {
+			return "selected `" + winner + "` as the canonical winner."
+		}
+	case "unresolved":
+		if kind == "single_provider_only" {
+			return "partial result only; treat the surfaced provider output as incomplete competitive evidence."
+		}
+		return "no canonical winner; inspect status, caveats, and provider artifacts."
+	}
+	return "inspect the decision audit and caveats."
 }
 
 func renderJudgeFailureStatus(decision map[string]any, opts RenderOptions) []string {
@@ -1098,9 +1187,16 @@ func selectorStrengthLine(confidence string) string {
 	return "- Confidence: `" + confidence + "`"
 }
 
+func selectorLabelLine(label string) string {
+	return "- Selector label: `" + label + "`"
+}
+
 // escalationAdvisoryImpactLines returns advisory decision-impact bullet lines for non-independent escalation modes.
 func escalationAdvisoryImpactLines(mode, selectionBasis string) []string {
 	var lines []string
+	if label := escalationSelectorLabel(mode, selectionBasis); label != "" {
+		lines = append(lines, selectorLabelLine(label))
+	}
 	if mode != "independent" {
 		lines = append(lines, "- Decision impact: advisory only; this mode does not replace the source winner.")
 	}
@@ -1108,6 +1204,20 @@ func escalationAdvisoryImpactLines(mode, selectionBasis string) []string {
 		lines = append(lines, "- Selection basis: `escalation_synthesis`; this is one synthesis pass, not position-swapped judging.")
 	}
 	return lines
+}
+
+func escalationSelectorLabel(mode, selectionBasis string) string {
+	switch mode {
+	case "witness":
+		return "advisory witness"
+	case "dispute":
+		return "focused dispute"
+	case "independent":
+		if selectionBasis == "escalation_synthesis" {
+			return "fresh third answer"
+		}
+	}
+	return ""
 }
 
 func escalationModeLabel(mode string) string {

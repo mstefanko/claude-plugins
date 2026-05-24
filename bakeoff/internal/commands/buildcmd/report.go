@@ -35,6 +35,7 @@ func renderBuildReport(wo *workorder.WorkOrder, runID string, outDir string, run
 		lines = append(lines, "Patch: `"+filepath.Join("providers", winner, "build", "diff.patch")+"`")
 	}
 	lines = append(lines, "Verifier gates: "+buildVerifierGateSummary(baseline, runs))
+	lines = append(lines, buildSelectorConfidenceLines(decision)...)
 	if runID != "" {
 		lines = append(lines, buildNextStep(runID, outDir))
 	}
@@ -67,11 +68,11 @@ func renderBuildReport(wo *workorder.WorkOrder, runID string, outDir string, run
 				}
 			}
 			if len(run.Capture.TestFiles) > 0 {
-				lines = append(lines, "- Provider-authored tests:")
+				lines = append(lines, "- Provider-authored tests (supporting evidence, not selector truth):")
 				lines = append(lines, changedFileBulletLines(run.Capture.TestFiles)...)
 			}
 			if len(run.Capture.BenchmarkFiles) > 0 {
-				lines = append(lines, "- Provider-authored benchmarks/probes:")
+				lines = append(lines, "- Provider-authored benchmarks/probes (supporting evidence, not selector truth):")
 				lines = append(lines, changedFileBulletLines(run.Capture.BenchmarkFiles)...)
 			}
 		}
@@ -230,10 +231,10 @@ func renderBuildReport(wo *workorder.WorkOrder, runID string, outDir string, run
 				lines = append(lines, "Patch artifact: `"+filepath.Join("providers", winner, "build", "diff.patch")+"`")
 				lines = append(lines, "Diffstat artifact: `"+filepath.Join("providers", winner, "build", "diffstat.txt")+"`")
 				if len(run.Capture.TestFiles) > 0 {
-					lines = append(lines, fmt.Sprintf("Provider-authored tests: `%d`", len(run.Capture.TestFiles)))
+					lines = append(lines, fmt.Sprintf("Provider-authored tests: `%d` (supporting evidence, not selector truth)", len(run.Capture.TestFiles)))
 				}
 				if len(run.Capture.BenchmarkFiles) > 0 {
-					lines = append(lines, fmt.Sprintf("Provider-authored benchmarks/probes: `%d`", len(run.Capture.BenchmarkFiles)))
+					lines = append(lines, fmt.Sprintf("Provider-authored benchmarks/probes: `%d` (supporting evidence, not selector truth)", len(run.Capture.BenchmarkFiles)))
 				}
 			}
 			if run.Cleanup.Retained {
@@ -292,6 +293,75 @@ func buildResultLine(decision map[string]any) string {
 		winner = "none"
 	}
 	return fmt.Sprintf("%s, winner=%s, basis=%s", jsonutil.StringValue(decision["decision_kind"]), winner, jsonutil.StringValue(decision["selection_basis"]))
+}
+
+func buildSelectorConfidenceLines(decision map[string]any) []string {
+	label := buildSelectorLabel(decision)
+	return []string{
+		"",
+		"## Selector Confidence",
+		"",
+		"- Selector label: `" + label + "`",
+		"- Evidence: " + buildSelectorEvidence(decision, label),
+		"- Decision effect: " + buildSelectorEffect(decision, label),
+		"",
+	}
+}
+
+func buildSelectorLabel(decision map[string]any) string {
+	switch jsonutil.StringValue(decision["selection_basis"]) {
+	case "gate":
+		return "gate"
+	case "metric":
+		return "metric"
+	case "judge":
+		return "judge-only"
+	default:
+		return "unresolved"
+	}
+}
+
+func buildSelectorEvidence(decision map[string]any, label string) string {
+	switch label {
+	case "gate":
+		return "required gate verifiers selected or eliminated a candidate."
+	case "metric":
+		return "metric comparisons selected the winner under configured thresholds."
+	case "judge-only":
+		return "gates and metrics did not select a winner; the swapped LLM judge supplied preference evidence."
+	default:
+		basis := jsonutil.StringValue(decision["selection_basis"])
+		if basis == "identical_patch" {
+			return "captured patches were identical after normalization."
+		}
+		if stalledAt := jsonutil.StringValue(decision["stalled_at"]); stalledAt != "" {
+			return "the build selector stopped at `" + stalledAt + "`."
+		}
+		return "artifacts did not support a stable build winner."
+	}
+}
+
+func buildSelectorEffect(decision map[string]any, label string) string {
+	winner := jsonutil.StringValue(decision["canonical_winner"])
+	switch label {
+	case "gate":
+		if winner != "" {
+			return "selected `" + winner + "` using executed verifier evidence."
+		}
+		return "executed verifier evidence decided the outcome."
+	case "metric":
+		if winner != "" {
+			return "selected `" + winner + "` using thresholded metric evidence."
+		}
+		return "thresholded metric evidence decided the outcome."
+	case "judge-only":
+		if winner != "" {
+			return "selected `" + winner + "` using useful LLM preference evidence; weaker than gate or metric evidence."
+		}
+		return "useful LLM preference evidence only; weaker than gate or metric evidence."
+	default:
+		return "no canonical winner; inspect stalled stage, caveats, and artifacts."
+	}
 }
 
 func passFail(passed bool) string {

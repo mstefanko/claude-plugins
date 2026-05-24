@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "id": "slice5-build-handoff-facts",
+  "type": "build",
+  "goal": "Tighten Bakeoff build CLI/report so handoff output is honest about whether there is a selected patch: surface selected-patch path only when decision.json.canonical_winner is non-null, explicitly say 'no selected patch' when unresolved/judge-failed, and stop recommending build judge-only rerun.",
+  "background": [
+    "Acceptance criteria:\n- When decision.json.canonical_winner is a non-empty string, build handoff output surfaces exactly the path <out>/<run-id>/providers/<winner>/build/diff.patch as the selected patch.\n- When canonical_winner is null/absent (unresolved or judge-failed build), build handoff output explicitly states there is no selected patch and does NOT print any providers/<x>/build/diff.patch line.\n- Build handoff output never recommends 'bakeoff rerun <run-id> --judge-only' for any build run, including exit 4 / judge-failed cases.\n- Focused tests in internal/commands/buildcmd and/or internal/summary cover canonical-winner success, unresolved disagreement / exit 3, and judge-failed build / exit 4 cases; assertions cover selected-patch presence/absence and absence of judge-only-rerun advice.\n- go test ./internal/commands/buildcmd ./internal/summary passes.",
+    "Edit boundary:\n- internal/commands/buildcmd/**\n- internal/summary/**\n- docs/**",
+    "Bakeoff will capture candidate patches from isolated worktrees and will not apply them to this checkout."
+  ],
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "sonnet",
+      "effort": "high",
+      "scope": "codebase"
+    },
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "effort": "high",
+      "scope": "codebase"
+    }
+  ],
+  "scope_policy": {
+    "enforcement": "best_effort"
+  },
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "build": {
+    "base_ref": "HEAD",
+    "comparison_goal": "Prefer the patch that satisfies the acceptance criteria with the smallest maintainable change.",
+    "verify": [
+      {
+        "id": "buildcmd-summary-tests",
+        "kind": "gate",
+        "argv": [
+          "sh",
+          "-c",
+          "go test ./internal/commands/buildcmd ./internal/summary"
+        ],
+        "wall_clock_seconds": 300,
+        "max_output_bytes": 60000
+      }
+    ]
+  },
+  "budgets": {
+    "wall_clock_seconds": 1200,
+    "max_output_bytes": 80000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 80000
+  }
+}

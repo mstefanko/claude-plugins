@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "id": "slice5-bundle-command-quoting",
+  "type": "build",
+  "goal": "Make 'bakeoff bundle' render its 'Write this derived report if needed' command using the same shell-quoting and --out formatting behavior as the ledger command helpers, so custom --out paths and unusual run ids are quoted correctly while the default 'runs' output shape is preserved.",
+  "background": [
+    "Acceptance criteria:\n- When --out is the default ('runs' or empty), bundle renders the derived-report command in its existing default shape (byte-identical to today for vanilla run ids).\n- When --out is a custom path containing characters that need quoting (spaces, shell metacharacters), the rendered command quotes the --out value using the same helper(s) the ledger command helpers in internal/ledger use.\n- When the run id contains characters that need quoting, the rendered command quotes the run id consistently with the ledger helpers.\n- Existing bundle output for vanilla run ids and the default --out remains byte-identical except where quoting is added for previously unsafe inputs.\n- Focused tests in internal/commands/bundlecmd cover default --out, custom --out path requiring quoting, and unusual run id quoting; 'go test ./internal/commands/bundlecmd ./internal/ledger' passes.",
+    "Edit boundary:\n- internal/commands/bundlecmd/bundle.go\n- internal/commands/bundlecmd/bundle_test.go\n- internal/ledger/*.go (helper exposure only if needed)",
+    "Bakeoff will capture candidate patches from isolated worktrees and will not apply them to this checkout."
+  ],
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "sonnet",
+      "effort": "high",
+      "scope": "codebase"
+    },
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "effort": "high",
+      "scope": "codebase"
+    }
+  ],
+  "scope_policy": {
+    "enforcement": "best_effort"
+  },
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "build": {
+    "base_ref": "HEAD",
+    "comparison_goal": "Prefer the patch that satisfies the acceptance criteria with the smallest maintainable change.",
+    "protected_paths": [
+      "internal/commands/buildcmd",
+      "internal/report",
+      "scripts"
+    ],
+    "verify": [
+      {
+        "id": "go-tests",
+        "kind": "gate",
+        "argv": [
+          "sh",
+          "-c",
+          "go test ./internal/commands/bundlecmd ./internal/ledger"
+        ],
+        "wall_clock_seconds": 300,
+        "max_output_bytes": 60000
+      }
+    ]
+  },
+  "budgets": {
+    "wall_clock_seconds": 1200,
+    "max_output_bytes": 80000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 80000
+  }
+}

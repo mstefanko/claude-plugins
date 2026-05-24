@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "id": "slice5-show-bundle-guidance",
+  "type": "build",
+  "goal": "When bakeoff show <run-id> detects related escalation children, or shows an escalation run that has siblings, append exactly one concise next-reader hint pointing to bakeoff bundle <source-run-id> with the correct --out value; otherwise leave the normal report output unchanged.",
+  "background": [
+    "Acceptance criteria:\n- Showing a run with one or more escalation children renders exactly one additional next-reader hint line of the form 'bakeoff bundle <source-run-id> --out <out-value>' using the originating source run id and the resolved --out directory.\n- Showing an escalation child run that has sibling escalation runs renders exactly one additional next-reader hint line pointing to 'bakeoff bundle <source-run-id> --out <out-value>' for the source run.\n- Showing a run with no escalation children and no sibling escalations renders output unchanged from prior behavior (no hint line is added).\n- The new hint is the single next-reader recommendation surfaced by show; no competing next-step recommendations are added in the same code path.\n- Focused tests in internal/commands/showcmd/show_test.go cover three cases: escalation parent with children present, escalation child with siblings present, and a run with no escalation relations (baseline stability).\n- go test ./internal/commands/showcmd ./internal/runlinks ./internal/ledger passes after the change.",
+    "Edit boundary:\n- internal/commands/showcmd/show.go\n- internal/commands/showcmd/show_test.go\n- internal/commands/showcmd package helper files only if strictly necessary",
+    "Bakeoff will capture candidate patches from isolated worktrees and will not apply them to this checkout."
+  ],
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "sonnet",
+      "effort": "high",
+      "scope": "codebase"
+    },
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "effort": "high",
+      "scope": "codebase"
+    }
+  ],
+  "scope_policy": {
+    "enforcement": "best_effort"
+  },
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "build": {
+    "base_ref": "HEAD",
+    "comparison_goal": "Prefer the patch that satisfies the acceptance criteria with the smallest maintainable change.",
+    "verify": [
+      {
+        "id": "showcmd_tests",
+        "kind": "gate",
+        "argv": [
+          "sh",
+          "-c",
+          "go test ./internal/commands/showcmd ./internal/runlinks ./internal/ledger"
+        ],
+        "wall_clock_seconds": 300,
+        "max_output_bytes": 60000
+      }
+    ]
+  },
+  "budgets": {
+    "wall_clock_seconds": 1200,
+    "max_output_bytes": 80000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 80000
+  }
+}

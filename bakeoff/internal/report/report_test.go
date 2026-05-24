@@ -30,6 +30,10 @@ func TestRenderIncludesDecisionAuditAndProviderStatus(t *testing.T) {
 		"Stalled at: `providers`",
 		"Result: `both_failed`",
 		"Next: `bakeoff show run-1`",
+		"## Selector Confidence",
+		"- Selector label: `unresolved`",
+		"- Evidence: the selector stopped at `providers`.",
+		"- Decision effect: no canonical winner; inspect status, caveats, and provider artifacts.",
 		"- Stalled at: `providers`",
 		"| Provider | Status | Wall | Stdout | Stderr | Scope | Notes |",
 		"| `claude` | `exit_error` |",
@@ -41,6 +45,9 @@ func TestRenderIncludesDecisionAuditAndProviderStatus(t *testing.T) {
 	}
 	if strings.Index(text, "## Outcome") > strings.Index(text, "## Decision Audit") {
 		t.Fatalf("Outcome should precede Decision Audit:\n%s", text)
+	}
+	if strings.Index(text, "## Selector Confidence") < strings.Index(text, "## Outcome") || strings.Index(text, "## Selector Confidence") > strings.Index(text, "## Decision Audit") {
+		t.Fatalf("selector confidence should sit between Outcome and Decision Audit:\n%s", text)
 	}
 	if strings.Contains(text, "- `claude`: `exit_error`") {
 		t.Fatalf("provider status still rendered in bullet form:\n%s", text)
@@ -110,6 +117,97 @@ func TestRenderOutcomeByMode(t *testing.T) {
 			}
 			if strings.Index(text, "## Outcome") > strings.Index(text, "## Decision Audit") {
 				t.Fatalf("Outcome should precede Decision Audit:\n%s", text)
+			}
+		})
+	}
+}
+
+func TestRenderSelectorConfidenceByResearchMode(t *testing.T) {
+	cases := []struct {
+		name     string
+		wo       *workorder.WorkOrder
+		decision map[string]any
+		want     []string
+	}{
+		{
+			name: "gather union",
+			wo:   &workorder.WorkOrder{ID: "sample", Type: "gather"},
+			decision: map[string]any{
+				"mode":              "gather",
+				"decision_kind":     "structured_union",
+				"judge_ran":         true,
+				"judge_completed":   true,
+				"provider_statuses": map[string]any{},
+			},
+			want: []string{
+				"- Selector label: `union/dedupe`",
+				"gather merged and deduped provider findings without selecting a winner.",
+				"no canonical winner; report claims are grouped by source overlap.",
+			},
+		},
+		{
+			name: "compare judge winner",
+			wo:   &workorder.WorkOrder{ID: "sample", Type: "compare"},
+			decision: map[string]any{
+				"mode":              "compare",
+				"decision_kind":     "pick_winner",
+				"canonical_winner":  "claude",
+				"judge_ran":         true,
+				"judge_completed":   true,
+				"provider_statuses": map[string]any{},
+			},
+			want: []string{
+				"- Selector label: `swapped judge`",
+				"position-swapped judge passes produced a stable decision.",
+				"selected `claude` as the canonical winner.",
+			},
+		},
+		{
+			name: "compare consensus",
+			wo:   &workorder.WorkOrder{ID: "sample", Type: "compare"},
+			decision: map[string]any{
+				"mode":              "compare",
+				"decision_kind":     "consensus",
+				"judge_ran":         true,
+				"judge_completed":   true,
+				"provider_statuses": map[string]any{},
+			},
+			want: []string{
+				"- Selector label: `swapped judge`",
+				"position-swapped judge passes found agreement rather than a winner.",
+				"no winner; the report carries consensus material and sub-claim divergences.",
+			},
+		},
+		{
+			name: "single provider partial",
+			wo:   &workorder.WorkOrder{ID: "sample", Type: "gather"},
+			decision: map[string]any{
+				"mode":          "gather",
+				"decision_kind": "single_provider_only",
+				"judge_ran":     false,
+				"provider_statuses": map[string]any{
+					"claude": map[string]any{"status": "ok"},
+					"codex":  map[string]any{"status": "timeout"},
+				},
+				"canonical_winner": "claude",
+			},
+			want: []string{
+				"- Selector label: `unresolved`",
+				"only `claude` completed successfully; no two-provider selector ran.",
+				"partial result only; treat the surfaced provider output as incomplete competitive evidence.",
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			text := Render(tc.wo, tc.decision, map[string]map[string]any{"claude": {"final_json": map[string]any{"claims": []any{}, "unknowns": []any{}}}}, map[string]map[string]any{}, RenderOptions{})
+			for _, want := range tc.want {
+				if !strings.Contains(text, want) {
+					t.Fatalf("report missing %q:\n%s", want, text)
+				}
+			}
+			if strings.Count(text, "## Selector Confidence") != 1 {
+				t.Fatalf("report should render one selector confidence section:\n%s", text)
 			}
 		})
 	}
@@ -269,6 +367,7 @@ func TestRenderFailedJudgeShowsStatusAndProviderClaims(t *testing.T) {
 		"### codex",
 		"Codex claim",
 		"Judge error kind: `api_transient`",
+		"- Selector label: `unresolved`",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("report missing %q:\n%s", want, text)
@@ -276,6 +375,9 @@ func TestRenderFailedJudgeShowsStatusAndProviderClaims(t *testing.T) {
 	}
 	if strings.Index(text, "## Status") > strings.Index(text, "## Outcome") {
 		t.Fatalf("Status should precede Outcome:\n%s", text)
+	}
+	if strings.Index(text, "## Outcome") > strings.Index(text, "## Selector Confidence") || strings.Index(text, "## Selector Confidence") > strings.Index(text, "## Decision Audit") {
+		t.Fatalf("selector confidence should remain after Outcome and before Decision Audit:\n%s", text)
 	}
 	if strings.Contains(text, "## Conflicts") {
 		t.Fatalf("failed judge report should not render judge conflicts:\n%s", text)
@@ -449,6 +551,13 @@ func TestSelectorStrengthLine(t *testing.T) {
 	}
 }
 
+func TestSelectorLabelLine(t *testing.T) {
+	line := selectorLabelLine("gate")
+	if line != "- Selector label: `gate`" {
+		t.Fatalf("unexpected selector label line: %q", line)
+	}
+}
+
 func TestEscalationAdvisoryImpactLines(t *testing.T) {
 	cases := []struct {
 		mode           string
@@ -463,15 +572,15 @@ func TestEscalationAdvisoryImpactLines(t *testing.T) {
 		},
 		{
 			mode: "witness", selectionBasis: "",
-			wantCount: 1, wantSubstr: []string{"advisory only"},
+			wantCount: 2, wantSubstr: []string{"advisory witness", "advisory only"},
 		},
 		{
 			mode: "witness", selectionBasis: "escalation_synthesis",
-			wantCount: 2, wantSubstr: []string{"advisory only", "one synthesis pass"},
+			wantCount: 3, wantSubstr: []string{"advisory witness", "advisory only", "one synthesis pass"},
 		},
 		{
 			mode: "independent", selectionBasis: "escalation_synthesis",
-			wantCount: 1, wantSubstr: []string{"one synthesis pass"}, wantAbsent: []string{"advisory only"},
+			wantCount: 2, wantSubstr: []string{"fresh third answer", "one synthesis pass"}, wantAbsent: []string{"advisory only"},
 		},
 	}
 	for _, tc := range cases {
@@ -533,6 +642,49 @@ func TestAdvisoryHelpersUsedInWitnessAndDisputeReports(t *testing.T) {
 		if !strings.Contains(text, "advisory only") {
 			t.Errorf("mode=%q: advisory impact line missing from report", mode)
 		}
+		if !strings.Contains(text, "Selector label: `") {
+			t.Errorf("mode=%q: selector label missing from report", mode)
+		}
+	}
+}
+
+func TestRenderEscalationIndependentShowsFreshThirdAnswerLabel(t *testing.T) {
+	text := RenderEscalation(
+		&workorder.WorkOrder{ID: "sample", Type: "compare"},
+		map[string]any{
+			"decision_kind":    "escalation_recommends_winner",
+			"escalation_mode":  "independent",
+			"added_provider":   "gemini",
+			"source_providers": []any{"claude", "codex"},
+			"source_mode":      "compare",
+			"source_decision":  map[string]any{"decision_kind": "tie"},
+			"canonical_winner": "gemini",
+			"selection_basis":  "escalation_synthesis",
+			"synthesis": map[string]any{
+				"headline":               "Gemini provides a supported answer.",
+				"source_decision_effect": "recommends_winner",
+				"recommended_winner":     "gemini",
+				"what_changed":           []any{"new evidence"},
+				"material_new_evidence":  []any{},
+				"unresolved_questions":   []any{},
+				"confidence":             "medium",
+				"recommended_action":     "inspect",
+			},
+		},
+		map[string]any{"claims": []any{}},
+		nil,
+		EscalationRenderOptions{RunID: "run-1", OutDir: "runs", SourceRunID: "source"},
+	)
+	for _, want := range []string{
+		"- Selector label: `fresh third answer`",
+		"Selection basis: `escalation_synthesis`; this is one synthesis pass, not position-swapped judging.",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("report missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "Decision impact: advisory only") {
+		t.Fatalf("independent escalation should not render advisory-only impact:\n%s", text)
 	}
 }
 
