@@ -4,25 +4,48 @@
   <img src="assets/bakeoff-logo.png" alt="Bakeoff logo: two cake slices labeled A and B on a cake stand next to the Bakeoff wordmark" width="720">
 </p>
 
-Bakeoff turns agent comparison into a repeatable workflow. Give two providers
-the same research, review, or build task; Bakeoff runs them in parallel,
-collects their work, judges the outputs, and returns a report with replayable
-artifacts. The default pair is Claude + Codex; Gemini and GitHub Copilot can be
-chosen as optional peers.
+Bakeoff is a second-opinion machine for agent work. You give one clear task to
+two providers, they work independently, and Bakeoff collects the evidence in
+one repeatable run. Instead of wondering which answer to trust, you get the
+provider outputs, the judge or verifier result, and a durable report you can
+inspect later.
 
-The tool is deliberately small and transparent. It launches providers, records artifacts, runs verification or judging, and writes a ledger, while leaving your checkout untouched. No surprise patches, no automatic PRs, no hidden state. Just parallel agent work with enough evidence to audit, reproduce, and trust the result.
+That is the whole value: two independent attempts, one auditable process, and
+no hidden repo mutations. Bakeoff writes run artifacts under `runs/<run-id>/`.
+For build work, it captures candidate patches from isolated worktrees and hands
+you the selected patch file when there is a clear winner. It does not apply,
+merge, commit, push, or open PRs for you.
+
+Generated work orders normally use exactly two providers. The default pair is
+Claude + Codex; Gemini and GitHub Copilot can replace one of those initial
+peers when you want a different two-agent matchup. After a completed non-build
+run, escalation lets you bring in any available provider for a fresh third
+answer (`independent`), a sanity check on the report (`witness`), or a focused
+challenge to disputed points (`dispute`). Provider secrets stay with the
+provider CLIs. Do not put API keys, tokens, or private credentials in work
+orders or prompts.
+
+Use Bakeoff when one agent answer would feel too thin: a tricky research
+question, a code review where blind spots matter, a comparison with real
+tradeoffs, or a fix where tests can choose between two candidate patches. Skip
+it for formatter-only work, one-obvious-line edits, or anything where a normal
+single-agent pass is cheaper and just as clear.
 
 ## Modes
 
-| Mode | Work order | Use when | Example |
-| --- | --- | --- | --- |
-| Gather | `type: "gather"` | Inventories, source-backed findings, coverage questions. | `/bakeoff:run research how auth retry works` |
-| Compare | `type: "compare"` | Choosing between options, vendors, designs. | `/bakeoff:run compare SQLite FTS vs Tantivy` |
-| Analyze | `type: "analyze"` | Root cause, architecture, synthesis. | `/bakeoff:run why reports get truncated` |
-| Review | `type: "gather"` + `facet.id: "code-review"` | Auditing a branch, PR, diff, or local change. | `/bakeoff:run review this diff against main` |
-| Build | `type: "build"` | Competing implementations with verifiers as the selector. | `/bakeoff:run build competing fixes for the failing test` |
+Think of the mode as the shape of the question.
 
-Mode words are steering hints, not required syntax: `/bakeoff:run` infers the work-order type from the request, so a "why" question can draft an `analyze` work order without saying `analyze`.
+| Mode | Work order | What Bakeoff does | Good prompt |
+| --- | --- | --- | --- |
+| Gather | `type: "gather"` | Asks both providers to find facts, then merges the useful evidence. | `/bakeoff:run research how auth retry works and cite files` |
+| Compare | `type: "compare"` | Asks both providers to weigh named options, then judges the tradeoff. | `/bakeoff:run compare SQLite FTS vs Tantivy for local search` |
+| Analyze | `type: "analyze"` | Asks both providers to explain why something happens, then keeps the strongest reasoning. | `/bakeoff:run analyze why reports get truncated` |
+| Review | `type: "gather"` + `facet.id: "code-review"` | Asks both providers to review the same change, merges findings, then triages them. | `/bakeoff:run review this diff against main` |
+| Build | `type: "build"` | Asks both providers to implement the same fix in isolated worktrees, runs your gates, and selects a patch only when evidence is strong. | `/bakeoff:run build competing fixes for the failing cache test` |
+
+Mode words are hints, not strict syntax. A request that starts with "why" can
+become `analyze`; a request about a diff can become review; a request for
+candidate patches becomes build.
 
 ```mermaid
 flowchart LR
@@ -31,7 +54,17 @@ flowchart LR
 
 ## The Pipeline
 
-Every Bakeoff run has the same shape. The mode determines what the judge does and whether verifiers or triage run.
+Every run follows the same simple loop:
+
+1. You ask a question or pass a work-order file.
+2. Bakeoff previews the planned work order and waits for approval.
+3. Two providers work on the same task independently.
+4. Bakeoff merges, judges, triages, or verifies depending on the mode.
+5. You inspect the report, decision file, and artifacts before acting.
+
+The mode decides the middle step. Gather merges evidence. Compare and analyze
+use a judge. Review adds automatic triage. Build runs verifier commands and
+hands off a patch artifact only when there is a canonical winner.
 
 ```mermaid
 flowchart LR
@@ -43,11 +76,14 @@ flowchart LR
 
 ## Quick Start
 
-Prerequisites: Claude Code with this plugin installed; Go 1.24+ so
-`/bakeoff:setup` can build the bundled CLI source; `git` for review and build;
-an authenticated `claude` CLI for generated judges; and at least one peer CLI.
-`codex` is the canonical peer, while `gemini` and `copilot` are optional peers.
-Provider auth lives with the provider CLIs — don't put secrets in work orders.
+Prerequisites:
+
+- Claude Code with this plugin installed.
+- Go 1.24+ so `/bakeoff:setup` can build the bundled CLI source.
+- `git` for review and build workflows.
+- An authenticated `claude` CLI for generated judges.
+- At least one peer CLI. `codex` is the canonical peer; `gemini` and `copilot`
+  are optional peers.
 
 ```text
 /bakeoff:setup                                           # build bundled Go CLI into plugin data
@@ -58,6 +94,22 @@ Provider auth lives with the provider CLIs — don't put secrets in work orders.
 /bakeoff:run examples/build.work-order.json              # run an existing work order
 /bakeoff:history                                         # list recent runs and run ids
 ```
+
+### A First Run In Your Head
+
+Here is the normal flow with a research task:
+
+1. Run `/bakeoff:run research how auth retry behavior works and cite the files involved`.
+2. Bakeoff drafts a work order, shows the providers, judge, goal, budget, and
+   command it plans to run.
+3. Reply `show` if you want to read the full JSON. Reply `yes`, `approve`, or
+   `run it` when the preview looks right.
+4. Bakeoff writes the work order, validates it, runs both providers, judges the
+   result, and writes `runs/<run-id>/report.md`.
+5. Run `/bakeoff:history` if you need the run id, then
+   `/bakeoff:inspect <run-id>` to read the report.
+6. Act on the report yourself, or approve a separate follow-up run if Bakeoff
+   recommends one.
 
 Local development install:
 
@@ -76,7 +128,21 @@ documented in [docs/release-publishing.md](docs/release-publishing.md).
 
 Codex install: this checkout ships `.codex-plugin/plugin.json`; verify the current Codex plugin flow in Codex docs.
 
-Natural-language requests draft a work order, show a compact review preview, and wait for explicit approval before writing or running. Single-work-order previews accept `yes`, `approve`, or `run it`; `show` prints the JSON, `edit` revises the draft, and `cancel` discards it. Short drafts include the full JSON inline; longer drafts show the planned work-order file and let you reply `show` to print the JSON before approving. For large requests, the plugin may suggest 2-3 separate work orders when the split is clean; each part is still a normal Bakeoff run. Eligible non-build splits can be approved with `parallel` after the preview to launch all parts at once; `write and run` or `sequential` keeps the existing one-after-another behavior. Explicit 2-3 lens review can also be run sequentially or in parallel after preview, and writes a short summary file after the lens runs finish. Sample work orders live in `examples/` (`gather`, `compare`, `analyze`, `review`, `build`).
+Natural-language requests draft a work order, show a compact review preview,
+and wait for explicit approval before writing or running. Single-work-order
+previews accept `yes`, `approve`, or `run it`; `show` prints the JSON, `edit`
+revises the draft, and `cancel` discards it. Short drafts include the full JSON
+inline; longer drafts show the planned work-order file and let you reply
+`show` before approving.
+
+For large requests, the plugin may suggest 2-3 separate work orders when the
+split is clean. Each part is still a normal Bakeoff run. Eligible non-build
+splits can be approved with `parallel` after the preview to launch all parts at
+once; `write and run` or `sequential` keeps the one-after-another behavior.
+Explicit 2-3 lens review can also run sequentially or in parallel after
+preview, and writes a short summary file after the lens runs finish. Sample
+work orders live in `examples/` (`gather`, `compare`, `analyze`, `review`,
+`build`).
 
 After a run finishes, `/bakeoff:run` may recommend one next normal work order
 when the artifacts make it obvious, such as drafting an implementation plan
@@ -91,8 +157,8 @@ and call out the fallback in the preview. Use full model ids in the work order
 to pin exact versions.
 
 When the default judge shares provider-family metadata with one selected
-provider, `/bakeoff:run` may surface a compact judge family advisory from
-`bakeoff doctor`. The advisory is informational: it can name ready
+provider, `/bakeoff:run` may show a short judge-family advisory from
+`bakeoff doctor`. Treat it as a note, not a rule. It can name ready
 non-contestant judge backends such as Gemini or Copilot, but it does not
 auto-switch the judge, add `judge_policy`, or make validation fail. In
 `doctor --json`, `judge_family_advisory` includes `judge_backend`,
@@ -103,7 +169,7 @@ auto-switch the judge, add `judge_policy`, or make validation fail. In
 
 ### Route Examples
 
-Route examples stay compact in the preview:
+Route advisor lines explain why Bakeoff picked a loop:
 
 | User phrase | Route advisor |
 | --- | --- |
@@ -118,19 +184,18 @@ not supported.
 
 ## Research
 
-Think of research as:
+Use research when you want evidence, a decision, or a clear explanation before
+you change anything.
 
-**same task -> two independent answers -> mode-specific judge -> report**
+Think of it as:
 
-`gather`, `compare`, and `analyze` use the same basic pipeline. The two selected
-providers each work from the same request, then Bakeoff judges the results
-differently depending on the mode:
+**same question -> two independent answers -> mode-specific judge -> report**
 
-- `gather`: combines overlapping claims into one cited list
-- `compare`: judges named options and returns a winner, consensus, or tie
-- `analyze`: judges explanation spines and keeps the strongest evidence-backed reasoning
+Pick the mode by the kind of answer you need:
 
-Simple rule: use `gather` when you want breadth and citations, like "find every place this happens." Use `compare` when you can name the options and criteria. Use `analyze` when you need root cause, architecture tradeoffs, or a clear answer to "why did this happen?"
+- `gather`: "Find the facts and cite the source."
+- `compare`: "Choose between these options using these criteria."
+- `analyze`: "Explain why this happened or what design tradeoff matters."
 
 ```text
 /bakeoff:run research how auth retry behavior works and cite the files involved
@@ -138,8 +203,21 @@ Simple rule: use `gather` when you want breadth and citations, like "find every 
 /bakeoff:run analyze why provider output caps sometimes produce incomplete reports
 ```
 
-After a run, use `/bakeoff:history` to find recent run ids and
-`/bakeoff:inspect <run-id>` to open the report.
+Example flow:
+
+1. You ask: `/bakeoff:run compare SQLite FTS vs Tantivy for local product search`.
+2. Bakeoff previews a `compare` work order with two providers and a judge.
+3. You approve it.
+4. Both providers answer the same comparison independently.
+5. The judge reads both answers, checks whether the ordering changes under A/B
+   and B/A position swaps, and returns a winner, consensus, or unresolved tie.
+6. You inspect `runs/<run-id>/report.md` and `decision.json`.
+
+After any run, use `/bakeoff:history` to find recent run ids and
+`/bakeoff:inspect <run-id>` to open the report. If a research run exits `4`
+because the judge failed after both providers succeeded, the usual next step is
+`bakeoff rerun <run-id> --judge-only`; build runs do not support judge-only
+rerun today.
 
 <details open>
 <summary>Research and evidence behind this design</summary>
@@ -158,19 +236,24 @@ More: [docs/research-basis.md](docs/research-basis.md).
 
 ## Review
 
-Think of `review` as:
+Use review when you want two independent reviewers to inspect the same branch,
+PR, diff, file set, or local change.
+
+Think of it as:
 
 **same scope -> two independent reviews -> one combined finding list -> automatic triage**
 
-Review is implemented as a `gather` run with a `code-review` facet. Both providers inspect the same branch, diff, or local changes through the same review boundaries:
+Review is implemented as a `gather` run with a `code-review` facet. Both
+providers inspect the same target through the same boundaries:
 
 - `focus`: what the review should care about
 - `include`: what should be in scope
 - `exclude`: what should stay out of scope
 
-The judge does not pick a winning reviewer. It combines the findings from both providers, removes duplicates, and keeps the useful candidates.
-
-Then Bakeoff runs triage automatically. Triage checks each finding for actionability, citations, and staleness before you decide what to fix.
+The judge does not pick a winning reviewer. It combines the findings, removes
+duplicates, and keeps useful candidates. Then Bakeoff runs triage
+automatically. Triage checks each finding for actionability, citations, and
+staleness before you decide what to fix.
 
 ```text
 /bakeoff:run review this diff against main
@@ -181,20 +264,40 @@ Then Bakeoff runs triage automatically. Triage checks each finding for actionabi
 /bakeoff:run review this diff --no-triage
 ```
 
-`--base` and `--diff` capture read-only git context. `--no-triage` skips the automatic triage step for review runs. See [examples/review.work-order.json](examples/review.work-order.json) for the facet shape; field-level reference is in [docs/work-orders.md](docs/work-orders.md).
+Example flow:
 
-To run multiple lenses, say so explicitly: `/bakeoff:run review this diff against main with security, performance, and UX as separate lenses`. Bakeoff previews one normal review run per lens. Reply `write and run` or `sequential` to run them one after another, or `parallel` when the preview offers it to launch all 2-3 lens runs at once. Parallel speedup depends on the configured provider CLIs tolerating concurrent invocations from the same host/session; some setups may self-serialize.
+1. You ask: `/bakeoff:run review this diff against main --base main --diff --changed-files`.
+2. Bakeoff previews a review work order and shows that triage is on by default.
+3. You approve it.
+4. Both providers review the same diff context.
+5. The judge creates one candidate finding list.
+6. Triage checks which findings are actionable, stale, unsupported, or need
+   reproduction.
+7. You read `runs/<run-id>/report.md` first, then
+   `runs/<run-id>/triage/triage.md`.
 
-Plain review stays one run, even when you mention several concerns. If you explicitly ask for separate lenses, such as security plus performance plus UX, `/bakeoff:run` drafts one normal review work order per lens, keeps triage on for each lens unless disabled, validates every file before launch, and writes `runs/<base>.multi-lens-summary.md`. Parallel lens summaries use explicit run ids and are marked partial when any lens fails, is interrupted, or has missing artifacts. Synthesis into one prioritized fix plan is a separate follow-up approval, not an automatic hidden step.
+`--base`, `--diff`, and `--changed-files` capture read-only git context.
+`--no-triage` skips the automatic triage step. See
+[examples/review.work-order.json](examples/review.work-order.json) for the
+facet shape; field-level reference is in
+[docs/work-orders.md](docs/work-orders.md).
 
-Generic clean splits are different from multi-lens review: if all 2-3 parts are
-`gather`, `compare`, or `analyze`, the preview offers `sequential`, `parallel`,
-and `show`. Parallel split children run as normal `bakeoff research ... --json
---quiet` commands with explicit run ids. Because concurrent children race to
+To run multiple lenses, say so explicitly:
+
+```text
+/bakeoff:run review this diff against main with security, performance, and UX as separate lenses
+```
+
+Bakeoff previews one normal review run per lens. Reply `write and run` or
+`sequential` to run them one after another, or `parallel` when the preview
+offers it to launch all 2-3 lens runs at once. Each lens keeps triage on unless
+you supplied `--no-triage`. After the lens runs finish, Bakeoff writes
+`runs/<base>.multi-lens-summary.md`. Synthesis into one prioritized fix plan is
+a separate follow-up approval, not an automatic hidden step.
+
+Parallel child runs use explicit run ids. Because concurrent children race to
 update the convenience pointer, `latest` may point to any one child; use the
 run ids in the final summary or `bakeoff show <run-id>`.
-
-After a run, open `runs/<run-id>/report.md` first. Then open `runs/<run-id>/triage/triage.md`, unless you used `--no-triage`.
 
 <details open>
 <summary>Research and evidence behind this design</summary>
@@ -206,6 +309,43 @@ LLM reviewers produce real findings mixed with false positives and stale comment
 More: [docs/research-basis.md](docs/research-basis.md).
 
 </details>
+
+## Escalation
+
+Use escalation when a completed non-build run needs one more view. Escalation
+does not change the source run. It writes a new related run directory and, for
+review escalations, can run triage on the escalation provider's new findings.
+
+Escalation is for `gather`, `compare`, `analyze`, and code-review runs. It is
+not supported for build runs and never creates a third patch.
+
+```text
+/bakeoff:escalate <run-id> --provider gemini --mode witness --dry-run
+/bakeoff:escalate <run-id> --provider copilot --mode dispute --dry-run
+/bakeoff:inspect <run-id> --bundle
+```
+
+Modes:
+
+- `independent`: ask the added provider for a fresh third answer.
+- `witness`: ask the added provider to audit the current report and artifacts.
+- `dispute`: ask the added provider to focus only on contested points.
+
+Example flow:
+
+1. A compare run ends unresolved, or a review report has a finding you want
+   challenged.
+2. Run `/bakeoff:escalate <run-id> --provider gemini --mode dispute --dry-run`.
+3. Read the dry-run preview: source run, added provider, mode, cost, and scope.
+4. If the preview fits, approve it. Bakeoff runs the escalation and writes a
+   related child run.
+5. Inspect the source plus children with `/bakeoff:inspect <run-id> --bundle`.
+
+`witness` and `dispute` are advisory. They cannot pick a new winner and cannot
+replace source-run triage. If review triage failed or is missing, retry triage
+first with `/bakeoff:inspect <run-id> --triage-force` or
+`bakeoff triage <run-id> --force`; use escalation only when you still need
+another provider's opinion.
 
 ## Build
 
@@ -224,6 +364,20 @@ Use `build` when verification can actually help: performance work, robustness fi
 /bakeoff:run build two approaches for reducing ledger scan time, verify with go test ./...
 /bakeoff:run build a safer parser for work-order JSONC with tests as the gate
 ```
+
+Example flow:
+
+1. You ask for a build and name the acceptance criteria, edit scope, and gate
+   command, such as `go test ./internal/cache -run TestInvalidation -count=1`.
+2. Bakeoff previews a build work order with two `codebase` providers and the
+   verifier command.
+3. You approve it.
+4. Each provider implements in an isolated worktree.
+5. Bakeoff captures each patch, runs the declared gates and metrics, then
+   selects a winner only when the evidence is strong enough.
+6. If there is a canonical winner, you inspect
+   `runs/<run-id>/providers/<winner>/build/diff.patch` and decide what to do
+   with it yourself.
 
 Minimum build work order: `type: "build"`, two `codebase` providers, and at least one `kind: "gate"` verifier. If verifier scripts or fixtures must not be edited, list them in `build.protected_paths`; patches that touch protected paths become ineligible.
 
@@ -288,6 +442,21 @@ runs/<run-id>/
 ```
 
 Manifest telemetry fields are documented in [docs/cli-reference.md#manifest-telemetry](docs/cli-reference.md#manifest-telemetry).
+Use `bakeoff runs verify <run-id> --json` to check required artifacts,
+manifest fingerprints, and triage state.
+
+Common inspection flow:
+
+```text
+/bakeoff:history                         # find the run id
+/bakeoff:inspect <run-id>                # read report.md
+/bakeoff:inspect <run-id> --verify       # check ledger and manifest state
+/bakeoff:inspect <run-id> --bundle       # read source run plus escalations
+```
+
+For review runs, inspect `triage/triage.md` before treating findings as ready
+to fix. For build runs, inspect `diagnostics.json` when present and use the
+selected patch path only when `decision.json.canonical_winner` is non-null.
 
 | Exit | Meaning |
 | --- | --- |
@@ -306,14 +475,14 @@ Slash commands:
 
 - `/bakeoff:setup` — build or update the bundled Bakeoff Go CLI in persistent plugin data.
 - `/bakeoff:quickstart` — check CLI, local readiness, and provider auth/session state.
-- `/bakeoff:run <path or request> [--run-id ID] [--out runs] [--quiet] [--keep-worktrees] [--no-triage] [--no-repo-layout]` — validate and run, or draft from natural language.
+- `/bakeoff:run <path or request> [--run-id ID] [--out runs] [--base REF] [--diff] [--changed-files] [--quiet] [--keep-worktrees] [--no-triage] [--no-repo-layout]` — validate and run, or draft from natural language.
 - `/bakeoff:escalate <run-id> --provider gemini --mode independent|witness|dispute --dry-run` — preview or run one post-run non-build provider escalation.
 - `/bakeoff:history [limit] [--out runs] [--facet ID] [--triage-state STATE] [--type TYPE]` — list recent runs with run ids and short goal summaries.
-- `/bakeoff:inspect [latest or run-id] [--bundle]` — open existing reports, decisions, triage, handoff, or source-plus-escalation bundles.
+- `/bakeoff:inspect [latest or run-id] [--list] [--verify] [--bundle] [--triage-dry-run] [--triage-force]` — open existing reports, decisions, triage, handoff, verification, or source-plus-escalation bundles.
 - `/bakeoff:doctor [--skip-auth-probe] [--build] [--quiet]` — readiness check. Reports the canonical pair, optional providers, provider-family metadata, any draft-time fallback, and a judge family advisory for the default generated judge when applicable. `--build` runs live edit probes.
 - `/bakeoff:uninstall` — remove plugin state, then guide manual plugin uninstall.
 
-Core CLI: `bakeoff draft-build`, `bakeoff validate`, `bakeoff research`, `bakeoff build`, `bakeoff rerun`, `bakeoff escalate`, `bakeoff ls`, `bakeoff show`, `bakeoff bundle`, `bakeoff triage`, `bakeoff doctor`. Full reference in [docs/cli-reference.md](docs/cli-reference.md).
+Core CLI: `bakeoff draft-build`, `bakeoff validate`, `bakeoff research`, `bakeoff build`, `bakeoff rerun`, `bakeoff escalate`, `bakeoff ls`, `bakeoff show`, `bakeoff bundle`, `bakeoff runs verify`, `bakeoff triage`, `bakeoff doctor`. Full reference in [docs/cli-reference.md](docs/cli-reference.md).
 
 ## Configuration
 

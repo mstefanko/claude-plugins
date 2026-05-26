@@ -53,12 +53,17 @@ bakeoff_plugin_root() {
 }
 
 bakeoff_data_root() {
+  local conventional_data
   if [[ -n "${BAKEOFF_PLUGIN_DATA:-}" ]]; then
     printf '%s\n' "$BAKEOFF_PLUGIN_DATA"
     return 0
   fi
   if [[ -n "${CLAUDE_PLUGIN_DATA:-}" ]]; then
     printf '%s\n' "$CLAUDE_PLUGIN_DATA"
+    return 0
+  fi
+  if conventional_data="$(bakeoff_conventional_data_root)"; then
+    printf '%s\n' "$conventional_data"
     return 0
   fi
   return 1
