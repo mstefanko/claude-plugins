@@ -1414,7 +1414,7 @@ func asFloat(value any) (float64, bool) {
 func validateFacetStringList(value any, label string, minItems int, maxItems int) ([]string, error) {
 	items, ok := value.([]any)
 	if !ok {
-		return nil, Validationf("%s must be an array of strings", label)
+		return nil, Validationf("%s must be an array of strings (got %s; expected %d-%d items)", label, jsonTypeName(value), minItems, maxItems)
 	}
 	if len(items) < minItems || len(items) > maxItems {
 		return nil, Validationf("%s must contain %d-%d items", label, minItems, maxItems)
@@ -1452,6 +1452,25 @@ func normalizeFacetText(value any, label string) (string, error) {
 		return "", Validationf("%s must be at most 500 characters (got %d)", label, len(normalized))
 	}
 	return normalized, nil
+}
+
+func jsonTypeName(value any) string {
+	switch value.(type) {
+	case nil:
+		return "null"
+	case string:
+		return "string"
+	case bool:
+		return "boolean"
+	case float64, float32, int, int64, int32, json.Number:
+		return "number"
+	case []any:
+		return "array"
+	case map[string]any:
+		return "object"
+	default:
+		return fmt.Sprintf("%T", value)
+	}
 }
 
 func validateClaims(value any, label string) error {
@@ -1706,11 +1725,11 @@ func validateTriageItem(value any, label string) error {
 func validateStringList(value any, label string) error {
 	items, ok := value.([]any)
 	if !ok {
-		return Validationf("%s must be an array of strings", label)
+		return Validationf("%s must be an array of strings (got %s)", label, jsonTypeName(value))
 	}
-	for _, item := range items {
+	for i, item := range items {
 		if _, ok := item.(string); !ok {
-			return Validationf("%s must be an array of strings", label)
+			return Validationf("%s must be an array of strings (%s[%d] got %s)", label, label, i, jsonTypeName(item))
 		}
 	}
 	return nil

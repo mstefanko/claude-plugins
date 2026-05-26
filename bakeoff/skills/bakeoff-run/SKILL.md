@@ -235,10 +235,13 @@ For gather/code-review, compare, and analyze drafts, copy field names from
 `output_cap_grace_seconds`, and `max_output_overrun_bytes`; use nested
 `build.verify[]` with `argv: [...]`; put criteria in `background`; use integer
 `schema_version: 1`. For code-review facets, use `facet.kind: "generic"` and
-write `facet.focus` as one string of 500 characters or fewer with no backticks,
-angle brackets, or `</facet>`; write `facet.include` / `facet.exclude` as
-descriptive criteria, not path globs. Use `examples/review.work-order.json` as
-the code-review facet example.
+write `facet.focus` as one short string: normally under 300 characters, shorter
+is fine, hard capped at 500, with no backticks, angle brackets, or `</facet>`.
+Put enumerated review areas in `background`, `facet.include`, and
+`facet.exclude`; `include` is a JSON array of 1-8 short descriptive criteria
+strings, and `exclude` is a JSON array of 0-8 short descriptive criteria
+strings. Do not collapse them to a paragraph and do not use path globs. Use
+`examples/review.work-order.json` as the code-review facet example.
 Non-build and manual build drafts should internally validate before preview
 when practical, but the enforced safety gate is the on-disk
 `bakeoff validate` after approval.

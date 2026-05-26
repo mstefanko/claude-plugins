@@ -76,7 +76,7 @@ func runShow(_ context.Context, f commands.Factory, opts *ShowOptions) error {
 	}
 	f.Streams().Printf("%s", string(data))
 	printRelatedRuns(f, opts, runDir)
-	state, staleInputs := triage.StateDetail(runDir)
+	state, staleInputs := triage.DisplayStateDetail(runDir)
 	switch state {
 	case "yes":
 		f.Streams().Printf("\ntriage available: %s\n", ledger.BakeoffShowCommand(opts.RunID, opts.Out, "--triage"))
@@ -209,9 +209,12 @@ func tailLines(text string, n int) string {
 
 func showTriage(f commands.Factory, opts *ShowOptions, runDir string) error {
 	triageReport := filepath.Join(runDir, "triage", "triage.md")
-	state, staleInputs := triage.StateDetail(runDir)
+	state, staleInputs := triage.DisplayStateDetail(runDir)
 	if state == "stale" {
 		return &apperror.ValidationError{Message: "triage is stale for " + filepath.Base(runDir) + triage.StaleInputsText(staleInputs) + "; run " + ledger.BakeoffTriageCommand(opts.RunID, opts.Out, true)}
+	}
+	if state == "failed" {
+		return &apperror.ValidationError{Message: "triage failed for " + filepath.Base(runDir) + "; run " + ledger.BakeoffTriageCommand(opts.RunID, opts.Out, true)}
 	}
 	if state == "dry_run" {
 		return &apperror.ValidationError{Message: "triage has only a dry run for " + filepath.Base(runDir) + "; run " + ledger.BakeoffTriageCommand(opts.RunID, opts.Out, true)}

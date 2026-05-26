@@ -65,10 +65,18 @@ func TestWriteRunManifestFingerprintsProviderAndJudgeEvidence(t *testing.T) {
 	writeJSON(t, filepath.Join(runDir, "providers", "claude", "final.json"), map[string]any{"ok": true})
 	writeJSON(t, filepath.Join(runDir, "providers", "codex", "failure.json"), map[string]any{"status": "exit_error", "failure_kind": "api_transient"})
 	writeText(t, filepath.Join(runDir, "providers", "claude", "last-message.txt"), "<final_json>{}\n")
+	writeText(t, filepath.Join(runDir, "providers", "claude", "stdout.txt"), "provider stdout\n")
+	writeText(t, filepath.Join(runDir, "providers", "claude", "stderr.txt"), "provider stderr\n")
 	writeText(t, filepath.Join(runDir, "judge", "prompt.txt"), "judge prompt\n")
 	writeJSON(t, filepath.Join(runDir, "judge", "status.json"), map[string]any{"status": "ok"})
 	writeJSON(t, filepath.Join(runDir, "judge", "result.json"), map[string]any{"winner": "claude"})
 	writeText(t, filepath.Join(runDir, "judge", "last-message.txt"), "<final_json>{}\n")
+	writeText(t, filepath.Join(runDir, "judge", "stdout.txt"), "judge stdout\n")
+	writeText(t, filepath.Join(runDir, "judge", "stderr.txt"), "judge stderr\n")
+	writeJSON(t, filepath.Join(runDir, "judge", "synthesis-result.json"), map[string]any{"winner": "claude"})
+	writeText(t, filepath.Join(runDir, "judge", "synthesis-last-message.txt"), "<final_json>{}\n")
+	writeText(t, filepath.Join(runDir, "judge", "synthesis-stdout.txt"), "synthesis stdout\n")
+	writeText(t, filepath.Join(runDir, "judge", "synthesis-stderr.txt"), "synthesis stderr\n")
 
 	value, err := manifest.WriteRunManifest(runDir)
 	if err != nil {
@@ -81,10 +89,18 @@ func TestWriteRunManifestFingerprintsProviderAndJudgeEvidence(t *testing.T) {
 		"providers/claude/final.json",
 		"providers/codex/failure.json",
 		"providers/claude/last-message.txt",
+		"providers/claude/stdout.txt",
+		"providers/claude/stderr.txt",
 		"judge/prompt.txt",
 		"judge/status.json",
 		"judge/result.json",
 		"judge/last-message.txt",
+		"judge/stdout.txt",
+		"judge/stderr.txt",
+		"judge/synthesis-result.json",
+		"judge/synthesis-last-message.txt",
+		"judge/synthesis-stdout.txt",
+		"judge/synthesis-stderr.txt",
 	} {
 		if _, ok := fingerprints[relative]; !ok {
 			t.Fatalf("missing fingerprint for %s in %#v", relative, fingerprints)
@@ -486,6 +502,12 @@ func TestWriteRunManifestMarksZeroSelectedTriage(t *testing.T) {
 	filter := map[string]any{"included": 0, "skipped_non_actionable": 2, "skipped_out_of_facet": 1}
 	writeJSON(t, filepath.Join(runDir, "triage", "status.json"), map[string]any{"status": "ok", "source_finding_filter": filter})
 	writeJSON(t, filepath.Join(runDir, "triage", "final.json"), map[string]any{"schema_version": 1, "status": "complete", "summary": "none", "items": []any{}, "input_hashes": hashes, "source_finding_filter": filter})
+	writeJSON(t, filepath.Join(runDir, "triage", "source_finding_filter.json"), map[string]any{"summary": filter})
+	writeJSON(t, filepath.Join(runDir, "triage", "citation_checks.json"), map[string]any{"checks": []any{}})
+	writeJSON(t, filepath.Join(runDir, "triage", "finding_index.json"), []any{})
+	writeText(t, filepath.Join(runDir, "triage", "prompt.txt"), "triage prompt\n")
+	writeText(t, filepath.Join(runDir, "triage", "stdout.txt"), "triage stdout\n")
+	writeText(t, filepath.Join(runDir, "triage", "stderr.txt"), "triage stderr\n")
 	writeText(t, filepath.Join(runDir, "triage", "triage.md"), "# triage\n")
 
 	value, err := manifest.WriteRunManifest(runDir)
@@ -507,6 +529,19 @@ func TestWriteRunManifestMarksZeroSelectedTriage(t *testing.T) {
 	}
 	if _, ok := triageTelemetry["highest_severity"]; !ok {
 		t.Fatalf("triage telemetry missing highest_severity: %#v", triageTelemetry)
+	}
+	fingerprints := value["artifact_fingerprints"].(map[string]any)
+	for _, relative := range []string{
+		"triage/source_finding_filter.json",
+		"triage/citation_checks.json",
+		"triage/finding_index.json",
+		"triage/prompt.txt",
+		"triage/stdout.txt",
+		"triage/stderr.txt",
+	} {
+		if _, ok := fingerprints[relative]; !ok {
+			t.Fatalf("missing triage fingerprint for %s in %#v", relative, fingerprints)
+		}
 	}
 }
 
@@ -656,6 +691,7 @@ func TestBuildManifestRequiresContextAndFingerprintsBuildArtifacts(t *testing.T)
 	writeText(t, filepath.Join(runDir, "providers", "claude", "build", "diffstat.txt"), " main.go | 1 +\n")
 	writeJSON(t, filepath.Join(runDir, "providers", "claude", "build", "test-files.json"), []any{})
 	writeJSON(t, filepath.Join(runDir, "providers", "claude", "build", "benchmark-files.json"), []any{})
+	writeJSON(t, filepath.Join(runDir, "providers", "claude", "build", "verify", "result.json"), map[string]any{"scope": "provider", "provider_id": "claude", "gates_passed": true})
 	writeJSON(t, filepath.Join(runDir, "providers", "claude", "build", "verify", "unit", "status.json"), map[string]any{"id": "unit", "status": "passed"})
 	writeText(t, filepath.Join(runDir, "providers", "claude", "build", "verify", "unit", "stdout.txt"), "")
 	writeText(t, filepath.Join(runDir, "providers", "claude", "build", "verify", "unit", "stderr.txt"), "")
@@ -673,6 +709,7 @@ func TestBuildManifestRequiresContextAndFingerprintsBuildArtifacts(t *testing.T)
 		"build-context.json",
 		"baseline/verify/unit/status.json",
 		"providers/claude/build/diff.patch",
+		"providers/claude/build/verify/result.json",
 		"providers/claude/build/verify/unit/status.json",
 	} {
 		if _, ok := fingerprints[relative]; !ok {
@@ -787,6 +824,8 @@ func TestWriteRunManifestTelemetryEscalationRoute(t *testing.T) {
 		"escalation_mode":   "witness",
 		"provider_statuses": map[string]any{},
 	})
+	writeJSON(t, filepath.Join(runDir, "source-run.json"), map[string]any{"source_run_id": "source"})
+	writeJSON(t, filepath.Join(runDir, "escalation", "mode.json"), map[string]any{"mode": "witness"})
 
 	value, err := manifest.WriteRunManifest(runDir)
 	if err != nil {
@@ -840,29 +879,29 @@ func TestFingerprintArtifactPathsMatchesBuildEvidenceSet(t *testing.T) {
 	runDir := filepath.Join(t.TempDir(), "runs", "build1")
 	writeMinimalBuildRun(t, runDir, true)
 	writeJSON(t, filepath.Join(runDir, "baseline", "verify", "unit", "metric.json"), map[string]any{"value": 1})
+	writeJSON(t, filepath.Join(runDir, "baseline", "verify", "result.json"), map[string]any{"scope": "baseline", "gates_passed": true})
 	writeText(t, filepath.Join(runDir, "judge", "prompt-pass1.txt"), "judge\n")
 	writeJSON(t, filepath.Join(runDir, "judge", "result-pass1.json"), map[string]any{"winner": "claude"})
 	writeJSON(t, filepath.Join(runDir, "providers", "claude", "build", "scope.json"), map[string]any{"ignored": true})
+	writeJSON(t, filepath.Join(runDir, "providers", "claude", "build", "protected-paths.json"), map[string]any{"violations": []any{}})
+	writeJSON(t, filepath.Join(runDir, "providers", "claude", "build", "verify", "result.json"), map[string]any{"scope": "provider", "provider_id": "claude", "gates_passed": true})
 	writeJSON(t, filepath.Join(runDir, "providers", "claude", "build", "verify", "unit", "metric.json"), map[string]any{"value": 2})
-	writeJSON(t, filepath.Join(runDir, "providers", "claude", "build", "verify", "unit", "result.json"), map[string]any{"ignored": true})
+	writeJSON(t, filepath.Join(runDir, "providers", "claude", "build", "verify", "unit", "result.json"), map[string]any{"id": "unit", "status": "passed"})
 
 	paths := manifest.FingerprintArtifactPaths(runDir)
 	for _, want := range []string{
+		"baseline/verify/result.json",
 		"baseline/verify/unit/metric.json",
 		"judge/prompt-pass1.txt",
 		"judge/result-pass1.json",
+		"providers/claude/build/protected-paths.json",
+		"providers/claude/build/scope.json",
+		"providers/claude/build/verify/result.json",
 		"providers/claude/build/verify/unit/metric.json",
+		"providers/claude/build/verify/unit/result.json",
 	} {
 		if !contains(paths, want) {
 			t.Fatalf("missing %s in %#v", want, paths)
-		}
-	}
-	for _, excluded := range []string{
-		"providers/claude/build/scope.json",
-		"providers/claude/build/verify/unit/result.json",
-	} {
-		if contains(paths, excluded) {
-			t.Fatalf("unexpected %s in %#v", excluded, paths)
 		}
 	}
 }

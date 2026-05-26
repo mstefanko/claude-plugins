@@ -5,8 +5,8 @@ usage() {
   cat >&2 <<'EOF'
 usage: scripts/bakeoff-uninstall [--force]
 
-Removes Bakeoff-owned plugin state and cache. Provider CLIs, provider auth,
-git branches, commits, and development binaries are left alone.
+Removes Bakeoff-owned plugin state. Provider CLIs, provider auth, plugin-manager
+caches, git branches, commits, and development binaries are left alone.
 EOF
 }
 
@@ -125,6 +125,12 @@ cleanup_plugin_data_dir() {
 
   remove_file "$data/bin/bakeoff"
   remove_file "$data/version.json"
+  local metadata_tmp
+  for metadata_tmp in "$data"/.version.*; do
+    if [[ -e "$metadata_tmp" || -L "$metadata_tmp" ]]; then
+      remove_file "$metadata_tmp"
+    fi
+  done
   remove_dir "$data/tmp"
   remove_dir "$data/go-cache"
   rmdir "$data/bin" 2>/dev/null || true
@@ -224,7 +230,6 @@ if [[ "$force" -ne 1 ]]; then
 Bakeoff uninstall cleanup will remove Bakeoff-owned plugin state:
 
 - $root/dist/bakeoff and an empty $root/dist directory
-- ${cache_root:-the Bakeoff plugin cache directory}
 - BAKEOFF_PLUGIN_DATA or CLAUDE_PLUGIN_DATA bin/version/tmp/go-cache state when
   version.json marks it as Bakeoff-owned
 - Bakeoff-generated run ledgers and work-order/context/report files in:
@@ -244,8 +249,8 @@ fi
 remove_file "$root/dist/bakeoff"
 rmdir "$root/dist" 2>/dev/null || true
 
-if [[ -n "$cache_root" ]]; then
-  remove_dir "$cache_root"
+if [[ -n "$cache_root" && -d "$cache_root" ]]; then
+  note_left "$cache_root (Claude plugin cache is managed by the plugin manager)"
 fi
 
 if data_root="$(bakeoff_data_root)"; then

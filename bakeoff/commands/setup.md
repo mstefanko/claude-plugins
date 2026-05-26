@@ -28,8 +28,10 @@ mutate project files, or run live build probes.
 3. Summarize the install kind and target path from the JSON.
 
    - For `source-build`, say setup will run `go build` against the bundled
-     source in `${CLAUDE_PLUGIN_ROOT}` and install the resulting binary under
-     `${CLAUDE_PLUGIN_DATA}/bin/bakeoff`. Include the detected Go path/version.
+     source in `${CLAUDE_PLUGIN_ROOT}` and install the resulting binary at the
+     dry-run JSON `binary_path`. Explain that the data root resolves by
+     precedence: `BAKEOFF_PLUGIN_DATA`, then `CLAUDE_PLUGIN_DATA`, then the
+     conventional Claude plugin data root. Include the detected Go path/version.
    - For `release-binary`, summarize the selected version, platform, checksum
      URL, and release URL. This is the optional no-Go path and requires a
      published release asset.

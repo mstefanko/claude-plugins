@@ -362,12 +362,8 @@ emit_release_json() {
 
 root="$(bakeoff_plugin_root)"
 if ! data="$(bakeoff_data_root)"; then
-  die 2 "CLAUDE_PLUGIN_DATA is not set; set BAKEOFF_PLUGIN_DATA for tests, or set BAKEOFF_GO_BINARY for a manual binary"
+  die 2 "could not resolve plugin data root from BAKEOFF_PLUGIN_DATA, CLAUDE_PLUGIN_DATA, or conventional Claude plugin data root"
 fi
-case "$data" in
-  /*) ;;
-  *) data="$(pwd)/$data" ;;
-esac
 
 read -r goos goarch < <(bakeoff_host_os_arch)
 binary_path="${data}/bin/bakeoff"
@@ -430,9 +426,13 @@ EOF
   mkdir -p "$data/bin" "$data/tmp"
   tmp_dir="$(mktemp -d "$data/tmp/setup.XXXXXX")"
   install_tmp=""
+  metadata_tmp=""
   cleanup() {
     if [[ -n "$install_tmp" ]]; then
       rm -f "$install_tmp"
+    fi
+    if [[ -n "$metadata_tmp" ]]; then
+      rm -f "$metadata_tmp"
     fi
     rm -rf "$tmp_dir"
   }
@@ -455,7 +455,7 @@ EOF
   mv -f "$install_tmp" "$binary_path"
   install_tmp=""
 
-  metadata_tmp="$(mktemp "$data/.version.XXXXXX")"
+  metadata_tmp="$(mktemp "$tmp_dir/version.XXXXXX")"
   cat > "$metadata_tmp" <<EOF
 {
   "schema_version": 1,
@@ -485,7 +485,7 @@ Installed Bakeoff CLI from bundled source:
   binary: $binary_path
   version: $probe_output
 
-Next: /bakeoff:quickstart
+Next: /bakeoff:run <request>  (or /bakeoff:doctor to re-check readiness)
 EOF
   fi
   exit 0
@@ -568,9 +568,13 @@ fi
 mkdir -p "$data/bin" "$data/tmp"
 tmp_dir="$(mktemp -d "$data/tmp/setup.XXXXXX")"
 install_tmp=""
+metadata_tmp=""
 cleanup() {
   if [[ -n "$install_tmp" ]]; then
     rm -f "$install_tmp"
+  fi
+  if [[ -n "$metadata_tmp" ]]; then
+    rm -f "$metadata_tmp"
   fi
   rm -rf "$tmp_dir"
 }
@@ -619,7 +623,7 @@ mv -f "$install_tmp" "$binary_path"
 install_tmp=""
 
 installed_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-metadata_tmp="$(mktemp "$data/.version.XXXXXX")"
+metadata_tmp="$(mktemp "$tmp_dir/version.XXXXXX")"
 cat > "$metadata_tmp" <<EOF
 {
   "schema_version": 1,
@@ -652,6 +656,6 @@ Installed Bakeoff CLI from release:
   binary: $binary_path
   version: $probe_output
 
-Next: /bakeoff:quickstart
+Next: /bakeoff:run <request>  (or /bakeoff:doctor to re-check readiness)
 EOF
 fi

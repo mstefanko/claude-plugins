@@ -168,6 +168,21 @@ func TestRunRerunJudgeOnlyRejectsBuildWorkOrder(t *testing.T) {
 	}
 }
 
+func TestRunRerunJudgeOnlyRejectsNoRepoLayoutNoop(t *testing.T) {
+	outDir := filepath.Join(t.TempDir(), "runs")
+	sourceRun := filepath.Join(outDir, "research-source")
+	if err := os.MkdirAll(sourceRun, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeRerunResearchWorkOrder(t, filepath.Join(sourceRun, "work-order.json"))
+
+	f := rerunTestFactory{streams: output.NewStreams(&bytes.Buffer{}, &bytes.Buffer{})}
+	err := runRerun(context.Background(), f, &RerunOptions{SourceRunID: "research-source", Out: outDir, JudgeOnly: true, NoRepoLayout: true})
+	if err == nil || !strings.Contains(err.Error(), "--no-repo-layout has no effect with --judge-only") {
+		t.Fatalf("expected no-repo-layout judge-only rejection, got %v", err)
+	}
+}
+
 func TestRunRerunRequiresSourceWorkOrder(t *testing.T) {
 	outDir := filepath.Join(t.TempDir(), "runs")
 	if err := os.MkdirAll(filepath.Join(outDir, "missing-work-order"), 0o755); err != nil {

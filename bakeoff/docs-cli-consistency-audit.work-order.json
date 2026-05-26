@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "id": "docs-cli-consistency-audit",
+  "type": "gather",
+  "goal": "Identify mismatches between README.md plus commands/*.md slash-command docs and the Go CLI's actual runtime behavior for run, inspect, escalate, rerun, runs verify, review-context flags, and judge-only recovery guidance.",
+  "background": [
+    "Docs surface: README.md plus commands/{run,inspect,escalate,history,doctor,quickstart,setup,uninstall}.md.",
+    "Code surface: cmd/bakeoff/main.go and internal/cli/, internal/verify/, internal/reviewcontext/, internal/workorder/, plus any subcommand wiring for rerun, runs verify, and judge-only recovery flows.",
+    "At draft time no commands/rerun.md or commands/verify.md were present; that absence is itself in scope.",
+    "Each finding must include: doc reference (file:line or section heading), source reference (file:line), observed mismatch, and a severity judgment.",
+    "Mismatch classes to flag: (a) documented but absent from the CLI; (b) implemented but undocumented; (c) divergent semantics (exit codes, defaults, side effects, output format, flag names); (d) judge-only recovery guidance in docs versus how bakeoff rerun --judge-only actually behaves, including which exit codes and run types trigger the recommendation.",
+    "Review-context flags in scope: --base, --diff, --changed-files, --no-triage, --no-repo-layout. Confirm doc-vs-code parity, mode binding (research vs build), and user-facing descriptions.",
+    "Acceptance: a prioritized list of cited findings; do not produce a patch."
+  ],
+  "facet": {
+    "id": "code-review",
+    "kind": "generic",
+    "focus": "Audit consistency between README.md and commands/*.md slash-command docs and the Go CLI behavior for run, inspect, escalate, rerun, and runs verify, plus review-context flags and judge-only recovery guidance. Surface documented-but-absent, implemented-but-undocumented, and divergent-semantics mismatches with doc and source citations and a severity judgment for each.",
+    "include": [
+      "flags or subcommands documented in README.md or commands/*.md that are absent from the Go CLI",
+      "flags or subcommands implemented in the Go CLI but undocumented in README.md or commands/*.md",
+      "divergent semantics between docs and code: exit codes, default values, side effects, output format, flag names, mode binding",
+      "judge-only recovery guidance parity: docs description versus actual rerun --judge-only behavior, including which exit codes and run types trigger the recommendation",
+      "review-context flag parity for --base, --diff, --changed-files, --no-triage, --no-repo-layout including mode binding to research vs build"
+    ],
+    "exclude": [
+      "style-only or wording-only nits without behavioral consequence",
+      "speculation without doc:line and source:line evidence",
+      "provider integration internals beyond the surface CLI",
+      "example work-order JSON contents",
+      "unrelated internal packages such as manifest, ledger, fsutil, runner, runlinks, prompt, jsonutil, output, scope, triage, repocontext, buildworkspace, modeldefaults, apperror unless they are surfaced through a CLI flag in scope"
+    ]
+  },
+  "providers": [
+    {
+      "id": "claude-sonnet",
+      "backend": "claude",
+      "model": "sonnet",
+      "scope": "codebase",
+      "effort": "high"
+    },
+    {
+      "id": "codex-gpt5",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "scope": "codebase",
+      "effort": "high"
+    }
+  ],
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  },
+  "scope_policy": {"enforcement": "best_effort"}
+}

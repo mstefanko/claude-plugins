@@ -117,10 +117,6 @@ func Run(ctx context.Context, f commands.Factory, opts *TriageOptions) (int, err
 		}
 	}
 	reportText := string(reportData)
-	inputHashes, err := triage.ComputeInputHashes(runDir)
-	if err != nil {
-		return 0, commands.WrapValidation(&workorder.ValidationError{Message: err.Error(), Err: err})
-	}
 	citationCWD, caveats := triage.ResolveCitationCWD(meta)
 	targetTriageDir := filepath.Join(runDir, "triage")
 	triageDir := targetTriageDir
@@ -175,6 +171,10 @@ func Run(ctx context.Context, f commands.Factory, opts *TriageOptions) (int, err
 	citationChecks := triage.CheckCitations(triage.ExtractCitationsFromText(citationText), citationCWD)
 	if err := workorder.WriteJSONAtomic(filepath.Join(triageDir, "citation_checks.json"), citationChecks); err != nil {
 		return 0, &apperror.RuntimeError{Err: err}
+	}
+	inputHashes, err := triage.ComputeInputHashesForTriageDir(runDir, triageDir)
+	if err != nil {
+		return 0, commands.WrapValidation(&workorder.ValidationError{Message: err.Error(), Err: err})
 	}
 	providerFailures := providerFailureSummaries(runDir)
 	workOrderText, err := os.ReadFile(filepath.Join(runDir, "work-order.json"))

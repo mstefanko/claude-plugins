@@ -189,6 +189,9 @@ func ValidateProsePaths(root string, wo *workorder.WorkOrder) ([]PathWarning, er
 				continue
 			}
 			suggestions := suggestPaths(ref, index)
+			if len(suggestions) == 0 && negatedMissingPathMention(field.text, token) {
+				continue
+			}
 			if !plausibleMissingPath(token, ref, suggestions) {
 				continue
 			}
@@ -236,19 +239,64 @@ func extractPathTokens(text string) []string {
 }
 
 func plausibleMissingPath(token string, ref string, suggestions []string) bool {
+	cleaned := cleanSlash(ref)
+	if slashDelimitedProse(cleaned) {
+		return false
+	}
 	if len(suggestions) > 0 || strings.HasPrefix(ref, "./") || stripLineSuffix(token) != token {
 		return true
 	}
-	ref = cleanSlash(ref)
-	if slashDelimitedProse(ref) {
-		return false
-	}
-	first, _, _ := strings.Cut(ref, "/")
+	first, _, _ := strings.Cut(cleaned, "/")
 	if commonPathRoots[first] {
 		return true
 	}
-	base := filepath.Base(ref)
+	base := filepath.Base(cleaned)
 	return strings.Contains(base, ".")
+}
+
+func negatedMissingPathMention(text string, token string) bool {
+	index := strings.Index(text, token)
+	if index < 0 {
+		return false
+	}
+	start := index
+	for start > 0 {
+		switch text[start-1] {
+		case '.', '!', '?', '\n':
+			goto foundStart
+		}
+		start--
+	}
+foundStart:
+	end := index + len(token)
+	for end < len(text) {
+		switch text[end] {
+		case '.', '!', '?', '\n':
+			goto foundEnd
+		}
+		end++
+	}
+foundEnd:
+	window := strings.ToLower(" " + text[start:end] + " ")
+	for _, marker := range []string{
+		" no ",
+		" not ",
+		" absent",
+		" absence",
+		" missing",
+		" does not exist",
+		" do not exist",
+		" not present",
+		" were not present",
+		" was not present",
+		" removed",
+		" not found",
+	} {
+		if strings.Contains(window, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func slashDelimitedProse(ref string) bool {

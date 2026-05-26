@@ -38,9 +38,12 @@ func TestValidateProsePathsWarnsAndSuggestsDirectoriesWithoutExtensions(t *testi
 
 func TestValidateProsePathsSkipsSlashDelimitedProse(t *testing.T) {
 	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "internal", "manifest", "manifest.go"), "package manifest\n")
+	writeFile(t, filepath.Join(root, "internal", "verify", "verify.go"), "package verify\n")
+	writeFile(t, filepath.Join(root, "internal", "report", "report.go"), "package report\n")
 	wo := validWorkOrder(t)
 	wo.Goal = "Tune include/exclude/focus and AI/LLM wording for build/research work orders."
-	wo.Background = "Keep yes/no tradeoffs clear; decision/manifest/triage and files/tests are prose here."
+	wo.Background = "Keep yes/no tradeoffs clear; decision/manifest/triage and files/tests are prose here. Audit verify/manifest, findings/report, build/verify, artifact/manifest, and verifier/manifest wording."
 
 	warnings, err := ValidateProsePaths(root, wo)
 	if err != nil {
@@ -48,6 +51,38 @@ func TestValidateProsePathsSkipsSlashDelimitedProse(t *testing.T) {
 	}
 	if len(warnings) != 0 {
 		t.Fatalf("unexpected warnings: %#v", warnings)
+	}
+}
+
+func TestValidateProsePathsSkipsNegatedMissingMentions(t *testing.T) {
+	root := t.TempDir()
+	wo := validWorkOrder(t)
+	wo.Background = "At draft time no commands/rerun.md or commands/verify.md were present; that absence is in scope."
+
+	warnings, err := ValidateProsePaths(root, wo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("unexpected warnings: %#v", warnings)
+	}
+}
+
+func TestValidateProsePathsStillWarnsNegatedTyposWithSuggestions(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "internal", "workorder", "workorder.go"), "package workorder\n")
+	wo := validWorkOrder(t)
+	wo.Background = "No pkg/workorder should be treated as a valid path."
+
+	warnings, err := ValidateProsePaths(root, wo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) != 1 || warnings[0].Token != "pkg/workorder" {
+		t.Fatalf("warnings = %#v", warnings)
+	}
+	if !containsString(warnings[0].Suggestions, "internal/workorder/") {
+		t.Fatalf("missing typo suggestion: %#v", warnings[0].Suggestions)
 	}
 }
 

@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "id": "build-handoff-semantics-review",
+  "type": "gather",
+  "goal": "Verify build-mode handoff semantics in the Bakeoff CLI and run skill: selected patch paths must appear only when a canonical winner exists; unresolved or judge-failed build runs must not imply a patch is safe; build output must never recommend judge-only rerun.",
+  "background": "Acceptance: (1) Every code path that emits a selected/winning patch path is guarded by a non-null canonical_winner; no summary, report, or recommendation surfaces providers/<id>/build/diff.patch when canonical_winner is empty. (2) Build runs with exit 3 (unresolved disagreement) or exit 4 (decision-incomplete / judge failure) never include a 'selected patch', 'winning patch', or applied-patch line; the absence of a canonical winner is stated explicitly. (3) No build code path or skill text recommends 'bakeoff rerun --judge-only' for build runs; the judge-only rerun is research-only. Concrete files to inspect: internal/commands/buildcmd/{decision.go,summary.go,report.go,run.go,run_test.go}; internal/decision/decision.go; internal/summary/summary.go; internal/report/report.go; internal/commands/reruncmd/rerun.go; skills/bakeoff-run/SKILL.md; skills/bakeoff/SKILL.md. Also check internal/manifest/manifest.go for selected-patch path derivation. Report exact file:line citations for each violation or confirmation.",
+  "facet": {
+    "id": "code-review",
+    "kind": "generic",
+    "focus": "Audit build-mode handoff semantics for three invariants: (1) selected patch paths (providers/WINNER/build/diff.patch) appear only when decision.canonical_winner is non-empty; (2) build runs with exit 3 or exit 4 never imply a selected patch exists; (3) judge-only rerun (bakeoff rerun --judge-only) is never recommended for build runs - it is research-only. Cite exact file:line for each finding. Treat skill text and Go code symmetrically.",
+    "include": [
+      "Build command summary, report, and decision code",
+      "Build run tests and table-driven exit-code cases",
+      "Decision and report packages used by build summaries",
+      "Run skill text covering build-mode output and recommendations",
+      "Rerun command logic and gating on run type",
+      "Manifest and artifact patch-path derivation"
+    ],
+    "exclude": [
+      "Research-only paths that legitimately recommend judge-only rerun",
+      "Unrelated CLI commands (ls, history, escalate non-build)",
+      "Provider authentication and doctor probes"
+    ]
+  },
+  "providers": [
+    {"id": "claude", "backend": "claude", "model": "sonnet", "effort": "high", "scope": "codebase"},
+    {"id": "codex", "backend": "codex", "model": "gpt-5.5", "effort": "high", "scope": "codebase"}
+  ],
+  "judge": {"backend": "claude", "model": "opus", "effort": "xhigh"},
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 30,
+    "output_cap_grace_seconds": 30,
+    "max_output_overrun_bytes": 8000
+  },
+  "scope_policy": {"enforcement": "best_effort"}
+}

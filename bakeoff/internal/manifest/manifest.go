@@ -38,6 +38,7 @@ var CoreFingerprintArtifacts = []string{
 	"decision.json",
 	"meta.json",
 	"report.md",
+	"diagnostics.json",
 	"escalation/mode.json",
 	"escalation/dispute-packet.json",
 	"escalation/synthesis-prompt.txt",
@@ -45,6 +46,12 @@ var CoreFingerprintArtifacts = []string{
 	"escalation/dispute-prompt.txt",
 	"triage/status.json",
 	"triage/final.json",
+	"triage/source_finding_filter.json",
+	"triage/citation_checks.json",
+	"triage/finding_index.json",
+	"triage/prompt.txt",
+	"triage/stdout.txt",
+	"triage/stderr.txt",
 	"triage/triage.md",
 }
 
@@ -79,7 +86,7 @@ func BuildRunManifest(runDir string) (map[string]any, error) {
 			facetID, _ = facet["id"].(string)
 		}
 	}
-	state, staleInputs := triage.StateDetail(runDir)
+	state, staleInputs := triage.DisplayStateDetail(runDir)
 	triageSummary := triageSummary(runDir, state, staleInputs)
 	runType := resolveRunType(workOrder, meta, decision)
 	artifacts, err := artifactPathsForType(runDir, runType)
@@ -227,7 +234,7 @@ func triageStateForLS(runDir string, manifestState string) string {
 	if err != nil || !info.IsDir() {
 		return manifestState
 	}
-	state, _ := triage.StateDetail(runDir)
+	state, _ := triage.DisplayStateDetail(runDir)
 	if state != "" {
 		return state
 	}
@@ -671,6 +678,9 @@ func RequiredArtifactsForType(runType string) []string {
 	if runType == "build" {
 		required = append(required, "build-context.json")
 	}
+	if runType == "escalation" {
+		required = append(required, "source-run.json", "escalation/mode.json")
+	}
 	return required
 }
 
@@ -728,9 +738,9 @@ func artifactFingerprintsForType(runDir string, runType string) map[string]any {
 	return out
 }
 
-var providerEvidenceArtifactNames = []string{"prompt.txt", "status.json", "final.json", "failure.json", "last-message.txt"}
-var buildProviderArtifactNames = []string{"workspace.json", "capture.json", "ineligible.json", "changed-files.txt", "diff.patch", "diffstat.txt", "test-files.json", "benchmark-files.json"}
-var verifyArtifactNames = []string{"status.json", "stdout.txt", "stderr.txt", "metric.json"}
+var providerEvidenceArtifactNames = []string{"prompt.txt", "status.json", "final.json", "failure.json", "last-message.txt", "stdout.txt", "stderr.txt"}
+var buildProviderArtifactNames = []string{"workspace.json", "capture.json", "scope.json", "ineligible.json", "protected-paths.json", "changed-files.txt", "diff.patch", "diffstat.txt", "test-files.json", "benchmark-files.json"}
+var verifyArtifactNames = []string{"status.json", "stdout.txt", "stderr.txt", "metric.json", "result.json"}
 
 func addProviderEvidencePaths(runDir string, add func(string)) {
 	providers, err := os.ReadDir(filepath.Join(runDir, "providers"))
@@ -756,7 +766,7 @@ func addJudgeEvidencePaths(runDir string, add func(string)) {
 			continue
 		}
 		name := entry.Name()
-		if matchesAny(name, "prompt*.txt", "status*.json", "result*.json", "last-message*.txt") {
+		if matchesAny(name, "prompt*.txt", "status*.json", "*-status.json", "result*.json", "*-result.json", "last-message*.txt", "*-last-message.txt", "stdout*.txt", "*-stdout.txt", "stderr*.txt", "*-stderr.txt") {
 			addDirEntryFile(runDir, "judge", entry, add)
 		}
 	}
@@ -794,6 +804,10 @@ func addBuildProviderEvidencePaths(runDir string, add func(string)) {
 }
 
 func addVerifyEvidencePaths(runDir string, verifyRel string, add func(string)) {
+	resultRel := filepath.Join(verifyRel, "result.json")
+	if fsutil.FileExists(filepath.Join(runDir, resultRel)) {
+		add(resultRel)
+	}
 	verifiers, err := os.ReadDir(filepath.Join(runDir, verifyRel))
 	if err != nil {
 		return
@@ -893,7 +907,7 @@ func legacyLSRow(runDir string, manifestState string) map[string]any {
 	}
 	state := "no"
 	if info, err := os.Stat(filepath.Join(runDir, "triage")); err == nil && info.IsDir() {
-		state, _ = triage.StateDetail(runDir)
+		state, _ = triage.DisplayStateDetail(runDir)
 	}
 	row := map[string]any{
 		"run_id":         filepath.Base(runDir),
@@ -997,7 +1011,8 @@ func resolveRunType(workOrder map[string]any, meta map[string]any, decision map[
 }
 
 func RunTypeForRun(runDir string) (string, error) {
-	for _, relative := range []string{"work-order.json", "meta.json", "manifest.json"} {
+	values := map[string]string{}
+	for _, relative := range []string{"work-order.json", "meta.json", "manifest.json", "decision.json"} {
 		path := filepath.Join(runDir, relative)
 		data, err := os.ReadFile(path)
 		if os.IsNotExist(err) {
@@ -1010,7 +1025,12 @@ func RunTypeForRun(runDir string) (string, error) {
 		if err := json.Unmarshal(data, &obj); err != nil {
 			return "", fmt.Errorf("%s run type source is invalid JSON: %w", path, err)
 		}
-		value, ok := obj["type"]
+		field := "type"
+		value, ok := obj[field]
+		if !ok && relative == "decision.json" {
+			field = "mode"
+			value, ok = obj[field]
+		}
 		if !ok {
 			if relative == "work-order.json" || relative == "manifest.json" {
 				return "", fmt.Errorf("%s run type source is missing type", path)
@@ -1019,9 +1039,20 @@ func RunTypeForRun(runDir string) (string, error) {
 		}
 		runType, ok := value.(string)
 		if !ok || runType == "" {
-			return "", fmt.Errorf("%s run type source has non-string type", path)
+			return "", fmt.Errorf("%s run type source has non-string %s", path, field)
 		}
+		values[relative] = runType
+		if runType == "escalation" {
+			return runType, nil
+		}
+	}
+	if runType := values["work-order.json"]; runType != "" {
 		return runType, nil
+	}
+	for _, relative := range []string{"meta.json", "manifest.json", "decision.json"} {
+		if runType := values[relative]; runType != "" {
+			return runType, nil
+		}
 	}
 	return "", nil
 }

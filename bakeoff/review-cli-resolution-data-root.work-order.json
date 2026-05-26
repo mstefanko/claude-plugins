@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "id": "review-cli-resolution-data-root",
+  "type": "gather",
+  "goal": "Audit the Bakeoff plugin CLI resolution and setup data-root logic. Verify correctness, safety, and consistency of BAKEOFF_PLUGIN_DATA / CLAUDE_PLUGIN_DATA / conventional Claude plugin data root precedence, setup install behavior across source-build and release-binary modes, ensure-cli fallback when the persistent install is missing or stale, and uninstall ownership semantics that must avoid deleting files the plugin did not create.",
+  "background": "Recent work in commits 68e9e46 (binary cache resolution) and 7f5416c (binary) restructured how the Bakeoff plugin chooses an install root, resolves its CLI at runtime, and removes itself. Three env vars or path conventions now interact: BAKEOFF_PLUGIN_DATA (operator override), CLAUDE_PLUGIN_DATA (set by the Claude Code harness), and conventional Claude plugin data roots under the user home. The same precedence is consumed in scripts/bakeoff-setup, scripts/bakeoff-ensure-cli, scripts/bakeoff-uninstall, and shared in scripts/bakeoff-lib. Acceptance criteria: (1) precedence order is documented and identical across setup, ensure-cli, and uninstall; (2) ensure-cli never returns a path that is not executable; (3) uninstall only removes paths the plugin owns (binary + plugin data dir it created), never operator-set roots or conventional Claude data roots; (4) source-build and release-binary install kinds produce equivalent install layouts; (5) tests in scripts/bakeoff-setup-tests cover env precedence and ownership invariants; (6) commands/setup.md user-facing wording matches script behavior. Out of scope: the bundled Go binary internals, provider auth, and the bakeoff-run skill itself.",
+  "facet": {
+    "id": "code-review",
+    "kind": "generic",
+    "focus": "Review plugin CLI resolution and setup data-root. Confirm env precedence: BAKEOFF_PLUGIN_DATA over CLAUDE_PLUGIN_DATA over conventional Claude roots. Check idempotent install, ensure-cli fallback when persistent path is missing or unwritable, uninstall ownership that never touches operator or harness roots, source-build vs release-binary parity, shared helper consistency. Flag races, partial-install gaps, symlink hazards, missing quoting, untested precedence, uninstall removing user data.",
+    "include": [
+      "scripts/bakeoff-setup",
+      "scripts/bakeoff-ensure-cli",
+      "scripts/bakeoff-uninstall",
+      "scripts/bakeoff-lib",
+      "scripts/bakeoff-setup-tests",
+      "commands/setup.md",
+      "docs/binary-cache-resolution-patch-plan-2026-05-22.md as design intent"
+    ],
+    "exclude": [
+      "Go source under the bundled CLI",
+      "provider auth probe logic",
+      "the bakeoff-run skill text",
+      "unrelated docs",
+      "historical implementation plans not tied to the binary-cache-resolution change"
+    ]
+  },
+  "providers": [
+    {
+      "id": "claude-sonnet",
+      "backend": "claude",
+      "model": "sonnet",
+      "scope": "codebase",
+      "effort": "high"
+    },
+    {
+      "id": "codex-gpt55",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "scope": "codebase",
+      "effort": "high"
+    }
+  ],
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 30,
+    "output_cap_grace_seconds": 30,
+    "max_output_overrun_bytes": 10000
+  },
+  "scope_policy": {
+    "enforcement": "best_effort"
+  }
+}

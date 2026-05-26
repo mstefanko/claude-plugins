@@ -36,6 +36,19 @@ bakeoff_normalize_path_key() {
   esac
 }
 
+bakeoff_normalize_data_root() {
+  local path="$1"
+  path="$(bakeoff_strip_trailing_slashes "$path")"
+  if [[ -z "$path" ]]; then
+    printf '\n'
+    return 0
+  fi
+  case "$path" in
+    /*) printf '%s\n' "$path" ;;
+    *) printf '%s/%s\n' "$(pwd -P)" "$path" ;;
+  esac
+}
+
 bakeoff_plugin_root() {
   if [[ -n "${BAKEOFF_PLUGIN_ROOT:-}" ]]; then
     printf '%s\n' "$BAKEOFF_PLUGIN_ROOT"
@@ -55,15 +68,15 @@ bakeoff_plugin_root() {
 bakeoff_data_root() {
   local conventional_data
   if [[ -n "${BAKEOFF_PLUGIN_DATA:-}" ]]; then
-    printf '%s\n' "$BAKEOFF_PLUGIN_DATA"
+    bakeoff_normalize_data_root "$BAKEOFF_PLUGIN_DATA"
     return 0
   fi
   if [[ -n "${CLAUDE_PLUGIN_DATA:-}" ]]; then
-    printf '%s\n' "$CLAUDE_PLUGIN_DATA"
+    bakeoff_normalize_data_root "$CLAUDE_PLUGIN_DATA"
     return 0
   fi
   if conventional_data="$(bakeoff_conventional_data_root)"; then
-    printf '%s\n' "$conventional_data"
+    bakeoff_normalize_data_root "$conventional_data"
     return 0
   fi
   return 1
@@ -170,13 +183,13 @@ bakeoff_candidate_binaries() {
   fi
 
   if [[ -n "${BAKEOFF_PLUGIN_DATA:-}" ]]; then
-    data="$(bakeoff_strip_trailing_slashes "$BAKEOFF_PLUGIN_DATA")"
+    data="$(bakeoff_normalize_data_root "$BAKEOFF_PLUGIN_DATA")"
     data_label="BAKEOFF_PLUGIN_DATA/bin/bakeoff"
     emit_candidate "$data_label" "$data/bin/bakeoff" 'provisioned'
   fi
 
   if [[ -n "${CLAUDE_PLUGIN_DATA:-}" ]]; then
-    data="$(bakeoff_strip_trailing_slashes "$CLAUDE_PLUGIN_DATA")"
+    data="$(bakeoff_normalize_data_root "$CLAUDE_PLUGIN_DATA")"
     data_label="CLAUDE_PLUGIN_DATA/bin/bakeoff"
     emit_candidate "$data_label" "$data/bin/bakeoff" 'provisioned'
   fi

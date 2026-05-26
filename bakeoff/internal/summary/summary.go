@@ -417,7 +417,7 @@ func BuildEscalation(runDir string, runID string, outDir string, sourceRunID str
 }
 
 func ResearchTriage(runDir string, autoStarted bool, triageExitCode any) ResearchTriageSummary {
-	state, staleInputs := triage.StateDetail(runDir)
+	state, staleInputs := triage.DisplayStateDetail(runDir)
 	statusData := readJSON(filepath.Join(runDir, "triage", "status.json"))
 	rawStatus := ""
 	if obj, ok := statusData.(map[string]any); ok {

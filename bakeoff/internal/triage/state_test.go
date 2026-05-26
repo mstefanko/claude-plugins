@@ -1,6 +1,7 @@
 package triage
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -283,6 +284,64 @@ func TestStateDetailMarksProviderFailureHashChangesStale(t *testing.T) {
 	state, stale := StateDetail(runDir)
 	if state != "stale" || !contains(stale, "providers/*/failure.json") {
 		t.Fatalf("state=%s stale=%#v", state, stale)
+	}
+}
+
+func TestStateDetailMarksTriageInputArtifactsStale(t *testing.T) {
+	tests := []struct {
+		name     string
+		file     string
+		wantPath string
+	}{
+		{name: "source finding filter", file: "source_finding_filter.json", wantPath: "triage/source_finding_filter.json"},
+		{name: "citation checks", file: "citation_checks.json", wantPath: "triage/citation_checks.json"},
+		{name: "finding index", file: "finding_index.json", wantPath: "triage/finding_index.json"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runDir := t.TempDir()
+			for name, text := range map[string]string{
+				"decision.json":   "{}\n",
+				"report.md":       "# report\n",
+				"work-order.json": "{}\n",
+			} {
+				if err := os.WriteFile(filepath.Join(runDir, name), []byte(text), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			triageDir := filepath.Join(runDir, "triage")
+			if err := os.MkdirAll(triageDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{"source_finding_filter.json", "citation_checks.json", "finding_index.json"} {
+				if err := os.WriteFile(filepath.Join(triageDir, name), []byte(`{"version":1}`), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			hashes, err := ComputeInputHashes(runDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			final := map[string]any{"input_hashes": hashes, "items": []any{}}
+			data, err := json.Marshal(final)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(triageDir, "final.json"), data, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(triageDir, "triage.md"), []byte("# triage\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(triageDir, tt.file), []byte(`{"version":2}`), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			state, stale := StateDetail(runDir)
+			if state != "stale" || !contains(stale, tt.wantPath) {
+				t.Fatalf("state=%s stale=%#v", state, stale)
+			}
+		})
 	}
 }
 

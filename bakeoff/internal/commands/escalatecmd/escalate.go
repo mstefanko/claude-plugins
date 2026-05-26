@@ -980,6 +980,9 @@ func sourceRunIdentity(src sourceRun) map[string]any {
 		add("providers/"+id+"/status.json", filepath.Join(src.Dir, "providers", id, "status.json"))
 		add("providers/"+id+"/final.json", filepath.Join(src.Dir, "providers", id, "final.json"))
 	}
+	for _, name := range []string{"source-work-order.json", "review-context.md", "review-context.json"} {
+		add(name, filepath.Join(src.Dir, name))
+	}
 	return map[string]any{
 		"schema_version":  1,
 		"source_run_id":   src.ID,
@@ -1017,6 +1020,8 @@ func sourceTriageSnapshot(runDir string) map[string]any {
 	add("status", filepath.Join("triage", "status.json"))
 	add("final", filepath.Join("triage", "final.json"))
 	add("triage_md", filepath.Join("triage", "triage.md"))
+	add("source_finding_filter", filepath.Join("triage", "source_finding_filter.json"))
+	add("citation_checks", filepath.Join("triage", "citation_checks.json"))
 	if !present {
 		if info, err := os.Stat(triageDir); err != nil || !info.IsDir() {
 			out["state"] = "absent"
@@ -1426,6 +1431,14 @@ func providerClaims(providerID string, claims []any, fallback []any) []any {
 }
 
 func triageGapItems(artifacts map[string]any) []any {
+	switch state := jsonutil.StringValue(triageState(artifacts)); state {
+	case "failed", "stale":
+		return []any{map[string]any{
+			"classification": "triage_" + state,
+			"source_finding": "Source run triage state is " + state + ".",
+			"rationale":      "Escalation should account for source triage not being current and successful.",
+		}}
+	}
 	final, _ := artifacts["final"].(map[string]any)
 	if final == nil {
 		return nil
@@ -1471,7 +1484,7 @@ func readJudgeResults(runDir string) map[string]any {
 
 func readTriageArtifacts(runDir string) map[string]any {
 	triageDir := filepath.Join(runDir, "triage")
-	state, staleInputs := triagepkg.StateDetail(runDir)
+	state, staleInputs := triagepkg.DisplayStateDetail(runDir)
 	out := map[string]any{}
 	if state != "" && state != "no" {
 		out["state"] = state

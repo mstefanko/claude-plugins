@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/buildinfo"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/jsonutil"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/ledger"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/output"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/provider"
@@ -386,6 +387,34 @@ func TestSourceRunIdentityIncludesCompletedTriageSnapshot(t *testing.T) {
 		if _, ok := sourceTriage[key]; !ok {
 			t.Fatalf("source_triage missing %s: %#v", key, sourceTriage)
 		}
+	}
+}
+
+func TestDisputePacketIncludesFailedSourceTriageGap(t *testing.T) {
+	root := t.TempDir()
+	outDir := filepath.Join(root, "runs")
+	writeSourceRun(t, outDir, "source", "compare", map[string]any{"decision_kind": "pick_winner", "canonical_winner": "claude"})
+	runDir := filepath.Join(outDir, "source")
+	if err := workorder.WriteJSONAtomic(filepath.Join(runDir, "triage", "status.json"), map[string]any{"status": "exit_error"}); err != nil {
+		t.Fatal(err)
+	}
+	src, err := loadSourceRun(runDir, "source")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	packet := buildDisputePacket(src)
+	points := jsonutil.ListValue(packet["points"])
+	if len(points) != 1 {
+		t.Fatalf("points = %#v", points)
+	}
+	point, _ := points[0].(map[string]any)
+	if point["kind"] != "triage_gap" {
+		t.Fatalf("expected triage gap point, got %#v", point)
+	}
+	context, _ := point["triage_context"].(map[string]any)
+	if context["classification"] != "triage_failed" {
+		t.Fatalf("triage context = %#v", context)
 	}
 }
 

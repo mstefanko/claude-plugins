@@ -26,8 +26,8 @@ codes.
 - `/bakeoff:escalate` invokes one explicit non-build post-run escalation. It
   must preview with `--dry-run` unless the user already approved a specific
   mode.
-- `/bakeoff:history`, `/bakeoff:doctor`, `/bakeoff:setup`, `/bakeoff:quickstart`,
-  and `/bakeoff:uninstall` follow their command docs and the global rules here.
+- `/bakeoff:history`, `/bakeoff:doctor`, `/bakeoff:setup`, and `/bakeoff:uninstall`
+  follow their command docs and the global rules here.
 - For any Bakeoff command, do not call provider CLIs directly for the user task;
   only the Bakeoff CLI may launch providers.
 

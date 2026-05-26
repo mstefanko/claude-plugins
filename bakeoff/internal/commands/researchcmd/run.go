@@ -86,6 +86,10 @@ func RunResearch(ctx context.Context, f commands.Factory, opts *ResearchOptions)
 			return commands.WrapValidation(err)
 		}
 	}
+	metaExtra := map[string]any{}
+	if reviewOptions(opts).Enabled() {
+		metaExtra["review_context_requested"] = true
+	}
 	if replaceRunDir {
 		if err := os.RemoveAll(runDir); err != nil {
 			return &apperror.RuntimeError{Err: err}
@@ -194,6 +198,7 @@ func RunResearch(ctx context.Context, f commands.Factory, opts *ResearchOptions)
 		Quiet:          effectiveQuiet,
 		HumanOutput:    humanOutput,
 		LookupProvider: f.LookupProvider,
+		MetaExtra:      metaExtra,
 	})
 }
 

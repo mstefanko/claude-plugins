@@ -11,7 +11,6 @@ place.
 | --- | --- |
 | `/bakeoff:setup [--yes]` | Build or update the bundled Go CLI in persistent plugin data. |
 | `/bakeoff:setup --from-release --version vX.Y.Z [--yes]` | Optional no-Go path: install a released CLI binary from GitHub Releases. |
-| `/bakeoff:quickstart` | Check the CLI, then run `doctor --json` with provider auth probes. |
 | `/bakeoff:run <path or request> [flags]` | Validate and run an existing work order, or draft one from natural language. |
 | `/bakeoff:history [limit] [flags]` | List recent runs with run ids, states, and short goal summaries. |
 | `/bakeoff:inspect [latest or run-id] [flags]` | Read ledgers, reports, decisions, triage, and build handoff artifacts. |
@@ -214,6 +213,10 @@ For judge-heavy work orders (`compare`, `analyze`, `build`, and code-review
 shares provider-family metadata with one or both providers. It does not probe
 provider readiness; use `bakeoff doctor` to check ready non-contestant judge
 backends.
+Advisory warnings do not change exit status; validation still exits `0`.
+Stable advisory categories are path-like goal/background references, judge-family
+overlap, build metric-verifier hygiene, and mode-specific context warnings such
+as generated repo-layout or review-context notes.
 
 `bakeoff validate context` previews the prompt context blocks providers would
 receive from the current invocation directory. It prints the resolved context
@@ -296,12 +299,15 @@ Flags:
 | `--quiet` | Suppress provider heartbeat lines. |
 | `--no-triage` | Skip automatic triage for code-review research reruns. |
 | `--judge-only` | Retry only a failed research judge using durable provider artifacts from the source run. |
-| `--no-repo-layout` | Suppress generated `<repo_layout>` prompt context for replayed provider runs. |
+| `--no-repo-layout` | Suppress generated `<repo_layout>` prompt context for replayed provider runs; invalid with `--judge-only`. |
 
 `--judge-only` is only for research runs whose providers completed and whose
 judge has durable failed-attempt evidence in `decision.json` or
 `judge/status*.json`. It creates a fresh run directory, copies provider
-artifacts, updates `latest`, and leaves the source run unchanged.
+artifacts, reruns only the judge, updates `latest`, and leaves the source run
+unchanged. Because provider prompts are not regenerated, `--no-repo-layout` is
+rejected with `--judge-only`; run a full rerun to change provider prompt
+context.
 
 ## `bakeoff escalate`
 

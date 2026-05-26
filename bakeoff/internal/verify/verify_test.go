@@ -164,17 +164,87 @@ func TestRunNextErrorPathsUnchanged(t *testing.T) {
 	})
 }
 
+func TestRunRequiresBuildWinnerArtifactsWhenCanonicalWinnerSelected(t *testing.T) {
+	runDir := writeVerifyBaseRunOfType(t, "build", map[string]any{
+		"decision_kind":    "pick_winner",
+		"canonical_winner": "claude",
+	})
+	if err := workorder.WriteJSONAtomic(filepath.Join(runDir, "build-context.json"), map[string]any{"schema_version": 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	result := Run(runDir, "runs")
+	if result.ExitCode == 0 {
+		t.Fatalf("ExitCode = 0, want missing winner artifacts: %#v", result)
+	}
+	if !contains(result.RequiredArtifacts.Missing, "providers/claude/build/diff.patch") || !contains(result.RequiredArtifacts.Missing, "providers/claude/build/verify/result.json") {
+		t.Fatalf("missing winner artifacts not reported: %#v", result.RequiredArtifacts)
+	}
+
+	if err := workorder.WriteTextAtomic(filepath.Join(runDir, "providers", "claude", "build", "diff.patch"), "diff --git a/file b/file\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := workorder.WriteJSONAtomic(filepath.Join(runDir, "providers", "claude", "build", "verify", "result.json"), map[string]any{"scope": "provider", "provider_id": "claude"}); err != nil {
+		t.Fatal(err)
+	}
+	result = Run(runDir, "runs")
+	if result.ExitCode != 0 {
+		t.Fatalf("winner artifacts should satisfy verify: %#v", result)
+	}
+}
+
+func TestRunDoesNotRequireBuildWinnerArtifactsWithoutCanonicalWinner(t *testing.T) {
+	runDir := writeVerifyBaseRunOfType(t, "build", map[string]any{
+		"decision_kind":    "tie",
+		"canonical_winner": nil,
+	})
+	if err := workorder.WriteJSONAtomic(filepath.Join(runDir, "build-context.json"), map[string]any{"schema_version": 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	result := Run(runDir, "runs")
+	if result.ExitCode != 0 {
+		t.Fatalf("no winner should not require provider build artifacts: %#v", result)
+	}
+}
+
+func TestRunRequiresReviewContextArtifactsWhenRequested(t *testing.T) {
+	runDir := writeVerifyBaseRun(t)
+	if err := workorder.WriteJSONAtomic(filepath.Join(runDir, "meta.json"), map[string]any{
+		"type":                     "gather",
+		"review_context_requested": true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	result := Run(runDir, "runs")
+	if result.ExitCode == 0 {
+		t.Fatalf("ExitCode = 0, want missing review context artifacts: %#v", result)
+	}
+	got := strings.Join(result.Problems, "\n")
+	for _, relative := range manifest.ReviewContextArtifacts {
+		if !strings.Contains(got, "missing review context artifact: "+filepath.Join(runDir, relative)) {
+			t.Fatalf("missing review context problem for %s: %#v", relative, result.Problems)
+		}
+	}
+}
+
 func writeVerifyBaseRun(t *testing.T) string {
+	t.Helper()
+	return writeVerifyBaseRunOfType(t, "gather", map[string]any{"decision_kind": "winner"})
+}
+
+func writeVerifyBaseRunOfType(t *testing.T, runType string, decision map[string]any) string {
 	t.Helper()
 	runDir := t.TempDir()
 	for relative, value := range map[string]any{
-		"work-order.json": map[string]any{"type": "gather"},
-		"decision.json":   map[string]any{"decision_kind": "winner"},
-		"meta.json":       map[string]any{"type": "gather"},
+		"work-order.json": map[string]any{"type": runType},
+		"decision.json":   decision,
+		"meta.json":       map[string]any{"type": runType},
 		"manifest.json": map[string]any{
 			"schema_version":        manifest.SchemaVersion,
 			"run_id":                filepath.Base(runDir),
-			"type":                  "gather",
+			"type":                  runType,
 			"artifact_fingerprints": map[string]any{},
 		},
 	} {
@@ -230,4 +300,13 @@ func writeFailedTriageStatus(t *testing.T, runDir string) {
 	if err := workorder.WriteJSONAtomic(filepath.Join(runDir, "triage", "status.json"), map[string]any{"status": "exit_error"}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func contains(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
 }

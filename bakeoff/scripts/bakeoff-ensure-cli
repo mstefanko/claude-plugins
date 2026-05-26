@@ -70,8 +70,10 @@ while IFS=$'\t' read -r label path kind; do
       echo "warning: $label exists but is not executable, skipping: $path" >&2
       continue
     fi
-    report_probe "$path" "$label" || exit 1
-    exit 0
+    if report_probe "$path" "$label"; then
+      exit 0
+    fi
+    continue
   fi
 done < <(bakeoff_candidate_binaries)
 

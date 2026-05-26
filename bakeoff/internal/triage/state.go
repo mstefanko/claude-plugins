@@ -28,6 +28,10 @@ var Classifications = []string{
 }
 
 func ComputeInputHashes(runDir string) (map[string]string, error) {
+	return ComputeInputHashesForTriageDir(runDir, filepath.Join(runDir, "triage"))
+}
+
+func ComputeInputHashesForTriageDir(runDir string, triageDir string) (map[string]string, error) {
 	decision, err := sha256File(filepath.Join(runDir, "decision.json"))
 	if err != nil {
 		return nil, err
@@ -72,6 +76,21 @@ func ComputeInputHashes(runDir string) (map[string]string, error) {
 			}
 			out[key] = sha
 		}
+	}
+	for key, relative := range map[string]string{
+		"source_finding_filter_sha256": "source_finding_filter.json",
+		"citation_checks_sha256":       "citation_checks.json",
+		"finding_index_sha256":         "finding_index.json",
+	} {
+		path := filepath.Join(triageDir, relative)
+		if !fsutil.FileExists(path) {
+			continue
+		}
+		sha, err := sha256File(path)
+		if err != nil {
+			return nil, err
+		}
+		out[key] = sha
 	}
 	return out, nil
 }
@@ -118,12 +137,15 @@ func StateDetail(runDir string) (string, []string) {
 		changed = append(changed, "providers/*/failure.json")
 	}
 	for key, relative := range map[string]string{
-		"source_work_order_sha256":   "source-work-order.json",
-		"review_context_md_sha256":   "review-context.md",
-		"review_context_json_sha256": "review-context.json",
+		"source_work_order_sha256":     "source-work-order.json",
+		"review_context_md_sha256":     "review-context.md",
+		"review_context_json_sha256":   "review-context.json",
+		"source_finding_filter_sha256": filepath.Join("triage", "source_finding_filter.json"),
+		"citation_checks_sha256":       filepath.Join("triage", "citation_checks.json"),
+		"finding_index_sha256":         filepath.Join("triage", "finding_index.json"),
 	} {
 		if _, ok := hashes[key]; ok && jsonutil.StringValue(hashes[key]) != current[key] {
-			changed = append(changed, relative)
+			changed = append(changed, filepath.ToSlash(relative))
 		}
 	}
 	if len(changed) > 0 {

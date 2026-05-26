@@ -106,6 +106,69 @@ func TestFacetValidationNormalizesAndRejectsUnsafeText(t *testing.T) {
 	}
 }
 
+func TestFacetStringListErrorsNameShapeAndActualType(t *testing.T) {
+	data := validWorkOrder()
+	data["facet"] = map[string]any{
+		"id":      "review",
+		"focus":   "Find defects.",
+		"include": "correctness and reliability",
+	}
+	_, err := Validate(data)
+	if err == nil || !strings.Contains(err.Error(), "facet.include must be an array of strings (got string; expected 1-8 items)") {
+		t.Fatalf("expected facet include type error with actual type, got %v", err)
+	}
+
+	data = validWorkOrder()
+	data["facet"] = map[string]any{
+		"id":      "review",
+		"focus":   "Find defects.",
+		"include": []any{"correctness"},
+		"exclude": "style-only",
+	}
+	_, err = Validate(data)
+	if err == nil || !strings.Contains(err.Error(), "facet.exclude must be an array of strings (got string; expected 0-8 items)") {
+		t.Fatalf("expected facet exclude type error with actual type, got %v", err)
+	}
+}
+
+func TestValidateStringListErrorsNameActualType(t *testing.T) {
+	_, err := ValidateTriageResult(map[string]any{
+		"schema_version": 1,
+		"status":         "complete",
+		"summary":        "done",
+		"unknowns":       []any{},
+		"items": []any{
+			map[string]any{
+				"id":                  "T-001",
+				"source_finding_id":   "F-001",
+				"source_finding":      "Finding text.",
+				"classification":      "real_issue",
+				"severity":            "low",
+				"confidence":          "high",
+				"supporting_evidence": "file.go:1",
+				"counterevidence":     []any{},
+				"citation_check_ids":  []any{},
+				"recommended_action":  "fix_now",
+				"rationale":           "Rationale.",
+			},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "triage final_json.items[0].supporting_evidence must be an array of strings (got string)") {
+		t.Fatalf("expected triage string-list type error with actual type, got %v", err)
+	}
+
+	_, err = ValidateTriageResult(map[string]any{
+		"schema_version": 1,
+		"status":         "complete",
+		"summary":        "done",
+		"unknowns":       []any{42},
+		"items":          []any{},
+	})
+	if err == nil || !strings.Contains(err.Error(), "triage final_json.unknowns must be an array of strings (triage final_json.unknowns[0] got number)") {
+		t.Fatalf("expected triage string-list item type error with actual type, got %v", err)
+	}
+}
+
 func TestValidateEscalationWitnessResultAcceptsStructuredObjects(t *testing.T) {
 	_, err := ValidateEscalationWitnessResult(map[string]any{
 		"status":                 "complete",

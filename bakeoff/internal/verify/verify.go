@@ -97,6 +97,7 @@ func Run(runDir string, displayOutDir string) Result {
 		problems = append(problems, runTypeErr.Error())
 	}
 	requiredArtifacts := manifest.RequiredArtifactsForType(runType)
+	requiredArtifacts = append(requiredArtifacts, dynamicRequiredArtifacts(runDir, runType)...)
 	missingRequired := []string{}
 	for _, relative := range requiredArtifacts {
 		if !fsutil.FileExists(filepath.Join(runDir, relative)) {
@@ -104,7 +105,12 @@ func Run(runDir string, displayOutDir string) Result {
 			problems = append(problems, "missing artifact: "+filepath.Join(runDir, relative))
 		}
 	}
-	if reviewPresent, missing := reviewContextSetStatus(runDir); reviewPresent && len(missing) > 0 {
+	reviewPresent, missing := reviewContextSetStatus(runDir)
+	reviewRequested := reviewContextRequested(runDir)
+	if reviewRequested && !reviewPresent && len(missing) == 0 {
+		missing = append([]string(nil), manifest.ReviewContextArtifacts...)
+	}
+	if (reviewPresent || reviewRequested) && len(missing) > 0 {
 		for _, relative := range missing {
 			problems = append(problems, "missing review context artifact: "+filepath.Join(runDir, relative))
 		}
@@ -273,6 +279,38 @@ func reviewContextSetStatus(runDir string) (bool, []string) {
 		return true, nil
 	}
 	return true, missing
+}
+
+func reviewContextRequested(runDir string) bool {
+	meta := readOptionalObject(filepath.Join(runDir, "meta.json"))
+	return jsonutil.BoolValue(meta["review_context_requested"])
+}
+
+func dynamicRequiredArtifacts(runDir string, runType string) []string {
+	if runType != "build" {
+		return nil
+	}
+	decision := readOptionalObject(filepath.Join(runDir, "decision.json"))
+	winner := strings.TrimSpace(jsonutil.StringValue(decision["canonical_winner"]))
+	if winner == "" {
+		return nil
+	}
+	return []string{
+		filepath.ToSlash(filepath.Join("providers", winner, "build", "diff.patch")),
+		filepath.ToSlash(filepath.Join("providers", winner, "build", "verify", "result.json")),
+	}
+}
+
+func readOptionalObject(path string) map[string]any {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return nil
+	}
+	return obj
 }
 
 func VerifyFingerprintEntry(runDir string, relative string, expected any) string {

@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "id": "bakeoff-artifact-coverage-review",
+  "type": "gather",
+  "goal": "Audit verify/manifest artifact-coverage code paths in the Bakeoff CLI across research, review, build, rerun, and escalation runs. Surface actionable defects in five focus areas: missing required artifacts, fingerprint gaps, stale-triage detection, review-context artifacts, and build provider artifacts.",
+  "background": [
+    "Scope: review the local Bakeoff CLI source tree (no diff). The audit targets how each run type writes, fingerprints, and verifies its on-disk artifacts, and whether the verifier/manifest layer detects gaps and staleness consistently across run kinds.",
+    "Primary code paths to focus the review on:",
+    "  - internal/verify/verify.go (artifact verification entrypoint)",
+    "  - internal/manifest/manifest.go (manifest writer/reader)",
+    "  - internal/artifact/artifact.go (artifact emission / required-artifact contract)",
+    "  - internal/buildverify/buildverify.go (build-specific verifier)",
+    "  - internal/reviewcontext/reviewcontext.go (review-context artifacts emitted for code-review research)",
+    "  - internal/commands/researchcmd/research.go (research and code-review research runs)",
+    "  - internal/commands/buildcmd/build.go (build runs and per-provider build artifacts)",
+    "  - internal/commands/escalatecmd/escalate.go (escalation runs and escalation-specific artifacts)",
+    "  - internal/commands/reruncmd/rerun.go (rerun and judge-only rerun artifacts; carry-forward vs regen)",
+    "  - internal/commands/triagecmd/triage.go (triage emission, staleness, and source-finding filter)",
+    "Five focus areas (the reviewer should hit each):",
+    "  1) Missing required artifacts: per run type, what artifacts must exist for a run to be considered complete (decision.json, report.md, manifest.json, triage/*.json, per-provider stdout/stderr/exit, build/diff.patch, etc.) and where the verify/manifest layer silently accepts a missing one.",
+    "  2) Fingerprint gaps: places where artifacts are written without a hash/fingerprint, or where the writer and the verifier compute fingerprints over different byte ranges, or where the manifest fingerprint can drift from the on-disk artifact (e.g. post-write mutation, late-bound paths, race with triage writes).",
+    "  3) Stale-triage detection: how the verifier decides whether triage outputs are stale relative to the source findings/report, including source_finding_filter.json, regeneration after rerun/escalate, and the difference between 'failed', 'missing', and 'stale' triage states.",
+    "  4) Review-context artifacts: the artifacts reviewcontext.go emits for code-review research (diff snapshot, base ref, changed-files manifest, etc.), whether they are required by verify.go, fingerprinted in manifest.json, and propagated to triage and to escalation runs.",
+    "  5) Build provider artifacts: the per-provider build artifacts (diff.patch, build/verify output, gate verifier captures, metric outputs), whether each is required, whether canonical_winner selection depends on artifacts that the verifier doesn't enforce, and whether protected-path violations are detected and surfaced.",
+    "Acceptance criteria for the review:",
+    "  - Findings are file:line specific and tied to one of the five focus areas.",
+    "  - For each finding, state the run type(s) affected (research / code-review research / build / rerun / escalate / triage) and the concrete failure scenario.",
+    "  - Distinguish 'verifier accepts a bad state' from 'writer never emits the artifact' from 'manifest schema gap'.",
+    "  - Prefer findings supported by reading the code together (e.g. verify.go required list vs the corresponding writer in researchcmd/buildcmd/etc.).",
+    "Non-goals:",
+    "  - Style-only preferences without project convention evidence.",
+    "  - Large refactor proposals unrelated to artifact/manifest coverage.",
+    "  - Speculation without file:line evidence."
+  ],
+  "facet": {
+    "id": "code-review",
+    "kind": "generic",
+    "focus": "Find actionable gaps in artifact/manifest coverage across research, code-review, build, rerun, and escalation runs. Five areas: missing required artifacts verify should enforce; fingerprint gaps between writer and verifier; stale-triage detection (missing vs failed vs stale, regen after rerun/escalate); review-context artifacts (diff snapshot, base ref, changed files); build per-provider artifacts (diff.patch, gate/metric outputs, protected-path checks). Tie findings to file:line and run type.",
+    "include": [
+      "places where verify.go accepts a missing or empty required artifact",
+      "places where manifest.json does not fingerprint an artifact the verifier later trusts",
+      "writer/verifier fingerprint range or algorithm mismatches",
+      "stale-triage detection gaps including source_finding_filter.json handling and rerun/escalate regen",
+      "review-context artifact gaps (diff snapshot, base ref, changed-files manifest, propagation to triage and escalation)",
+      "build per-provider artifact gaps (diff.patch, gate verifier captures, metric outputs, protected-path enforcement)",
+      "canonical_winner or decision logic that depends on artifacts not enforced by verify",
+      "races or post-write mutations between writer, triage, and verifier"
+    ],
+    "exclude": [
+      "style-only preferences without project convention evidence",
+      "broad refactor proposals unrelated to artifact/manifest coverage",
+      "speculation without file:line evidence",
+      "test-only nits unless they hide a verifier coverage gap"
+    ]
+  },
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "sonnet",
+      "scope": "codebase",
+      "effort": "high"
+    },
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "scope": "codebase",
+      "effort": "high"
+    }
+  ],
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  },
+  "scope_policy": {
+    "enforcement": "best_effort"
+  }
+}

@@ -239,7 +239,7 @@ test_valid_release_install() {
   assert_contains "$("$data/bin/bakeoff" --version)" "$tag"
   grep -Eq '"schema_version"[[:space:]]*:[[:space:]]*1' "$data/version.json" || fail "version.json missing schema"
   grep -Eq '"install_kind"[[:space:]]*:[[:space:]]*"release-binary"' "$data/version.json" || fail "version.json missing ownership"
-  assert_contains "$output" "Next: /bakeoff:quickstart"
+  assert_contains "$output" "Next: /bakeoff:run"
   run_release_setup "$data" "$release" >/dev/null
 }
 
@@ -288,6 +288,42 @@ test_resolution_order() {
   assert_contains "$output" "bakeoff override"
 }
 
+test_claude_plugin_data_precedes_conventional_and_dist() {
+  local home plugin_root claude_data conventional_data output path
+  home="$tmp/home-claude-data"
+  plugin_root="$home/.claude/plugins/marketplaces/mstefanko-plugins/bakeoff"
+  claude_data="$tmp/claude-plugin-data-distinct"
+  conventional_data="$home/.claude/plugins/data/bakeoff-mstefanko-plugins"
+  mkdir -p "$plugin_root/dist" "$claude_data/bin" "$conventional_data/bin"
+  write_fake_bakeoff "$plugin_root/dist/bakeoff" "dist"
+  write_fake_bakeoff "$claude_data/bin/bakeoff" "claude-data"
+  write_fake_bakeoff "$conventional_data/bin/bakeoff" "conventional"
+
+  output="$(env -i HOME="$home" PATH="/usr/bin:/bin" BAKEOFF_PLUGIN_ROOT="$plugin_root" CLAUDE_PLUGIN_DATA="$claude_data" "$root/scripts/bakeoff-ensure-cli" --check)"
+  assert_contains "$output" "CLAUDE_PLUGIN_DATA/bin/bakeoff"
+  assert_contains "$output" "bakeoff claude-data"
+  if [[ "$output" == *"bakeoff conventional"* || "$output" == *"bakeoff dist"* ]]; then
+    fail "resolver used a lower-priority candidate: $output"
+  fi
+
+  path="$(env -i HOME="$home" PATH="/usr/bin:/bin" BAKEOFF_PLUGIN_ROOT="$plugin_root" CLAUDE_PLUGIN_DATA="$claude_data/" "$root/scripts/bakeoff-ensure-cli" --check --print-path)"
+  [[ "$path" == "$claude_data/bin/bakeoff" ]] || fail "print-path = $path, want $claude_data/bin/bakeoff"
+}
+
+test_relative_plugin_data_is_normalized_once() {
+  local release project output
+  release="$(make_release relative-data)"
+  project="$tmp/project-relative-data"
+  mkdir -p "$project"
+  project="$(cd "$project" && pwd -P)"
+  output="$(cd "$project" && env BAKEOFF_PLUGIN_ROOT="$root" BAKEOFF_PLUGIN_DATA="relative-data/" BAKEOFF_RELEASE_BASE_URL="file://$release" "$root/scripts/bakeoff-setup" --yes --from-release --version "$tag" --json)"
+  assert_contains "$output" "\"binary_path\": \"$project/relative-data/bin/bakeoff\""
+  [[ -x "$project/relative-data/bin/bakeoff" ]] || fail "relative BAKEOFF_PLUGIN_DATA did not install under project"
+
+  output="$(cd "$project" && env BAKEOFF_PLUGIN_ROOT="$root" BAKEOFF_PLUGIN_DATA="relative-data/" "$root/scripts/bakeoff-ensure-cli" --check --print-path)"
+  [[ "$output" == "$project/relative-data/bin/bakeoff" ]] || fail "relative ensure print-path = $output"
+}
+
 test_duplicate_data_candidates_warn_once_and_fall_through() {
   local plugin_root="$tmp/plugin-root-duplicates"
   local data="$tmp/data-duplicates"
@@ -309,6 +345,20 @@ test_duplicate_data_candidates_warn_once_and_fall_through() {
   assert_contains "$output" "bakeoff dist"
   warning_count="$(grep -oF 'exists but is not executable' <<< "$output" | wc -l | tr -d ' ')"
   [[ "$warning_count" == "1" ]] || fail "duplicate bin candidates produced $warning_count warnings: $output"
+}
+
+test_probe_failure_falls_through_to_lower_priority_candidate() {
+  local plugin_root data output
+  plugin_root="$tmp/plugin-root-probe-failure"
+  data="$tmp/data-probe-failure"
+  mkdir -p "$plugin_root/dist" "$data/bin"
+  write_fake_bakeoff "$data/bin/bakeoff" "broken" "gatekeeper"
+  write_fake_bakeoff "$plugin_root/dist/bakeoff" "dist"
+
+  output="$(env BAKEOFF_PLUGIN_ROOT="$plugin_root" BAKEOFF_PLUGIN_DATA="$data" "$root/scripts/bakeoff-ensure-cli" --check 2>&1)"
+  assert_contains "$output" "failed version probe"
+  assert_contains "$output" "dist/bakeoff"
+  assert_contains "$output" "bakeoff dist"
 }
 
 test_conventional_data_precedes_dist_without_env() {
@@ -459,11 +509,30 @@ EOF
   assert_contains "$output" "no Bakeoff setup ownership metadata"
 }
 
+test_uninstall_leaves_plugin_manager_cache_root() {
+  local home project plugin_root cache_root output
+  home="$tmp/home-cache-uninstall"
+  project="$tmp/project-cache-uninstall"
+  plugin_root="$home/.claude/plugins/cache/mstefanko-plugins/bakeoff/v1.2.3"
+  cache_root="$home/.claude/plugins/cache/mstefanko-plugins/bakeoff"
+  mkdir -p "$plugin_root/dist" "$cache_root/v9.9.9" "$project"
+  write_fake_bakeoff "$plugin_root/dist/bakeoff" "cached"
+  printf 'keep\n' > "$cache_root/v9.9.9/sentinel"
+
+  output="$(cd "$project" && env HOME="$home" BAKEOFF_PLUGIN_ROOT="$plugin_root" "$root/scripts/bakeoff-uninstall" --force)"
+  assert_not_exists "$plugin_root/dist/bakeoff"
+  [[ -f "$cache_root/v9.9.9/sentinel" ]] || fail "uninstall removed plugin-manager cache root"
+  assert_contains "$output" "plugin cache is managed by the plugin manager"
+}
+
 test_no_go_no_binary_check
 test_source_build_install
 test_valid_release_install
 test_resolution_order
+test_claude_plugin_data_precedes_conventional_and_dist
+test_relative_plugin_data_is_normalized_once
 test_duplicate_data_candidates_warn_once_and_fall_through
+test_probe_failure_falls_through_to_lower_priority_candidate
 test_conventional_data_precedes_dist_without_env
 test_conventional_data_precedes_dist_for_cache_root_without_env
 test_unrecognized_plugin_root_ignores_conventional_data_without_env
@@ -473,5 +542,6 @@ test_single_space_checksum_is_accepted
 test_archive_failures
 test_gatekeeper_message
 test_uninstall_ownership
+test_uninstall_leaves_plugin_manager_cache_root
 
 echo "bakeoff setup tests: ok"
