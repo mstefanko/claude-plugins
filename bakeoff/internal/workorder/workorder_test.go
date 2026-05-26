@@ -97,6 +97,13 @@ func TestFacetValidationNormalizesAndRejectsUnsafeText(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "facet.id is reserved") {
 		t.Fatalf("expected reserved facet id error, got %v", err)
 	}
+
+	data = validWorkOrder()
+	data["facet"] = map[string]any{"id": "review", "focus": strings.Repeat("x", 501), "include": []any{"correctness"}}
+	_, err = Validate(data)
+	if err == nil || !strings.Contains(err.Error(), "facet.focus must be at most 500 characters (got 501)") {
+		t.Fatalf("expected facet length error with actual length, got %v", err)
+	}
 }
 
 func TestValidateEscalationWitnessResultAcceptsStructuredObjects(t *testing.T) {

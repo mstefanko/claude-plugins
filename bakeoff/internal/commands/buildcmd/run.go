@@ -291,7 +291,13 @@ func finalizeBuildRun(ctx context.Context, f commands.Factory, opts *BuildOption
 	if humanOutput {
 		f.Streams().Printf("manifest: %s\n", filepath.Join(runDir, "manifest.json"))
 		f.Streams().Printf("report: %s\n", filepath.Join(runDir, "report.md"))
+		if disagreement := buildJudgePassDisagreementLine(decision); disagreement != "" {
+			f.Streams().Printf("[judge] %s\n", disagreement)
+		}
 		f.Streams().Printf("result: %s\n", buildResultLine(decision))
+		if status := buildStatusLine(decision, exitCode); status != "" {
+			f.Streams().Printf("status: %s\n", status)
+		}
 		if selectedPatch, ok := selectedBuildPatchAbsolutePath(runDir, decision); ok {
 			f.Streams().Printf("selected patch: %s\n", selectedPatch)
 		} else {

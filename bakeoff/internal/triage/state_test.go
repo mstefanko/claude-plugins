@@ -73,6 +73,63 @@ func TestSelectTriageSourceFindings(t *testing.T) {
 	}
 }
 
+func TestBuildEscalationFindingIndexSelectsProviderFindings(t *testing.T) {
+	decision := map[string]any{
+		"mode":          "escalation",
+		"decision_kind": "escalation_advisory_supported",
+		"assessment": map[string]any{
+			"missed_material": []any{map[string]any{
+				"source_finding_id": "new-01",
+				"claim":             "Manifest telemetry drops fallback providers.",
+				"evidence":          []any{"internal/manifest/manifest.go:376"},
+			}},
+			"material_errors": []any{map[string]any{
+				"source_finding_id": "F-002",
+				"claim":             "Original finding overstates the evidence.",
+			}},
+		},
+	}
+
+	findings := BuildEscalationFindingIndex(decision)
+	if len(findings) != 2 {
+		t.Fatalf("findings = %#v", findings)
+	}
+	if findings[0]["id"] != "new-01" || findings[0]["source"] != "escalation_provider" || findings[0]["section"] != "Missed Material" {
+		t.Fatalf("missed material finding = %#v", findings[0])
+	}
+	if findings[1]["id"] == "F-002" || findings[1]["source_finding_id"] != "F-002" || findings[1]["section"] != "Material Errors" {
+		t.Fatalf("material error finding should avoid colliding with source finding IDs: %#v", findings[1])
+	}
+	selected, skipped := SelectTriageSourceFindings(findings, CodeReviewFacetID)
+	if len(selected) != 2 || len(skipped) != 0 {
+		t.Fatalf("selected=%#v skipped=%#v", selected, skipped)
+	}
+	streams := SummarizeFindingStreams(findings)
+	if streams["escalation_provider"] != 2 {
+		t.Fatalf("streams = %#v", streams)
+	}
+}
+
+func TestBuildEscalationFindingIndexAvoidsGeneratedIDCollisions(t *testing.T) {
+	decision := map[string]any{
+		"mode":            "escalation",
+		"missed_material": []any{map[string]any{"claim": "top missed"}},
+		"assessment": map[string]any{
+			"missed_material": []any{map[string]any{"claim": "assessment missed"}},
+		},
+	}
+	findings := BuildEscalationFindingIndex(decision)
+	if len(findings) != 2 {
+		t.Fatalf("findings = %#v", findings)
+	}
+	if findings[0]["id"] == findings[1]["id"] {
+		t.Fatalf("generated IDs collided: %#v", findings)
+	}
+	if findings[0]["id"] != "ESC-TOP-MISSED-001" || findings[1]["id"] != "ESC-ASSESSMENT-MISSED-001" {
+		t.Fatalf("unexpected generated IDs: %#v", findings)
+	}
+}
+
 func TestCitationExtractionAndChecks(t *testing.T) {
 	repo := t.TempDir()
 	source := filepath.Join(repo, "src", "app.go")

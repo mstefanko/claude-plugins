@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "id": "dogfood-manifest-telemetry-lenses.correctness",
+  "type": "gather",
+  "goal": "Review the uncommitted local diff vs HEAD on the bakeoff plugin for correctness defects in production code and supporting tests.",
+  "background": [
+    "Repository root: /Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins (bakeoff plugin under bakeoff/).",
+    "Base ref: HEAD.",
+    "Review target: uncommitted working-tree changes (git diff HEAD).",
+    "Branch: main.",
+    "Changed files (tracked, modified), paths relative to bakeoff/ context root:",
+    "  - README.md",
+    "  - docs/cli-reference.md",
+    "  - internal/commands/doctorcmd/doctor_test.go",
+    "  - internal/manifest/manifest.go",
+    "  - internal/manifest/manifest_test.go",
+    "Diff size: ~221 lines across 5 files; internal/manifest/manifest.go is the primary code change, internal/manifest/manifest_test.go is a substantial test expansion.",
+    "Companion lenses run separately: telemetry-schema (manifest schema/contract) and docs-tests (doc accuracy + test coverage). This lens focuses ONLY on correctness defects in code, not schema design or doc quality.",
+    "Known context: untracked work-order files in cwd reference 'manifest-telemetry-highest-severity' work, indicating the manifest change likely surfaces a highest-severity telemetry field."
+  ],
+  "facet": {
+    "id": "code-review",
+    "kind": "generic",
+    "focus": "Find correctness defects, edge cases, and regressions introduced by the manifest.go and doctor_test.go changes.",
+    "include": [
+      "logic bugs, off-by-one errors, ordering/sorting mistakes, and incorrect comparisons in manifest.go",
+      "nil, empty-slice, and zero-value handling in new manifest fields and helpers",
+      "race conditions, mutation of shared state, or unsafe concurrent access",
+      "error handling regressions: swallowed errors, wrong error types, missing wrap",
+      "regressions in existing manifest behavior exposed by the diff",
+      "test correctness: assertions that pass for the wrong reason, missing comparisons, hard-coded values that drift from production code",
+      "control-flow defects in doctor_test.go change"
+    ],
+    "exclude": [
+      "telemetry schema/contract design critique (covered by telemetry-schema lens)",
+      "doc prose accuracy critique (covered by docs-tests lens)",
+      "test coverage gaps unless they hide an active defect",
+      "style-only preferences without project convention evidence",
+      "speculation without file:line evidence"
+    ]
+  },
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "sonnet",
+      "scope": "codebase",
+      "effort": "high"
+    },
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "scope": "codebase",
+      "effort": "high"
+    }
+  ],
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  },
+  "scope_policy": {
+    "enforcement": "best_effort"
+  }
+}

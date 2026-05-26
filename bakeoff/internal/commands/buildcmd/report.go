@@ -298,6 +298,48 @@ func buildResultLine(decision map[string]any) string {
 	return fmt.Sprintf("%s, winner=%s, basis=%s", jsonutil.StringValue(decision["decision_kind"]), winner, jsonutil.StringValue(decision["selection_basis"]))
 }
 
+func buildStatusLine(decision map[string]any, exitCode int) string {
+	stalledAt := jsonutil.StringValue(decision["stalled_at"])
+	if stalledAt == "" && exitCode == 0 {
+		return ""
+	}
+	if stalledAt != "" {
+		return fmt.Sprintf("stalled at %s (exit %d)", stalledAt, exitCode)
+	}
+	return fmt.Sprintf("completed with exit %d", exitCode)
+}
+
+func buildJudgePassDisagreementLine(decision map[string]any) string {
+	passes, _ := decision["judge_passes"].(map[string]any)
+	if len(passes) == 0 {
+		return ""
+	}
+	pass1 := buildJudgePassWinner(passes["pass1"])
+	pass2 := buildJudgePassWinner(passes["pass2"])
+	if pass1 == "" || pass2 == "" || pass1 == pass2 {
+		return ""
+	}
+	result := jsonutil.StringValue(decision["canonical_winner"])
+	if result == "" {
+		result = jsonutil.StringValue(decision["decision_kind"])
+	}
+	return fmt.Sprintf("swapped pass disagreed (pass1=%s, pass2=%s) -> %s", pass1, pass2, result)
+}
+
+func buildJudgePassWinner(value any) string {
+	obj, _ := value.(map[string]any)
+	if len(obj) == 0 {
+		return ""
+	}
+	if winner := jsonutil.StringValue(obj["canonical_winner"]); winner != "" {
+		return winner
+	}
+	if positional := jsonutil.StringValue(obj["positional_winner"]); positional != "" && positional != "none" {
+		return positional
+	}
+	return "tie"
+}
+
 func buildSelectorConfidenceLines(decision map[string]any) []string {
 	label := buildSelectorLabel(decision)
 	return []string{

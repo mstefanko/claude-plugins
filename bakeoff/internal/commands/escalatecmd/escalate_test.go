@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/buildinfo"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/ledger"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/output"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/provider"
 	triagepkg "github.com/mstefanko/claude-plugins/bakeoff/internal/triage"
@@ -117,6 +118,36 @@ func TestDisputeWithoutPointsFailsBeforeMutation(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(outDir, "dispute")); !os.IsNotExist(err) {
 		t.Fatalf("dispute validation created run directory, stat err=%v", err)
+	}
+}
+
+func TestEscalateScaffoldFailurePreservesLatest(t *testing.T) {
+	root := t.TempDir()
+	outDir := filepath.Join(root, "runs")
+	if err := os.MkdirAll(filepath.Join(outDir, "prior"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := ledger.UpdateLatest(outDir, "prior"); err != nil {
+		t.Fatal(err)
+	}
+	writeSourceRun(t, outDir, "source", "compare", map[string]any{"decision_kind": "pick_winner", "canonical_winner": "claude"})
+	if err := workorder.WriteTextAtomic(filepath.Join(outDir, "source", "review-context.md"), "partial review context\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	err := Run(context.Background(), escalateTestFactory{streams: output.NewStreams(&bytes.Buffer{}, &bytes.Buffer{})}, &EscalateOptions{
+		SourceRunID: "source",
+		Out:         outDir,
+		RunID:       "witness",
+		Mode:        ModeWitness,
+		Provider:    "gemini",
+		NoTriage:    true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "partial review-context artifact set") {
+		t.Fatalf("expected scaffold error, got %v", err)
+	}
+	if got := latestValue(t, outDir); got != "prior" {
+		t.Fatalf("latest = %q, want prior", got)
 	}
 }
 
@@ -666,6 +697,19 @@ func readTestJSON(t *testing.T, path string) map[string]any {
 		t.Fatal(err)
 	}
 	return out
+}
+
+func latestValue(t *testing.T, outDir string) string {
+	t.Helper()
+	path := filepath.Join(outDir, "latest")
+	if link, err := os.Readlink(path); err == nil {
+		return link
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.TrimSpace(string(data))
 }
 
 func scopeWorkOrder(left string, right string, codeReview bool) *workorder.WorkOrder {

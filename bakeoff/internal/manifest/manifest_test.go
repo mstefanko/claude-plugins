@@ -1,6 +1,7 @@
 package manifest_test
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -212,7 +213,7 @@ func TestWriteRunManifestAddsDerivedLocalTelemetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	telemetry := value["telemetry"].(map[string]any)
-	if telemetry["schema_version"] != 1 {
+	if telemetry["schema_version"] != manifest.TelemetrySchemaVersion {
 		t.Fatalf("telemetry schema = %#v", telemetry)
 	}
 	route := telemetry["route"].(map[string]any)
@@ -237,24 +238,43 @@ func TestWriteRunManifestAddsDerivedLocalTelemetry(t *testing.T) {
 	if artifacts["prompt_trim_count"] != 2 || artifacts["output_truncation_count"] != 2 {
 		t.Fatalf("artifact telemetry = %#v", artifacts)
 	}
+	telemetryJSON, err := json.Marshal(telemetry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(telemetryJSON), "worker:claude") || strings.Contains(string(telemetryJSON), "judge:pass1") {
+		t.Fatalf("telemetry leaked prompt trim source text: %s", telemetryJSON)
+	}
 	triageTelemetry := telemetry["triage"].(map[string]any)
 	if triageTelemetry["state"] != "no" {
 		t.Fatalf("triage telemetry = %#v", triageTelemetry)
+	}
+	for _, key := range []string{"item_count", "highest_severity"} {
+		if _, ok := triageTelemetry[key]; !ok {
+			t.Fatalf("triage telemetry missing nullable key %q: %#v", key, triageTelemetry)
+		}
 	}
 }
 
 func TestWriteRunManifestTelemetryJudgeFamilyRelations(t *testing.T) {
 	tests := []struct {
-		name      string
-		judge     string
-		providers []string
-		relation  string
-		diversity string
+		name        string
+		judge       string
+		providers   []string
+		relation    any
+		judgeFamily any
+		families    []string
+		diversity   string
+		backends    []string
+		count       int
 	}{
-		{name: "same all", judge: "claude", providers: []string{"claude"}, relation: provider.JudgeFamilyRelationSameAsAll, diversity: "single"},
-		{name: "same some", judge: "claude", providers: []string{"claude", "codex"}, relation: provider.JudgeFamilyRelationSameAsSome, diversity: "mixed"},
-		{name: "different all", judge: "claude", providers: []string{"codex"}, relation: provider.JudgeFamilyRelationDifferentFromAll, diversity: "single"},
-		{name: "unknown", judge: "claude", providers: []string{"mystery"}, relation: provider.JudgeFamilyRelationUnknown, diversity: "unknown"},
+		{name: "same all", judge: "claude", providers: []string{"claude"}, relation: provider.JudgeFamilyRelationSameAsAll, judgeFamily: provider.ProviderFamilyAnthropic, families: []string{provider.ProviderFamilyAnthropic}, diversity: "single", backends: []string{"claude"}, count: 1},
+		{name: "same some", judge: "claude", providers: []string{"claude", "codex"}, relation: provider.JudgeFamilyRelationSameAsSome, judgeFamily: provider.ProviderFamilyAnthropic, families: []string{provider.ProviderFamilyAnthropic, provider.ProviderFamilyOpenAI}, diversity: "mixed", backends: []string{"claude", "codex"}, count: 2},
+		{name: "different all", judge: "claude", providers: []string{"codex"}, relation: provider.JudgeFamilyRelationDifferentFromAll, judgeFamily: provider.ProviderFamilyAnthropic, families: []string{provider.ProviderFamilyOpenAI}, diversity: "single", backends: []string{"codex"}, count: 1},
+		{name: "unknown provider", judge: "claude", providers: []string{"mystery"}, relation: provider.JudgeFamilyRelationUnknown, judgeFamily: provider.ProviderFamilyAnthropic, families: []string{}, diversity: "unknown", backends: []string{"mystery"}, count: 1},
+		{name: "unknown judge", judge: "mystery", providers: []string{"claude"}, relation: provider.JudgeFamilyRelationUnknown, judgeFamily: provider.ProviderFamilyUnknown, families: []string{provider.ProviderFamilyAnthropic}, diversity: "single", backends: []string{"claude"}, count: 1},
+		{name: "no judge configured", judge: "", providers: []string{"claude"}, relation: nil, judgeFamily: nil, families: []string{provider.ProviderFamilyAnthropic}, diversity: "single", backends: []string{"claude"}, count: 1},
+		{name: "duplicate provider backend", judge: "claude", providers: []string{"claude", "claude"}, relation: provider.JudgeFamilyRelationSameAsAll, judgeFamily: provider.ProviderFamilyAnthropic, families: []string{provider.ProviderFamilyAnthropic}, diversity: "single", backends: []string{"claude", "claude"}, count: 2},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -267,12 +287,190 @@ func TestWriteRunManifestTelemetryJudgeFamilyRelations(t *testing.T) {
 			}
 			telemetry := value["telemetry"].(map[string]any)
 			judge := telemetry["judge"].(map[string]any)
-			if judge["family_relation"] != tt.relation {
+			if judge["family"] != tt.judgeFamily || judge["family_relation"] != tt.relation {
 				t.Fatalf("judge telemetry = %#v", judge)
 			}
 			providers := telemetry["providers"].(map[string]any)
-			if providers["family_diversity"] != tt.diversity {
+			if providers["count"] != tt.count || providers["family_diversity"] != tt.diversity || !reflect.DeepEqual(providers["families"], tt.families) || !reflect.DeepEqual(providers["backends"], tt.backends) {
 				t.Fatalf("provider telemetry = %#v", providers)
+			}
+		})
+	}
+}
+
+func TestWriteRunManifestTelemetryResolvedProviderBackendsKeepWorkOrderOrder(t *testing.T) {
+	runDir := filepath.Join(t.TempDir(), "runs", "r1")
+	writeMinimalRun(t, runDir)
+	writeJSON(t, filepath.Join(runDir, "work-order.json"), map[string]any{
+		"schema_version": 1,
+		"id":             "sample",
+		"type":           "gather",
+		"goal":           "test",
+		"background":     "",
+		"providers": []map[string]any{
+			{"id": "left", "backend": "claude", "model": "m", "scope": "codebase"},
+			{"id": "right", "backend": "codex", "model": "m", "scope": "web"},
+		},
+		"judge":   map[string]any{"backend": "claude", "model": "judge"},
+		"budgets": map[string]any{"wall_clock_seconds": 3, "max_output_bytes": 1000},
+	})
+	writeJSON(t, filepath.Join(runDir, "decision.json"), map[string]any{
+		"decision_kind":     "structured_union",
+		"judge_ran":         true,
+		"judge_completed":   true,
+		"provider_statuses": map[string]any{"left": map[string]any{"status": "ok"}, "right": map[string]any{"status": "ok"}},
+	})
+	writeJSON(t, filepath.Join(runDir, "meta.json"), map[string]any{
+		"run_id": "r1",
+		"type":   "gather",
+		"resolved_models": map[string]any{
+			"providers": map[string]any{
+				"right": map[string]any{"backend": "codex", "model": "gpt"},
+				"left":  map[string]any{"backend": "gemini", "model": "pro"},
+			},
+			"judge": map[string]any{"backend": "claude", "model": "opus"},
+		},
+	})
+
+	value, err := manifest.WriteRunManifest(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	telemetry := value["telemetry"].(map[string]any)
+	providers := telemetry["providers"].(map[string]any)
+	if !reflect.DeepEqual(providers["backends"], []string{"gemini", "codex"}) {
+		t.Fatalf("provider backends = %#v", providers["backends"])
+	}
+	if !reflect.DeepEqual(providers["families"], []string{provider.ProviderFamilyGoogleGemini, provider.ProviderFamilyOpenAI}) {
+		t.Fatalf("provider families = %#v", providers["families"])
+	}
+	judge := telemetry["judge"].(map[string]any)
+	if judge["family_relation"] != provider.JudgeFamilyRelationDifferentFromAll {
+		t.Fatalf("judge telemetry = %#v", judge)
+	}
+}
+
+func TestWriteRunManifestTelemetryJudgeDecisionMetadata(t *testing.T) {
+	tests := []struct {
+		name             string
+		decision         map[string]any
+		meta             map[string]any
+		wantBasis        any
+		wantWinner       any
+		wantWinnerFamily any
+		wantSwap         bool
+		wantOrderMaps    bool
+		wantJudgePasses  bool
+	}{
+		{
+			name: "gate winner",
+			decision: map[string]any{
+				"decision_kind":     "pick_winner",
+				"selection_basis":   "gate",
+				"canonical_winner":  "claude",
+				"judge_ran":         false,
+				"provider_statuses": map[string]any{"claude": map[string]any{"status": "ok"}, "codex": map[string]any{"status": "ok"}},
+			},
+			wantBasis:        "gate",
+			wantWinner:       "claude",
+			wantWinnerFamily: provider.ProviderFamilyAnthropic,
+		},
+		{
+			name: "metric winner uses resolved backend",
+			decision: map[string]any{
+				"decision_kind":     "pick_winner",
+				"selection_basis":   "metric",
+				"canonical_winner":  "codex",
+				"judge_ran":         false,
+				"provider_statuses": map[string]any{"claude": map[string]any{"status": "ok"}, "codex": map[string]any{"status": "ok"}},
+			},
+			meta: map[string]any{
+				"run_id": "build1",
+				"type":   "build",
+				"resolved_models": map[string]any{
+					"providers": map[string]any{
+						"claude": map[string]any{"backend": "claude", "model": "sonnet"},
+						"codex":  map[string]any{"backend": "gemini", "model": "pro"},
+					},
+					"judge": map[string]any{"backend": "claude", "model": "opus"},
+				},
+			},
+			wantBasis:        "metric",
+			wantWinner:       "gemini",
+			wantWinnerFamily: provider.ProviderFamilyGoogleGemini,
+		},
+		{
+			name: "judge winner without swap",
+			decision: map[string]any{
+				"decision_kind":    "pick_winner",
+				"selection_basis":  "judge",
+				"canonical_winner": "claude",
+				"judge_ran":        true,
+				"judge_completed":  true,
+				"order_maps": map[string]any{
+					"pass1": map[string]any{"A": "claude", "B": "codex"},
+					"pass2": map[string]any{"A": "claude", "B": "codex"},
+				},
+				"judge_passes": map[string]any{
+					"pass1": map[string]any{"canonical_winner": "claude"},
+					"pass2": map[string]any{"canonical_winner": "claude"},
+				},
+				"provider_statuses": map[string]any{"claude": map[string]any{"status": "ok"}, "codex": map[string]any{"status": "ok"}},
+			},
+			wantBasis:        "judge",
+			wantWinner:       "claude",
+			wantWinnerFamily: provider.ProviderFamilyAnthropic,
+			wantOrderMaps:    true,
+			wantJudgePasses:  true,
+		},
+		{
+			name: "judge winner with swap",
+			decision: map[string]any{
+				"decision_kind":    "pick_winner",
+				"selection_basis":  "judge",
+				"canonical_winner": "claude",
+				"judge_ran":        true,
+				"judge_completed":  true,
+				"order_maps": map[string]any{
+					"pass1": map[string]any{"A": "claude", "B": "codex"},
+					"pass2": map[string]any{"A": "codex", "B": "claude"},
+				},
+				"judge_passes": map[string]any{
+					"pass1": map[string]any{"canonical_winner": "claude"},
+					"pass2": map[string]any{"canonical_winner": "claude"},
+				},
+				"provider_statuses": map[string]any{"claude": map[string]any{"status": "ok"}, "codex": map[string]any{"status": "ok"}},
+			},
+			wantBasis:        "judge",
+			wantWinner:       "claude",
+			wantWinnerFamily: provider.ProviderFamilyAnthropic,
+			wantSwap:         true,
+			wantOrderMaps:    true,
+			wantJudgePasses:  true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runDir := filepath.Join(t.TempDir(), "runs", "build1")
+			writeMinimalBuildRun(t, runDir, true)
+			writeJSON(t, filepath.Join(runDir, "decision.json"), tt.decision)
+			if tt.meta != nil {
+				writeJSON(t, filepath.Join(runDir, "meta.json"), tt.meta)
+			}
+
+			value, err := manifest.WriteRunManifest(runDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			judge := value["telemetry"].(map[string]any)["judge"].(map[string]any)
+			if judge["selection_basis"] != tt.wantBasis || judge["winner_backend"] != tt.wantWinner || judge["winner_family"] != tt.wantWinnerFamily || judge["position_swap_used"] != tt.wantSwap {
+				t.Fatalf("judge telemetry = %#v", judge)
+			}
+			if (judge["order_maps"] != nil) != tt.wantOrderMaps {
+				t.Fatalf("order_maps = %#v, want present %t", judge["order_maps"], tt.wantOrderMaps)
+			}
+			if (judge["judge_passes"] != nil) != tt.wantJudgePasses {
+				t.Fatalf("judge_passes = %#v, want present %t", judge["judge_passes"], tt.wantJudgePasses)
 			}
 		})
 	}
@@ -307,20 +505,24 @@ func TestWriteRunManifestMarksZeroSelectedTriage(t *testing.T) {
 	if triageTelemetry["state"] != "yes" || triageTelemetry["item_count"] != 0 || triageTelemetry["highest_severity"] != nil {
 		t.Fatalf("triage telemetry = %#v", triageTelemetry)
 	}
+	if _, ok := triageTelemetry["highest_severity"]; !ok {
+		t.Fatalf("triage telemetry missing highest_severity: %#v", triageTelemetry)
+	}
 }
 
 func TestWriteRunManifestTelemetryTriageStates(t *testing.T) {
 	tests := []struct {
-		name      string
-		setup     func(t *testing.T, runDir string)
-		wantState string
-		wantItems any
+		name                string
+		setup               func(t *testing.T, runDir string)
+		wantState           string
+		wantItems           any
+		wantHighestSeverity any
 	}{
 		{name: "no", wantState: "no", wantItems: nil},
 		{name: "dry run", wantState: "dry_run", wantItems: nil, setup: func(t *testing.T, runDir string) {
 			writeJSON(t, filepath.Join(runDir, "triage", "status.json"), map[string]any{"status": "dry_run"})
 		}},
-		{name: "yes", wantState: "yes", wantItems: 2, setup: func(t *testing.T, runDir string) {
+		{name: "yes", wantState: "yes", wantItems: 2, wantHighestSeverity: "medium", setup: func(t *testing.T, runDir string) {
 			hashes, err := triage.ComputeInputHashes(runDir)
 			if err != nil {
 				t.Fatal(err)
@@ -336,7 +538,53 @@ func TestWriteRunManifestTelemetryTriageStates(t *testing.T) {
 			})
 			writeText(t, filepath.Join(runDir, "triage", "triage.md"), "# triage\n")
 		}},
-		{name: "stale", wantState: "stale", wantItems: 1, setup: func(t *testing.T, runDir string) {
+		{name: "needs repro ignored", wantState: "yes", wantItems: 2, wantHighestSeverity: "medium", setup: func(t *testing.T, runDir string) {
+			hashes, err := triage.ComputeInputHashes(runDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeJSON(t, filepath.Join(runDir, "triage", "final.json"), map[string]any{
+				"schema_version": 1,
+				"status":         "complete",
+				"input_hashes":   hashes,
+				"items": []any{
+					map[string]any{"classification": "needs_repro", "severity": "high"},
+					map[string]any{"classification": "real_issue", "severity": "medium"},
+				},
+			})
+			writeText(t, filepath.Join(runDir, "triage", "triage.md"), "# triage\n")
+		}},
+		{name: "false positives do not outrank real issues", wantState: "yes", wantItems: 3, wantHighestSeverity: "low", setup: func(t *testing.T, runDir string) {
+			hashes, err := triage.ComputeInputHashes(runDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeJSON(t, filepath.Join(runDir, "triage", "final.json"), map[string]any{
+				"schema_version": 1,
+				"status":         "complete",
+				"input_hashes":   hashes,
+				"items": []any{
+					map[string]any{"classification": "false_positive", "severity": "high"},
+					map[string]any{"classification": "already_fixed", "severity": "high"},
+					map[string]any{"classification": "real_issue", "severity": "low"},
+				},
+			})
+			writeText(t, filepath.Join(runDir, "triage", "triage.md"), "# triage\n")
+		}},
+		{name: "only non-actionable", wantState: "yes", wantItems: 1, setup: func(t *testing.T, runDir string) {
+			hashes, err := triage.ComputeInputHashes(runDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeJSON(t, filepath.Join(runDir, "triage", "final.json"), map[string]any{
+				"schema_version": 1,
+				"status":         "complete",
+				"input_hashes":   hashes,
+				"items":          []any{map[string]any{"classification": "false_positive", "severity": "high"}},
+			})
+			writeText(t, filepath.Join(runDir, "triage", "triage.md"), "# triage\n")
+		}},
+		{name: "stale", wantState: "stale", wantItems: 1, wantHighestSeverity: "low", setup: func(t *testing.T, runDir string) {
 			writeJSON(t, filepath.Join(runDir, "triage", "final.json"), map[string]any{
 				"schema_version": 1,
 				"status":         "complete",
@@ -362,6 +610,25 @@ func TestWriteRunManifestTelemetryTriageStates(t *testing.T) {
 			triageTelemetry := telemetry["triage"].(map[string]any)
 			if triageTelemetry["state"] != tt.wantState || triageTelemetry["item_count"] != tt.wantItems {
 				t.Fatalf("triage telemetry = %#v", triageTelemetry)
+			}
+			for _, key := range []string{"item_count", "highest_severity"} {
+				if _, ok := triageTelemetry[key]; !ok {
+					t.Fatalf("triage telemetry missing nullable key %q: %#v", key, triageTelemetry)
+				}
+			}
+			if tt.wantHighestSeverity != nil {
+				triageSummary := value["triage"].(map[string]any)
+				if triageSummary["highest_severity"] != tt.wantHighestSeverity {
+					t.Fatalf("triage summary = %#v", triageSummary)
+				}
+				if triageTelemetry["highest_severity"] != tt.wantHighestSeverity {
+					t.Fatalf("triage telemetry = %#v", triageTelemetry)
+				}
+				if triageTelemetry["highest_severity"] != triageSummary["highest_severity"] {
+					t.Fatalf("triage telemetry highest_severity = %#v, triage summary highest_severity = %#v", triageTelemetry["highest_severity"], triageSummary["highest_severity"])
+				}
+			} else if triageTelemetry["highest_severity"] != nil {
+				t.Fatalf("triage telemetry highest_severity = %#v, want nil", triageTelemetry["highest_severity"])
 			}
 		})
 	}
@@ -422,33 +689,84 @@ func TestBuildManifestRequiresContextAndFingerprintsBuildArtifacts(t *testing.T)
 	}
 }
 
-func TestBuildManifestTelemetryUsesDiagnosticsTruncationCount(t *testing.T) {
-	runDir := filepath.Join(t.TempDir(), "runs", "build1")
-	writeMinimalBuildRun(t, runDir, true)
-	writeJSON(t, filepath.Join(runDir, "decision.json"), map[string]any{
-		"decision_kind":     "pick_winner",
-		"selection_basis":   "gate",
-		"canonical_winner":  "claude",
-		"judge_ran":         false,
-		"provider_statuses": map[string]any{"claude": map[string]any{"status": "ok", "stdout_truncated": true}},
-	})
-	writeJSON(t, filepath.Join(runDir, "diagnostics.json"), map[string]any{
-		"schema_version": 1,
-		"output_truncation": []any{
-			map[string]any{"scope": "provider", "provider_id": "claude", "stream": "stdout"},
-			map[string]any{"scope": "verify", "provider_id": "claude", "verifier_id": "unit", "stream": "stderr"},
-			map[string]any{"scope": "baseline", "verifier_id": "unit", "stream": "stdout"},
+func TestBuildManifestTelemetryOutputTruncationCount(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, runDir string)
+		want  int
+	}{
+		{
+			name: "no diagnostics falls back to provider statuses",
+			want: 2,
 		},
-	})
-
-	value, err := manifest.WriteRunManifest(runDir)
-	if err != nil {
-		t.Fatal(err)
+		{
+			name: "diagnostics records are authoritative when present",
+			setup: func(t *testing.T, runDir string) {
+				writeJSON(t, filepath.Join(runDir, "diagnostics.json"), map[string]any{
+					"schema_version": 1,
+					"output_truncation": []any{
+						map[string]any{"scope": "provider", "provider_id": "claude", "stream": "stdout"},
+						map[string]any{"scope": "verify", "provider_id": "claude", "verifier_id": "unit", "stream": "stderr"},
+						map[string]any{"scope": "baseline", "verifier_id": "unit", "stream": "stdout"},
+					},
+				})
+			},
+			want: 3,
+		},
+		{
+			name: "diagnostics without truncation key falls back to provider statuses",
+			setup: func(t *testing.T, runDir string) {
+				writeJSON(t, filepath.Join(runDir, "diagnostics.json"), map[string]any{"schema_version": 1})
+			},
+			want: 2,
+		},
+		{
+			name: "work order type controls build diagnostics even when meta type drifts",
+			setup: func(t *testing.T, runDir string) {
+				writeJSON(t, filepath.Join(runDir, "meta.json"), map[string]any{"run_id": "build1", "type": "gather", "resolved_models": map[string]any{}})
+				writeJSON(t, filepath.Join(runDir, "diagnostics.json"), map[string]any{
+					"schema_version": 1,
+					"output_truncation": []any{
+						map[string]any{"scope": "provider", "provider_id": "claude", "stream": "stdout"},
+						map[string]any{"scope": "verify", "provider_id": "claude", "verifier_id": "unit", "stream": "stderr"},
+						map[string]any{"scope": "baseline", "verifier_id": "unit", "stream": "stdout"},
+					},
+				})
+			},
+			want: 3,
+		},
 	}
-	telemetry := value["telemetry"].(map[string]any)
-	artifacts := telemetry["artifacts"].(map[string]any)
-	if artifacts["output_truncation_count"] != 3 {
-		t.Fatalf("artifact telemetry = %#v", artifacts)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runDir := filepath.Join(t.TempDir(), "runs", "build1")
+			writeMinimalBuildRun(t, runDir, true)
+			writeJSON(t, filepath.Join(runDir, "decision.json"), map[string]any{
+				"decision_kind":    "pick_winner",
+				"selection_basis":  "gate",
+				"canonical_winner": "claude",
+				"judge_ran":        false,
+				"provider_statuses": map[string]any{
+					"claude": map[string]any{"status": "ok", "stdout_truncated": true, "stderr_truncated": true},
+				},
+			})
+			if tt.setup != nil {
+				tt.setup(t, runDir)
+			}
+
+			value, err := manifest.WriteRunManifest(runDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			telemetry := value["telemetry"].(map[string]any)
+			artifacts := telemetry["artifacts"].(map[string]any)
+			if artifacts["output_truncation_count"] != tt.want {
+				t.Fatalf("artifact telemetry = %#v, want %d", artifacts, tt.want)
+			}
+			route := telemetry["route"].(map[string]any)
+			if route["type"] != "build" {
+				t.Fatalf("route telemetry = %#v", route)
+			}
+		})
 	}
 }
 
@@ -478,6 +796,35 @@ func TestWriteRunManifestTelemetryEscalationRoute(t *testing.T) {
 	route := telemetry["route"].(map[string]any)
 	if route["type"] != "escalation" || route["source_type"] != "gather" || route["escalation_mode"] != "witness" {
 		t.Fatalf("route telemetry = %#v", route)
+	}
+}
+
+func TestRowForLSProjectsTriageAndRerunFields(t *testing.T) {
+	runDir := filepath.Join(t.TempDir(), "runs", "retry")
+	writeJSON(t, filepath.Join(runDir, "manifest.json"), map[string]any{
+		"schema_version": manifest.SchemaVersion,
+		"run_id":         "retry",
+		"type":           "gather",
+		"decision_kind":  "structured_union",
+		"finished_at":    "2026-05-25T00:00:00Z",
+		"source_run_id":  "source",
+		"rerun_mode":     "judge_only",
+		"artifacts":      map[string]any{"report": "report.md"},
+		"triage": map[string]any{
+			"state":            "yes",
+			"item_count":       2,
+			"highest_severity": "medium",
+		},
+	})
+	writeText(t, filepath.Join(runDir, "report.md"), "# report\n")
+
+	row := manifest.RowForLS(runDir)
+	if row["source_run_id"] != "source" || row["rerun_mode"] != "judge_only" || row["triage_state"] != "yes" {
+		t.Fatalf("ls row = %#v", row)
+	}
+	triageRow := row["triage"].(map[string]any)
+	if triageRow["state"] != "yes" || triageRow["item_count"] != 2 || triageRow["highest_severity"] != "medium" {
+		t.Fatalf("triage row = %#v", triageRow)
 	}
 }
 

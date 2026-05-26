@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "id": "gemini-judge-family-advisory",
+  "type": "analyze",
+  "goal": "Determine whether replacing the default `claude/opus` judge with `gemini/pro` for the canonical `claude` + `codex` provider pair (1) suppresses the judge-family advisory warning that `bakeoff validate` emits when `judge_family_advisory.relation` is `same_as_some` or `same_as_all`, and (2) preserves the telemetry relation fields (`judge_backend`, `judge_family`, `provider_backends`, `relation`, `ready_non_contestant_judges`, `advisory_only`, `independence_not_measured_yet`) on the resulting run/manifest emissions. Cite exact code locations (file:line) for: where the advisory is computed, where `validate` decides whether to print the warning, and where the relation fields are serialized into telemetry/manifest payloads. If suppressed, state on which fields the suppression is conditioned; if preserved, state which surfaces still carry them.",
+  "background": "Repo root: /Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/bakeoff (Go, cobra-style CLI).\n\nObserved state on this machine: `bakeoff doctor --json --quiet --skip-auth-probe` returns `judge_family_advisory` with `relation: \"same_as_some\"`, `judge_backend: \"claude\"`, `judge_family: \"anthropic\"`, `provider_backends: [\"claude\",\"codex\"]`, and `ready_non_contestant_judges: [\"gemini\",\"copilot\"]` for the canonical default pair. The `bias` field documents: \"Default generated judge is claude/opus. Position-swap is the primary order-bias mitigation; judge_family_advisory reports provider-family relation without changing defaults.\"\n\nWhat to investigate (cite file:line for every claim):\n\n  1. Advisory computation. Find the Go code that computes the `judge_family_advisory` payload (likely under `internal/.../doctor` or a judge-family helper). Identify: (a) the input it takes (judge backend, provider backends, family registry), (b) the relation enum values it can produce (`same_as_some`, `same_as_all`, `different`, or whatever the source uses), and (c) which of the output fields are emitted unconditionally vs gated on the relation.\n\n  2. Validate warning path. Find `cmd/validate` (or wherever `bakeoff validate <work-order>` is implemented). Trace: (a) does it call the same advisory computation against the work order's `judge` and `providers`, (b) under which exact relation values does it print a warning, and (c) is the warning suppressed when relation would be `different` / `non_contestant` (i.e., when judge family is disjoint from all provider families). Show the conditional branch.\n\n  3. Telemetry / manifest emission. Find every surface that writes the relation fields: `manifest.json` writer, `bakeoff research --json` end-of-run payload, `bakeoff ls --json`, `bakeoff runs verify --json`, run-level `meta.json`, and any per-provider status surface. For each: (a) which struct holds the relation block, (b) is the block populated unconditionally or only when the relation is non-`different`, (c) when judge family is disjoint from all provider families (the gemini-with-claude+codex case), what fields remain present vs which are omitted/empty.\n\n  4. Concrete answer for the gemini case. With providers=[claude,codex] (families anthropic, openai) and judge=gemini (family google-gemini), what `relation` value does the advisory return? Does `bakeoff validate` print the warning for this configuration? Which telemetry fields are still emitted, and with what values? If any field is dropped, name it and cite the code path that drops it.\n\nDeliverable: (A) yes/no on warning suppression with the conditional cited, (B) field-by-field table of telemetry relation fields × surfaces showing preserved/dropped for the gemini-judge case, (C) one short note on whether the advisory remains `advisory_only: true` (no validation failure) regardless of relation. Cite file:line for every claim.\n\nNon-goals: do not propose redesigns; do not change defaults; do not recommend new policy enforcement. Pure source-cited analysis.",
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "sonnet",
+      "scope": "codebase",
+      "effort": "high"
+    },
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "scope": "codebase",
+      "effort": "high"
+    }
+  ],
+  "judge": {
+    "backend": "gemini",
+    "model": "pro",
+    "effort": "xhigh"
+  },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  },
+  "scope_policy": {
+    "enforcement": "best_effort"
+  }
+}

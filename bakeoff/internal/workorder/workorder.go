@@ -1449,7 +1449,7 @@ func normalizeFacetText(value any, label string) (string, error) {
 		return "", Validationf("%s must not contain backticks", label)
 	}
 	if len(normalized) > 500 {
-		return "", Validationf("%s must be at most 500 characters", label)
+		return "", Validationf("%s must be at most 500 characters (got %d)", label, len(normalized))
 	}
 	return normalized, nil
 }

@@ -53,10 +53,16 @@ func MakeTickPrinter(f Factory, label string, quiet bool) func(runner.Tick) {
 	if quiet {
 		return nil
 	}
+	longQuietNoted := false
 	return func(tick runner.Tick) {
 		elapsed := int(tick.Elapsed)
 		wallSeconds := tick.WallSeconds
 		lastOutputAge := int(tick.LastOutputAge)
-		f.Streams().Errorf("[%s] %s t=%ds/%ds out=%.1fKB err=%.1fKB last=%ds\n", label, tick.Phase, elapsed, wallSeconds, float64(tick.StdoutBytes)/1024, float64(tick.StderrBytes)/1024, lastOutputAge)
+		note := ""
+		if tick.Phase == "quiet" && !longQuietNoted && lastOutputAge >= 600 {
+			note = " (long quiet; provider output may be buffered until completion)"
+			longQuietNoted = true
+		}
+		f.Streams().Errorf("[%s] %s t=%ds/%ds out=%.1fKB err=%.1fKB last=%ds%s\n", label, tick.Phase, elapsed, wallSeconds, float64(tick.StdoutBytes)/1024, float64(tick.StderrBytes)/1024, lastOutputAge, note)
 	}
 }

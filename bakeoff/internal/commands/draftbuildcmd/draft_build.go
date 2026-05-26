@@ -161,7 +161,7 @@ func parseGateFlags(values []string) ([]workorder.GateDraft, error) {
 	for i, value := range values {
 		index := strings.Index(value, "=")
 		if index < 0 {
-			return nil, workorder.Validationf("--gate[%d] must use <id>=<command>", i)
+			return nil, workorder.Validationf("--gate[%d] must use <id>=<command>, for example tests=%s", i, strings.TrimSpace(value))
 		}
 		id := strings.TrimSpace(value[:index])
 		command := strings.TrimSpace(value[index+1:])

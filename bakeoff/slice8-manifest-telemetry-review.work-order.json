@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "id": "slice8-manifest-telemetry-review",
+  "type": "gather",
+  "goal": "Surface real correctness, privacy, and coverage issues in the Slice 8 manifest telemetry implementation across internal/manifest/manifest.go and internal/manifest/manifest_test.go.",
+  "background": "Slice 8 added local telemetry to the run manifest. Review the diff at base afc0c7c against HEAD with focus on five criteria:\n\n1. Privacy: no PII, repo paths, file contents, secrets, env vars, command-line arguments, or user-controlled strings should leak into manifest fields. Only derived structural data is allowed.\n\n2. Manifest bloat: fields must be bounded, deduplicated, and proportional to what consumers actually need. Watch for unbounded slices, per-file payloads, redundant nested records, or growth that scales with input size in a way the manifest does not need.\n\n3. Derived-only correctness: telemetry must be computed strictly from observable run state (provider/judge results, exit codes, durations, counts), not from raw user-supplied or attacker-controlled inputs. Derivations should match documented semantics; check for ordering bugs, off-by-one counts, wrong aggregation, and silently-swallowed errors.\n\n4. Family relation accuracy: provider/judge family inference (e.g. same_as_some, same_as_all, distinct_from_all) must map backends to families correctly, handle unknown backends safely, deduplicate families before comparing, and never report a misleading relation. Check the relation against the actual provider set, including edge cases like one provider, identical providers, and mixed families.\n\n5. Test coverage gaps: tests must exercise edge cases such as empty or missing inputs, unknown backends, duplicate providers, mixed families, boundary counts, large inputs, and partial failures. Assertions should cover the manifest's external shape end-to-end, not only internal helpers.\n\nFlag concrete, actionable findings with file:line references. Prefer specific evidence over generic concerns.",
+  "facet": {
+    "kind": "generic",
+    "id": "code-review",
+    "focus": "(1) Privacy: only derived data; no PII, paths, secrets, env, args. (2) Bloat: bounded, proportional fields; no unbounded growth. (3) Derived-only correctness: telemetry from observable run state; no off-by-one, wrong aggregation, swallowed errors. (4) Family relation accuracy: provider/judge family inference maps backends correctly, handles unknowns, dedups. (5) Test gaps: edge cases and end-to-end manifest shape assertions.",
+    "include": [
+      "internal/manifest/manifest.go",
+      "internal/manifest/manifest_test.go"
+    ],
+    "exclude": [
+      "files outside internal/manifest/",
+      "generic style nits unrelated to the five focus criteria",
+      "speculative refactors without a concrete bug, privacy leak, or coverage gap"
+    ]
+  },
+  "providers": [
+    {
+      "id": "claude-sonnet",
+      "backend": "claude",
+      "model": "sonnet",
+      "scope": "codebase",
+      "effort": "high"
+    },
+    {
+      "id": "codex-gpt-5_5",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "scope": "codebase",
+      "effort": "high"
+    }
+  ],
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 30,
+    "output_cap_grace_seconds": 30,
+    "max_output_overrun_bytes": 8192
+  },
+  "scope_policy": {
+    "enforcement": "best_effort"
+  }
+}

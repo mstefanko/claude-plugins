@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "id": "dogfood-artifacts-telemetry-split.part-1",
+  "type": "analyze",
+  "goal": "Assess whether the research replay path and artifact-copy logic in internal/commands/researchcmd/run.go can be safely extracted into a reusable component, or hardened in place. Name the cohesive surface, current coupling points, and the trade-offs between extraction and in-place hardening.",
+  "background": "Bakeoff (this repo) is a Go CLI that orchestrates competitive research and build runs. internal/commands/researchcmd/run.go contains the research-mode entrypoint: it parses flags, loads/validates the work order, optionally replays an existing run, fans out provider invocations, captures artifacts, drives the judge, and writes manifest/decision outputs. Two adjacent concerns inside that file are of interest: (a) the replay path that reconstructs prior provider artifacts when replay is used, and (b) the artifact-copy logic that materializes provider outputs into runs/<run-id>/providers/<id>/. Questions: Is there a cohesive extraction boundary (e.g., a replay or artifact-staging package) that would reduce coupling without changing behavior? What is currently coupled (flag parsing, logging, manifest emission, working-directory assumptions, error-handling shape)? If extraction is not warranted, what in-place hardening (clearer invariants, error paths, telemetry, defensive checks against partial copies, idempotency around rerun) would reduce risk most? Compare both options against test debt, blast radius, and ongoing maintenance cost. Produce a concrete recommendation with named functions/structs and a sketch of the proposed boundary or hardening checklist. Treat run.go as the primary evidence; reference adjacent helpers (manifest writers, copy utilities, runs.go, replay support files) where needed. Focus on design analysis only; do not propose code edits in this report.",
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "sonnet",
+      "scope": "codebase",
+      "effort": "high"
+    },
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "scope": "codebase",
+      "effort": "high"
+    }
+  ],
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  },
+  "scope_policy": {
+    "enforcement": "best_effort"
+  }
+}

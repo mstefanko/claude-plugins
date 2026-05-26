@@ -123,7 +123,7 @@ func TestRunDoctorJSONReportsJudgeFamilyAdvisory(t *testing.T) {
 		t.Fatalf("claude family = %#v", claude["family"])
 	}
 	advisory := report["judge_family_advisory"].(map[string]any)
-	if advisory["judge_backend"] != "claude" || advisory["judge_family"] != provider.ProviderFamilyAnthropic || advisory["relation"] != provider.JudgeFamilyRelationSameAsSome || advisory["advisory_only"] != true {
+	if advisory["judge_backend"] != "claude" || advisory["judge_family"] != provider.ProviderFamilyAnthropic || advisory["relation"] != provider.JudgeFamilyRelationSameAsSome || advisory["advisory_only"] != true || advisory["independence_not_measured_yet"] != true {
 		t.Fatalf("judge family advisory = %#v", advisory)
 	}
 	if got := stringSliceFromJSON(t, advisory["provider_backends"]); !reflect.DeepEqual(got, []string{"claude", "codex"}) {

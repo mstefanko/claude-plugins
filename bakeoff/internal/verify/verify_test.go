@@ -1,11 +1,13 @@
 package verify
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/manifest"
 	triagepkg "github.com/mstefanko/claude-plugins/bakeoff/internal/triage"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
 )
@@ -48,7 +50,7 @@ func TestRunRejectsUnsafeManifestPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	manifestText := `{
-  "schema_version": 1,
+  "schema_version": ` + fmt.Sprint(manifest.SchemaVersion) + `,
   "run_id": "` + filepath.Base(runDir) + `",
   "artifact_fingerprints": {
     "../../../etc/passwd": {"sha256": "abc", "size_bytes": 1}
@@ -170,7 +172,7 @@ func writeVerifyBaseRun(t *testing.T) string {
 		"decision.json":   map[string]any{"decision_kind": "winner"},
 		"meta.json":       map[string]any{"type": "gather"},
 		"manifest.json": map[string]any{
-			"schema_version":        1,
+			"schema_version":        manifest.SchemaVersion,
 			"run_id":                filepath.Base(runDir),
 			"type":                  "gather",
 			"artifact_fingerprints": map[string]any{},

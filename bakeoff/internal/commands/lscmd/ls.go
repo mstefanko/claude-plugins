@@ -71,7 +71,7 @@ func NewCmdLs(f commands.Factory, runF func(context.Context, *LsOptions) error) 
 	cmd.Flags().StringVar(&opts.Facet, "facet", "", "filter by facet id")
 	cmd.Flags().StringVar(&opts.TriageState, "triage-state", "", "filter by triage state")
 	cmd.Flags().StringVar(&opts.Type, "type", "", "filter by run type")
-	cmd.Flags().StringVar(&opts.SourceRun, "source-run", "", "filter escalation rows by source run id")
+	cmd.Flags().StringVar(&opts.SourceRun, "source-run", "", "filter rows by source run id")
 	cmd.Flags().IntVar(&opts.Limit, "limit", 0, "limit rows after filtering; 0 returns no rows")
 	cmd.Flags().BoolVar(&opts.History, "history", false, "emit a compact recent-run history with work-order summaries")
 	return cmd

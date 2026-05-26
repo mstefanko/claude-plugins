@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "id": "dogfood-manifest-telemetry-lenses.docs-tests",
+  "type": "gather",
+  "goal": "Review documentation accuracy and test coverage for the uncommitted local manifest telemetry change.",
+  "background": [
+    "Repository root: /Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins (bakeoff plugin under bakeoff/).",
+    "Base ref: HEAD.",
+    "Review target: uncommitted working-tree changes (git diff HEAD).",
+    "Branch: main.",
+    "Changed files (tracked, modified), paths relative to bakeoff/ context root:",
+    "  - README.md",
+    "  - docs/cli-reference.md",
+    "  - internal/commands/doctorcmd/doctor_test.go",
+    "  - internal/manifest/manifest.go",
+    "  - internal/manifest/manifest_test.go",
+    "Primary surface for this lens: README.md, docs/cli-reference.md, internal/manifest/manifest_test.go, internal/commands/doctorcmd/doctor_test.go.",
+    "Companion lenses run separately: correctness (code defects in manifest.go) and telemetry-schema (manifest contract). This lens focuses ONLY on doc accuracy and test quality/coverage — not production code design."
+  ],
+  "facet": {
+    "id": "code-review",
+    "kind": "generic",
+    "focus": "Confirm docs describe the changed behavior accurately and tests cover it meaningfully.",
+    "include": [
+      "doc accuracy: do README and docs/cli-reference.md describe the new manifest telemetry behavior correctly and match the code changes",
+      "doc completeness: are user-visible new fields, flags, or behaviors documented",
+      "doc consistency: terminology, field names, and severity vocabulary used uniformly between docs and code",
+      "test coverage: are new manifest behaviors covered by manifest_test.go cases (happy path, empty input, multi-input, ordering, edge values)",
+      "test quality: are assertions specific (exact field/value checks) rather than incidental, are subtests named meaningfully",
+      "test independence: do new tests depend on undocumented ordering or shared state",
+      "missing negative tests: invalid inputs, conflicting severities, malformed entries",
+      "doctor_test.go change: does the test continue to assert what the docs/README claim about doctor output"
+    ],
+    "exclude": [
+      "production code design or correctness critique (covered by correctness lens)",
+      "telemetry schema/contract critique (covered by telemetry-schema lens)",
+      "style preferences without project convention evidence",
+      "speculation without file:line evidence"
+    ]
+  },
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "sonnet",
+      "scope": "codebase",
+      "effort": "high"
+    },
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "scope": "codebase",
+      "effort": "high"
+    }
+  ],
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  },
+  "scope_policy": {
+    "enforcement": "best_effort"
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "id": "dogfood-manifest-telemetry-lenses.telemetry-schema",
+  "type": "gather",
+  "goal": "Review the manifest telemetry schema/contract changes in the uncommitted local diff for shape stability, naming, severity semantics, and backward compatibility.",
+  "background": [
+    "Repository root: /Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins (bakeoff plugin under bakeoff/).",
+    "Base ref: HEAD.",
+    "Review target: uncommitted working-tree changes (git diff HEAD).",
+    "Branch: main.",
+    "Changed files (tracked, modified), paths relative to bakeoff/ context root:",
+    "  - README.md",
+    "  - docs/cli-reference.md",
+    "  - internal/commands/doctorcmd/doctor_test.go",
+    "  - internal/manifest/manifest.go",
+    "  - internal/manifest/manifest_test.go",
+    "Primary surface for this lens: internal/manifest/manifest.go and the consumer side referenced by internal/commands/doctorcmd/doctor_test.go.",
+    "Companion lenses run separately: correctness (code defects) and docs-tests (doc accuracy + test coverage). This lens focuses ONLY on telemetry schema, contract, and downstream coupling — not pure code defects or doc prose.",
+    "Known context: untracked work-order files reference 'manifest-telemetry-highest-severity', indicating the change likely adds a highest-severity field to manifest telemetry."
+  ],
+  "facet": {
+    "id": "code-review",
+    "kind": "generic",
+    "focus": "Evaluate the manifest telemetry schema changes for stability, clarity, and safe evolution.",
+    "include": [
+      "JSON/serialized field names, casing, and pluralization consistency with existing manifest fields",
+      "field types and nullability: are zero values, empty strings, or missing fields semantically distinguishable for downstream consumers",
+      "severity vocabulary: enum coverage, ordering semantics, tie-breaking rules, default for empty input",
+      "backward compatibility: do existing manifest consumers (doctor, history, inspect, downstream tooling) continue to parse correctly when the new field is absent or unknown",
+      "schema versioning: should schema_version or a manifest version bump accompany the new field",
+      "hidden coupling: any consumer code or fixtures that depend on the manifest shape and were not updated",
+      "documentation of the field contract (in code comments, struct tags, or doc files) versus implicit behavior"
+    ],
+    "exclude": [
+      "general correctness bugs outside the schema contract (covered by correctness lens)",
+      "documentation prose quality and test coverage gaps (covered by docs-tests lens)",
+      "style preferences without project convention evidence",
+      "large refactors unrelated to the changed schema surface",
+      "speculation without file:line evidence"
+    ]
+  },
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "sonnet",
+      "scope": "codebase",
+      "effort": "high"
+    },
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "scope": "codebase",
+      "effort": "high"
+    }
+  ],
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  },
+  "scope_policy": {
+    "enforcement": "best_effort"
+  }
+}

@@ -476,6 +476,58 @@ capabilities, provider family, and build preflight details when requested. It
 also includes `judge_family_advisory`, an advisory-only provider-family
 relation for the default generated judge and selected default pair.
 
+`judge_family_advisory` has this shape:
+
+- `judge_backend`: default generated judge backend.
+- `judge_family`: provider/catalog family for the judge backend.
+- `provider_backends`: selected default provider pair.
+- `relation`: one of `same_as_all`, `same_as_some`, `different_from_all`, or
+  `unknown`.
+- `ready_non_contestant_judges`: ready known backends whose provider family is
+  not in the selected provider pair.
+- `advisory_only`: always `true`; doctor does not change defaults.
+- `independence_not_measured_yet`: always `true`; provider-family difference is
+  metadata, not a measured independence guarantee.
+
+Human output prints a `judge family advisory` line only when the default judge
+has relation `same_as_some` or `same_as_all` and at least one ready
+non-contestant judge backend exists. Otherwise the JSON field remains available
+for tooling, but the human report stays quiet.
+
+## Manifest Telemetry
+
+Each completed run writes `manifest.json.telemetry` for local-only analysis.
+Telemetry schema version `2` uses stable structural keys and meaningful nulls:
+nullable keys such as `source_run_id`, `rerun_mode`,
+`judge.family`, and `triage.highest_severity` remain present when their value is
+unknown or inapplicable.
+
+`route` records the resolved run type, facet id, escalation mode, and source
+type. Run type follows the work order, with escalation runs reported as
+`escalation`. Judge-only reruns also project `source_run_id` and
+`rerun_mode: "judge_only"` at the manifest and telemetry top level, and
+`bakeoff ls --json` includes those fields when present.
+
+`providers.backends` preserves work-order order and duplicate participants.
+`providers.count` is the participant count, not a deduped backend count.
+`providers.families` is a sorted set of known provider families; unknown
+backends are excluded from that set, while `family_diversity: "unknown"` records
+that at least one backend was not in the catalog. Otherwise
+`family_diversity` is `single` or `mixed`.
+
+`judge` records the configured or resolved judge backend/family, family
+relation to the provider set, whether the judge ran and completed,
+`selection_basis`, winner backend/family, `order_maps`, `judge_passes`, and
+whether a position swap was used. A missing judge backend has null family and
+family relation; an unrecognized non-empty judge backend uses family
+`unknown`.
+
+`artifacts` records local counts such as prompt trims and output truncation
+events. Build diagnostics are authoritative when present. `triage` records
+state, item count, and highest actionable severity. Highest severity only rolls
+up `real_issue` items; false positives, evidence gaps, and needs-repro items do
+not raise the actionable severity.
+
 ## JSON Modes
 
 These commands have `--json` output intended for scripts:

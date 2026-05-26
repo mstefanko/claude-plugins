@@ -76,6 +76,9 @@ Two invariants are load-bearing enough to repeat here:
   probe the CLI (`bakeoff providers list`, `bakeoff --help`,
   `bakeoff init`) to discover them. Use `bakeoff doctor --json` only for
   current-machine readiness and fallback-pair selection.
+  If ToolSearch cannot find the context-mode MCP tools, fall back to a single
+  bounded batched shell probe and summarize the output. Do not replace the one
+  batched pass with sequential per-question Bash, Read, or Grep probes.
 - **No `Write` before approval.** Drafting must show the compact
   preview and wait for the preview's exact approval. Single-work-order
   previews accept `yes`, `approve`, or `run it`; multi-file split or

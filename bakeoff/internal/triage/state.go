@@ -315,6 +315,95 @@ func BuildFindingIndex(reportText string) ([]map[string]string, bool) {
 	return entries, len(entries) > 0
 }
 
+func BuildEscalationFindingIndex(decision map[string]any) []map[string]string {
+	if decision == nil {
+		return nil
+	}
+	if jsonutil.StringValue(decision["mode"]) != "escalation" && !strings.HasPrefix(jsonutil.StringValue(decision["decision_kind"]), "escalation_") {
+		return nil
+	}
+	out := []map[string]string{}
+	usedIDs := map[string]bool{}
+	appendEscalationFindings(&out, usedIDs, decision, "top", "missed_material", "Missed Material", "MISSED")
+	appendEscalationFindings(&out, usedIDs, decision, "top", "material_errors", "Material Errors", "ERROR")
+	for _, key := range []string{"assessment", "dispute"} {
+		obj, _ := decision[key].(map[string]any)
+		appendEscalationFindings(&out, usedIDs, obj, key, "missed_material", "Missed Material", "MISSED")
+		appendEscalationFindings(&out, usedIDs, obj, key, "material_errors", "Material Errors", "ERROR")
+	}
+	return out
+}
+
+func appendEscalationFindings(out *[]map[string]string, usedIDs map[string]bool, container map[string]any, location string, field string, section string, idPrefix string) {
+	if container == nil {
+		return
+	}
+	for i, item := range jsonutil.ListValue(container[field]) {
+		obj, _ := item.(map[string]any)
+		if obj == nil {
+			continue
+		}
+		sourceID := jsonutil.StringValue(obj["source_finding_id"])
+		id := sourceID
+		if id == "" || strings.HasPrefix(id, "F-") {
+			id = fmt.Sprintf("ESC-%s-%s-%03d", strings.ToUpper(location), idPrefix, i+1)
+		}
+		id = uniqueEscalationFindingID(id, usedIDs)
+		entry := map[string]string{
+			"id":      id,
+			"section": section,
+			"source":  "escalation_provider",
+			"bucket":  field,
+			"text":    escalationFindingText(obj),
+		}
+		if sourceID != "" {
+			entry["source_finding_id"] = sourceID
+		}
+		*out = append(*out, entry)
+	}
+}
+
+func uniqueEscalationFindingID(id string, used map[string]bool) string {
+	if !used[id] {
+		used[id] = true
+		return id
+	}
+	for suffix := 2; ; suffix++ {
+		candidate := fmt.Sprintf("%s-%d", id, suffix)
+		if !used[candidate] {
+			used[candidate] = true
+			return candidate
+		}
+	}
+}
+
+func escalationFindingText(obj map[string]any) string {
+	parts := []string{}
+	for _, key := range []string{"claim", "challenge_type", "effect", "confidence", "rationale", "counterexample"} {
+		if value := jsonutil.StringValue(obj[key]); value != "" {
+			parts = append(parts, key+": "+value)
+		}
+	}
+	if evidence := stringItems(obj["evidence"]); len(evidence) > 0 {
+		parts = append(parts, "evidence: "+strings.Join(evidence, "; "))
+	}
+	if counterevidence := stringItems(obj["counterevidence"]); len(counterevidence) > 0 {
+		parts = append(parts, "counterevidence: "+strings.Join(counterevidence, "; "))
+	}
+	return strings.Join(parts, " | ")
+}
+
+func stringItems(value any) []string {
+	out := []string{}
+	for _, item := range jsonutil.ListValue(value) {
+		text := jsonutil.StringValue(item)
+		if text != "" {
+			out = append(out, text)
+		}
+	}
+	return out
+}
+
 var triageActionRE = regexp.MustCompile(`(?i)\b(?:bug|bugs|fix|fixes|fixed|gap|gaps|missing|invalid|schema_error|drift|incorrect|mismatch|misleading|ambiguous|unclear|incomplete|omits?|lacks?|stale|contradicts?|contradiction|confusing|unrecoverable)\b`)
 var primaryExplanationActionRE = regexp.MustCompile(`(?i)\b(?:bug|bugs|fix|fixes|gap|gaps|missing coverage|missing test|missing tests|no test|no tests|untested|incorrect|mismatch|drift|risk|risks|risky|omits?|should)\b`)
 var primaryExplanationDocDriftRE = regexp.MustCompile(`(?i)\b(?:README|docs?|documentation)\b.*\b(?:but|omits?|missing|drift|mismatch|incorrect)\b`)
@@ -375,6 +464,8 @@ func SelectTriageSourceFindings(findings []map[string]string, facetID string) ([
 			skipped = append(skipped, withSkipReason(finding, "out_of_facet"))
 		case facetID != "" && section == "Findings":
 			selected = append(selected, finding)
+		case section == "Missed Material" || section == "Material Errors":
+			selected = append(selected, finding)
 		case section == "Actionable Follow-ups" || section == "Conflicts" || section == "Unknowns":
 			selected = append(selected, finding)
 		case section == "Primary Explanation":
@@ -390,6 +481,18 @@ func SelectTriageSourceFindings(findings []map[string]string, facetID string) ([
 		}
 	}
 	return selected, skipped
+}
+
+func SummarizeFindingStreams(findings []map[string]string) map[string]int {
+	out := map[string]int{}
+	for _, finding := range findings {
+		source := finding["source"]
+		if source == "" {
+			source = "source_run"
+		}
+		out[source]++
+	}
+	return out
 }
 
 func SummarizeSourceFindingFilter(sourceFindings []map[string]string, skippedFindings []map[string]string) map[string]int {

@@ -169,7 +169,7 @@ func TestParseProviderFlags(t *testing.T) {
 func TestParseGateFlags(t *testing.T) {
 	t.Run("rejects missing separator", func(t *testing.T) {
 		_, err := parseGateFlags([]string{"foo"})
-		if err == nil || !strings.Contains(err.Error(), "<id>=<command>") {
+		if err == nil || !strings.Contains(err.Error(), "<id>=<command>") || !strings.Contains(err.Error(), "for example tests=foo") {
 			t.Fatalf("expected missing separator error, got %v", err)
 		}
 	})

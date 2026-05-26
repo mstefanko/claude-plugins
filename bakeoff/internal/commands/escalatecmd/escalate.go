@@ -168,10 +168,10 @@ func Run(ctx context.Context, f commands.Factory, opts *EscalateOptions) error {
 	if err := os.MkdirAll(runDir, 0o700); err != nil {
 		return &apperror.RuntimeError{Err: err}
 	}
-	if err := ledger.UpdateLatest(opts.Out, runID); err != nil {
+	if err := writeEscalationScaffold(src, added, opts, runDir); err != nil {
 		return &apperror.RuntimeError{Err: err}
 	}
-	if err := writeEscalationScaffold(src, added, opts, runDir); err != nil {
+	if err := ledger.UpdateLatest(opts.Out, runID); err != nil {
 		return &apperror.RuntimeError{Err: err}
 	}
 	if humanOutput {
@@ -1058,7 +1058,7 @@ func triageClassificationCounts(items []any) map[string]int {
 }
 
 func copyReviewContextArtifacts(sourceRunDir string, runDir string) error {
-	names := []string{"source-work-order.json", "review-context.md", "review-context.json"}
+	names := manifest.ReviewContextArtifacts
 	present := []string{}
 	missing := []string{}
 	for _, name := range names {
@@ -1080,7 +1080,7 @@ func copyReviewContextArtifacts(sourceRunDir string, runDir string) error {
 		if err != nil {
 			return err
 		}
-		if err := workorder.WriteTextAtomic(filepath.Join(runDir, name), string(data)); err != nil {
+		if err := fsutil.WriteFileAtomic(filepath.Join(runDir, name), data, 0o600); err != nil {
 			return err
 		}
 	}

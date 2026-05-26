@@ -81,7 +81,7 @@ func TestHistorySortsLimitsAndSummarizesDisplayedRows(t *testing.T) {
 	got := stdout.String()
 	for _, want := range []string{
 		"Recent Bakeoff runs (3 total, showing 2 newest):",
-		"| 2026-05-20 10:00 | new-run | build | - | pick_winner | no | New goal with a \\| pipe and extra whitespace for table safety |",
+		"| 2026-05-20 10:00 | new-run | build | - | pick_winner | yes | New goal with a \\| pipe and extra whitespace for table safety |",
 		"| 2026-05-19 10:00 | old-run | gather | - | structured_union | no | Old goal |",
 		"Open one with `/bakeoff:inspect <run-id>`.",
 	} {
@@ -170,6 +170,32 @@ func TestJSONRowsProjectEscalationFieldsAndSourceRunFilter(t *testing.T) {
 	}
 }
 
+func TestJSONRowsProjectJudgeOnlyRerunFields(t *testing.T) {
+	outDir := filepath.Join(t.TempDir(), "runs")
+	writeRun(t, outDir, runSpec{ID: "source", Type: "gather", FinishedAt: "2026-05-19T10:00:00Z", Decision: "structured_union", Triage: "no", Goal: "source"})
+	writeRun(t, outDir, runSpec{ID: "retry", Type: "gather", FinishedAt: "2026-05-19T10:01:00Z", Decision: "structured_union", Triage: "no", Goal: "retry", SourceRunID: "source", RerunMode: "judge_only"})
+
+	var stdout bytes.Buffer
+	f := testFactory{streams: output.NewStreams(&stdout, &bytes.Buffer{})}
+	err := runLs(context.Background(), f, &LsOptions{Out: outDir, JSON: true, SourceRun: "source"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		Runs []map[string]any `json:"runs"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Runs) != 1 {
+		t.Fatalf("filtered rows = %#v", payload.Runs)
+	}
+	row := payload.Runs[0]
+	if row["run_id"] != "retry" || row["source_run_id"] != "source" || row["rerun_mode"] != "judge_only" {
+		t.Fatalf("rerun row = %#v", row)
+	}
+}
+
 func TestSortRowsByFinishedAt(t *testing.T) {
 	t.Run("happy path newest first", func(t *testing.T) {
 		rows := []map[string]any{
@@ -251,6 +277,7 @@ type runSpec struct {
 	SourceType     string
 	EscalationMode string
 	AddedProvider  string
+	RerunMode      string
 }
 
 func writeRun(t *testing.T, outDir string, spec runSpec) {
@@ -269,8 +296,13 @@ func writeRun(t *testing.T, outDir string, spec runSpec) {
 		"artifacts":      map[string]string{"report": "report.md"},
 		"triage":         map[string]any{"state": spec.Triage},
 	}
-	if spec.Type == "escalation" {
+	if spec.SourceRunID != "" {
 		manifestDoc["source_run_id"] = spec.SourceRunID
+	}
+	if spec.RerunMode != "" {
+		manifestDoc["rerun_mode"] = spec.RerunMode
+	}
+	if spec.Type == "escalation" {
 		manifestDoc["source_type"] = spec.SourceType
 		manifestDoc["escalation_mode"] = spec.EscalationMode
 		manifestDoc["added_provider"] = spec.AddedProvider

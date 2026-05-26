@@ -232,9 +232,6 @@ func RunResearchJudgeOnly(ctx context.Context, f commands.Factory, opts *Researc
 	if err := os.MkdirAll(runDir, 0o700); err != nil {
 		return &apperror.RuntimeError{Err: err}
 	}
-	if err := ledger.UpdateLatest(opts.Out, runID); err != nil {
-		return &apperror.RuntimeError{Err: err}
-	}
 	if err := copyRequiredRunFile(opts.SourceRunDir, runDir, "work-order.json"); err != nil {
 		return &apperror.RuntimeError{Err: err}
 	}
@@ -242,6 +239,9 @@ func RunResearchJudgeOnly(ctx context.Context, f commands.Factory, opts *Researc
 		return &apperror.RuntimeError{Err: err}
 	}
 	if err := copyProviderArtifactDirs(wo, opts.SourceRunDir, runDir); err != nil {
+		return &apperror.RuntimeError{Err: err}
+	}
+	if err := ledger.UpdateLatest(opts.Out, runID); err != nil {
 		return &apperror.RuntimeError{Err: err}
 	}
 	workerResults, err := loadResearchWorkerResultsFromArtifacts(wo, runDir)
@@ -853,10 +853,13 @@ func copyRequiredRunFile(sourceRunDir string, runDir string, name string) error 
 func copyProviderArtifactDirs(wo *workorder.WorkOrder, sourceRunDir string, runDir string) error {
 	for _, participant := range wo.Providers {
 		source := filepath.Join(sourceRunDir, "providers", participant.ID)
-		target := filepath.Join(runDir, "providers", participant.ID)
 		if err := requireProviderReplayArtifacts(source, participant.ID); err != nil {
 			return err
 		}
+	}
+	for _, participant := range wo.Providers {
+		source := filepath.Join(sourceRunDir, "providers", participant.ID)
+		target := filepath.Join(runDir, "providers", participant.ID)
 		if err := copyDirectoryTree(source, target); err != nil {
 			return err
 		}
@@ -954,7 +957,7 @@ func copyFile(source string, target string) error {
 	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(target, data, 0o600)
+	return fsutil.WriteFileAtomic(target, data, 0o600)
 }
 
 func loadResearchWorkerResultsFromArtifacts(wo *workorder.WorkOrder, runDir string) (map[string]map[string]any, error) {
@@ -1007,7 +1010,7 @@ func readJSONObject(path string) (map[string]any, error) {
 }
 
 func copyReplayContextArtifacts(sourceRunDir string, runDir string) error {
-	names := []string{"source-work-order.json", "review-context.md", "review-context.json"}
+	names := manifest.ReviewContextArtifacts
 	present := []string{}
 	missing := []string{}
 	for _, name := range names {
@@ -1029,12 +1032,7 @@ func copyReplayContextArtifacts(sourceRunDir string, runDir string) error {
 		return fmt.Errorf("source run has partial review-context artifact set; missing: %s", strings.Join(missing, ", "))
 	}
 	for _, name := range names {
-		source := filepath.Join(sourceRunDir, name)
-		data, err := os.ReadFile(source)
-		if err != nil {
-			return err
-		}
-		if err := workorder.WriteTextAtomic(filepath.Join(runDir, name), string(data)); err != nil {
+		if err := copyFile(filepath.Join(sourceRunDir, name), filepath.Join(runDir, name)); err != nil {
 			return err
 		}
 	}

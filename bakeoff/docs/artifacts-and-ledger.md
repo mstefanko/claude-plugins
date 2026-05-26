@@ -1,7 +1,7 @@
 # Artifacts And Ledger
 
 Bakeoff writes run ledgers under `<out>/<run-id>`, with `runs` as the default
-output directory. A `latest` pointer is updated when a run starts.
+output directory. A `latest` pointer is updated when a run becomes active.
 
 The ledger is the handoff. Inspect it instead of relying on terminal output.
 
@@ -15,7 +15,7 @@ Every completed run should have:
 | `decision.json` | Machine-readable decision record. |
 | `meta.json` | Run metadata: type, facet, terminal decision kind, canonical winner, judge status, exit code, timestamps, cwd, versions, scope policy, resolved models, input hashes. |
 | `report.md` | Human-readable report. |
-| `manifest.json` | Manifest with artifact paths and SHA-256 fingerprints. |
+| `manifest.json` | Manifest with artifact paths, SHA-256 fingerprints, and local telemetry fields documented in [Manifest Telemetry](cli-reference.md#manifest-telemetry). |
 
 Build runs also require `build-context.json`.
 

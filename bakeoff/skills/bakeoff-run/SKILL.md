@@ -80,9 +80,10 @@ careful path, split, and multi-lens.
   current-machine readiness and fallback-pair selection.
 - **No `Write` before approval.** Drafting must show the compact
   preview and wait for the preview's exact approval. Single-work-order
-  previews accept `yes`, `approve`, or `run it`; multi-file split or
-  multi-lens previews accept only displayed choices such as `write and
-  run`, `sequential`, or `parallel`. Only then issue the file-mutating tool call.
+  previews accept `yes`, `approve`, or `run it`; `show`, `edit`, and
+  `cancel` are commands, not approval. Multi-file split or multi-lens previews
+  accept only displayed choices such as `write and run`, `sequential`, or
+  `parallel`. Only then issue the file-mutating tool call.
 
 Proposal is not approval. Repo exploration may support a read-only preview, but
 it does not authorize writing or running. `bakeoff draft-build` is
@@ -205,31 +206,39 @@ escalation is unsupported.
 Escalation previews for `witness` and `dispute` must disclose before approval:
 "advisory only - cannot pick a new winner" and "escalation triage operates on
 the escalation provider's new findings, not the source run's findings." For
-cheap advisory modes, include the cost line in the first preview and accept a
-single `yes`; `independent` keeps the fuller dry-run/cost gate.
+cheap advisory modes, include the cost line in the first preview and accept
+`yes`, `approve`, or `run it`; `independent` keeps the fuller dry-run/cost
+gate. If the user switches mode after seeing a preview, acknowledge it before
+the revised preview: `Switched to dispute mode. New preview below.`
 For code-review escalation, leave triage enabled unless the user supplied
 `--no-triage`.
 
 For build fast-path drafts, run `bakeoff draft-build` with the extracted id,
 goal, acceptance criteria, edit scope, gate verifier, optional base/protected
 paths, and exactly two `--provider` flags when the user explicitly chose a pair
-or doctor selected a fallback pair. Pass those flags in the same order you will
-show in the preview; `draft-build` preserves the two-provider order. With zero
-`--provider` flags the command stays deterministic and emits the canonical
-Claude+Codex pair. Use stdout as the preview source; the command owns the
-canonical build shape, provider/judge defaults, budgets, `build.verify[].argv`,
-and self-validation. Metric verifier drafts, generated fixtures, and protected
-benchmark harnesses still use careful manual drafting.
+or doctor selected a fallback pair. Canonical flags are `--id`, `--goal`,
+`--acceptance`, `--scope`, `--gate`, `--protected-path`, `--base-ref`, and
+`--provider`; gate flags use `--gate <id>=<command>`, for example
+`--gate "tests=go test ./internal/cache"`. Pass provider flags in the same
+order you will show in the preview; `draft-build` preserves the two-provider
+order. With zero `--provider` flags the command stays deterministic and emits
+the canonical Claude+Codex pair. Use stdout as the preview source; the command
+owns the canonical build shape, provider/judge defaults, budgets,
+`build.verify[].argv`, and self-validation. Metric verifier drafts, generated
+fixtures, and protected benchmark harnesses still use careful manual drafting.
 
 For gather/code-review, compare, and analyze drafts, copy field names from
-`examples/*.work-order.json`. Avoid schema drift: use `providers[].backend`
-and `providers[].id`; use `scope: "codebase"`, not `kind`, `role`, or
-`"local"`; use `judge: {backend, model, effort}`; use `budgets` keys
-`wall_clock_seconds`, `max_output_bytes`, `heartbeat_seconds`,
+`examples/*.work-order.json`. Avoid schema drift: use `providers[].id`,
+`providers[].backend`, and `providers[].model`; use `scope: "codebase"`, not
+`kind`, `role`, or `"local"`; use `judge: {backend, model, effort}`; use
+`budgets` keys `wall_clock_seconds`, `max_output_bytes`, `heartbeat_seconds`,
 `output_cap_grace_seconds`, and `max_output_overrun_bytes`; use nested
 `build.verify[]` with `argv: [...]`; put criteria in `background`; use integer
 `schema_version: 1`. For code-review facets, use `facet.kind: "generic"` and
-write `facet.include` / `facet.exclude` as descriptive criteria, not path globs.
+write `facet.focus` as one string of 500 characters or fewer with no backticks,
+angle brackets, or `</facet>`; write `facet.include` / `facet.exclude` as
+descriptive criteria, not path globs. Use `examples/review.work-order.json` as
+the code-review facet example.
 Non-build and manual build drafts should internally validate before preview
 when practical, but the enforced safety gate is the on-disk
 `bakeoff validate` after approval.
@@ -274,8 +283,8 @@ verifier command, explicit edit boundary, any non-`HEAD` base, no metric
 protected-path discovery, no split/multi-lens/sequential plan, no mode flag
 conflict, no web/secrets/auth material, and no missing facts. Run preflight,
 parse flags, run `bakeoff draft-build`, show a compact preview, wait for
-single-work-order approval (`yes`, `y`, `approve`, `run it`, or `write and
-run`), then write, validate, and run `bakeoff build`.
+single-work-order approval (`yes`, `approve`, or `run it`), then write,
+validate, and run `bakeoff build`.
 
 Do not fast-path when acceptance criteria, gate verifier, scope, type, metric
 direction/protected paths, generated fixture/golden constraints, review scope,
@@ -310,18 +319,24 @@ providers, judge, budget, scope policy, goal, short background summary, and
 command. Bold or visually anchor the mutation target path as
 `./<basename>.work-order.json`. Note that the run id is assigned by the CLI on
 launch unless a `--run-id` was supplied; preview-time id is the file basename.
-Include full JSON only if at most 120 lines and 10 KB; otherwise say `show` can
-print it. For build previews, include `Why this loop: build-verifier path`.
-This line is for `/bakeoff:run` build drafting only, not escalation.
+If `--run-id` was supplied, say the run id is fixed by that flag. Mark
+default-applied fields with `(default)` where helpful, including triage on,
+provider and judge effort, `scope_policy.enforcement`, inferred base ref, and
+background-run conversion. Include full JSON only if at most 120 lines and
+10 KB; otherwise say `show` can print it. For build previews, include
+`Why this loop: build-verifier path`. This line is for `/bakeoff:run` build
+drafting only, not escalation.
 
 Choice-label conventions: `yes`, `approve`, and `run it` accept every approved
 single-work-order preview. Mode-specific aliases such as `approve witness` are
 optional and shown only as "or" alongside base verbs. `show` prints JSON; it is
-not an accept token and belongs on its own line. `inspect` opens or prints an
-existing report, not the draft JSON. Scoped variants use `<verb>: <scope>`.
-Every preview ends with "Reply `cancel` to discard this draft." If the user
-edits, asks, or replies ambiguously, revise or clarify and show an updated
-preview before writing.
+not an accept token and belongs on its own line. `edit` revises the draft and
+belongs with non-approval commands. If a judge family advisory names ready
+non-contestant judges, show `swap judge to <backend>` as a non-mutating preview
+command. `inspect` opens or prints an existing report, not the draft JSON.
+Scoped variants use `<verb>: <scope>`. Every preview ends with "Reply `cancel`
+to discard this draft." If the user edits, asks, or replies ambiguously, revise
+or clarify and show an updated preview before writing.
 
 After approval, write only `./<id>.work-order.json`. If the filename or
 `runs/<id>` exists, append the smallest numeric suffix (`-2`, `-3`, ...);
@@ -401,7 +416,10 @@ the user explicitly approves all lenses. Do not offer parallel for `run all
 lenses` in this implementation. Lens presets and the summary template live in
 `references/run-appendix.md`; map SQL injection to `security`, accessibility
 to `ux`, and allow narrow custom kebab slugs while asking one clarification
-for vague lenses like `quality` or `everything`.
+for vague lenses like `quality` or `everything`. When normalizing a requested
+lens label with spaces, slashes, dots, underscores, or uppercase, surface the
+rename in preview, for example: `Note: lens 'docs/tests' was normalized to
+'docs-tests' for run-id and label compatibility.`
 
 For each lens, draft a normal review work order: `type: "gather"`,
 `facet.id: "code-review"`, shared providers/judge/budgets/scope/base/diff, and
@@ -472,9 +490,11 @@ child logs when a child failed or JSON is missing. Always attempt to write
 `<out>/<base>.multi-lens-summary.md`, with numeric collision suffixes, after
 all sequentially completed or parallel-launched children settle. Include every
 requested lens, run id, report path when present, triage path/state, result
-class and exit code, triage counts when available (`real_issue`,
-`needs_repro`, evidence gaps, false positives, deferred, documented, and
-ignored items), most actionable findings by lens, overlap, clean lenses,
+class and exit code, triage counts when available. Classifications are
+`real_issue`, `false_positive`, `already_fixed`, `needs_repro`,
+`evidence_gap`, `plan_doc_drift`, and `product_decision`; recommended actions
+are `fix_now`, `document`, `defer`, `ignore`, and `reproduce`. Include most
+actionable findings by lens, overlap, clean lenses,
 caveats, explicit `bakeoff show <run-id>` commands, the summary path, and a
 note that `latest` may point to any one child and is not the group. If triage
 is disabled, missing, stale, dry-run, failed, or only recommended, state that
@@ -491,9 +511,10 @@ invent findings, and preserve source lens and run id.
 
 ## Execution And Summary
 
-Default interactive runs keep CLI heartbeats. Use `--json --quiet` only when
-the user asks for quiet or machine-readable output, except for parallel
-research children.
+Default interactive runs keep CLI heartbeats, but host backgrounding can hide
+live heartbeats for long-budget runs; mention this when a run is launched
+asynchronously. Use `--json --quiet` only when the user asks for quiet or
+machine-readable output, except for parallel research children.
 
 On exit `0`, `3`, or `4`, read artifacts and summarize. Exit `3` means a
 completed run with unresolved disagreement, not launcher failure. Exit `4`
@@ -507,7 +528,9 @@ converge, recommend `bakeoff rerun <run-id> --judge-only` first. Mention a full
 for build runs.
 
 Post-run summaries lead with the verdict, not the run id:
-`Decision: <X wins | consensus | unresolved> - <one-line position>`. Then give
+`Decision: <X wins | consensus | merged | unresolved> - <one-line position>`.
+Use `merged` for `structured_union`; reserve `consensus` for compare/analyze
+decisions that explicitly report consensus. Then give
 run id, command or exit-code meaning, decision kind, report path, relevant
 triage path/state for code-review research, `bakeoff show <run-id>`, and for
 build runs the selected patch artifact only when

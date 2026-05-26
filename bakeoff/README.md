@@ -76,7 +76,7 @@ documented in [docs/release-publishing.md](docs/release-publishing.md).
 
 Codex install: this checkout ships `.codex-plugin/plugin.json`; verify the current Codex plugin flow in Codex docs.
 
-Natural-language requests draft a work order, show a compact review preview, and wait for explicit approval before writing or running. Short drafts include the full JSON inline; longer drafts show the planned work-order file and let you reply `show` to print the JSON before approving. For large requests, the plugin may suggest 2-3 separate work orders when the split is clean; each part is still a normal Bakeoff run. Eligible non-build splits can be approved with `parallel` after the preview to launch all parts at once; `write and run` or `sequential` keeps the existing one-after-another behavior. Explicit 2-3 lens review can also be run sequentially or in parallel after preview, and writes a short summary file after the lens runs finish. Sample work orders live in `examples/` (`gather`, `compare`, `analyze`, `review`, `build`).
+Natural-language requests draft a work order, show a compact review preview, and wait for explicit approval before writing or running. Single-work-order previews accept `yes`, `approve`, or `run it`; `show` prints the JSON, `edit` revises the draft, and `cancel` discards it. Short drafts include the full JSON inline; longer drafts show the planned work-order file and let you reply `show` to print the JSON before approving. For large requests, the plugin may suggest 2-3 separate work orders when the split is clean; each part is still a normal Bakeoff run. Eligible non-build splits can be approved with `parallel` after the preview to launch all parts at once; `write and run` or `sequential` keeps the existing one-after-another behavior. Explicit 2-3 lens review can also be run sequentially or in parallel after preview, and writes a short summary file after the lens runs finish. Sample work orders live in `examples/` (`gather`, `compare`, `analyze`, `review`, `build`).
 
 After a run finishes, `/bakeoff:run` may recommend one next normal work order
 when the artifacts make it obvious, such as drafting an implementation plan
@@ -89,6 +89,17 @@ plus `codex/gpt-5.5`, with `claude/opus` as judge. If Codex is missing and
 exactly one optional peer is ready, `/bakeoff:run` may draft Claude + that peer
 and call out the fallback in the preview. Use full model ids in the work order
 to pin exact versions.
+
+When the default judge shares provider-family metadata with one selected
+provider, `/bakeoff:run` may surface a compact judge family advisory from
+`bakeoff doctor`. The advisory is informational: it can name ready
+non-contestant judge backends such as Gemini or Copilot, but it does not
+auto-switch the judge, add `judge_policy`, or make validation fail. In
+`doctor --json`, `judge_family_advisory` includes `judge_backend`,
+`judge_family`, `provider_backends`, `relation`,
+`ready_non_contestant_judges`, `advisory_only`, and
+`independence_not_measured_yet`; `relation` is one of `same_as_all`,
+`same_as_some`, `different_from_all`, or `unknown`.
 
 ### Route Examples
 
@@ -260,7 +271,7 @@ runs/<run-id>/
 ├── work-order.json            # exact work order used
 ├── report.md                  # human-readable report
 ├── decision.json              # machine-readable decision
-├── manifest.json              # ledger integrity
+├── manifest.json              # ledger integrity and telemetry
 ├── providers/<provider-id>/
 │   ├── stdout, stderr, prompts
 │   └── build/                 # build runs only
@@ -275,6 +286,8 @@ runs/<run-id>/
     ├── citation_checks.json
     └── source_finding_filter.json
 ```
+
+Manifest telemetry fields are documented in [docs/cli-reference.md#manifest-telemetry](docs/cli-reference.md#manifest-telemetry).
 
 | Exit | Meaning |
 | --- | --- |
@@ -297,7 +310,7 @@ Slash commands:
 - `/bakeoff:escalate <run-id> --provider gemini --mode independent|witness|dispute --dry-run` — preview or run one post-run non-build provider escalation.
 - `/bakeoff:history [limit] [--out runs] [--facet ID] [--triage-state STATE] [--type TYPE]` — list recent runs with run ids and short goal summaries.
 - `/bakeoff:inspect [latest or run-id] [--bundle]` — open existing reports, decisions, triage, handoff, or source-plus-escalation bundles.
-- `/bakeoff:doctor [--skip-auth-probe] [--build] [--quiet]` — readiness check. Reports the canonical pair, optional providers, and any draft-time fallback. `--build` runs live edit probes.
+- `/bakeoff:doctor [--skip-auth-probe] [--build] [--quiet]` — readiness check. Reports the canonical pair, optional providers, provider-family metadata, any draft-time fallback, and a judge family advisory for the default generated judge when applicable. `--build` runs live edit probes.
 - `/bakeoff:uninstall` — remove plugin state, then guide manual plugin uninstall.
 
 Core CLI: `bakeoff draft-build`, `bakeoff validate`, `bakeoff research`, `bakeoff build`, `bakeoff rerun`, `bakeoff escalate`, `bakeoff ls`, `bakeoff show`, `bakeoff bundle`, `bakeoff triage`, `bakeoff doctor`. Full reference in [docs/cli-reference.md](docs/cli-reference.md).

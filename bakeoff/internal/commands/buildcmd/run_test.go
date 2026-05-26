@@ -412,6 +412,24 @@ func TestBuildResultLineSummarizesDecision(t *testing.T) {
 	}
 }
 
+func TestBuildStatusAndJudgePassDisagreementLines(t *testing.T) {
+	decision := map[string]any{
+		"decision_kind":   "tie",
+		"selection_basis": "none",
+		"stalled_at":      "selection",
+		"judge_passes": map[string]any{
+			"pass1": map[string]any{"canonical_winner": nil, "positional_winner": "tie"},
+			"pass2": map[string]any{"canonical_winner": "codex", "positional_winner": "A"},
+		},
+	}
+	if got := buildStatusLine(decision, 3); got != "stalled at selection (exit 3)" {
+		t.Fatalf("buildStatusLine = %q", got)
+	}
+	if got := buildJudgePassDisagreementLine(decision); got != "swapped pass disagreed (pass1=tie, pass2=codex) -> tie" {
+		t.Fatalf("buildJudgePassDisagreementLine = %q", got)
+	}
+}
+
 func TestRunBuildMutatesIsolatedWorktreesAndCapturesPatches(t *testing.T) {
 	repoDir := initBuildGitRepo(t)
 	root := t.TempDir()

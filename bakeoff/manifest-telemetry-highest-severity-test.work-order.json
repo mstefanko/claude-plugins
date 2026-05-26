@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "id": "manifest-telemetry-highest-severity-test",
+  "type": "build",
+  "goal": "Add a test-only assertion proving manifest telemetry triage.highest_severity is a faithful passthrough of the triage summary highest_severity for a completed triage run with severity-bearing items.",
+  "background": [
+    "Acceptance criteria:\n- internal/manifest/manifest_test.go gains at least one assertion that, for a completed triage run (final.json with status complete and items carrying severity), telemetry.triage.highest_severity equals the highest-ranked severity present in items per the existing high > medium > low > none ordering, and equals the value at the manifest's top-level triage.highest_severity (passthrough).\n- The new or extended test seeds at least one item with severity \"high\" so the asserted value is deterministic, and exercises the fully completed-triage path (final.json present, status complete, fresh input_hashes via triage.ComputeInputHashes, triage.md present).\n- All existing tests in ./internal/manifest/... continue to pass. Only test files under internal/manifest/ are touched; no production source files are modified. The telemetry JSON schema (field names, shapes, schema_version) is unchanged.",
+    "Edit boundary:\n- internal/manifest/manifest_test.go",
+    "Existing test TestWriteRunManifestTelemetryTriageStates covers the completed (\"yes\") triage path but only asserts state and item_count; TestWriteRunManifestMarksZeroSelectedTriage asserts highest_severity == nil only for an empty items array. The passthrough of triage.highest_severity through telemetry.triage.highest_severity for completed triage runs with severity-bearing items is currently unverified. telemetryTriageSummary (internal/manifest/manifest.go) copies triageSummary[\"highest_severity\"]; highestSeverity ranking is high > medium > low > none.",
+    "Bakeoff will capture candidate patches from isolated worktrees and will not apply them to this checkout."
+  ],
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "sonnet",
+      "effort": "high",
+      "scope": "codebase"
+    },
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "effort": "high",
+      "scope": "codebase"
+    }
+  ],
+  "scope_policy": {
+    "enforcement": "best_effort"
+  },
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "build": {
+    "base_ref": "HEAD",
+    "comparison_goal": "Prefer the patch that satisfies the acceptance criteria with the smallest maintainable change.",
+    "verify": [
+      {
+        "id": "manifest_tests",
+        "kind": "gate",
+        "argv": [
+          "sh",
+          "-c",
+          "go test ./internal/manifest/..."
+        ],
+        "wall_clock_seconds": 300,
+        "max_output_bytes": 60000
+      }
+    ]
+  },
+  "budgets": {
+    "wall_clock_seconds": 1200,
+    "max_output_bytes": 80000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 80000
+  }
+}

@@ -40,23 +40,26 @@ func (f validateTestFactory) Capabilities() *provider.CapabilityRegistry {
 	return provider.NewCapabilityRegistry(f.LookupProvider)
 }
 
-func TestValidateWarnsForUnprotectedRepoRelativeMetricCommand(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "build.work-order.json")
+func TestValidateRejectsUnprotectedRepoRelativeMetricCommand(t *testing.T) {
+	root := setupValidateMetricRepo(t)
+	path := filepath.Join(root, "build.work-order.json")
 	if err := writeValidateBuildWorkOrder(path, nil); err != nil {
 		t.Fatal(err)
 	}
 	var out, errOut bytes.Buffer
 	f := validateTestFactory{streams: output.NewStreams(&out, &errOut)}
-	if err := runValidate(context.Background(), f, &ValidateOptions{WorkOrder: path}); err != nil {
-		t.Fatal(err)
+	err := runValidate(context.Background(), f, &ValidateOptions{WorkOrder: path})
+	if err == nil || !strings.Contains(err.Error(), `metric verifier "score" runs repo-relative command "./scripts/bench-json" while build.protected_paths is empty`) {
+		t.Fatalf("expected protected_paths validation error, got %v\nstdout:\n%s", err, out.String())
 	}
-	if !strings.Contains(out.String(), `warning: metric verifier "score" runs repo-relative command "./scripts/bench-json" while build.protected_paths is empty`) {
-		t.Fatalf("missing warning:\n%s", out.String())
+	if strings.Contains(out.String(), "valid work order") {
+		t.Fatalf("invalid work order should not be printed as valid:\n%s", out.String())
 	}
 }
 
 func TestValidateSuppressesMetricCommandWarningWhenProtectedPathsExist(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "build.work-order.json")
+	root := setupValidateMetricRepo(t)
+	path := filepath.Join(root, "build.work-order.json")
 	if err := writeValidateBuildWorkOrder(path, []any{"scripts/bench-json"}); err != nil {
 		t.Fatal(err)
 	}
@@ -70,8 +73,53 @@ func TestValidateSuppressesMetricCommandWarningWhenProtectedPathsExist(t *testin
 	}
 }
 
+func TestValidateAllowsPathMetricCommandWithoutProtectedPaths(t *testing.T) {
+	root := setupValidateMetricRepo(t)
+	path := filepath.Join(root, "build.work-order.json")
+	if err := writeValidateBuildWorkOrderWithMetricArgv(path, nil, map[string]any{"name": "score", "direction": "higher", "min_delta_percent": 1}, []any{"go", "test", "./..."}); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	f := validateTestFactory{streams: output.NewStreams(&out, &errOut)}
+	if err := runValidate(context.Background(), f, &ValidateOptions{WorkOrder: path}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "valid work order") {
+		t.Fatalf("missing valid output:\n%s", out.String())
+	}
+}
+
+func TestValidateRejectsMissingProtectedPath(t *testing.T) {
+	root := setupValidateMetricRepo(t)
+	path := filepath.Join(root, "build.work-order.json")
+	if err := writeValidateBuildWorkOrder(path, []any{"scripts/typo.sh"}); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	f := validateTestFactory{streams: output.NewStreams(&out, &errOut)}
+	err := runValidate(context.Background(), f, &ValidateOptions{WorkOrder: path})
+	if err == nil || !strings.Contains(err.Error(), `build.protected_paths references missing path "scripts/typo.sh" under <context-root>`) {
+		t.Fatalf("expected missing protected path error, got %v\nstdout:\n%s", err, out.String())
+	}
+}
+
+func TestValidateRejectsMissingRepoRelativeMetricCommand(t *testing.T) {
+	root := setupValidateMetricRepo(t)
+	path := filepath.Join(root, "build.work-order.json")
+	if err := writeValidateBuildWorkOrderWithMetricArgv(path, []any{"scripts"}, map[string]any{"name": "score", "direction": "higher", "min_delta_percent": 1}, []any{"./scripts/missing-bench"}); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	f := validateTestFactory{streams: output.NewStreams(&out, &errOut)}
+	err := runValidate(context.Background(), f, &ValidateOptions{WorkOrder: path})
+	if err == nil || !strings.Contains(err.Error(), `metric verifier "score" runs missing repo-relative command "./scripts/missing-bench" under <context-root>`) {
+		t.Fatalf("expected missing metric command error, got %v\nstdout:\n%s", err, out.String())
+	}
+}
+
 func TestValidateWarnsWhenMetricMinRunsNeedsN(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "build.work-order.json")
+	root := setupValidateMetricRepo(t)
+	path := filepath.Join(root, "build.work-order.json")
 	if err := writeValidateBuildWorkOrderWithMetric(path, []any{"scripts/bench-json"}, map[string]any{"name": "score", "direction": "higher", "min_delta_percent": 1, "noise_floor_percent": 5, "min_runs": 10}); err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +140,8 @@ func TestValidateWarnsWhenMetricMinRunsNeedsN(t *testing.T) {
 }
 
 func TestValidateWarnsWhenMetricNoiseFloorMissing(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "build.work-order.json")
+	root := setupValidateMetricRepo(t)
+	path := filepath.Join(root, "build.work-order.json")
 	if err := writeValidateBuildWorkOrderWithMetric(path, []any{"scripts/bench-json"}, map[string]any{"name": "score", "direction": "higher", "min_delta_percent": 1}); err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +159,8 @@ func TestValidateWarnsWhenMetricNoiseFloorMissing(t *testing.T) {
 }
 
 func TestValidateSuppressesMissingNoiseFloorWarningWhenDeclared(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "build.work-order.json")
+	root := setupValidateMetricRepo(t)
+	path := filepath.Join(root, "build.work-order.json")
 	if err := writeValidateBuildWorkOrderWithMetric(path, []any{"scripts/bench-json"}, map[string]any{"name": "score", "direction": "higher", "min_delta_percent": 1, "noise_floor_percent": 5}); err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +194,8 @@ func TestValidateWarnsWhenMetricNoiseFloorHasTooFewRuns(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "build.work-order.json")
+			root := setupValidateMetricRepo(t)
+			path := filepath.Join(root, "build.work-order.json")
 			if err := writeValidateBuildWorkOrderWithMetric(path, []any{"scripts/bench-json"}, tt.metric); err != nil {
 				t.Fatal(err)
 			}
@@ -161,7 +212,8 @@ func TestValidateWarnsWhenMetricNoiseFloorHasTooFewRuns(t *testing.T) {
 }
 
 func TestValidateMetricNoiseFloorWithRepeatedRunsWarnsOnlyForFinalN(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "build.work-order.json")
+	root := setupValidateMetricRepo(t)
+	path := filepath.Join(root, "build.work-order.json")
 	if err := writeValidateBuildWorkOrderWithMetric(path, []any{"scripts/bench-json"}, map[string]any{"name": "score", "direction": "higher", "min_delta_percent": 1, "noise_floor_percent": 5, "min_runs": 10}); err != nil {
 		t.Fatal(err)
 	}
@@ -366,6 +418,19 @@ func writeValidateBuildWorkOrder(path string, protectedPaths []any) error {
 	return writeValidateBuildWorkOrderWithMetric(path, protectedPaths, map[string]any{"name": "score", "direction": "higher", "min_delta_percent": 1})
 }
 
+func setupValidateMetricRepo(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	t.Chdir(root)
+	if err := os.MkdirAll(filepath.Join(root, "scripts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "scripts", "bench-json"), []byte("#!/bin/sh\nprintf '{}\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
 func writeValidateGatherWorkOrder(path string, goal string, background string) error {
 	return workorder.WriteJSONAtomic(path, map[string]any{
 		"schema_version": 1,
@@ -407,10 +472,14 @@ func writeValidateModeWorkOrder(path string, mode string, facetID string, judgeB
 }
 
 func writeValidateBuildWorkOrderWithMetric(path string, protectedPaths []any, metric map[string]any) error {
+	return writeValidateBuildWorkOrderWithMetricArgv(path, protectedPaths, metric, []any{"./scripts/bench-json"})
+}
+
+func writeValidateBuildWorkOrderWithMetricArgv(path string, protectedPaths []any, metric map[string]any, metricArgv []any) error {
 	build := map[string]any{
 		"verify": []any{
 			map[string]any{"id": "unit", "kind": "gate", "argv": []any{"go", "test", "./..."}, "wall_clock_seconds": 10, "max_output_bytes": 1000},
-			map[string]any{"id": "score", "kind": "metric", "argv": []any{"./scripts/bench-json"}, "wall_clock_seconds": 10, "max_output_bytes": 1000, "metric": metric},
+			map[string]any{"id": "score", "kind": "metric", "argv": metricArgv, "wall_clock_seconds": 10, "max_output_bytes": 1000, "metric": metric},
 		},
 	}
 	if protectedPaths != nil {

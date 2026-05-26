@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "id": "slice-9-judge-advisory-audit",
+  "type": "analyze",
+  "goal": "Determine whether the Slice 9 third-party judge advisory feature is wired consistently across internal/provider, the doctor command, the validate command + work-order schema, skills/bakeoff-run, README, and docs/cli-reference. Cite concrete file:line evidence for every claim and call out any drift, contradictions, or missing surfaces.",
+  "background": "Slice 9 introduced a third-party judge advisory: when the judge's provider family overlaps with one or more contestants, a structured note is surfaced (advisory only — independence is not measured yet, and no auto-switching). On this machine the doctor JSON currently emits judge_family_advisory with the shape: { advisory_only: true, independence_not_measured_yet: true, judge_backend, judge_family, provider_backends[], ready_non_contestant_judges[], relation } where relation is one of same_as_some | same_as_all | different.\n\nAudit the following surfaces in this repository and report whether each one references the advisory consistently with the others:\n\n1. internal/provider/ — where the advisory shape is defined and/or emitted. Look at provider.go and provider_test.go. Confirm exported field names, relation values, and that advisory_only / independence_not_measured_yet are always set.\n\n2. internal/commands/doctorcmd/ — confirm both the JSON path and any human-readable doctor output expose the advisory consistently (same field names, same relation values, ready_non_contestant_judges populated when applicable).\n\n3. internal/commands/validatecmd/ + internal/workorder/ — confirm validate does NOT require judge_policy and does not block on family overlap (advisory-only is the documented contract). Look for any stray judge_policy / judge_family handling in the work-order schema or validation code.\n\n4. skills/bakeoff-run/SKILL.md — confirm the drafting-time guidance matches the runtime contract: the skill must (a) tell the agent NOT to auto-switch the judge, (b) tell the agent NOT to add judge_policy fields, (c) tell the agent to surface a compact preview note when relation is same_as_some / same_as_all AND ready_non_contestant_judges is non-empty, and (d) frame the advisory as advisory-only.\n\n5. README.md — confirm the user-facing description of the judge advisory exists, matches the runtime field names, and does not promise auto-switching or enforcement.\n\n6. docs/cli-reference.md — confirm the doctor command's CLI surface description mentions the advisory (or knowingly omits it) and that the field shape documented matches reality.\n\nFor each surface, produce: (a) a verdict — consistent / drifted / missing, (b) the specific file:line evidence, and (c) the smallest concrete change that would restore consistency if drifted/missing. Then produce an overall consistency verdict and a prioritized fix list.\n\nDo not propose changes to runtime behavior (no auto-switching, no judge_policy). Treat advisory-only as a fixed product constraint.",
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "sonnet",
+      "scope": "codebase",
+      "effort": "high"
+    },
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "scope": "codebase",
+      "effort": "high"
+    }
+  ],
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  },
+  "scope_policy": {
+    "enforcement": "best_effort"
+  }
+}

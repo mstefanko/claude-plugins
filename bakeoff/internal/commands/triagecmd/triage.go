@@ -149,11 +149,15 @@ func Run(ctx context.Context, f commands.Factory, opts *TriageOptions) (int, err
 	}
 
 	findingIndex, synthesized := triage.BuildFindingIndex(reportText)
+	escalationFindings := triage.BuildEscalationFindingIndex(decisionDoc)
+	findingIndex = append(findingIndex, escalationFindings...)
 	sourceFindings, skippedFindings := triage.SelectTriageSourceFindings(findingIndex, triage.FacetID(wo.Raw))
 	sourceFindingFilter := triage.SummarizeSourceFindingFilter(sourceFindings, skippedFindings)
+	intakeStreams := triage.SummarizeFindingStreams(findingIndex)
 	if err := workorder.WriteJSONAtomic(filepath.Join(triageDir, "source_finding_filter.json"), map[string]any{
 		"schema_version": 1,
 		"summary":        sourceFindingFilter,
+		"intake_streams": intakeStreams,
 		"selected":       sourceFindings,
 		"skipped":        skippedFindings,
 	}); err != nil {
@@ -161,6 +165,8 @@ func Run(ctx context.Context, f commands.Factory, opts *TriageOptions) (int, err
 	}
 	if synthesized {
 		caveats = append(caveats, "source finding IDs were synthesized from report display order")
+	}
+	if synthesized || len(escalationFindings) > 0 {
 		if err := workorder.WriteJSONAtomic(filepath.Join(triageDir, "finding_index.json"), map[string]any{"schema_version": 1, "findings": findingIndex}); err != nil {
 			return 0, &apperror.RuntimeError{Err: err}
 		}
@@ -185,6 +191,7 @@ func Run(ctx context.Context, f commands.Factory, opts *TriageOptions) (int, err
 		"report_md":             reportText,
 		"source_findings":       sourceFindings,
 		"source_finding_filter": sourceFindingFilter,
+		"source_intake_streams": intakeStreams,
 		"provider_failures":     providerFailures,
 		"citation_checks":       citationChecks,
 		"caveats":               caveats,

@@ -16,6 +16,7 @@ import (
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/apperror"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/buildinfo"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/ledger"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/output"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/provider"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/runner"
@@ -453,6 +454,13 @@ JSON
 		t.Fatalf("copied provider final missing: %v", err)
 	}
 	manifest := readTestJSON(t, filepath.Join(runDir, "manifest.json"))
+	if manifest["source_run_id"] != "source" || manifest["rerun_mode"] != "judge_only" {
+		t.Fatalf("manifest rerun fields = %#v", manifest)
+	}
+	telemetry := manifest["telemetry"].(map[string]any)
+	if telemetry["source_run_id"] != "source" || telemetry["rerun_mode"] != "judge_only" {
+		t.Fatalf("telemetry rerun fields = %#v", telemetry)
+	}
 	fingerprints := manifest["artifact_fingerprints"].(map[string]any)
 	for _, relative := range []string{"providers/claude/status.json", "providers/codex/final.json", "judge/status.json", "judge/result.json"} {
 		if _, ok := fingerprints[relative]; !ok {
@@ -503,6 +511,73 @@ func TestRunResearchJudgeOnlyMissingProviderArtifactDoesNotCreateRetryRun(t *tes
 	}
 	if _, statErr := os.Lstat(filepath.Join(outDir, "latest")); !os.IsNotExist(statErr) {
 		t.Fatalf("latest was updated before preflight completed: %v", statErr)
+	}
+}
+
+func TestRunResearchJudgeOnlyReplayContextFailurePreservesLatest(t *testing.T) {
+	root := t.TempDir()
+	outDir := filepath.Join(root, "runs")
+	if err := os.MkdirAll(filepath.Join(outDir, "prior"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := ledger.UpdateLatest(outDir, "prior"); err != nil {
+		t.Fatal(err)
+	}
+	sourceRun := filepath.Join(outDir, "source")
+	writeJudgeOnlySourceRun(t, sourceRun, "gather", "exit_error")
+	if err := workorder.WriteTextAtomic(filepath.Join(sourceRun, "review-context.md"), "partial context\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	factory := researchTestFactory{streams: output.NewStreams(&out, &errOut)}
+	err := RunResearchJudgeOnly(context.Background(), factory, &ResearchJudgeOnlyOptions{
+		SourceRunDir: sourceRun,
+		SourceRunID:  "source",
+		Out:          outDir,
+		RunID:        "retry",
+		Quiet:        true,
+		NoTriage:     true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "partial review-context artifact set") {
+		t.Fatalf("expected replay context error, got %v\nstdout:\n%s\nstderr:\n%s", err, out.String(), errOut.String())
+	}
+	if got := latestValue(t, outDir); got != "prior" {
+		t.Fatalf("latest = %q, want prior", got)
+	}
+}
+
+func TestCopyProviderArtifactDirsPreflightsBeforeMutation(t *testing.T) {
+	root := t.TempDir()
+	sourceRun := filepath.Join(root, "source")
+	targetRun := filepath.Join(root, "target")
+	wo := writeJudgeOnlySourceRun(t, sourceRun, "gather", "exit_error")
+	if err := os.Remove(filepath.Join(sourceRun, "providers", "codex", "status.json")); err != nil {
+		t.Fatal(err)
+	}
+
+	err := copyProviderArtifactDirs(wo, sourceRun, targetRun)
+	if err == nil || !strings.Contains(err.Error(), "provider codex status.json is required") {
+		t.Fatalf("expected missing status error, got %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(targetRun, "providers", "claude")); !os.IsNotExist(statErr) {
+		t.Fatalf("copied first provider before preflight completed: %v", statErr)
+	}
+}
+
+func TestCopyFilePreservesBinaryBytes(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source.bin")
+	target := filepath.Join(root, "nested", "target.bin")
+	want := []byte{0x00, 0xff, 0x01, 0xfe}
+	if err := os.WriteFile(source, want, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyFile(source, target); err != nil {
+		t.Fatal(err)
+	}
+	if got := mustReadFile(t, target); !bytes.Equal(got, want) {
+		t.Fatalf("copied bytes = %v, want %v", got, want)
 	}
 }
 
@@ -834,6 +909,15 @@ func mustReadFile(t *testing.T, path string) []byte {
 		t.Fatal(err)
 	}
 	return data
+}
+
+func latestValue(t *testing.T, outDir string) string {
+	t.Helper()
+	path := filepath.Join(outDir, "latest")
+	if link, err := os.Readlink(path); err == nil {
+		return link
+	}
+	return strings.TrimSpace(string(mustReadFile(t, path)))
 }
 
 func writeExecutable(t *testing.T, path string, text string) {

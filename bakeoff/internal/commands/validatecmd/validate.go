@@ -77,6 +77,9 @@ func runValidate(_ context.Context, f commands.Factory, opts *ValidateOptions) e
 		return &apperror.RuntimeError{Err: err}
 	}
 	streams := f.Streams()
+	if errors := validateErrors(root, wo); len(errors) > 0 {
+		return commands.WrapValidation(&workorder.ValidationError{Message: strings.Join(errors, "\n")})
+	}
 	streams.Printf("valid work order\n")
 	streams.Printf("  id:      %s\n", wo.ID)
 	streams.Printf("  mode:    %s\n", wo.Type)
@@ -160,6 +163,41 @@ func anySelectedReceivesLayout(wo *workorder.WorkOrder, providers []workorder.Pa
 	return false
 }
 
+func validateErrors(root string, wo *workorder.WorkOrder) []string {
+	if wo == nil || wo.Build == nil {
+		return nil
+	}
+	var errors []string
+	for _, protectedPath := range wo.Build.ProtectedPaths {
+		if _, err := os.Stat(filepath.Join(root, protectedPath)); err != nil {
+			if os.IsNotExist(err) {
+				errors = append(errors, `build.protected_paths references missing path "`+protectedPath+`" under <context-root>`)
+			} else {
+				errors = append(errors, `build.protected_paths references unreadable path "`+protectedPath+`": `+err.Error())
+			}
+		}
+	}
+	for _, verifier := range wo.Build.Verify {
+		if verifier.Kind != "metric" {
+			continue
+		}
+		if len(verifier.Argv) > 0 && repoRelativeCommand(verifier.Argv[0]) {
+			commandPath := strings.TrimPrefix(verifier.Argv[0], "./")
+			if _, err := os.Stat(filepath.Join(root, commandPath)); err != nil {
+				if os.IsNotExist(err) {
+					errors = append(errors, `metric verifier "`+verifier.ID+`" runs missing repo-relative command "`+verifier.Argv[0]+`" under <context-root>`)
+				} else {
+					errors = append(errors, `metric verifier "`+verifier.ID+`" cannot stat repo-relative command "`+verifier.Argv[0]+`": `+err.Error())
+				}
+			}
+			if len(wo.Build.ProtectedPaths) == 0 {
+				errors = append(errors, `metric verifier "`+verifier.ID+`" runs repo-relative command "`+verifier.Argv[0]+`" while build.protected_paths is empty; add the verifier script and any data fixtures to build.protected_paths`)
+			}
+		}
+	}
+	return errors
+}
+
 func validateWarnings(root string, wo *workorder.WorkOrder) []string {
 	var warnings []string
 	pathWarnings, err := repocontext.ValidateProsePaths(root, wo)
@@ -181,9 +219,6 @@ func validateWarnings(root string, wo *workorder.WorkOrder) []string {
 	for _, verifier := range wo.Build.Verify {
 		if verifier.Kind != "metric" {
 			continue
-		}
-		if len(wo.Build.ProtectedPaths) == 0 && len(verifier.Argv) > 0 && repoRelativeCommand(verifier.Argv[0]) {
-			warnings = append(warnings, `metric verifier "`+verifier.ID+`" runs repo-relative command "`+verifier.Argv[0]+`" while build.protected_paths is empty; add the verifier script and any data fixtures to build.protected_paths if providers should not edit them`)
 		}
 		if verifier.Metric != nil {
 			_, hasNoiseFloor := verifier.Metric.Raw["noise_floor_percent"]

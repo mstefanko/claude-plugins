@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "id": "dogfood-artifacts-telemetry-split.part-2",
+  "type": "analyze",
+  "goal": "Evaluate whether the manifest telemetry emitted by internal/manifest, combined with provider family metadata exposed by internal/provider, is sufficient to measure judge-bias as described in docs/agentic-loop-evidence-synthesis-2026-05-23.md. Identify gaps, missing joins between telemetry rows and family metadata, fields that would still need to be added, and any structural risks (cardinality, sampling, lossy aggregation) that would block credible bias measurement.",
+  "background": "Bakeoff orchestrates two contestant providers and a judge, recording per-run telemetry through internal/manifest (manifest.go + manifest_test.go) and provider/model identity + family metadata through internal/provider (provider.go + provider_test.go). docs/agentic-loop-evidence-synthesis-2026-05-23.md proposes measuring judge-bias by correlating judge outcomes with contestant/judge family relationships (e.g., same-family judging, family pairings, family-vs-family win rates) across a corpus of runs. The question is whether the existing telemetry rows plus family metadata are sufficient to compute the bias measurements in that doc, or whether new fields/joins are required. Examine: (a) which manifest fields capture provider and judge identity, decision_kind, winner, triage state, and other signals the synthesis doc relies on; (b) which provider-family attributes are exposed and whether they reach the manifest in a queryable form (or only at run-launch time); (c) what joins or aggregations the synthesis doc implies and whether those are feasible on current artifacts without re-running the corpus; (d) measurement gotchas the doc names (sample size, judge ties, decision-incomplete runs, replay vs fresh runs) and whether current telemetry can distinguish them. Produce a concrete sufficiency verdict (sufficient / partially-sufficient-with-named-additions / insufficient), the minimum set of additional telemetry or metadata changes if any, and a short worked example showing how a single bias measurement would be computed end-to-end from current artifacts. Focus on design analysis only; do not propose code edits in this report.",
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "sonnet",
+      "scope": "codebase",
+      "effort": "high"
+    },
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "scope": "codebase",
+      "effort": "high"
+    }
+  ],
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  },
+  "scope_policy": {
+    "enforcement": "best_effort"
+  }
+}
