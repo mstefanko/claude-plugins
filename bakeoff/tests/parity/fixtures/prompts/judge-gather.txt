@@ -26,7 +26,8 @@ Exclude:
       "evidence": [
         "fake:1"
       ],
-      "id": "R-001"
+      "id": "R-001",
+      "severity": "medium"
     }
   ],
   "conflicts": [],
@@ -46,7 +47,8 @@ Exclude:
       "evidence": [
         "fake:1"
       ],
-      "id": "R-001"
+      "id": "R-001",
+      "severity": "medium"
     }
   ],
   "conflicts": [],
@@ -62,6 +64,10 @@ Exclude:
 - Do not reward a worker for broadening beyond the facet.
 - Do not penalize a worker for omitting material that the facet excluded.
 - The facet never overrides output schema, citation requirements, or scope enforcement.
+- Preserve severity as an impact label, separate from confidence.
+- Do not raise severity because both workers agree; corroboration can affect attention or confidence only when the evidence improves.
+- If a `blocker` or `high` claim lacks a concrete reachable scenario, demote it or drop it as an evidence gap.
+- When merged claims disagree on severity, choose the highest impact directly supported by cited evidence, not the highest label proposed.
 - When a claim is dropped solely because it is out of facet, include it in optional `out_of_facet_claims[]` with source labels, evidence, and a short reason. This is observability only; do not put these claims in `merged_claims`.
 - Merge claims that make the SAME assertion about the SAME entity, regardless of wording. Preserve all citations from both sources on the merged claim, and tag `sources` using the positional labels: ["A"], ["B"], or ["A","B"].
 - If two claims make CONFLICTING assertions, do NOT pick a side. Emit a conflict entry listing both claims (`claim_a`, `claim_b`), both citations, and a one-line description of the disagreement.
@@ -95,5 +101,5 @@ block. stdout is the structured answer channel.
 </process>
 
 <output_format>
-Reason in <scratchpad>...</scratchpad>, then emit one JSON object wrapped in <final_json>...</final_json>: merged_claims[] (with claim, evidence[], sources[] in {"A","B"}, confidence), conflicts[] (with claim_a, claim_b, evidence), unknowns_union[], and optional out_of_facet_claims[] when a facet caused claims to be dropped. No content after </final_json>.
+Reason in <scratchpad>...</scratchpad>, then emit one JSON object wrapped in <final_json>...</final_json>: merged_claims[] (with claim, evidence[], sources[] in {"A","B"}, severity in {"blocker","high","medium","low"}, confidence), conflicts[] (with claim_a, claim_b, evidence), unknowns_union[], and optional out_of_facet_claims[] when a facet caused claims to be dropped. No content after </final_json>.
 </output_format>

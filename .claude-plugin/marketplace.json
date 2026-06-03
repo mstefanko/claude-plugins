@@ -28,6 +28,12 @@
       "source": "./swarm-do",
       "description": "SwarmDaddy: Beads-backed multi-agent orchestration for plans, reviews, research, and Claude+Codex routing.",
       "category": "orchestration"
+    },
+    {
+      "name": "review-kit",
+      "source": "./review-kit",
+      "description": "Assemble curated code-review context, route by risk, and delegate ledgered swarm reviews to bakeoff.",
+      "category": "orchestration"
     }
   ]
 }

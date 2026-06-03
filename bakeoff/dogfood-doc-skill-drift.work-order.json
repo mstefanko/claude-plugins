@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "id": "dogfood-doc-skill-drift",
+  "type": "gather",
+  "goal": "Find drift between user-facing docs (README.md, docs/cli-reference.md) and the actual routing contract codified in skills/bakeoff-run/SKILL.md, in either direction.",
+  "background": [
+    "Three files are in scope: README.md, docs/cli-reference.md, and skills/bakeoff-run/SKILL.md (all relative to the bakeoff/ plugin root).",
+    "skills/bakeoff-run/SKILL.md is the canonical routing/drafting contract that the /bakeoff:run skill executes at runtime.",
+    "README.md and docs/cli-reference.md are the user-facing surface that explains the same workflow.",
+    "Drift means: (a) a behavior the user-facing docs promise that SKILL.md does not enforce, OR (b) a contract rule SKILL.md enforces that the user-facing docs omit or describe incorrectly, OR (c) a claim that disagrees across the three files.",
+    "Each finding must cite both sides with file:line evidence. Single-file claims are out of scope.",
+    "Out of scope: style/wording/formatting issues without a behavioral mismatch, drift against code outside the three named files, and speculation without file:line evidence on both sides.",
+    "Categories of behavior most worth checking: flag routing and known-flag list, exit code semantics, approval verbs and preview shapes, single-vs-split-vs-multi-lens routing, escalation modes and recommendations, provider/judge defaults and the canonical pair, task-fit warnings, validation-warning handling, parallel-vs-sequential eligibility, and post-run continuation recommendations."
+  ],
+  "facet": {
+    "id": "code-review",
+    "kind": "generic",
+    "focus": "Identify concrete drift between README.md / docs/cli-reference.md and skills/bakeoff-run/SKILL.md - each finding must cite both sides with file:line evidence.",
+    "include": [
+      "rules SKILL.md enforces that README or docs/cli-reference.md omit or contradict",
+      "behaviors README or docs/cli-reference.md promise that SKILL.md does not enforce",
+      "flag, mode, or routing claims that disagree between the three files",
+      "approval, preview, or exit-code semantics described inconsistently",
+      "provider, judge, or escalation defaults that differ across the files"
+    ],
+    "exclude": [
+      "style, wording, or formatting issues without a behavioral mismatch",
+      "speculation without file:line evidence on both sides",
+      "drift against code outside the three named files"
+    ]
+  },
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "sonnet",
+      "scope": "codebase",
+      "effort": "high"
+    },
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "scope": "codebase",
+      "effort": "high"
+    }
+  ],
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  },
+  "scope_policy": {
+    "enforcement": "best_effort"
+  }
+}

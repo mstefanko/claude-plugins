@@ -902,9 +902,13 @@ func claimLines(claims []any, source string, showCorroboration bool) []string {
 	for _, item := range claims {
 		claim, _ := item.(map[string]any)
 		confidence := defaultString(claim["confidence"], "unknown")
+		severity := jsonutil.StringValue(claim["severity"])
 		details := []string{}
 		if source != "" {
 			details = append(details, "source `"+source+"`")
+		}
+		if severity != "" {
+			details = append(details, "severity `"+severity+"`")
 		}
 		details = append(details, "model confidence `"+confidence+"`")
 		if showCorroboration {

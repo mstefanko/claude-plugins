@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "id": "dogfood-report-helper-research",
+  "type": "gather",
+  "goal": "Identify low-risk helper extraction opportunities in internal/report/report.go based only on its existing functions and tests. Do not propose implementation.",
+  "background": "Target file: internal/report/report.go (1356 lines, ~58 top-level functions, package 'report'). Companion tests in internal/report/report_test.go (18 Test* funcs covering Render/RenderEscalation, decision audit, provider status table, selector confidence, witness/dispute structured items, advisory helpers, judge failure paths). For each candidate, enumerate: file+line range, proposed helper signature, existing tests that already cover or constrain the behavior, risk classification (low / not-low) with reason. Explicit scope: existing functions and tests only; no implementation, no behavior change, no new tests, no cross-file refactors. Only files in scope are internal/report/report.go and internal/report/report_test.go.",
+  "providers": [
+    {"id": "claude", "backend": "claude", "model": "sonnet", "scope": "codebase", "effort": "high"},
+    {"id": "codex",  "backend": "codex",  "model": "gpt-5.5", "scope": "codebase", "effort": "high"}
+  ],
+  "judge": {"backend": "claude", "model": "opus", "effort": "xhigh"},
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  },
+  "scope_policy": {"enforcement": "best_effort"}
+}

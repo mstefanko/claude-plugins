@@ -1,0 +1,7 @@
+{
+  "name": "review-kit",
+  "description": "Assemble curated code-review context, route by risk, and delegate ledgered swarm reviews to bakeoff.",
+  "author": { "name": "mstefanko" },
+  "license": "MIT",
+  "keywords": ["review", "code-review", "context", "routing", "bakeoff", "swarm", "claude", "codex"]
+}

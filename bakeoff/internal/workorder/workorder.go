@@ -42,6 +42,7 @@ var (
 	workerStatuses      = []string{"complete", "complete_with_concerns", "needs_context", "blocked"}
 	buildWorkerStatuses = []string{"complete", "blocked"}
 	confidences         = []string{"high", "medium", "low"}
+	reviewSeverities    = []string{"blocker", "high", "medium", "low"}
 	compareScores       = []string{"evidence", "coherence", "tradeoff_honesty", "rebuttals"}
 	analyzeScores       = []string{"step_atomicity", "citation_grounding", "assumption_transparency", "coherence"}
 	buildScores         = []string{"correctness", "verifier_evidence", "comparative_evidence", "scope_control", "test_quality", "benchmark_quality", "maintainability"}
@@ -949,7 +950,7 @@ func ValidateWorkerResult(data any, mode string) (any, error) {
 			return nil, Validationf("worker final_json.position is required for compare mode")
 		}
 	}
-	if err := validateClaims(obj["claims"], "worker final_json.claims"); err != nil {
+	if err := validateClaims(obj["claims"], "worker final_json.claims", mode == "gather"); err != nil {
 		return nil, err
 	}
 	if err := validateStringList(obj["unknowns"], "worker final_json.unknowns"); err != nil {
@@ -979,7 +980,7 @@ func ValidateGatherJudgeResult(data any) (any, error) {
 		return nil, Validationf("gather judge final_json.merged_claims must be an array")
 	}
 	for i, claim := range claims {
-		if err := validateMappingClaim(claim, fmt.Sprintf("gather judge final_json.merged_claims[%d]", i), true); err != nil {
+		if err := validateMappingClaim(claim, fmt.Sprintf("gather judge final_json.merged_claims[%d]", i), true, true); err != nil {
 			return nil, err
 		}
 	}
@@ -1473,25 +1474,29 @@ func jsonTypeName(value any) string {
 	}
 }
 
-func validateClaims(value any, label string) error {
+func validateClaims(value any, label string, requireSeverity bool) error {
 	items, ok := value.([]any)
 	if !ok {
 		return Validationf("%s must be an array", label)
 	}
 	for i, item := range items {
-		if err := validateMappingClaim(item, fmt.Sprintf("%s[%d]", label, i), false); err != nil {
+		if err := validateMappingClaim(item, fmt.Sprintf("%s[%d]", label, i), false, requireSeverity); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func validateMappingClaim(value any, label string, requireSources bool) error {
+func validateMappingClaim(value any, label string, requireSources bool, requireSeverity bool) error {
 	obj, ok := value.(map[string]any)
 	if !ok {
 		return Validationf("%s must be an object", label)
 	}
-	for _, field := range []string{"claim", "evidence", "confidence"} {
+	required := []string{"claim", "evidence", "confidence"}
+	if requireSeverity {
+		required = append(required, "severity")
+	}
+	for _, field := range required {
 		if _, ok := obj[field]; !ok {
 			return Validationf("%s.%s is required", label, field)
 		}
@@ -1504,6 +1509,11 @@ func validateMappingClaim(value any, label string, requireSources bool) error {
 	}
 	if confidence, _ := obj["confidence"].(string); !contains(confidences, confidence) {
 		return Validationf("%s.confidence must be one of: %s", label, strings.Join(confidences, ", "))
+	}
+	if severity, exists := obj["severity"]; exists {
+		if severity, _ := severity.(string); !contains(reviewSeverities, severity) {
+			return Validationf("%s.severity must be one of: %s", label, strings.Join(reviewSeverities, ", "))
+		}
 	}
 	if requireSources {
 		raw, ok := obj["sources"]
@@ -1543,6 +1553,11 @@ func validateEscalationMappingClaim(value any, label string, sourceLabels []stri
 	}
 	if confidence, _ := obj["confidence"].(string); !contains(confidences, confidence) {
 		return Validationf("%s.confidence must be one of: %s", label, strings.Join(confidences, ", "))
+	}
+	if severity, exists := obj["severity"]; exists {
+		if severity, _ := severity.(string); !contains(reviewSeverities, severity) {
+			return Validationf("%s.severity must be one of: %s", label, strings.Join(reviewSeverities, ", "))
+		}
 	}
 	return validateEscalationSources(obj["sources"], label+".sources", sourceLabels)
 }

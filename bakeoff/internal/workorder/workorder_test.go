@@ -169,6 +169,53 @@ func TestValidateStringListErrorsNameActualType(t *testing.T) {
 	}
 }
 
+func TestGatherClaimSeverityValidation(t *testing.T) {
+	valid := map[string]any{
+		"status": "complete",
+		"claims": []any{
+			map[string]any{
+				"id":         "R-001",
+				"claim":      "A reachable defect exists.",
+				"evidence":   []any{"internal/example.go:12"},
+				"severity":   "high",
+				"confidence": "medium",
+			},
+		},
+		"conflicts":               []any{},
+		"unknowns":                []any{},
+		"recommended_next_checks": []any{},
+	}
+	if _, err := ValidateWorkerResult(valid, "gather"); err != nil {
+		t.Fatalf("gather claim with severity should validate: %v", err)
+	}
+
+	missing := map[string]any{
+		"status":                  "complete",
+		"claims":                  []any{map[string]any{"id": "R-001", "claim": "Missing severity.", "evidence": []any{"internal/example.go:12"}, "confidence": "high"}},
+		"conflicts":               []any{},
+		"unknowns":                []any{},
+		"recommended_next_checks": []any{},
+	}
+	if _, err := ValidateWorkerResult(missing, "gather"); err == nil || !strings.Contains(err.Error(), "worker final_json.claims[0].severity is required") {
+		t.Fatalf("expected missing severity error, got %v", err)
+	}
+
+	invalidJudge := map[string]any{
+		"merged_claims": []any{map[string]any{
+			"claim":      "Bad severity.",
+			"evidence":   []any{"internal/example.go:12"},
+			"sources":    []any{"A", "B"},
+			"severity":   "critical",
+			"confidence": "high",
+		}},
+		"conflicts":      []any{},
+		"unknowns_union": []any{},
+	}
+	if _, err := ValidateGatherJudgeResult(invalidJudge); err == nil || !strings.Contains(err.Error(), "gather judge final_json.merged_claims[0].severity must be one of: blocker, high, medium, low") {
+		t.Fatalf("expected judge severity enum error, got %v", err)
+	}
+}
+
 func TestValidateEscalationWitnessResultAcceptsStructuredObjects(t *testing.T) {
 	_, err := ValidateEscalationWitnessResult(map[string]any{
 		"status":                 "complete",

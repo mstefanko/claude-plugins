@@ -578,7 +578,7 @@ func writeSourceRunWithFacet(t *testing.T, outDir string, runID string, mode str
 		}
 		final := map[string]any{
 			"status":                  "complete",
-			"claims":                  []any{map[string]any{"id": strings.ToUpper(id[:1]) + "-001", "claim": id + " claim.", "evidence": []any{"fake:1"}, "confidence": "high"}},
+			"claims":                  []any{map[string]any{"id": strings.ToUpper(id[:1]) + "-001", "claim": id + " claim.", "evidence": []any{"fake:1"}, "severity": "medium", "confidence": "high"}},
 			"conflicts":               []any{},
 			"unknowns":                []any{},
 			"recommended_next_checks": []any{},

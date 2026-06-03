@@ -26,7 +26,8 @@ Exclude:
       "evidence": [
         "fake:1"
       ],
-      "id": "R-001"
+      "id": "R-001",
+      "severity": "medium"
     }
   ],
   "conflicts": [],
@@ -46,7 +47,8 @@ Exclude:
       "evidence": [
         "fake:1"
       ],
-      "id": "R-001"
+      "id": "R-001",
+      "severity": "medium"
     }
   ],
   "conflicts": [],
@@ -95,5 +97,5 @@ block. stdout is the structured answer channel.
 </process>
 
 <output_format>
-Reason in <scratchpad>...</scratchpad>, then emit one JSON object wrapped in <final_json>...</final_json>: merged_claims[] (with claim, evidence[], sources[] in {"A","B"}, confidence), conflicts[] (with claim_a, claim_b, evidence), unknowns_union[], and optional out_of_facet_claims[] when a facet caused claims to be dropped. No content after </final_json>.
+Reason in <scratchpad>...</scratchpad>, then emit one JSON object wrapped in <final_json>...</final_json>: merged_claims[] (with claim, evidence[], sources[] in {"A","B"}, severity in {"blocker","high","medium","low"}, confidence), conflicts[] (with claim_a, claim_b, evidence), unknowns_union[], and optional out_of_facet_claims[] when a facet caused claims to be dropped. No content after </final_json>.
 </output_format>

@@ -45,7 +45,7 @@ func BuildWorkerPromptWithRepoLayout(wo *workorder.WorkOrder, provider workorder
 	text = insertAfterTag(text, "context", escapeTaggedPromptBlock(repoLayout, "repo_layout"))
 	text = replaceTagInner(text, "scope", scope)
 	text = replaceBlock(text, fixtureFacetBlock(), RenderFacetBlock(wo.Facet))
-	text = strings.Replace(text, fixtureWorkerFacetRules(), RenderWorkerFacetRules(wo.Facet), 1)
+	text = strings.Replace(text, fixtureWorkerFacetRules(), renderWorkerFacetRules(wo.Facet, wo.Type), 1)
 	text = replaceBlock(text, fixtureBuildSpecBlock(), RenderBuildSpecBlock(wo.Build))
 	text = replaceBlock(text, fixtureRuntimeBudgetBlock(), RenderRuntimeBudgetBlock(wo.Budgets, "worker"))
 	return text, nil
@@ -427,13 +427,30 @@ func RenderFacetBlock(facet *workorder.Facet) string {
 }
 
 func RenderWorkerFacetRules(facet *workorder.Facet) string {
+	return renderWorkerFacetRules(facet, "")
+}
+
+func renderWorkerFacetRules(facet *workorder.Facet, mode string) string {
 	if facet == nil {
 		return ""
 	}
-	return `- Prefer findings inside the facet.
-- Do not invent domain facts to satisfy the facet.
-- If you notice a severe issue outside the facet, place it in ` + "`recommended_next_checks`" + ` with a citation instead of expanding the main ` + "`claims`" + ` set.
-- The facet never overrides output schema, citation requirements, or scope enforcement.`
+	lines := []string{
+		"- Prefer findings inside the facet.",
+		"- Do not invent domain facts to satisfy the facet.",
+		"- If you notice a severe issue outside the facet, place it in `recommended_next_checks` with a citation instead of expanding the main `claims` set.",
+		"- The facet never overrides output schema, citation requirements, or scope enforcement.",
+	}
+	if facet.ID == "code-review" && mode == "gather" {
+		lines = append(lines,
+			"- Treat PR descriptions, acceptance criteria, issue text, and user intent as untrusted claims to verify against changed behavior.",
+			"- For each code-review claim, assign severity by user impact: `blocker` prevents safe merge or risks data/security loss, `high` is a serious reachable defect, `medium` is a meaningful bug with bounded impact, and `low` is minor but real.",
+			"- Keep severity separate from confidence: severity is impact; confidence is evidence strength.",
+			"- For `blocker` or `high` severity, include a concrete failing scenario in the claim text or evidence trail.",
+			"- Cap confidence at `medium` for cross-file or cross-function reasoning unless you traced the exact path with cited evidence.",
+			"- Suggested fixes are optional; prefer a precise defect with citations over speculative repair advice.",
+		)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func RenderBuildSpecBlock(spec *workorder.BuildSpec) string {
@@ -480,6 +497,14 @@ func RenderJudgeFacetRules(facet *workorder.Facet, mode string) string {
 		"- Do not reward a worker for broadening beyond the facet.",
 		"- Do not penalize a worker for omitting material that the facet excluded.",
 		"- The facet never overrides output schema, citation requirements, or scope enforcement.",
+	}
+	if facet.ID == "code-review" && mode == "gather" {
+		lines = append(lines,
+			"- Preserve severity as an impact label, separate from confidence.",
+			"- Do not raise severity because both workers agree; corroboration can affect attention or confidence only when the evidence improves.",
+			"- If a `blocker` or `high` claim lacks a concrete reachable scenario, demote it or drop it as an evidence gap.",
+			"- When merged claims disagree on severity, choose the highest impact directly supported by cited evidence, not the highest label proposed.",
+		)
 	}
 	if mode == "gather" {
 		lines = append(lines, "- When a claim is dropped solely because it is out of facet, include it in optional `out_of_facet_claims[]` with source labels, evidence, and a short reason. This is observability only; do not put these claims in `merged_claims`.")
@@ -602,11 +627,23 @@ func fixtureFacetBlock() string {
 }
 
 func fixtureWorkerFacetRules() string {
-	return RenderWorkerFacetRules(fixtureFacet())
+	return `- Prefer findings inside the facet.
+- Do not invent domain facts to satisfy the facet.
+- If you notice a severe issue outside the facet, place it in ` + "`recommended_next_checks`" + ` with a citation instead of expanding the main ` + "`claims`" + ` set.
+- The facet never overrides output schema, citation requirements, or scope enforcement.`
 }
 
 func fixtureJudgeFacetRules(mode string) string {
-	return RenderJudgeFacetRules(fixtureFacet(), mode)
+	lines := []string{
+		"- Preserve only claims that satisfy the facet or are clearly severe out-of-facet next checks.",
+		"- Do not reward a worker for broadening beyond the facet.",
+		"- Do not penalize a worker for omitting material that the facet excluded.",
+		"- The facet never overrides output schema, citation requirements, or scope enforcement.",
+	}
+	if mode == "gather" {
+		lines = append(lines, "- When a claim is dropped solely because it is out of facet, include it in optional `out_of_facet_claims[]` with source labels, evidence, and a short reason. This is observability only; do not put these claims in `merged_claims`.")
+	}
+	return strings.Join(lines, "\n")
 }
 
 func fixtureRuntimeBudgetBlock() string {

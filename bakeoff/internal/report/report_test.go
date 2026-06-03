@@ -353,8 +353,8 @@ func TestRenderFailedJudgeShowsStatusAndProviderClaims(t *testing.T) {
 			"caveats":           []any{"gather judge failed with exit_error"},
 		},
 		map[string]map[string]any{
-			"claude": {"final_json": map[string]any{"claims": []any{map[string]any{"claim": "Claude claim", "confidence": "high"}}, "unknowns": []any{"claude unknown"}}},
-			"codex":  {"final_json": map[string]any{"claims": []any{map[string]any{"claim": "Codex claim", "confidence": "medium"}}, "unknowns": []any{"codex unknown"}}},
+			"claude": {"final_json": map[string]any{"claims": []any{map[string]any{"claim": "Claude claim", "severity": "high", "confidence": "high"}}, "unknowns": []any{"claude unknown"}}},
+			"codex":  {"final_json": map[string]any{"claims": []any{map[string]any{"claim": "Codex claim", "severity": "medium", "confidence": "medium"}}, "unknowns": []any{"codex unknown"}}},
 		},
 		map[string]map[string]any{"pass1": {}},
 		RenderOptions{RunID: "run-1", OutDir: "runs"},
@@ -364,6 +364,7 @@ func TestRenderFailedJudgeShowsStatusAndProviderClaims(t *testing.T) {
 		"Action: judge failed; provider claims below; consider `bakeoff rerun run-1 --judge-only`.",
 		"### claude",
 		"Claude claim",
+		"severity `high`, model confidence `high`",
 		"### codex",
 		"Codex claim",
 		"Judge error kind: `api_transient`",

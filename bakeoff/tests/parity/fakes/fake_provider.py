@@ -93,6 +93,7 @@ def worker_payload(name: str, prompt: str) -> dict:
                 "id": "R-001",
                 "claim": f"{name} claim",
                 "evidence": ["fake:1"],
+                "severity": "medium",
                 "confidence": "high",
             }
         ],
@@ -148,7 +149,7 @@ def main() -> int:
         return 0
     if name in output_cap_salvage_providers and not is_judge and not is_triage:
         sys.stdout.write("x" * int(os.environ.get("BAKEOFF_FAKE_OUTPUT_CAP_PREFIX_BYTES", "200")))
-        sys.stdout.write('<final_json>{"status":"complete","claims":[{"id":"R-001","claim":"late claim","evidence":["fake:1"],"confidence":"high"}],"conflicts":[],"unknowns":[],"recommended_next_checks":[]}</final_json>')
+        sys.stdout.write('<final_json>{"status":"complete","claims":[{"id":"R-001","claim":"late claim","evidence":["fake:1"],"severity":"medium","confidence":"high"}],"conflicts":[],"unknowns":[],"recommended_next_checks":[]}</final_json>')
         sys.stdout.flush()
         return 0
     if name in stderr_truncation_providers and not is_judge and not is_triage:
@@ -195,7 +196,7 @@ def main() -> int:
             )
         return 0
     if is_gather_judge:
-        emit({"merged_claims": [{"claim": "Fake merged claim", "evidence": ["fake:1"], "sources": ["A", "B"], "confidence": "high"}], "conflicts": [], "unknowns_union": []})
+        emit({"merged_claims": [{"claim": "Fake merged claim", "evidence": ["fake:1"], "sources": ["A", "B"], "severity": "medium", "confidence": "high"}], "conflicts": [], "unknowns_union": []})
         return 0
     if is_compare_judge:
         compare_scores_a = {"evidence": 5, "coherence": 5, "tradeoff_honesty": 5, "rebuttals": 5}

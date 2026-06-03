@@ -127,7 +127,7 @@ esac
 printf 'provider-env:%s:%s:%s\n' "$ANTHROPIC_API_KEY" "$OPENAI_API_KEY" "$APP_JWT"
 cat >/dev/null
 cat <<'JSON'
-<final_json>{"status":"complete","claims":[{"id":"C-001","claim":"Provider did not receive scrubbed secrets.","evidence":["fake:1"],"confidence":"high"}],"conflicts":[],"unknowns":[],"recommended_next_checks":[]}</final_json>
+<final_json>{"status":"complete","claims":[{"id":"C-001","claim":"Provider did not receive scrubbed secrets.","evidence":["fake:1"],"severity":"medium","confidence":"high"}],"conflicts":[],"unknowns":[],"recommended_next_checks":[]}</final_json>
 JSON
 `)
 	writeExecutable(t, filepath.Join(fakeBin, "codex"), `#!/bin/sh
@@ -358,7 +358,7 @@ case "$prompt" in
     ;;
 esac
 cat <<'JSON'
-<final_json>{"status":"complete","claims":[{"id":"C-001","claim":"Provider claim.","evidence":["fake:1"],"confidence":"high"}],"conflicts":[],"unknowns":[],"recommended_next_checks":[]}</final_json>
+<final_json>{"status":"complete","claims":[{"id":"C-001","claim":"Provider claim.","evidence":["fake:1"],"severity":"medium","confidence":"high"}],"conflicts":[],"unknowns":[],"recommended_next_checks":[]}</final_json>
 JSON
 `
 	writeExecutable(t, filepath.Join(fakeBin, "claude"), fakeScript)
@@ -418,7 +418,7 @@ if [ "$1" = "--version" ]; then
 fi
 cat >/dev/null
 cat <<'JSON'
-<final_json>{"merged_claims":[{"claim":"Merged claim","sources":["A","B"],"evidence":["judge:1"],"confidence":"high"}],"conflicts":[],"unknowns_union":[]}</final_json>
+<final_json>{"merged_claims":[{"claim":"Merged claim","sources":["A","B"],"evidence":["judge:1"],"severity":"medium","confidence":"high"}],"conflicts":[],"unknowns_union":[]}</final_json>
 JSON
 `)
 	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -601,7 +601,7 @@ JSON
     ;;
   *)
     cat <<'JSON'
-<final_json>{"merged_claims":[{"claim":"Merged review finding","sources":["A","B"],"evidence":["file.go:12"],"confidence":"high"}],"conflicts":[],"unknowns_union":[]}</final_json>
+<final_json>{"merged_claims":[{"claim":"Merged review finding","sources":["A","B"],"evidence":["file.go:12"],"severity":"medium","confidence":"high"}],"conflicts":[],"unknowns_union":[]}</final_json>
 JSON
     ;;
 esac
@@ -840,7 +840,7 @@ func writeJudgeOnlySourceRun(t *testing.T, runDir string, mode string, judgeStat
 		if err := workorder.WriteJSONAtomic(filepath.Join(runDir, "providers", id, "final.json"), map[string]any{
 			"status": "complete",
 			"claims": []any{
-				map[string]any{"id": "C-001", "claim": id + " claim", "evidence": []any{"evidence:1"}, "confidence": "high"},
+				map[string]any{"id": "C-001", "claim": id + " claim", "evidence": []any{"evidence:1"}, "severity": "medium", "confidence": "high"},
 			},
 			"conflicts":               []any{},
 			"unknowns":                []any{id + " unknown"},

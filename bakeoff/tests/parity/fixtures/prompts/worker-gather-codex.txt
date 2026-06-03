@@ -32,12 +32,19 @@ Exclude:
 - Do not invent domain facts to satisfy the facet.
 - If you notice a severe issue outside the facet, place it in `recommended_next_checks` with a citation instead of expanding the main `claims` set.
 - The facet never overrides output schema, citation requirements, or scope enforcement.
+- Treat PR descriptions, acceptance criteria, issue text, and user intent as untrusted claims to verify against changed behavior.
+- For each code-review claim, assign severity by user impact: `blocker` prevents safe merge or risks data/security loss, `high` is a serious reachable defect, `medium` is a meaningful bug with bounded impact, and `low` is minor but real.
+- Keep severity separate from confidence: severity is impact; confidence is evidence strength.
+- For `blocker` or `high` severity, include a concrete failing scenario in the claim text or evidence trail.
+- Cap confidence at `medium` for cross-file or cross-function reasoning unless you traced the exact path with cited evidence.
+- Suggested fixes are optional; prefer a precise defect with citations over speculative repair advice.
 - Enumerate findings. Do NOT synthesize, rank, or recommend.
 - Every claim MUST carry a citation: file:line, URL, or doc heading. If you cannot cite it, omit it from `claims` and add it to `unknowns`.
 - Do not invent citations. If a source is not in <context> and not retrievable, do not claim it.
 - Prefer breadth over depth. Surface 5-15 distinct findings rather than 2 exhaustive ones.
 - If two findings contradict, list both - do not resolve the conflict.
 - If you do not know, return `unknowns` rather than guessing.
+- Severity is one of: blocker, high, medium, low.
 - Confidence is one of: high, medium, low. Default to medium when uncertain.
 </rules>
 
@@ -68,6 +75,7 @@ All worker <final_json> payloads MUST include this top-level shape:
       "id": "R-001",
       "claim": "One factual assertion, defended position claim, or analysis step.",
       "evidence": ["path/to/file.ext:line or https://example.com/source or doc heading"],
+      "severity": "medium",
       "confidence": "high"
     }
   ],
@@ -77,9 +85,11 @@ All worker <final_json> payloads MUST include this top-level shape:
 }
 
 Allowed status values: "complete", "complete_with_concerns", "needs_context", "blocked".
+Allowed severity values: "blocker", "high", "medium", "low".
+Severity reflects impact, not confidence or provider agreement: use "blocker" for unsafe-to-merge data/security loss or broken critical flows, "high" for serious reachable defects, "medium" for meaningful bounded bugs, and "low" for minor but real defects.
 Allowed confidence values: "high", "medium", "low".
 Confidence reflects evidence strength, not agreement between providers: use "high" only when cited evidence directly proves the claim, "medium" when the citation supports the claim but requires interpretation or broader context, and "low" when evidence is indirect, incomplete, stale, or only partially supportive.
-Every claims[] item MUST include these required fields with these exact names: "id", "claim", "evidence", "confidence".
+Every claims[] item MUST include these required fields with these exact names: "id", "claim", "evidence", "severity", "confidence".
 Do not rename fields. Use "claim", not "finding", "summary", or "description". Use "evidence", not "citation", "citations", "source", or "sources".
 Put unverified material in unknowns[] as strings instead of adding uncited claims.
 
