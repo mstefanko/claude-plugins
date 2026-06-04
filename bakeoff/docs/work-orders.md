@@ -7,13 +7,14 @@ scope policy, and a workflow type.
 Bakeoff has no batch work-order schema in v1. Split plugin runs are represented
 as separate normal work-order files. Multi-lens review is also a plugin
 drafting workflow, not a work-order schema feature: each lens is a normal
-`gather` work order with the standard `code-review` facet and lens-specific
-focus/include/exclude text.
+`gather` work order with a standard review facet and lens-specific
+focus/include/exclude text. Code review uses `facet.id: "code-review"`; plan
+review uses `facet.id: "plan-review"`.
 
 Eligible generic non-build splits and eligible 2-3 lens multi-lens review
 previews may be launched in parallel by the plugin, but that still does not
 change the schema. Each child is a normal `gather`, `compare`, or `analyze`
-work order for generic splits, or a normal `gather` plus `code-review` work
+work order for generic splits, or a normal `gather` plus review facet work
 order for multi-lens review, and each child is a normal `bakeoff research` run
 with an explicit run id. Parallel summaries use those explicit run ids and do
 not rely on `latest`, because concurrent child starts make the convenience
@@ -45,6 +46,7 @@ The fastest way to start is the examples directory:
 - [examples/compare.work-order.json](../examples/compare.work-order.json)
 - [examples/analyze.work-order.json](../examples/analyze.work-order.json)
 - [examples/review.work-order.json](../examples/review.work-order.json)
+- [examples/plan-review.work-order.json](../examples/plan-review.work-order.json)
 - [examples/build.work-order.json](../examples/build.work-order.json)
 
 For build work orders with known extracted inputs, `bakeoff draft-build` can
@@ -62,7 +64,9 @@ manual editing.
 | `build` | Competitive implementation candidates in isolated worktrees. |
 
 `review` is an init recipe only. It writes a `gather` work order with
-`facet.id: "code-review"`.
+`facet.id: "code-review"`. Plan review is intentionally not an init recipe in
+v1; use [examples/plan-review.work-order.json](../examples/plan-review.work-order.json)
+as the documented starting point.
 
 ## Common Fields
 
@@ -162,6 +166,35 @@ The `code-review` facet is the standard review shape:
       "style-only preferences without project convention evidence",
       "large rewrites unrelated to the changed behavior",
       "speculation without file:line evidence"
+    ]
+  }
+}
+```
+
+The `plan-review` facet is a data-only generic facet for reviewing
+implementation, rollout, migration, or verification plans before code is
+written. Runtime type remains `gather`; do not add plan-specific fields to
+worker or judge JSON. Put plan section, failure mode, and required plan change
+inside `claim`, and put plan section labels, repo file lines, URLs, command
+output, or `missing evidence` inside `evidence`.
+
+```json
+{
+  "type": "gather",
+  "facet": {
+    "id": "plan-review",
+    "kind": "generic",
+    "focus": "Find plan defects that could cause unsafe, incomplete, incorrect, or unverifiable implementation.",
+    "include": [
+      "missing or untestable acceptance criteria",
+      "uncited claims about current behavior",
+      "wrong sequencing or hidden dependencies",
+      "missing tests, gates, observability, or rollback"
+    ],
+    "exclude": [
+      "style preferences about plan prose",
+      "new feature ideas outside the stated goal",
+      "implementation code unless needed to explain a plan defect"
     ]
   }
 }

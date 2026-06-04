@@ -29,10 +29,11 @@ The new capability is only this:
 ```
 
 The implementation should treat `providers[].id` as the attempt identity and
-artifact/worktree key. `backend`, `model`, `scope`, and `effort` remain the
-execution identity. For the same-model baseline, both workers should receive the
-same prompt, same scope, same tools, same runtime budgets, and separate artifact
-directories or build worktrees.
+artifact/worktree key. `backend`, `model`, and `scope` are the current
+deduplication key that blocks same-model pairs; `effort` is not part of that
+existing key. For the exact duplicate baseline, both workers should receive the
+same prompt, same scope, same tools, same effort, same runtime budgets, and
+separate artifact directories or build worktrees.
 
 Do not add N-agent work orders, debate rounds, worker personas, provider-level
 facets, shared memory, or a new scheduler.
@@ -86,8 +87,9 @@ primitive, not as proof by consensus.
   existing pairwise design.
 
 Research implication: v1 should use independent parallel duplicate attempts
-with identical prompts, then rely on deterministic verifiers first and swapped,
-anonymized, preferably cross-family judging second.
+with identical prompts when the execution settings match, then rely on
+deterministic verifiers first and swapped, anonymized, preferably cross-family
+judging second.
 
 ## Goals
 
@@ -104,7 +106,7 @@ anonymized, preferably cross-family judging second.
 
 ## Non-Goals
 
-- Do not change the default pair to Claude + Codex.
+- Do not change the default pair away from Claude + Codex.
 - No automatic same-model fallback when Codex or Claude is missing.
 - No three-provider or N-provider work-order schema.
 - No majority voting.
@@ -223,9 +225,11 @@ Change `validateProviders`:
 - Keep `providers[].id` required and unique.
 - Keep valid backend, model, scope, and effort validation.
 - Keep rejecting provider-level `facet`.
-- Remove the hard error:
+- Remove the hard error keyed by `backend + model + scope`. The current
+  validation map is named `triples`, but it does not include `effort`:
 
 ```go
+triples[participant.Backend+"\x00"+participant.Model+"\x00"+participant.Scope] = true
 if len(triples) == 1 {
 	return nil, Validationf("providers must differ on at least one of backend, model, or scope")
 }
@@ -234,16 +238,9 @@ if len(triples) == 1 {
 Do not replace it with schema fields such as `duplicate: true` or
 `attempt_group`. The existing two-provider array plus unique IDs is enough.
 
-Add helper functions near work-order or provider utility code:
+If a helper is useful, keep it tiny and named after the actual current key:
 
 ```go
-func SameExecutionIdentity(a, b Participant) bool {
-	return a.Backend == b.Backend &&
-		a.Model == b.Model &&
-		a.Scope == b.Scope &&
-		a.Effort == b.Effort
-}
-
 func SameBackendModelScope(a, b Participant) bool {
 	return a.Backend == b.Backend &&
 		a.Model == b.Model &&
@@ -251,9 +248,10 @@ func SameBackendModelScope(a, b Participant) bool {
 }
 ```
 
-Use `SameExecutionIdentity` for exact duplicate baseline warnings. Use
-`SameBackendModelScope` only when effort is intentionally ignored, such as
-judge-family text.
+Do not define a broader execution-identity abstraction unless implementation
+needs it. `effort` may still be compared in tests and warnings to distinguish
+an exact duplicate baseline from a same backend/model/scope run with different
+runtime effort.
 
 ### 2. Validate Warnings
 
@@ -261,24 +259,24 @@ File:
 
 - `internal/commands/validatecmd/validate.go`
 
-Add a warning in `validateWarnings` when both providers have the same execution
-identity:
+Add a warning in `validateWarnings` when both providers have the same
+`backend`, `model`, and `scope`:
 
 ```text
 same-model duplicate advisory: providers claude-a and claude-b share backend,
-model, scope, and effort. They are independent attempts, not independent model
+model, and scope. They are independent attempts, not independent model
 corroboration; no majority vote is possible with two workers.
 ```
 
-For same-family judge warnings, update `matchingProviderBackends` or add a
-provider-ID-aware helper so duplicate runs name IDs instead of deduping to one
-backend. Current output can collapse Claude + Claude to `all providers`, which
-is acceptable but less actionable. Prefer:
+If the two providers also share `effort`, the advisory may call it an exact
+duplicate baseline. If effort differs, keep validation successful but phrase the
+warning as same backend/model/scope with different effort, not exact duplicate
+sampling.
 
-```text
-judge family advisory: judge claude shares provider-family metadata with
-providers claude-a, claude-b; ...
-```
+Do not rework the existing same-family judge helper in v1. Claude + Claude with
+a Claude judge enters the `JudgeFamilyRelationSameAsAll` branch and currently
+reports `all providers`; that is accurate enough for the first cut. The
+duplicate advisory above carries the provider IDs.
 
 Keep warnings advisory-only. Validation should still succeed.
 
@@ -294,6 +292,13 @@ Change `parseProviderFlags` so repeated backend flags are allowed:
 ```text
 bakeoff draft-build ... --provider claude --provider claude
 ```
+
+This requires two concrete edits:
+
+- remove the duplicate-backend rejection in `parseProviderFlags`;
+- stop assigning `participant.ID = backend` inside the first parse loop when
+  duplicate backends are present. Parse both flags first, compute IDs from the
+  full pair, then build participants.
 
 Desired output IDs:
 
@@ -311,6 +316,11 @@ necessary later, add a separate `--provider-id` design instead of overloading
 Implementation sketch:
 
 ```go
+type parsedProviderFlag struct {
+	Backend string
+	Model   string
+}
+
 func providerIDsForFlags(parsed []parsedProviderFlag) []string {
 	counts := map[string]int{}
 	for _, p := range parsed {
@@ -386,11 +396,14 @@ should not upgrade confidence because both sources are the same model family.
 The current judge fixture already says confidence reflects evidence strength,
 not corroboration; keep that invariant.
 
-### 6. Analyze Tie Behavior
+### 6. Deferred Analyze Tie Behavior
 
-File:
+Defer this from the v1 cut line.
+
+Files:
 
 - `internal/decision/decision.go`
+- `internal/commands/researchcmd/run.go`
 
 Current analyze fallback can choose provider A when swapped judges disagree and
 claim counts are equal:
@@ -399,11 +412,15 @@ claim counts are equal:
 tiebreak = "position_a"
 ```
 
-For exact duplicate provider runs, this is too arbitrary. Change `ResolveAnalyze`
-so exact duplicate runs with swap disagreement and equal claim counts return an
-unresolved decision instead of selecting position A.
+For exact duplicate provider runs, that fallback is arbitrary. However, changing
+it is more invasive than the core duplicate-provider enablement because analyze
+currently returns exit `0` unconditionally after successful judge passes. A real
+tie result would need both decision-shape work and an explicit exit-code
+contract change.
 
-Suggested behavior:
+Do not include this in the first implementation unless dogfood shows duplicate
+analyze runs are a priority. If implemented later, do all of the following in
+one change:
 
 - If swapped judges agree, keep `decision_kind: "pick_winner"`.
 - If swapped judges disagree and atomic claim counts differ, keep the existing
@@ -417,9 +434,12 @@ same-model duplicate analyze run had judge swap disagreement with no objective
 tiebreak; inspect both analyses or rerun with a non-contestant judge
 ```
 
-If changing `ResolveAnalyze` to return a tie would affect exit codes, update
-`runJudgePhase` for analyze to set exit `3` when `decision_kind == "tie"`.
-That keeps compare and analyze unresolved selection behavior aligned.
+- Add an early tie branch before assigning `decision_kind: "pick_winner"` and
+  `canonical_winner` in `ResolveAnalyze`.
+- Update `runJudgePhase` so analyze returns exit `3` when the resolved decision
+  is a tie. This is mandatory for a tie behavior change; otherwise the CLI would
+  silently exit `0`.
+- Update `/bakeoff:run` recovery guidance for analyze exit `3` if needed.
 
 ### 7. Build Run Behavior
 
@@ -446,11 +466,21 @@ For same-model duplicate runs:
   `selection_basis: "identical_patch"` tie behavior;
 - if verifier evidence is inconclusive, run the existing swapped build judge.
 
-Build judge payload currently includes `provider_id`. For duplicate providers,
-that can reveal same-backend identity and invite familiarity bias. Change
-`buildJudgePayload` or the judge prompt assembly so the judge sees positional
-candidate labels and artifact paths, not provider IDs, unless a failure artifact
-requires the provider ID for traceability.
+Build judge payload currently exposes provider IDs in two places:
+
+- top-level `provider_id` in `buildJudgePayload`;
+- nested `verify.provider_id` produced by `compactVerifyResult`.
+
+For duplicate providers, those fields can reveal same-backend identity and
+invite familiarity bias. Add a judge-payload-specific anonymization path so the
+judge sees positional candidate labels, verifier evidence, patch excerpts, and
+diffstats, but not real provider IDs. Do not remove provider IDs from durable
+operator artifacts.
+
+If the judge payload keeps artifact paths such as `providers/claude-a/...`, that
+also leaks the candidate ID. Prefer omitting judge-only path fields when the
+prompt already includes the relevant excerpt or summary. Keep artifact paths in
+the report and decision metadata for operator traceability.
 
 Keep real provider IDs in:
 
@@ -500,14 +530,13 @@ Files:
 The existing artifact layout should continue working because it is keyed by
 provider ID.
 
-Add duplicate-run metadata only if it materially improves operator visibility.
-Prefer derived telemetry over schema expansion:
+Do not add a `same_execution_identity` field to the manifest in v1. The report
+caveat is enough, and the state is already derivable from `work-order.json` if a
+future command needs it.
 
 - `providers.count` remains `2`.
 - `providers.backends` may be `["claude", "claude"]`.
-- `providers.families` remains unique or list behavior as currently defined,
-  but add a `same_execution_identity: true` field only if it can be derived
-  from `work-order.json` without changing the work-order schema.
+- `providers.families` keeps the current manifest behavior.
 
 Report caveat text should be enough for v1:
 
@@ -518,6 +547,24 @@ Agreement is duplicate sampling, not independent model-family corroboration.
 
 Do not add a new report section unless the warning is otherwise too easy to
 miss.
+
+### 10. Same-Provider Concurrency And Rate Limits
+
+Same-model duplicate runs launch the same provider backend twice in parallel
+because the existing research and build runners are parallel by design. Do not
+add a sequential worker mode in v1; that would be a larger scheduling feature
+for a risk that may or may not matter in practice.
+
+Mitigation for the first cut:
+
+- include a preview caveat that running the same provider twice can hit provider
+  rate limits or local CLI concurrency limits sooner than a heterogeneous pair;
+- rely on existing per-provider status, stderr, failure, and report artifacts
+  when one duplicate attempt fails;
+- add fake-provider coverage that a duplicate pair still writes separate
+  artifacts when one provider exits with a rate-limit-like failure message;
+- track real rate-limit or concurrency failures during dogfood before adding
+  scheduler controls.
 
 ## Test Plan
 
@@ -530,15 +577,18 @@ Add tests in `internal/workorder/workorder_test.go`:
 - unknown backend still fails;
 - provider-level `facet` still fails;
 - judge with the same backend/model as either provider still fails;
-- same backend/model/scope but different effort validates, with warnings handled
-  in validate command tests.
+- same backend/model/scope but different effort validates, because the removed
+  dedupe key is backend/model/scope only.
 
 ### Validate Command Warnings
 
 Add tests in `internal/commands/validatecmd/validate_test.go`:
 
 - exact duplicate providers print the same-model duplicate advisory;
-- Claude judge on Claude + Claude names both provider IDs or says all providers;
+- same backend/model/scope with different effort prints an advisory but does not
+  call the run an exact duplicate baseline;
+- Claude judge on Claude + Claude may continue to say `all providers` in the
+  existing judge-family advisory;
 - Codex judge on Claude + Claude does not print same-family warning;
 - compare/analyze/build and code-review gather contexts still trigger judge
   family warnings;
@@ -576,17 +626,28 @@ Add tests in `internal/commands/buildcmd/run_test.go`:
 - identical patch digest behavior still produces a tie without judge;
 - inconclusive verifier evidence still runs swapped build judge;
 - judge prompt for duplicate providers does not expose `claude-a` and
-  `claude-b` in candidate payload fields except unavoidable artifact paths if
-  retained.
+  `claude-b` in top-level `provider_id`, nested `verify.provider_id`, or
+  retained judge-only path fields.
 
-### Decision Logic
+### Provider Failure Isolation
 
-Add tests in `internal/decision/decision_test.go`:
+Add fake-provider tests in research and/or build command packages:
 
-- duplicate analyze with swap agreement still picks winner;
+- a duplicate pair can launch both attempts without artifact directory
+  collision;
+- if one duplicate attempt exits with a rate-limit-like stderr message, the
+  failure artifact is captured under that provider ID and the sibling artifacts
+  remain readable.
+
+### Deferred Decision Logic
+
+Only add these tests if the deferred analyze tie behavior is implemented:
+
+- duplicate analyze with swap agreement still picks a winner;
 - duplicate analyze with swap disagreement and different claim counts uses
   `atomic_count` with a caveat;
-- duplicate analyze with swap disagreement and equal claim counts returns tie;
+- duplicate analyze with swap disagreement and equal claim counts returns tie
+  and exits `3`;
 - non-duplicate analyze keeps current deterministic fallback unless separately
   changed.
 
@@ -656,17 +717,23 @@ unique evidence or patch diversity to justify the doubled worker cost.
 
 ## Implementation Order
 
-1. Allow duplicate execution identity in work-order validation.
-2. Add validate warnings for exact duplicate providers and same-family judges.
+1. Allow duplicate `backend + model + scope` pairs in work-order validation
+   while preserving unique provider IDs.
+2. Add the same-model duplicate advisory in `bakeoff validate`; keep the
+   existing judge-family advisory behavior.
 3. Update `draft-build --provider` parsing for repeated backends.
 4. Update `/bakeoff:run` skill drafting rules and preview text.
 5. Add research prompt/artifact tests for duplicate providers.
 6. Add build worktree/artifact tests for duplicate providers.
-7. Fix duplicate analyze equal-count swap-disagreement behavior.
-8. Anonymize build judge duplicate candidate payloads where practical.
+7. Anonymize build judge duplicate candidate payloads, including top-level and
+   nested provider IDs.
+8. Add provider failure isolation coverage for rate-limit-like duplicate
+   failures.
 9. Update README and `docs/work-orders.md` with a short explicit-provider
    example and caveat.
 10. Dogfood with the experiment matrix before considering any broader feature.
+11. Defer analyze tie/exit-code behavior until dogfood proves it is worth the
+    contract change.
 
 ## Recommended Cut Line
 
@@ -676,10 +743,12 @@ The smallest valuable release is:
 - natural-language drafting supports explicit Claude + Claude and Codex + Codex;
 - duplicate previews and `bakeoff validate` warn clearly;
 - build and research tests prove separate artifacts/worktrees;
+- build judge payloads are anonymized for duplicate candidates where judge
+  evidence is needed;
+- provider failure isolation is covered for one duplicate attempt failing;
 - swapped judging remains in place;
 - no work-order schema version or default changes.
 
-Analyze tie cleanup and build judge anonymization are strongly recommended for
-the same release, but if they threaten scope, ship duplicate validation behind
-clear warnings and mark judge-heavy duplicate analyze/build conclusions as
-experimental until those mitigations land.
+Analyze tie cleanup is below the cut line. If duplicate analyze runs later show
+unresolved swap disagreements are common enough to matter, implement the
+deferred decision and exit-code change as a separate, explicit behavior change.

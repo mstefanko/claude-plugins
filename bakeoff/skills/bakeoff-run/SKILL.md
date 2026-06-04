@@ -227,7 +227,7 @@ owns the canonical build shape, provider/judge defaults, budgets,
 `build.verify[].argv`, and self-validation. Metric verifier drafts, generated
 fixtures, and protected benchmark harnesses still use careful manual drafting.
 
-For gather/code-review, compare, and analyze drafts, copy field names from
+For gather, code-review, plan-review, compare, and analyze drafts, copy field names from
 `examples/*.work-order.json`. Avoid schema drift: use `providers[].id`,
 `providers[].backend`, and `providers[].model`; use `scope: "codebase"`, not
 `kind`, `role`, or `"local"`; use `judge: {backend, model, effort}`; use
@@ -242,6 +242,14 @@ Put enumerated review areas in `background`, `facet.include`, and
 strings, and `exclude` is a JSON array of 0-8 short descriptive criteria
 strings. Do not collapse them to a paragraph and do not use path globs. Use
 `examples/review.work-order.json` as the code-review facet example.
+For plan-review facets, use `type: "gather"`, `facet.id: "plan-review"`,
+`facet.kind: "generic"`, and the generic gather schema only. Put the plan
+section, issue, concrete failure mode, and required plan change inside
+`claim`; put plan section labels, repo file lines, source URLs, command output,
+or `missing evidence` inside `evidence`. Use
+`examples/plan-review.work-order.json` as the plan-review facet example. Do
+not generate source mutations, build work orders, code-review diff context, or
+extra plan-specific claim fields for plan-review requests.
 Non-build and manual build drafts should internally validate before preview
 when practical, but the enforced safety gate is the on-disk
 `bakeoff validate` after approval.
@@ -273,10 +281,27 @@ response as a task-fit warning.
 
 Classify types conservatively: code-editing candidates or competing patches are
 `build`; review/audit/check PR/diff/local changes is `gather` with
-`facet.id: "code-review"`; compare options is `compare`; RCA, design analysis,
-or synthesis is `analyze`; fact-finding is `gather`. "Build a report/matrix"
-is research unless the user asks providers to edit code. If build mode would
-launch editing providers without clear implementation authorization, ask once.
+`facet.id: "code-review"`; review of an implementation plan, rollout plan,
+migration plan, verification plan, `PLAN.md`, or other clearly plan-shaped
+document is `gather` with `facet.id: "plan-review"`; compare options is
+`compare`; RCA, design analysis, or synthesis is `analyze`; fact-finding is
+`gather`. "Build a report/matrix" is research unless the user asks providers
+to edit code. If build mode would launch editing providers without clear
+implementation authorization, ask once.
+
+Plan-vs-diff disambiguation:
+
+- `review this plan`, `review PLAN.md`, `implementation plan`, `rollout plan`,
+  `migration plan`, or a path that is clearly a plan document routes to
+  `type: "gather"` plus `facet.id: "plan-review"`.
+- `review this diff`, `review this branch`, `PR`, `local changes`, `--base`, or
+  `--diff` routes to `type: "gather"` plus `facet.id: "code-review"`.
+- `compare these two plans` routes to `compare`.
+- `analyze whether this plan is feasible`, `explain risks`, or `explain
+  tradeoffs` routes to `analyze` unless the user asks for actionable plan
+  defects.
+- If `review this` is ambiguous and the target is not clearly a diff, branch,
+  PR, local changes, or plan file, ask one short clarification.
 
 ## Single Work-Order Drafting
 
@@ -316,6 +341,12 @@ branch/base refs). Use `git diff` only for bounded context the user asked to
 review. Recommend `bakeoff research <path> --base <ref> --diff` when generated
 review context is useful. Let the CLI auto-triage reviews unless
 `--no-triage` is supplied.
+
+For plan-review requests, gather only read-only context needed to identify the
+plan path, cited current-state evidence, and nearby repo files. Do not request
+generated code-review diff context (`--base`, `--diff`, or `--changed-files`)
+unless the user explicitly asks to review implementation drift against a diff.
+Do not enable source mutations or build drafting from a plan-review request.
 
 Before writing, show a compact preview with id/type, planned file path,
 providers, judge, budget, scope policy, goal, short background summary, and

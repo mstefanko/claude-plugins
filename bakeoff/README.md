@@ -41,6 +41,7 @@ Think of the mode as the shape of the question.
 | Compare | `type: "compare"` | Asks both providers to weigh named options, then judges the tradeoff. | `/bakeoff:run compare SQLite FTS vs Tantivy for local search` |
 | Analyze | `type: "analyze"` | Asks both providers to explain why something happens, then keeps the strongest reasoning. | `/bakeoff:run analyze why reports get truncated` |
 | Review | `type: "gather"` + `facet.id: "code-review"` | Asks both providers to review the same change, merges findings, then triages them. | `/bakeoff:run review this diff against main` |
+| Plan review | `type: "gather"` + `facet.id: "plan-review"` | Asks both providers to find actionable defects in a plan before implementation. | `/bakeoff:run review docs/implementation-plan.md` |
 | Build | `type: "build"` | Asks both providers to implement the same fix in isolated worktrees, runs your gates, and selects a patch only when evidence is strong. | `/bakeoff:run build competing fixes for the failing cache test` |
 
 Mode words are hints, not strict syntax. A request that starts with "why" can
@@ -140,7 +141,7 @@ once; `write and run` or `sequential` keeps the one-after-another behavior.
 Explicit 2-3 lens review can also run sequentially or in parallel after
 preview, and writes a short summary file after the lens runs finish. Sample
 work orders live in `examples/` (`gather`, `compare`, `analyze`, `review`,
-`build`).
+`plan-review`, `build`).
 
 After a run finishes, `/bakeoff:run` may recommend one next normal work order
 when the artifacts make it obvious, such as drafting an implementation plan
@@ -279,6 +280,20 @@ Example flow:
 [examples/review.work-order.json](examples/review.work-order.json) for the
 facet shape; field-level reference is in
 [docs/work-orders.md](docs/work-orders.md).
+
+For plan review before code is written, use a normal `gather` run with
+`facet.id: "plan-review"`:
+
+```text
+/bakeoff:run review docs/implementation-plan.md
+/bakeoff:run review this migration plan for missing verification and rollback
+```
+
+Plan-review findings stay in the generic gather shape: `claim`, `evidence`,
+`severity`, and `confidence`. The claim should name the plan section, failure
+mode, and smallest required plan change. See
+[examples/plan-review.work-order.json](examples/plan-review.work-order.json)
+for the facet shape.
 
 To run multiple lenses, say so explicitly:
 

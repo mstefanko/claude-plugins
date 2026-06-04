@@ -1,14 +1,21 @@
 # Review Kit
 
-Review Kit is a thin, skill-driven code-review coordinator. It assembles curated context for a diff, fences user intent from defect review, chooses single-agent vs. swarm routing, writes a review-plan artifact, and delegates ledgered multi-agent execution to bakeoff when the route calls for it.
+Review Kit is a thin, skill-driven review coordinator. It assembles curated
+context for a code diff, implementation plan, or implementation-vs-plan drift
+pass; fences user intent from defect review; chooses single-agent vs. swarm
+routing; writes a review-plan artifact; and delegates ledgered multi-agent
+execution to bakeoff when the route calls for it.
 
 Primary command:
 
 ```bash
-/review-kit:review [base-ref] [--mode auto|single|focused-swarm|swarm|chunked-swarm]
+/review-kit:review [base-ref|plan-path] [--mode auto|single|focused-swarm|swarm|chunked-swarm] [--approved-plan path]
 ```
 
-The command is read-only/output-only by default. It does not create branches, PRs, commits, GitHub comments, or implementation plans.
+The command is read-only/output-only by default. It does not create branches,
+PRs, commits, GitHub comments, implementation plans, or code changes. It writes
+`approved-plan.md` only after the user explicitly approves or selects a
+reviewed plan as the implementation baseline.
 
 Provenance (bundled under `docs/`):
 

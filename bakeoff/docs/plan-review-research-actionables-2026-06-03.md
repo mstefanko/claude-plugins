@@ -16,14 +16,17 @@ mode. The strongest v1 shape is:
    review artifacts.
 2. Bakeoff owns ledgered independent reviewers and judges through ordinary
    work orders.
-3. A plan-review run is usually `type: "gather"` with `facet.id:
-   "plan-review"` because the desired output is a list of actionable plan
-   defects, not a winning explanation spine.
+3. A ledgered plan-review run should start as a data-only `type: "gather"`
+   work order with `facet.id: "plan-review"`. Use the existing generic
+   `claim`, `evidence`, `severity`, and `confidence` schema; put plan section,
+   failure mode, and required plan change inside the claim text.
 4. Multi-lens plan review should use separate normal work orders per lens,
-   then an optional synthesis pass. Do not add `facets[]`, provider-specific
-   lenses, debate loops, or majority voting.
-5. High-risk plans need an independent critic or verifier. Asking the same
-   model to self-approve its own plan is the least defensible shape.
+   then review-kit synthesis. Do not add `facets[]`, provider-specific lenses,
+   debate loops, majority voting, or a Bakeoff plan-review witness branch in
+   v1.
+5. High-risk plans need an independent critic or verifier, but that critic
+   belongs in review-kit for v1. Asking the same model to self-approve its own
+   plan is the least defensible shape.
 
 ## What The Research Says
 
@@ -142,6 +145,46 @@ right architectural concepts: context curation, route decisions, risk signals,
 synthesis. Plan review should extend that plugin's vocabulary rather than
 forking another orchestration plugin.
 
+## Review Corrections Accepted
+
+The follow-up review found that the original memo's thesis was sound but the
+first Actionable Changes section overreached. I agree with that review.
+
+Validated findings:
+
+| Reviewed item | Decision | Why |
+| --- | --- | --- |
+| Bakeoff plan-review witness branch | Cut from v1 | Current witness rules are explicitly code-review-only, and adding a plan branch would create another hardcoded path. Review-kit already has the critic concept. |
+| `bakeoff init plan-review` | Defer | This touches the compiled init-kind list and template tests. An example work order proves demand with less surface. |
+| Plan-specific claim fields | Cut from v1 | Generic gather workers and judges guarantee `claim`, `evidence`, `severity`, and `confidence`. Extra fields are not part of the prompt/report contract, even if the validator may tolerate some extras. |
+| Review-kit plan artifacts | Thin to one required artifact | Keep `approved-plan.md` because it enables implementation-drift review. Defer source/review/findings artifact families until usage proves the need. |
+| Review-kit route names | Reuse existing routes | Keep `single`, `focused-swarm`, `swarm`, and `chunked-swarm`. Use `target_kind` to distinguish code vs plan vs implementation-vs-plan instead of inventing parallel plan route labels. |
+| Review-kit risk signals | Consolidate | Use three broad plan risk signals rather than nine speculative ones. |
+| Plan-vs-diff routing | Add explicit rules | The existing `/bakeoff:run` classification only distinguishes code review, compare, analyze, gather, and build. Plan review needs concrete disambiguation rules before implementation. |
+
+One nuance: the worker-result validator does not appear to reject every extra
+claim field, but the stable Bakeoff contract and report rendering only promise
+the generic claim fields. The v1 plan should therefore encode plan-specific
+details in the generic `claim` and `evidence` fields and revisit schema only
+after dogfooding.
+
+Code evidence checked:
+
+- `internal/workorder/workorder.go` has runtime types `gather`, `compare`,
+  `analyze`, and `build`; `review` is only an init recipe.
+- `internal/workorder/workorder.go` validates facets generically and allows any
+  non-reserved facet id that satisfies the slug rules.
+- `internal/prompt/prompt.go`, `internal/triage/state.go`,
+  `internal/commands/validatecmd/validate.go`, and
+  `internal/commands/escalatecmd/escalate.go` contain code-review-specific
+  branches that should not be copied for plan review in v1.
+- `skills/bakeoff-run/SKILL.md` currently routes review/audit/check
+  PR/diff/local changes to `facet.id: "code-review"` and needs explicit
+  plan-vs-diff classification.
+- `../review-kit/skills/review/SKILL.md` already has the reusable route
+  decisions, risk-signal list, `review-plan.json`, and cold-start critic
+  contract.
+
 ## Recommended Product Shape
 
 ### Routine Single-agent Plan Review
@@ -165,14 +208,20 @@ Why `gather`: it asks both providers to enumerate cited findings, then unions
 and deduplicates. That better matches "what is wrong with this plan?" than
 `analyze`, which asks providers to build a linear reasoning spine.
 
+Implementation constraint: v1 should rely on the existing generic facet block
+and generic gather schema. Do not add `facet.ID == "plan-review"` branches to
+`internal/prompt/prompt.go` until a dogfood run shows that generic facet text
+cannot calibrate reviewers well enough.
+
 ### Multi-lens Plan Review
 
 Use only when the user asks for separate lenses or the plan is high-risk enough
 to justify the extra cost.
 
-Runner: separate normal `gather` work orders, one per lens, each with
-`facet.id: "plan-review"` and lens-specific include/exclude text. Optional
-parallel execution follows the existing multi-lens review pattern.
+Runner: review-kit drafts separate normal `gather` work orders, one per lens,
+each with `facet.id: "plan-review"` and lens-specific include/exclude text.
+Any sequential or parallel fanout should reuse review-kit's existing
+orchestration pattern; Bakeoff still sees ordinary single work orders.
 
 Default lenses:
 
@@ -189,96 +238,112 @@ Default lenses:
 
 Use after implementation, before normal code review or as a dedicated lens.
 
-Runner: `gather` with either `facet.id: "code-review"` plus conformance lens, or
-`facet.id: "plan-drift"` when reviewing only plan conformance.
+Runner: review-kit pass over an implementation diff and an approved plan. Use
+the existing route machinery, but set `target_kind: "implementation-vs-plan"`
+in `review-plan.json`.
 
 Key input: the approved plan artifact, not the evolving chat transcript.
 
-## Actionable Changes
+## Revised V1 Action Plan
 
 ### Bakeoff
 
-1. Add a documented plan-review recipe.
-   - Minimal version: `examples/plan-review.work-order.json` and docs.
-   - Stronger version: add `plan-review` to `initKinds` so
-     `bakeoff init plan-review` writes a template.
+1. Add only a documented plan-review example.
+   - Add `examples/plan-review.work-order.json`.
+   - Mention it from `docs/work-orders.md` and, optionally, the review section
+     in `README.md`.
+   - Do not add `plan-review` to `initKinds` in v1.
+
+2. Keep `plan-review` a data-only facet.
    - Runtime type remains `gather`.
+   - Use `facet.kind: "generic"`.
+   - Use `facet.focus`, `facet.include`, `facet.exclude`, and `background` to
+     instruct reviewers to cite plan sections, missing evidence, failure mode,
+     and required plan change.
+   - Do not add `facet.ID == "plan-review"` branches to prompt rendering,
+     triage, validate, report, or escalation code in v1.
 
-2. Add facet-specific prompt rules for `facet.id == "plan-review"`.
-   - Worker rules should require plan citation, evidence or missing-evidence
-     label, impact, required plan change, and confidence.
-   - Judge rules should dedupe by root plan defect, preserve severity as impact,
-     and never increase severity because both workers agree.
-   - Keep this generic enough for software implementation plans, docs plans,
-     migration plans, rollout plans, and agent task plans.
+3. Reuse the generic gather schema.
+   - Worker claims remain `id`, `claim`, `evidence`, `severity`, and
+     `confidence`.
+   - Judge merged claims remain `claim`, `evidence`, `sources`, `severity`, and
+     `confidence`.
+   - Encode plan-specific data inside `claim`, for example:
+     `Plan: Phase 2 / Verification. Issue: gate is missing. Failure mode:
+     broken migration can look complete. Required plan change: add fail-to-pass
+     verifier...`
+   - Put plan section labels, repo file lines, URLs, or `missing evidence` in
+     `evidence`.
 
-3. Add a plan-review witness/critic branch.
-   - Mirror the code-review witness idea, but target plan findings.
-   - Treat each finding as a hypothesis to falsify.
-   - Ask the witness to find a concrete counterexample, existing repo evidence,
-     or missing context that invalidates the plan-review finding.
+4. Update `/bakeoff:run` routing instructions with explicit disambiguation.
+   - `review this plan`, `review PLAN.md`, `implementation plan`, `rollout
+     plan`, `migration plan`, or a path matching a plan document -> `gather`
+     with `facet.id: "plan-review"`.
+   - `review this diff`, `review this branch`, `PR`, `local changes`, `--base`,
+     or `--diff` -> `gather` with `facet.id: "code-review"`.
+   - `compare these two plans` -> `compare`.
+   - `analyze whether this plan is feasible` or "explain risks/tradeoffs" ->
+     `analyze` unless the user asks for actionable plan defects.
+   - If "review this" is ambiguous and the target is not clearly a diff,
+     branch, PR, local changes, or plan file, ask one short clarification.
 
-4. Update docs and command routing.
-   - `/bakeoff:run review this plan` should mean plan review when the object is
-     a plan file or plan text, not code review.
-   - `/bakeoff:run review this diff` remains code review.
-   - `/bakeoff:run compare these two plans` remains `compare`.
-   - `/bakeoff:run analyze whether this plan is feasible` remains `analyze`.
+5. Add guard tests.
+   - Example work order validates.
+   - Plan-review routing drafts `gather` plus `facet.id: "plan-review"`.
+   - Plan-review routing never selects `build`.
+   - Plan-review routing does not request generated code-review diff context by
+     default.
+   - No source mutation is implied by a plan-review request.
 
-5. Add tests.
-   - Prompt fixture tests for `plan-review` worker and judge rules.
-   - Work-order validation test for a `gather` plan-review template.
-   - Router/skill scenario tests proving plan-review does not route to build and
-     does not mutate files.
+Deferred Bakeoff work:
+
+- `bakeoff init plan-review`.
+- Plan-review-specific prompt branches.
+- Plan-review triage or auto-triage.
+- Plan-review witness/escalation branches.
+- Plan-specific result schema fields.
 
 ### Review Kit
 
-1. Extend the command surface with plan-aware routing.
-   - Either `/review-kit:review-plan <plan-path>` or
-     `/review-kit:review --target plan <plan-path>`.
-   - Avoid overloading plain `/review-kit:review` too much unless the target is
-     unambiguous.
+1. Add plan-aware target routing without duplicating routes.
+   - Add `target_kind` to the existing `review-plan.json`:
+     `"code" | "plan" | "implementation-vs-plan"`.
+   - Reuse existing route decisions: `single`, `focused-swarm`, `swarm`, and
+     `chunked-swarm`.
+   - Do not add `single-plan-review`, `focused-plan-swarm`,
+     `plan-swarm`, or `chunked-plan-review`.
 
-2. Add a `plan-review-plan.json` artifact, or extend `review-plan.json` with
-   `target_kind: "code" | "plan" | "implementation-vs-plan"`.
+2. Add one required durable plan artifact.
+   - Write `approved-plan.md` only when the user approves or selects a reviewed
+     plan as the implementation baseline.
+   - Defer `source-plan.md`, `plan-review-rN.md`,
+     `plan-findings-rN.json`, and `implementation-vs-plan-rN.md` until usage
+     proves they are worth the extra artifact contract.
 
-3. Capture durable plan artifacts.
-   - `artifacts/source-plan.md`
-   - `artifacts/approved-plan.md`
-   - `artifacts/plan-review-rN.md`
-   - `artifacts/plan-findings-rN.json`
-   - `artifacts/implementation-vs-plan-rN.md`
-
-4. Normalize plans before review.
+3. Normalize plans before review.
    - Ensure section anchors exist for goal, scope, assumptions, steps,
      verification, rollback, risks, open questions, and exclusions.
    - Keep original text, but create stable references for reviewers.
 
-5. Use route decisions parallel to code review.
-   - `single-plan-review`
-   - `focused-plan-swarm`
-   - `plan-swarm`
-   - `chunked-plan-review` for long plans with separable sections
-   - `implementation-vs-plan`
+4. Add only three consolidated plan risk signals.
+   - `plan_evidence_or_verifier_gap`: missing acceptance criteria, missing
+     verifier, or uncited current-behavior claim.
+   - `plan_execution_or_rollback_risk`: sequencing, migration, rollback,
+     partial failure, or cross-module dependency risk.
+   - `plan_scope_or_safety_risk`: unbounded scope, security/privacy/data risk,
+     UX/product decision gap, or manual decision needed.
 
-6. Add plan-review-specific risk signals.
-   - `missing_acceptance_criteria`
-   - `missing_verifier`
-   - `missing_rollback`
-   - `unbounded_scope`
-   - `hidden_migration_or_data_risk`
-   - `cross_module_dependency`
-   - `security_or_privacy_assumption`
-   - `uncited_current_behavior_claim`
-   - `manual_decision_needed`
+5. Keep the critic in review-kit.
+   - Use review-kit's cold-start critic for high-risk plan reviews.
+   - Do not call or add a Bakeoff plan-review witness branch in v1.
 
-7. Add a confidence gate.
+6. Add a confidence gate.
    - Drop low-confidence non-blockers.
    - Preserve high-impact uncertain risks as `Clarify / verify`.
    - Cap confidence at medium for cross-module claims without a traced path.
    - Treat consensus as attention, not severity.
 
-8. Add implementation drift review after code is written.
+7. Add implementation drift review after code is written.
    - Compare actual diff against `approved-plan.md`.
    - Flag missing steps, extra scope, changed verification, and unreviewed
      architectural deviations.
@@ -360,7 +425,9 @@ Return markdown with sections:
     "Plan under review: PLAN_PATH.",
     "User goal / ticket: TODO.",
     "Current-state evidence supplied: TODO.",
-    "Return only actionable plan changes with plan citations and evidence.",
+    "Return only generic gather claims with id, claim, evidence, severity, and confidence.",
+    "Each claim should start with `Plan: <section>. Issue: ... Failure mode: ... Required plan change: ...`.",
+    "Evidence must include a plan section/line and repo file, command output, source URL, or `missing evidence`.",
     "Do not implement code and do not rewrite the whole plan."
   ],
   "facet": {
@@ -421,7 +488,15 @@ For every finding:
 Out-of-lens severe concerns go in out_of_scope with a citation.
 Do not expand your main findings to cover another lens.
 
-Output JSON:
+Review-kit in-session output may use the richer shape below. When compiling
+this lens to a Bakeoff work order, encode the same content in generic
+`claims[]` objects:
+- claim: "Plan: <section>. Issue: ... Failure mode: ... Required plan change: ..."
+- evidence: ["<plan section/line>", "<repo path:line or URL or missing evidence>"]
+- severity
+- confidence
+
+Output JSON for review-kit:
 {
   "lens": "{{LENS_NAME}}",
   "findings": [
@@ -575,24 +650,24 @@ Output:
 ## Suggested Implementation Order
 
 1. Add docs and an example `plan-review` work order.
-2. Add `facet.id == "plan-review"` worker and judge prompt rules.
-3. Teach `/bakeoff:run` skill routing to distinguish code review vs plan
+2. Teach `/bakeoff:run` skill routing to distinguish code review vs plan
    review.
-4. Extend review-kit with plan target routing and durable plan artifacts.
+3. Extend review-kit with `target_kind` on the existing `review-plan.json`.
+4. Add `approved-plan.md` capture for approved implementation baselines.
 5. Add multi-lens plan review as separate normal work orders, reusing the
    existing multi-lens execution and summary pattern.
-6. Add cold-start critic support for plan-review findings.
+6. Keep cold-start critic support in review-kit for high-risk plan-review
+   findings.
 7. Add implementation-vs-approved-plan review.
 
 ## Open Questions
 
-- Should `bakeoff init plan-review` be added, or is an example/template enough
-  until usage proves demand?
-- Should plan-review findings reuse the generic gather claim schema or add
-  plan-specific fields such as `plan_citation` and `required_plan_change`?
-  Reusing `claim`, `evidence`, `severity`, and `confidence` is lower churn, but
-  plan-specific fields make reports better.
-- Should automatic plan review hook behavior ever be enabled by default? The
-  safer default is explicit command invocation, with hooks as an opt-in later.
-- Should review-kit own all plan-review synthesis, leaving Bakeoff generic, or
-  should Bakeoff grow a plan-review witness branch like it did for code review?
+- After dogfooding, does generic facet text produce calibrated plan-review
+  claims, or is a narrow `plan-review` prompt branch worth the Go surface?
+- After repeated use, is `approved-plan.md` enough, or do users actually need
+  separate source/review/findings artifacts?
+- Should automatic plan review hook behavior ever be enabled? The safer default
+  is explicit command invocation, with hooks as an opt-in later.
+- Does implementation-vs-approved-plan belong as a `target_kind` only, or does
+  it eventually need a separate route decision once real usage shows distinct
+  execution behavior?

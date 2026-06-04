@@ -1,0 +1,72 @@
+{
+  // bakeoff plan-review example - edit id, goal, and background, then run:
+  //   bakeoff validate examples/plan-review.work-order.json
+  //   bakeoff research examples/plan-review.work-order.json
+  //
+  // Plan review is a normal gather run with a data-only plan-review facet.
+  // Encode plan-specific details inside generic claim/evidence fields.
+  "schema_version": 1,
+  "id": "plan-review-example",
+  "type": "gather",
+  "goal": "Review PLAN_PATH for actionable defects before implementation.",
+  "background": [
+    "Plan under review: PLAN_PATH.",
+    "User goal / ticket: TODO.",
+    "Current-state evidence supplied: TODO.",
+    "Return only generic gather claims with id, claim, evidence, severity, and confidence.",
+    "Each claim should start with `Plan: <section>. Issue: ... Failure mode: ... Required plan change: ...`.",
+    "Evidence must include a plan section/line and repo file, command output, source URL, or `missing evidence`.",
+    "Do not implement code and do not rewrite the whole plan."
+  ],
+  "facet": {
+    "id": "plan-review",
+    "kind": "generic",
+    "focus": "Find plan defects that could cause unsafe, incomplete, incorrect, or unverifiable implementation.",
+    "include": [
+      "missing or untestable acceptance criteria",
+      "uncited claims about current behavior",
+      "wrong sequencing or hidden dependencies",
+      "architecture or convention mismatches",
+      "scope creep and unnecessary rewrites",
+      "missing tests, gates, observability, or rollback",
+      "security, privacy, data-integrity, migration, or UX risks"
+    ],
+    "exclude": [
+      "style preferences about plan prose",
+      "new feature ideas outside the stated goal",
+      "implementation code unless needed to explain a plan defect",
+      "speculation without plan citation or repo evidence"
+    ]
+  },
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "sonnet",
+      "scope": "codebase",
+      "effort": "high"
+    },
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "scope": "codebase",
+      "effort": "high"
+    }
+  ],
+  "scope_policy": {
+    "enforcement": "best_effort"
+  },
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  }
+}

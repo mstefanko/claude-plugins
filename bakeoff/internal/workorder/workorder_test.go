@@ -327,6 +327,26 @@ func TestPublicExamplesUseModelDefaults(t *testing.T) {
 	}
 }
 
+func TestPlanReviewExampleValidatesAsDataOnlyGatherFacet(t *testing.T) {
+	path := filepath.Join("..", "..", "examples", "plan-review.work-order.json")
+	wo, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wo.Type != "gather" {
+		t.Fatalf("plan-review example type = %q, want gather", wo.Type)
+	}
+	if wo.Facet == nil {
+		t.Fatal("plan-review example missing facet")
+	}
+	if wo.Facet.ID != "plan-review" || wo.Facet.Kind != "generic" {
+		t.Fatalf("plan-review facet = %#v", wo.Facet)
+	}
+	if wo.Build != nil {
+		t.Fatal("plan-review example must not include build spec")
+	}
+}
+
 func TestBuildWorkOrderValidation(t *testing.T) {
 	data := validBuildWorkOrder()
 	wo, err := Validate(data)
