@@ -10,9 +10,11 @@ Primary command:
 
 The command is read-only/output-only by default. It does not create branches, PRs, commits, GitHub comments, or implementation plans.
 
-Provenance:
+Provenance (bundled under `docs/`):
 
-- Plan: `/Users/mstefanko/myorthomd-web/docs/code-review-research/07-plugin-implementation-plan.md`
-- Single-agent prompt: `/Users/mstefanko/myorthomd-web/docs/code-review-research/prompts/01-single-agent-routine.md`
-- Swarm prompt: `/Users/mstefanko/myorthomd-web/docs/code-review-research/prompts/02-swarm-multi-lens.md`
-- Bakeoff recommendation: `/Users/mstefanko/myorthomd-web/docs/code-review-research/prompts/03-bakeoff-gap-analysis.md`
+- Plan: `docs/07-plugin-implementation-plan.md`
+- Single-agent prompt: `docs/prompts/01-single-agent-routine.md`
+- Swarm prompt: `docs/prompts/02-swarm-multi-lens.md`
+- Bakeoff recommendation: `docs/prompts/03-bakeoff-gap-analysis.md`
+
+These were synthesized in the `myorthomd-web` code-review research directory and copied here so the plugin is self-contained.

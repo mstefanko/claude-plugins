@@ -180,9 +180,9 @@ Confidence gate:
 
 ### Single
 
-Use the single-agent prompt from:
+Use the single-agent prompt bundled with this plugin:
 
-`/Users/mstefanko/myorthomd-web/docs/code-review-research/prompts/01-single-agent-routine.md`
+`${CLAUDE_PLUGIN_ROOT}/docs/prompts/01-single-agent-routine.md`
 
 Fill placeholders from curated context. Run it in-session. Apply the confidence gate before reporting.
 
@@ -195,9 +195,9 @@ Run lenses:
 - one specialist lens selected from the risk signals
 - conformance if an intent block exists
 
-Use bakeoff when ledgered execution is available; otherwise run in-session as independent passes. Use the swarm prompt sections from:
+Use bakeoff when ledgered execution is available; otherwise run in-session as independent passes. Use the swarm prompt sections bundled with this plugin:
 
-`/Users/mstefanko/myorthomd-web/docs/code-review-research/prompts/02-swarm-multi-lens.md`
+`${CLAUDE_PLUGIN_ROOT}/docs/prompts/02-swarm-multi-lens.md`
 
 ### Swarm
 
