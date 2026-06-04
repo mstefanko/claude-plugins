@@ -128,6 +128,28 @@ func TestBuildWorkerPromptUsesGenericFlavorForOptionalProviders(t *testing.T) {
 	}
 }
 
+func TestBuildWorkerPromptSameModelDuplicateProvidersAreIdentical(t *testing.T) {
+	wo := fixtureWorkOrder(t, "compare")
+	wo.Providers = []workorder.Participant{
+		{ID: "claude-a", Backend: "claude", Model: "sonnet", Scope: "codebase", Effort: "high"},
+		{ID: "claude-b", Backend: "claude", Model: "sonnet", Scope: "codebase", Effort: "high"},
+	}
+	first, err := BuildWorkerPrompt(wo, wo.Providers[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := BuildWorkerPrompt(wo, wo.Providers[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != second {
+		t.Fatalf("same backend/model/scope/effort duplicate prompts should be byte-identical")
+	}
+	if strings.Contains(first, "claude-a") || strings.Contains(first, "claude-b") {
+		t.Fatalf("worker prompt should not include attempt ids:\n%s", first)
+	}
+}
+
 func TestGenericWorkerFixturesStayProviderNeutral(t *testing.T) {
 	for _, mode := range []string{"gather", "compare", "analyze", "build"} {
 		text, err := fixturePrompt("worker-" + mode + "-generic-terminal-agent.txt")

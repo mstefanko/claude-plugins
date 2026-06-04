@@ -318,6 +318,66 @@ func TestValidateWarnsWhenJudgeFamilyMatchesAllProviders(t *testing.T) {
 	}
 }
 
+func TestValidateWarnsForExactSameModelDuplicateProviders(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "compare.work-order.json")
+	if err := writeValidateDuplicateWorkOrder(path, "compare", "", "codex", "high", "high"); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	f := validateTestFactory{streams: output.NewStreams(&out, &errOut)}
+	if err := runValidate(context.Background(), f, &ValidateOptions{WorkOrder: path}); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	if !strings.Contains(text, "warning: same-model duplicate advisory: providers claude-a and claude-b share backend, model, scope, and effort") {
+		t.Fatalf("missing same-model duplicate advisory:\n%s", text)
+	}
+	if !strings.Contains(text, "exact duplicate baseline") || !strings.Contains(text, "no majority vote is possible with two workers") {
+		t.Fatalf("missing exact duplicate caveats:\n%s", text)
+	}
+	if strings.Contains(text, "judge family advisory") {
+		t.Fatalf("non-contestant judge should avoid judge family warning:\n%s", text)
+	}
+}
+
+func TestValidateWarnsForSameBackendModelScopeDifferentEffort(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "compare.work-order.json")
+	if err := writeValidateDuplicateWorkOrder(path, "compare", "", "codex", "high", "medium"); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	f := validateTestFactory{streams: output.NewStreams(&out, &errOut)}
+	if err := runValidate(context.Background(), f, &ValidateOptions{WorkOrder: path}); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	if !strings.Contains(text, "share backend, model, and scope but use different effort") {
+		t.Fatalf("missing different-effort duplicate advisory:\n%s", text)
+	}
+	if strings.Contains(text, "exact duplicate baseline") {
+		t.Fatalf("different effort should not be described as an exact duplicate baseline:\n%s", text)
+	}
+}
+
+func TestValidateWarnsForSameFamilyJudgeOnSameModelDuplicateProviders(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "compare.work-order.json")
+	if err := writeValidateDuplicateWorkOrder(path, "compare", "", "claude", "high", "high"); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	f := validateTestFactory{streams: output.NewStreams(&out, &errOut)}
+	if err := runValidate(context.Background(), f, &ValidateOptions{WorkOrder: path}); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	if !strings.Contains(text, "warning: judge family advisory: judge claude shares provider-family metadata with all providers") {
+		t.Fatalf("missing all-providers judge family warning:\n%s", text)
+	}
+	if !strings.Contains(text, "warning: same-model duplicate advisory") {
+		t.Fatalf("missing same-model duplicate warning:\n%s", text)
+	}
+}
+
 func TestValidateSuppressesJudgeFamilyWarningOutsideTriggerContexts(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "gather.work-order.json")
 	if err := writeValidateModeWorkOrder(path, "gather", "", "claude"); err != nil {
@@ -466,6 +526,37 @@ func writeValidateModeWorkOrder(path string, mode string, facetID string, judgeB
 			"id":      facetID,
 			"focus":   "Review findings.",
 			"include": []any{"code review findings"},
+		}
+	}
+	return workorder.WriteJSONAtomic(path, data)
+}
+
+func writeValidateDuplicateWorkOrder(path string, mode string, facetID string, judgeBackend string, effortA string, effortB string) error {
+	data := map[string]any{
+		"schema_version": 1,
+		"id":             "validate-duplicate-" + mode,
+		"type":           mode,
+		"goal":           "Compare duplicate attempts.",
+		"background":     "Plain context.",
+		"providers": []any{
+			map[string]any{"id": "claude-a", "backend": "claude", "model": "sonnet", "scope": "codebase", "effort": effortA},
+			map[string]any{"id": "claude-b", "backend": "claude", "model": "sonnet", "scope": "codebase", "effort": effortB},
+		},
+		"judge":   map[string]any{"backend": judgeBackend, "model": "judge"},
+		"budgets": map[string]any{"wall_clock_seconds": 3, "max_output_bytes": 2000},
+	}
+	if facetID != "" {
+		data["facet"] = map[string]any{
+			"id":      facetID,
+			"focus":   "Review findings.",
+			"include": []any{"code review findings"},
+		}
+	}
+	if mode == "build" {
+		data["build"] = map[string]any{
+			"verify": []any{
+				map[string]any{"id": "unit", "kind": "gate", "argv": []any{"go", "test", "./..."}, "wall_clock_seconds": 10, "max_output_bytes": 1000},
+			},
 		}
 	}
 	return workorder.WriteJSONAtomic(path, data)

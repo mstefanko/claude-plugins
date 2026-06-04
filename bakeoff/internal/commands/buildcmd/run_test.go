@@ -871,6 +871,149 @@ func TestRunBuildIdenticalCapturedPatchesTieWithoutJudge(t *testing.T) {
 	}
 }
 
+func TestRunBuildDuplicateProvidersUseSeparateArtifactsAndIdenticalPatchTie(t *testing.T) {
+	repoDir := initBuildGitRepo(t)
+	root := t.TempDir()
+	workOrderPath := filepath.Join(root, "build.work-order.json")
+	writeBuildWorkOrder(t, workOrderPath, "duplicate-build", 100000, []map[string]any{
+		{"id": "readme", "kind": "gate", "argv": []string{"test", "-f", "README.md"}, "wall_clock_seconds": 5, "max_output_bytes": 2000},
+	})
+	data := readJSONFile(t, workOrderPath)
+	data["providers"] = []any{
+		map[string]any{"id": "claude-a", "backend": "claude", "model": "claude-test", "scope": "codebase", "effort": "high"},
+		map[string]any{"id": "claude-b", "backend": "claude", "model": "claude-test", "scope": "codebase", "effort": "high"},
+	}
+	data["scope_policy"] = map[string]any{"enforcement": "best_effort", "repo_layout": "off"}
+	if err := workorder.WriteJSONAtomic(workOrderPath, data); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BAKEOFF_FAKE_IDENTICAL_BUILD_PATCH", "1")
+	outDir := filepath.Join(root, "runs")
+	out, errOut, err := runBuildTest(t, repoDir, workOrderPath, outDir, BuildOptions{RunID: "duplicate-build", Quiet: true, JSON: true})
+	if err == nil {
+		t.Fatalf("expected identical duplicate patch tie\nstdout:\n%s\nstderr:\n%s", out, errOut)
+	}
+	runDir := filepath.Join(outDir, "duplicate-build")
+	decision := readJSONFile(t, filepath.Join(runDir, "decision.json"))
+	if decision["decision_kind"] != "tie" || decision["selection_basis"] != "identical_patch" || decision["judge_ran"] != false {
+		t.Fatalf("decision = %#v", decision)
+	}
+	promptA, err := os.ReadFile(filepath.Join(runDir, "providers", "claude-a", "prompt.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	promptB, err := os.ReadFile(filepath.Join(runDir, "providers", "claude-b", "prompt.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(promptA, promptB) {
+		t.Fatalf("duplicate build prompts differ")
+	}
+	for _, providerID := range []string{"claude-a", "claude-b"} {
+		if _, err := os.Stat(filepath.Join(runDir, "providers", providerID, "build", "diff.patch")); err != nil {
+			t.Fatalf("%s patch missing: %v", providerID, err)
+		}
+		verify := readJSONFile(t, filepath.Join(runDir, "providers", providerID, "build", "verify", "result.json"))
+		if verify["provider_id"] != providerID {
+			t.Fatalf("%s verify provider_id = %#v", providerID, verify)
+		}
+		workspace := readJSONFile(t, filepath.Join(runDir, "providers", providerID, "build", "workspace.json"))
+		if !strings.Contains(fmt.Sprint(workspace["provider_cwd"]), providerID) {
+			t.Fatalf("%s workspace provider_cwd = %#v", providerID, workspace)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(runDir, "worktrees", "claude-a")); !os.IsNotExist(err) {
+		t.Fatalf("claude-a worktree should have been removed, stat err=%v", err)
+	}
+	report := string(mustReadBuildFile(t, filepath.Join(runDir, "report.md")))
+	if !strings.Contains(report, "Same-model duplicate run: both workers used claude/claude-test with the same scope") {
+		t.Fatalf("report missing duplicate caveat:\n%s", report)
+	}
+}
+
+func TestRunBuildDuplicateJudgePromptAnonymizesProviderIDs(t *testing.T) {
+	repoDir := initBuildGitRepo(t)
+	root := t.TempDir()
+	fakeBin := filepath.Join(root, "bin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeExecutable(t, filepath.Join(fakeBin, "claude"), `#!/bin/sh
+case " $* " in
+  *" --version "*) printf 'claude fake\n'; exit 0 ;;
+  *" --help "*) printf '%s\n' '--allowedTools --disallowedTools'; exit 0 ;;
+esac
+prompt=$(cat)
+case "$prompt" in
+  "You are a build judge."*)
+    cat <<'JSON'
+<final_json>{"relation":"compare","scores_a":{"correctness":4,"verifier_evidence":4,"comparative_evidence":4,"scope_control":4,"test_quality":3,"benchmark_quality":3,"maintainability":4},"scores_b":{"correctness":4,"verifier_evidence":4,"comparative_evidence":4,"scope_control":4,"test_quality":3,"benchmark_quality":3,"maintainability":4},"winner":"tie","rationale":"Candidates are anonymized and equivalent.","risks":[]}</final_json>
+JSON
+    ;;
+  *)
+    case "$PWD" in
+      *claude-a*) printf 'a\n' > duplicate-a.txt ;;
+      *claude-b*) printf 'b\n' > duplicate-b.txt ;;
+      *) printf 'unknown\n' > duplicate-unknown.txt ;;
+    esac
+    cat <<'JSON'
+<final_json>{"status":"complete","summary":"Wrote duplicate-specific output.","files_touched":["duplicate-output.txt"],"tests_added_or_changed":[],"risks":[],"manual_checks":[]}</final_json>
+JSON
+    ;;
+esac
+`)
+	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	workOrderPath := filepath.Join(root, "build.work-order.json")
+	writeBuildWorkOrder(t, workOrderPath, "duplicate-judge", 100000, []map[string]any{
+		{"id": "readme", "kind": "gate", "argv": []string{"test", "-f", "README.md"}, "wall_clock_seconds": 5, "max_output_bytes": 2000},
+	})
+	data := readJSONFile(t, workOrderPath)
+	data["providers"] = []any{
+		map[string]any{"id": "claude-a", "backend": "claude", "model": "claude-test", "scope": "codebase", "effort": "high"},
+		map[string]any{"id": "claude-b", "backend": "claude", "model": "claude-test", "scope": "codebase", "effort": "high"},
+	}
+	data["scope_policy"] = map[string]any{"enforcement": "best_effort", "repo_layout": "off"}
+	if err := workorder.WriteJSONAtomic(workOrderPath, data); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	factory := buildTestFactory{streams: output.NewStreams(&out, &errOut)}
+	factory.capabilities = provider.NewCapabilityRegistry(factory.LookupProvider)
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(oldWD)
+	outDir := filepath.Join(root, "runs")
+	err = RunBuild(context.Background(), factory, &BuildOptions{WorkOrder: workOrderPath, Out: outDir, RunID: "duplicate-judge", Quiet: true, JSON: true})
+	if err == nil {
+		t.Fatalf("expected tie after anonymized judge prompts\nstdout:\n%s\nstderr:\n%s", out.String(), errOut.String())
+	}
+	runDir := filepath.Join(outDir, "duplicate-judge")
+	decision := readJSONFile(t, filepath.Join(runDir, "decision.json"))
+	if decision["judge_ran"] != true {
+		t.Fatalf("judge should have run: %#v", decision)
+	}
+	orderMaps := decision["order_maps"].(map[string]any)
+	if !strings.Contains(fmt.Sprint(orderMaps), "claude-a") || !strings.Contains(fmt.Sprint(orderMaps), "claude-b") {
+		t.Fatalf("operator order maps should retain real provider ids: %#v", decision)
+	}
+	for _, promptName := range []string{"prompt-pass1.txt", "prompt-pass2.txt"} {
+		judgePrompt := string(mustReadBuildFile(t, filepath.Join(runDir, "judge", promptName)))
+		for _, forbidden := range []string{"claude-a", "claude-b", "providers/claude-a", "providers/claude-b", `"provider_id"`} {
+			if strings.Contains(judgePrompt, forbidden) {
+				t.Fatalf("%s leaked %q:\n%s", promptName, forbidden, judgePrompt)
+			}
+		}
+		if !strings.Contains(judgePrompt, `"candidate_label": "A"`) || !strings.Contains(judgePrompt, `"candidate_label": "B"`) {
+			t.Fatalf("%s missing positional candidate labels:\n%s", promptName, judgePrompt)
+		}
+	}
+}
+
 func TestRunBuildBothPassJudgeWinner(t *testing.T) {
 	repoDir := initBuildGitRepo(t)
 	root := t.TempDir()
@@ -1098,7 +1241,7 @@ func TestBuildJudgePayloadCompactsSharedEvidenceAndPatchExcerpt(t *testing.T) {
 			WorktreeRemoved:          true,
 		},
 	}
-	shared := buildJudgeSharedEvidence(runDir, verify, []buildverify.MetricComparison{{ID: "score", Name: "score", Direction: "lower", Winner: "claude", Conclusive: true}})
+	shared := buildJudgeSharedEvidence(runDir, verify, []buildverify.MetricComparison{{ID: "score", Name: "score", Direction: "lower", Winner: "claude", Conclusive: true}}, false)
 	payload := buildJudgePayload(runDir, run)
 
 	if _, ok := payload["baseline_verify"]; ok {
@@ -1125,6 +1268,101 @@ func TestBuildJudgePayloadCompactsSharedEvidenceAndPatchExcerpt(t *testing.T) {
 	resultPayload := verifyPayload["results"].([]map[string]any)[0]
 	if got := resultPayload["status_path"]; got != "providers/claude/build/verify/unit/status.json" {
 		t.Fatalf("status_path = %#v", got)
+	}
+}
+
+func TestBuildJudgePayloadAnonymizesDuplicateCandidateIDsAndPaths(t *testing.T) {
+	runDir := t.TempDir()
+	providerDir := filepath.Join(runDir, "providers", "claude-a", "build")
+	if err := os.MkdirAll(filepath.Join(providerDir, "verify", "unit"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	patchPath := filepath.Join(providerDir, "diff.patch")
+	diffstatPath := filepath.Join(providerDir, "diffstat.txt")
+	if err := os.WriteFile(patchPath, []byte("diff --git a/main.go b/main.go\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(diffstatPath, []byte("main.go | 1 +\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	exitCode := 0
+	run := providerRun{
+		ID: "claude-a",
+		WorkerResult: map[string]any{
+			"status": "ok",
+			"scope_enforcement": map[string]any{
+				"requested_scope":   "codebase",
+				"effective_scope":   "codebase",
+				"enforcement_level": "enforced",
+				"cwd":               filepath.Join(runDir, "worktrees", "claude-a"),
+				"temporary_cwd":     false,
+			},
+			"final_json": map[string]any{"status": "complete", "summary": "done"},
+		},
+		Capture: &buildworkspace.CaptureResult{
+			ChangedFiles: []buildworkspace.ChangedFile{{Status: "M", Path: "main.go"}},
+			PatchBytes:   42,
+			PatchPath:    patchPath,
+			DiffstatPath: diffstatPath,
+		},
+		Verify: buildverify.Result{
+			Scope:       "provider",
+			ProviderID:  "claude-a",
+			GatesPassed: true,
+			Results: []buildverify.VerifierResult{{
+				ID:         "unit",
+				Kind:       "gate",
+				Status:     buildverify.StatusPassed,
+				ExitCode:   &exitCode,
+				StatusPath: filepath.Join(providerDir, "verify", "unit", "status.json"),
+			}},
+		},
+		Workspace: buildworkspace.WorkspaceMetadata{
+			BaseRef:                  "HEAD",
+			BaseCommit:               "1234567890abcdef",
+			ProviderCWD:              filepath.Join(runDir, "worktrees", "claude-a"),
+			CleanupStatus:            "removed",
+			ProviderHead:             "abcdef1234567890",
+			ProviderCommittedChanges: true,
+			WorktreeRemoved:          true,
+		},
+	}
+	payload := buildJudgePayloadForCandidate(runDir, run, "A", true)
+	if payload["candidate_label"] != "A" {
+		t.Fatalf("candidate label = %#v", payload)
+	}
+	if _, ok := payload["provider_id"]; ok {
+		t.Fatalf("anonymized payload kept provider_id: %#v", payload)
+	}
+	verifyPayload := payload["verify"].(map[string]any)
+	if _, ok := verifyPayload["provider_id"]; ok {
+		t.Fatalf("anonymized verify kept provider_id: %#v", verifyPayload)
+	}
+	verifierResult := verifyPayload["results"].([]map[string]any)[0]
+	if _, ok := verifierResult["status_path"]; ok {
+		t.Fatalf("anonymized verifier kept status_path: %#v", verifierResult)
+	}
+	workspacePayload := payload["workspace"].(map[string]any)
+	if _, ok := workspacePayload["provider_cwd"]; ok {
+		t.Fatalf("anonymized workspace kept provider_cwd: %#v", workspacePayload)
+	}
+	runnerStatus := payload["runner_status"].(map[string]any)
+	scopePayload := runnerStatus["scope_enforcement"].(map[string]any)
+	if _, ok := scopePayload["cwd"]; ok {
+		t.Fatalf("anonymized runner status kept cwd: %#v", scopePayload)
+	}
+	patchPayload := payload["patch"].(map[string]any)
+	for _, key := range []string{"patch_path", "diffstat_path", "protected_paths_path"} {
+		if _, ok := patchPayload[key]; ok {
+			t.Fatalf("anonymized patch kept %s: %#v", key, patchPayload)
+		}
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "claude-a") || strings.Contains(string(encoded), "providers/claude-a") {
+		t.Fatalf("anonymized payload leaked provider id:\n%s", encoded)
 	}
 }
 
@@ -1449,6 +1687,22 @@ func readJSONFile(t *testing.T, path string) map[string]any {
 		t.Fatal(err)
 	}
 	return out
+}
+
+func mustReadBuildFile(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+func writeExecutable(t *testing.T, path string, text string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(text), 0o755); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func moduleRoot(t *testing.T) string {

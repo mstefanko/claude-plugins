@@ -154,16 +154,67 @@ func TestParseProviderFlags(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if providers[0].Backend != "codex" || providers[1].Backend != "claude" {
+		if providers[0].ID != "codex" || providers[1].ID != "claude" || providers[0].Backend != "codex" || providers[1].Backend != "claude" {
 			t.Fatalf("providers = %#v", providers)
 		}
 	})
-	t.Run("rejects duplicate backend", func(t *testing.T) {
-		_, err := parseProviderFlags([]string{"gemini:pro", "gemini:flash"})
-		if err == nil || !strings.Contains(err.Error(), "duplicates") {
-			t.Fatalf("expected duplicate error, got %v", err)
+	t.Run("same backend gets suffixed ids", func(t *testing.T) {
+		providers, err := parseProviderFlags([]string{"claude", "claude"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if providers[0].ID != "claude-a" || providers[1].ID != "claude-b" {
+			t.Fatalf("providers = %#v", providers)
+		}
+		if providers[0].Model != provider.DefaultModel("claude") || providers[1].Model != provider.DefaultModel("claude") {
+			t.Fatalf("providers = %#v", providers)
 		}
 	})
+	t.Run("same backend with explicit model gets suffixed ids", func(t *testing.T) {
+		providers, err := parseProviderFlags([]string{"codex:gpt-5.5", "codex:gpt-5.5"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if providers[0].ID != "codex-a" || providers[1].ID != "codex-b" || providers[0].Model != "gpt-5.5" || providers[1].Model != "gpt-5.5" {
+			t.Fatalf("providers = %#v", providers)
+		}
+	})
+	t.Run("same backend different models gets suffixed ids", func(t *testing.T) {
+		providers, err := parseProviderFlags([]string{"gemini:pro", "gemini:flash"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if providers[0].ID != "gemini-a" || providers[1].ID != "gemini-b" || providers[0].Model != "pro" || providers[1].Model != "flash" {
+			t.Fatalf("providers = %#v", providers)
+		}
+	})
+}
+
+func TestRunDraftBuildWithDuplicateProvidersValidates(t *testing.T) {
+	var out, errOut bytes.Buffer
+	f := draftBuildTestFactory{streams: output.NewStreams(&out, &errOut)}
+	providers, err := parseProviderFlags([]string{"claude", "claude"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = runDraftBuild(context.Background(), f, &DraftBuildOptions{
+		ID:         "draft-build-duplicate-claude",
+		Goal:       "Print a duplicate Claude build work order.",
+		Acceptance: []string{"The emitted JSON validates."},
+		Scopes:     []string{"internal/commands/draftbuildcmd"},
+		Gates:      []string{"tests=go test ./internal/commands/draftbuildcmd"},
+	}, []workorder.GateDraft{{ID: "tests", Command: "go test ./internal/commands/draftbuildcmd"}}, providers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	obj := decodeDraftOutput(t, out.String())
+	wo, err := workorder.Validate(obj)
+	if err != nil {
+		t.Fatalf("printed JSON did not validate: %v\n%s", err, out.String())
+	}
+	if wo.Providers[0].ID != "claude-a" || wo.Providers[1].ID != "claude-b" || !workorder.SameBackendModelScope(wo.Providers[0], wo.Providers[1]) {
+		t.Fatalf("providers = %#v", wo.Providers)
+	}
 }
 
 func TestParseGateFlags(t *testing.T) {

@@ -35,6 +35,9 @@ func renderBuildReport(wo *workorder.WorkOrder, runID string, outDir string, run
 	} else {
 		lines = append(lines, "Selected patch: no selected patch")
 	}
+	if caveat := workorder.SameBackendModelScopeReportCaveat(wo); caveat != "" {
+		lines = append(lines, caveat)
+	}
 	lines = append(lines, "Verifier gates: "+buildVerifierGateSummary(baseline, runs))
 	lines = append(lines, buildSelectorConfidenceLines(decision)...)
 	if runID != "" {

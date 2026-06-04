@@ -122,6 +122,31 @@ func TestRenderOutcomeByMode(t *testing.T) {
 	}
 }
 
+func TestRenderIncludesSameModelDuplicateCaveat(t *testing.T) {
+	text := Render(
+		&workorder.WorkOrder{
+			ID:   "duplicate-sample",
+			Type: "compare",
+			Providers: []workorder.Participant{
+				{ID: "claude-a", Backend: "claude", Model: "sonnet", Scope: "codebase"},
+				{ID: "claude-b", Backend: "claude", Model: "sonnet", Scope: "codebase"},
+			},
+		},
+		map[string]any{
+			"mode":              "compare",
+			"decision_kind":     "consensus",
+			"judge_ran":         true,
+			"provider_statuses": map[string]any{},
+		},
+		map[string]map[string]any{},
+		map[string]map[string]any{},
+		RenderOptions{},
+	)
+	if !strings.Contains(text, "Same-model duplicate run: both workers used claude/sonnet with the same scope") {
+		t.Fatalf("report missing same-model duplicate caveat:\n%s", text)
+	}
+}
+
 func TestRenderSelectorConfidenceByResearchMode(t *testing.T) {
 	cases := []struct {
 		name     string

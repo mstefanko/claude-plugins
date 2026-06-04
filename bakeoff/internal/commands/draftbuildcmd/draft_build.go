@@ -2,6 +2,7 @@ package draftbuildcmd
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/apperror"
@@ -103,6 +104,11 @@ func runDraftBuild(_ context.Context, f commands.Factory, opts *DraftBuildOption
 	return nil
 }
 
+type parsedProviderFlag struct {
+	Backend string
+	Model   string
+}
+
 func parseProviderFlags(values []string) ([]workorder.Participant, error) {
 	if len(values) == 0 {
 		return nil, nil
@@ -110,19 +116,19 @@ func parseProviderFlags(values []string) ([]workorder.Participant, error) {
 	if len(values) != 2 {
 		return nil, workorder.Validationf("--provider must be supplied exactly twice or not at all")
 	}
-	out := make([]workorder.Participant, 0, len(values))
-	seenBackends := map[string]int{}
+	parsed := make([]parsedProviderFlag, 0, len(values))
 	seenIDs := map[string]int{}
 	for i, value := range values {
-		backend, model, err := parseProviderFlag(value, i)
+		provider, err := parseProviderFlag(value, i)
 		if err != nil {
 			return nil, err
 		}
-		if previous, ok := seenBackends[backend]; ok {
-			return nil, workorder.Validationf("--provider[%d] backend %q duplicates --provider[%d]", i, backend, previous)
-		}
-		seenBackends[backend] = i
-		participant := workorder.Participant{ID: backend, Backend: backend, Model: model, Scope: "codebase", Effort: "high"}
+		parsed = append(parsed, provider)
+	}
+	ids := providerIDsForFlags(parsed)
+	out := make([]workorder.Participant, 0, len(parsed))
+	for i, provider := range parsed {
+		participant := workorder.Participant{ID: ids[i], Backend: provider.Backend, Model: provider.Model, Scope: "codebase", Effort: "high"}
 		if previous, ok := seenIDs[participant.ID]; ok {
 			return nil, workorder.Validationf("--provider[%d] generated id %q duplicates --provider[%d]", i, participant.ID, previous)
 		}
@@ -132,10 +138,10 @@ func parseProviderFlags(values []string) ([]workorder.Participant, error) {
 	return out, nil
 }
 
-func parseProviderFlag(value string, index int) (string, string, error) {
+func parseProviderFlag(value string, index int) (parsedProviderFlag, error) {
 	raw := strings.TrimSpace(value)
 	if raw == "" {
-		return "", "", workorder.Validationf("--provider[%d] must be backend or backend:model", index)
+		return parsedProviderFlag{}, workorder.Validationf("--provider[%d] must be backend or backend:model", index)
 	}
 	backend := raw
 	model := ""
@@ -143,16 +149,34 @@ func parseProviderFlag(value string, index int) (string, string, error) {
 		backend = strings.TrimSpace(parts[0])
 		model = strings.TrimSpace(parts[1])
 		if model == "" {
-			return "", "", workorder.Validationf("--provider[%d] model must be non-empty", index)
+			return parsedProviderFlag{}, workorder.Validationf("--provider[%d] model must be non-empty", index)
 		}
 	}
 	if !provider.ValidBackend(backend) {
-		return "", "", workorder.Validationf("--provider[%d] backend must be one of: %s", index, strings.Join(provider.BackendNames(), ", "))
+		return parsedProviderFlag{}, workorder.Validationf("--provider[%d] backend must be one of: %s", index, strings.Join(provider.BackendNames(), ", "))
 	}
 	if model == "" {
 		model = provider.DefaultModel(backend)
 	}
-	return backend, model, nil
+	return parsedProviderFlag{Backend: backend, Model: model}, nil
+}
+
+func providerIDsForFlags(parsed []parsedProviderFlag) []string {
+	counts := map[string]int{}
+	for _, provider := range parsed {
+		counts[provider.Backend]++
+	}
+	seen := map[string]int{}
+	ids := make([]string, len(parsed))
+	for i, provider := range parsed {
+		if counts[provider.Backend] == 1 {
+			ids[i] = provider.Backend
+			continue
+		}
+		seen[provider.Backend]++
+		ids[i] = fmt.Sprintf("%s-%c", provider.Backend, 'a'+seen[provider.Backend]-1)
+	}
+	return ids
 }
 
 func parseGateFlags(values []string) ([]workorder.GateDraft, error) {

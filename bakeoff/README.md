@@ -155,6 +155,12 @@ exactly one optional peer is ready, `/bakeoff:run` may draft Claude + that peer
 and call out the fallback in the preview. Use full model ids in the work order
 to pin exact versions.
 
+When you explicitly ask for the same provider twice, such as "Claude + Claude"
+or "two Codex attempts", Bakeoff runs two independent attempts with unique
+provider IDs like `claude-a` and `claude-b`. Treat agreement as duplicate
+sampling, not independent model-family corroboration; two workers do not make a
+majority vote, and same-provider runs may hit provider rate limits sooner.
+
 When the default judge shares provider-family metadata with one selected
 provider, `/bakeoff:run` may show a short judge-family advisory from
 `bakeoff doctor`. Treat it as a note, not a rule. It can name ready

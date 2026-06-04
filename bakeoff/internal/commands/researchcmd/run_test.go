@@ -193,6 +193,160 @@ exit 2
 	}
 }
 
+func TestRunResearchDuplicateProvidersUseSeparateArtifactsAndIdenticalPrompts(t *testing.T) {
+	root := t.TempDir()
+	fakeBin := filepath.Join(root, "bin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeExecutable(t, filepath.Join(fakeBin, "claude"), `#!/bin/sh
+case " $* " in
+  *" --version "*) printf 'claude fake\n'; exit 0 ;;
+  *" --help "*) printf '%s\n' '--allowedTools --disallowedTools'; exit 0 ;;
+esac
+prompt=$(cat)
+case "$prompt" in
+  *"deduplication and conflict-flagging judge"*)
+    cat <<'JSON'
+<final_json>{"merged_claims":[{"claim":"Merged duplicate claim","sources":["A","B"],"evidence":["fake:1"],"severity":"medium","confidence":"high"}],"conflicts":[],"unknowns_union":[]}</final_json>
+JSON
+    ;;
+  *)
+    cat <<'JSON'
+<final_json>{"status":"complete","claims":[{"id":"R-001","claim":"Duplicate provider claim.","evidence":["fake:1"],"severity":"medium","confidence":"high"}],"conflicts":[],"unknowns":[],"recommended_next_checks":[]}</final_json>
+JSON
+    ;;
+esac
+`)
+	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	workOrderPath := filepath.Join(root, "work-order.json")
+	if err := workorder.WriteJSONAtomic(workOrderPath, map[string]any{
+		"schema_version": 1,
+		"id":             "duplicate-research",
+		"type":           "gather",
+		"goal":           "Gather a duplicate fact.",
+		"background":     "Duplicate prompt smoke test.",
+		"providers": []map[string]any{
+			{"id": "claude-a", "backend": "claude", "model": "claude-test", "scope": "codebase", "effort": "high"},
+			{"id": "claude-b", "backend": "claude", "model": "claude-test", "scope": "codebase", "effort": "high"},
+		},
+		"scope_policy": map[string]any{"enforcement": "advisory", "repo_layout": "off"},
+		"judge":        map[string]any{"backend": "claude", "model": "judge-test"},
+		"budgets":      map[string]any{"wall_clock_seconds": 3, "max_output_bytes": 20000, "heartbeat_seconds": 0},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	outDir := filepath.Join(root, "runs")
+	factory := researchTestFactory{streams: output.NewStreams(&out, &errOut)}
+	err := RunResearch(context.Background(), factory, &ResearchOptions{WorkOrder: workOrderPath, Out: outDir, RunID: "duplicate-research", Quiet: true, NoTriage: true})
+	if err != nil {
+		t.Fatalf("RunResearch returned error: %v\nstdout:\n%s\nstderr:\n%s", err, out.String(), errOut.String())
+	}
+	runDir := filepath.Join(outDir, "duplicate-research")
+	promptA := mustReadFile(t, filepath.Join(runDir, "providers", "claude-a", "prompt.txt"))
+	promptB := mustReadFile(t, filepath.Join(runDir, "providers", "claude-b", "prompt.txt"))
+	if !bytes.Equal(promptA, promptB) {
+		t.Fatalf("duplicate provider prompts differ")
+	}
+	for _, id := range []string{"claude-a", "claude-b"} {
+		if _, err := os.Stat(filepath.Join(runDir, "providers", id, "final.json")); err != nil {
+			t.Fatalf("%s final.json missing: %v", id, err)
+		}
+		status := readTestJSON(t, filepath.Join(runDir, "providers", id, "status.json"))
+		if status["status"] != "ok" {
+			t.Fatalf("%s status = %#v", id, status)
+		}
+	}
+	reportText := string(mustReadFile(t, filepath.Join(runDir, "report.md")))
+	if !strings.Contains(reportText, "Same-model duplicate run: both workers used claude/claude-test with the same scope") {
+		t.Fatalf("report missing duplicate caveat:\n%s", reportText)
+	}
+}
+
+func TestRunResearchDuplicateProviderFailureIsolation(t *testing.T) {
+	root := t.TempDir()
+	fakeBin := filepath.Join(root, "bin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	onceDir := filepath.Join(root, "once")
+	if err := os.MkdirAll(onceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeExecutable(t, filepath.Join(fakeBin, "claude"), `#!/bin/sh
+case " $* " in
+  *" --version "*) printf 'claude fake\n'; exit 0 ;;
+  *" --help "*) printf '%s\n' '--allowedTools --disallowedTools'; exit 0 ;;
+esac
+cat >/dev/null
+if mkdir "$BAKEOFF_FAIL_ONCE_DIR/claimed" 2>/dev/null; then
+  printf '%s\n' 'rate_limit_error: retry later' >&2
+  exit 9
+fi
+cat <<'JSON'
+<final_json>{"status":"complete","claims":[{"id":"R-001","claim":"Surviving duplicate claim.","evidence":["fake:1"],"severity":"medium","confidence":"high"}],"conflicts":[],"unknowns":[],"recommended_next_checks":[]}</final_json>
+JSON
+`)
+	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("BAKEOFF_FAIL_ONCE_DIR", onceDir)
+
+	workOrderPath := filepath.Join(root, "work-order.json")
+	if err := workorder.WriteJSONAtomic(workOrderPath, map[string]any{
+		"schema_version": 1,
+		"id":             "duplicate-failure",
+		"type":           "gather",
+		"goal":           "Gather a duplicate fact.",
+		"background":     "One duplicate provider fails.",
+		"providers": []map[string]any{
+			{"id": "claude-a", "backend": "claude", "model": "claude-test", "scope": "codebase", "effort": "high"},
+			{"id": "claude-b", "backend": "claude", "model": "claude-test", "scope": "codebase", "effort": "high"},
+		},
+		"scope_policy": map[string]any{"enforcement": "advisory", "repo_layout": "off"},
+		"judge":        map[string]any{"backend": "claude", "model": "judge-test"},
+		"budgets":      map[string]any{"wall_clock_seconds": 3, "max_output_bytes": 20000, "heartbeat_seconds": 0},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	outDir := filepath.Join(root, "runs")
+	factory := researchTestFactory{streams: output.NewStreams(&out, &errOut)}
+	err := RunResearch(context.Background(), factory, &ResearchOptions{WorkOrder: workOrderPath, Out: outDir, RunID: "duplicate-failure", Quiet: true, NoTriage: true})
+	if err != nil {
+		t.Fatalf("RunResearch returned error for single-provider survivor: %v\nstdout:\n%s\nstderr:\n%s", err, out.String(), errOut.String())
+	}
+	runDir := filepath.Join(outDir, "duplicate-failure")
+	failures := 0
+	successes := 0
+	for _, id := range []string{"claude-a", "claude-b"} {
+		status := readTestJSON(t, filepath.Join(runDir, "providers", id, "status.json"))
+		switch status["status"] {
+		case "ok":
+			successes++
+			if _, err := os.Stat(filepath.Join(runDir, "providers", id, "final.json")); err != nil {
+				t.Fatalf("%s final.json missing: %v", id, err)
+			}
+		case "exit_error":
+			failures++
+			if status["failure_kind"] != "rate_or_quota_limited" {
+				t.Fatalf("%s failure kind = %#v", id, status)
+			}
+			stderr := string(mustReadFile(t, filepath.Join(runDir, "providers", id, "stderr.txt")))
+			if !strings.Contains(stderr, "rate_limit_error") {
+				t.Fatalf("%s stderr missing rate limit marker: %q", id, stderr)
+			}
+		default:
+			t.Fatalf("%s unexpected status = %#v", id, status)
+		}
+	}
+	if failures != 1 || successes != 1 {
+		t.Fatalf("failures=%d successes=%d", failures, successes)
+	}
+}
+
 func TestRunResearchOversizedBackgroundTrimsBeforeProviderLaunch(t *testing.T) {
 	root := t.TempDir()
 	fakeBin := filepath.Join(root, "bin")

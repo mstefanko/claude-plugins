@@ -96,9 +96,10 @@ func runBuildJudgePhase(ctx context.Context, f commands.Factory, wo *workorder.W
 
 func runSingleBuildJudge(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder, baseline buildverify.Result, runs map[string]providerRun, metrics []buildverify.MetricComparison, orderMap map[string]string, runDir string, label string, quiet bool, humanOutput bool) (map[string]any, buildPhaseTiming, []prompt.TrimRecord, error) {
 	phaseStarted := time.Now()
-	sharedEvidence := buildJudgeSharedEvidence(runDir, baseline, metrics)
-	workerA := buildJudgePayload(runDir, runs[orderMap["A"]])
-	workerB := buildJudgePayload(runDir, runs[orderMap["B"]])
+	anonymizeCandidates := workorder.SameBackendModelScopeRun(wo)
+	sharedEvidence := buildJudgeSharedEvidence(runDir, baseline, metrics, anonymizeCandidates)
+	workerA := buildJudgePayloadForCandidate(runDir, runs[orderMap["A"]], "A", anonymizeCandidates)
+	workerB := buildJudgePayloadForCandidate(runDir, runs[orderMap["B"]], "B", anonymizeCandidates)
 	judgePrompt, err := prompt.BuildJudgePromptWithEvidence(wo, sharedEvidence, workerA, workerB, "build")
 	if err != nil {
 		return nil, buildPhaseTiming{}, nil, err
@@ -147,21 +148,29 @@ func runSingleBuildJudge(ctx context.Context, f commands.Factory, wo *workorder.
 	return result, finishPhase("judge", "", label, phaseStarted), promptTrims, nil
 }
 
-func buildJudgeSharedEvidence(runDir string, baseline buildverify.Result, metrics []buildverify.MetricComparison) map[string]any {
+func buildJudgeSharedEvidence(runDir string, baseline buildverify.Result, metrics []buildverify.MetricComparison, anonymize bool) map[string]any {
 	return map[string]any{
-		"baseline_verify":  compactVerifyResult(runDir, baseline),
+		"baseline_verify":  compactVerifyResultForJudge(runDir, baseline, !anonymize, !anonymize),
 		"metric_decisions": metricDecisionMaps(metrics),
 	}
 }
 
 func buildJudgePayload(runDir string, run providerRun) map[string]any {
+	return buildJudgePayloadForCandidate(runDir, run, "", false)
+}
+
+func buildJudgePayloadForCandidate(runDir string, run providerRun, label string, anonymize bool) map[string]any {
 	payload := map[string]any{
-		"provider_id":       run.ID,
 		"worker_final_json": jsonutil.FinalJSONMap(run.WorkerResult),
-		"runner_status":     compactRunnerStatus(run.WorkerResult),
-		"workspace":         compactWorkspace(runDir, run),
+		"runner_status":     compactRunnerStatusForJudge(run.WorkerResult, !anonymize),
+		"workspace":         compactWorkspaceForJudge(runDir, run, !anonymize),
 		"scope_diagnostics": run.ScopeDiagnostics,
-		"verify":            compactVerifyResult(runDir, run.Verify),
+		"verify":            compactVerifyResultForJudge(runDir, run.Verify, !anonymize, !anonymize),
+	}
+	if anonymize {
+		payload["candidate_label"] = label
+	} else {
+		payload["provider_id"] = run.ID
 	}
 	if len(run.IneligibleReasons) > 0 {
 		payload["ineligible_reasons"] = run.IneligibleReasons
@@ -178,7 +187,9 @@ func buildJudgePayload(runDir string, run providerRun) map[string]any {
 		}
 		if len(run.ProtectedViolations) > 0 {
 			patch["protected_path_violations"] = run.ProtectedViolations
-			patch["protected_paths_path"] = mustRelative(runDir, filepath.Join(runDir, "providers", run.ID, "build", "protected-paths.json"))
+			if !anonymize {
+				patch["protected_paths_path"] = mustRelative(runDir, filepath.Join(runDir, "providers", run.ID, "build", "protected-paths.json"))
+			}
 		}
 		if run.Capture.DiffstatPath != "" {
 			if preview, truncated, err := readTextPreview(run.Capture.DiffstatPath, buildJudgeDiffstatPreviewBytes); err == nil {
@@ -187,19 +198,23 @@ func buildJudgePayload(runDir string, run providerRun) map[string]any {
 			} else {
 				patch["diffstat_error"] = err.Error()
 			}
-			if relative, err := relativePath(runDir, run.Capture.DiffstatPath); err == nil {
-				patch["diffstat_path"] = relative
-			} else {
-				patch["diffstat_path"] = run.Capture.DiffstatPath
-				patch["diffstat_path_error"] = err.Error()
+			if !anonymize {
+				if relative, err := relativePath(runDir, run.Capture.DiffstatPath); err == nil {
+					patch["diffstat_path"] = relative
+				} else {
+					patch["diffstat_path"] = run.Capture.DiffstatPath
+					patch["diffstat_path_error"] = err.Error()
+				}
 			}
 		}
 		if run.Capture.PatchPath != "" {
-			if relative, err := relativePath(runDir, run.Capture.PatchPath); err == nil {
-				patch["patch_path"] = relative
-			} else {
-				patch["patch_path"] = run.Capture.PatchPath
-				patch["patch_path_error"] = err.Error()
+			if !anonymize {
+				if relative, err := relativePath(runDir, run.Capture.PatchPath); err == nil {
+					patch["patch_path"] = relative
+				} else {
+					patch["patch_path"] = run.Capture.PatchPath
+					patch["patch_path_error"] = err.Error()
+				}
 			}
 			if preview, truncated, err := readTextPreview(run.Capture.PatchPath, buildJudgePatchExcerptBytes); err == nil {
 				patch["patch_excerpt"] = preview
@@ -213,13 +228,16 @@ func buildJudgePayload(runDir string, run providerRun) map[string]any {
 	return payload
 }
 
-func compactRunnerStatus(result map[string]any) map[string]any {
+func compactRunnerStatusForJudge(result map[string]any, includePaths bool) map[string]any {
 	status := artifact.StatusWithoutPayload(result)
 	delete(status, "io")
 	delete(status, "output_bytes")
 	if scopeMetadata, ok := status["scope_enforcement"].(map[string]any); ok {
 		compactScope := map[string]any{}
 		for _, key := range []string{"requested_scope", "effective_scope", "enforcement_level", "policy", "mechanisms", "fallback_reason", "minimum_controls", "minimum_controls_satisfied", "minimum_control_failures", "temporary_cwd", "cwd"} {
+			if key == "cwd" && !includePaths {
+				continue
+			}
 			if value, exists := scopeMetadata[key]; exists {
 				compactScope[key] = value
 			}
@@ -229,33 +247,36 @@ func compactRunnerStatus(result map[string]any) map[string]any {
 	return status
 }
 
-func compactWorkspace(runDir string, run providerRun) map[string]any {
-	return map[string]any{
+func compactWorkspaceForJudge(runDir string, run providerRun, includePaths bool) map[string]any {
+	out := map[string]any{
 		"base_ref":                   run.Workspace.BaseRef,
 		"base_commit":                shortCommit(run.Workspace.BaseCommit),
 		"cleanup_status":             run.Workspace.CleanupStatus,
-		"provider_cwd":               mustRelative(runDir, run.Workspace.ProviderCWD),
 		"provider_head":              shortCommit(run.Workspace.ProviderHead),
 		"provider_head_is_base":      run.Workspace.ProviderHeadIsBase,
 		"provider_committed_changes": run.Workspace.ProviderCommittedChanges,
 		"worktree_retained":          run.Workspace.WorktreeRetained,
 		"worktree_removed":           run.Workspace.WorktreeRemoved,
 	}
+	if includePaths {
+		out["provider_cwd"] = mustRelative(runDir, run.Workspace.ProviderCWD)
+	}
+	return out
 }
 
-func compactVerifyResult(runDir string, result buildverify.Result) map[string]any {
+func compactVerifyResultForJudge(runDir string, result buildverify.Result, includeProviderID bool, includePaths bool) map[string]any {
 	out := map[string]any{
 		"scope":        result.Scope,
 		"gates_passed": result.GatesPassed,
-		"results":      compactVerifierResults(runDir, result.Results),
+		"results":      compactVerifierResultsForJudge(runDir, result.Results, includePaths),
 	}
-	if result.ProviderID != "" {
+	if includeProviderID && result.ProviderID != "" {
 		out["provider_id"] = result.ProviderID
 	}
 	return out
 }
 
-func compactVerifierResults(runDir string, results []buildverify.VerifierResult) []map[string]any {
+func compactVerifierResultsForJudge(runDir string, results []buildverify.VerifierResult, includePaths bool) []map[string]any {
 	out := make([]map[string]any, 0, len(results))
 	for _, result := range results {
 		entry := map[string]any{
@@ -271,16 +292,16 @@ func compactVerifierResults(runDir string, results []buildverify.VerifierResult)
 			"stdout_truncated":      result.StdoutTruncated,
 			"stderr_truncated":      result.StderrTruncated,
 		}
-		if result.StdoutPath != "" {
+		if includePaths && result.StdoutPath != "" {
 			entry["stdout_path"] = mustRelative(runDir, result.StdoutPath)
 		}
-		if result.StderrPath != "" {
+		if includePaths && result.StderrPath != "" {
 			entry["stderr_path"] = mustRelative(runDir, result.StderrPath)
 		}
-		if result.StatusPath != "" {
+		if includePaths && result.StatusPath != "" {
 			entry["status_path"] = mustRelative(runDir, result.StatusPath)
 		}
-		if result.MetricPath != "" {
+		if includePaths && result.MetricPath != "" {
 			entry["metric_path"] = mustRelative(runDir, result.MetricPath)
 		}
 		if result.BaselineExpectation != "" {

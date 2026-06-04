@@ -399,6 +399,22 @@ func FormatBudgetSummary(b Budgets) string {
 	return fmt.Sprintf("%ds wall, %d bytes out, %ds cap grace", b.WallClockSeconds, b.MaxOutputBytes, b.OutputCapGraceSeconds)
 }
 
+func SameBackendModelScope(a, b Participant) bool {
+	return a.Backend == b.Backend && a.Model == b.Model && a.Scope == b.Scope
+}
+
+func SameBackendModelScopeRun(wo *WorkOrder) bool {
+	return wo != nil && len(wo.Providers) == 2 && SameBackendModelScope(wo.Providers[0], wo.Providers[1])
+}
+
+func SameBackendModelScopeReportCaveat(wo *WorkOrder) string {
+	if !SameBackendModelScopeRun(wo) {
+		return ""
+	}
+	provider := wo.Providers[0]
+	return fmt.Sprintf("Same-model duplicate run: both workers used %s/%s with the same scope. Agreement is duplicate sampling, not independent model-family corroboration.", provider.Backend, provider.Model)
+}
+
 func validateProviders(value any) ([]Participant, error) {
 	items, ok := value.([]any)
 	if !ok || len(items) != 2 {
@@ -406,7 +422,6 @@ func validateProviders(value any) ([]Participant, error) {
 	}
 	providers := make([]Participant, 0, len(items))
 	ids := map[string]bool{}
-	triples := map[string]bool{}
 	for i, item := range items {
 		obj, ok := item.(map[string]any)
 		if !ok {
@@ -423,11 +438,7 @@ func validateProviders(value any) ([]Participant, error) {
 			return nil, Validationf("providers[%d].id must be unique (duplicate %s)", i, pyRepr(participant.ID))
 		}
 		ids[participant.ID] = true
-		triples[participant.Backend+"\x00"+participant.Model+"\x00"+participant.Scope] = true
 		providers = append(providers, participant)
-	}
-	if len(triples) == 1 {
-		return nil, Validationf("providers must differ on at least one of backend, model, or scope")
 	}
 	return providers, nil
 }

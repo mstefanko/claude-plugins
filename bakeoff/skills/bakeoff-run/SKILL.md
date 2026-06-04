@@ -122,6 +122,16 @@ discovery.
 Provider-pair extraction rules:
 
 - If the user explicitly names exactly two known providers, use those providers.
+  If both names are the same known provider, treat that as explicit duplicate
+  intent and assign provider ids `<backend>-a` and `<backend>-b` with the same
+  backend, model, scope, effort, prompt, tools, and runtime budgets.
+- Do not treat "use Claude" as duplicate intent. Do not infer duplicate mode
+  from "retry", "rerun", "second opinion", or fallback degradation unless the
+  same provider is named twice or the user explicitly asks for the same model
+  twice.
+- Natural-language duplicate pairs use the catalog default model for that
+  backend: Claude + Claude becomes `claude-a`/`claude-b` with `sonnet`; Codex +
+  Codex becomes `codex-a`/`codex-b` with `gpt-5.5`.
 - If the user asks to replace one provider with another, keep exactly two
   providers and show the resulting pair in the preview.
 - If the user names one provider as a replacement after a just-completed run,
@@ -157,6 +167,12 @@ Implicit provider selection rules:
   compact preview note that a ready non-contestant provider-family judge exists.
   Do not infer provider families yourself, do not auto-switch the judge, and do
   not add `judge_policy` fields.
+- For explicit duplicate natural-language drafts, prefer a ready cross-family
+  judge when doctor data is already available from the normal preflight: Claude
+  + Claude should use Codex when Codex is ready, and Codex + Codex should use
+  Claude when Claude is ready. This is draft-time selection only; existing
+  work-order paths run exactly as authored. If no cross-family judge is ready,
+  keep a validating generated judge and show the same-family judge warning.
 - If `fallback_requires_user_choice` is true, ask which fallback peer to use
   and do not draft until the user chooses.
 - If `runnable_default_pair_available` is false, stop and summarize the missing
@@ -221,9 +237,11 @@ or doctor selected a fallback pair. Canonical flags are `--id`, `--goal`,
 `--provider`; gate flags use `--gate <id>=<command>`, for example
 `--gate "tests=go test ./internal/cache"`. Pass provider flags in the same
 order you will show in the preview; `draft-build` preserves the two-provider
-order. With zero `--provider` flags the command stays deterministic and emits
-the canonical Claude+Codex pair. Use stdout as the preview source; the command
-owns the canonical build shape, provider/judge defaults, budgets,
+order, including repeated flags such as `--provider claude --provider claude`
+when the user explicitly asked for duplicate providers. With zero `--provider`
+flags the command stays deterministic and emits the canonical Claude+Codex pair.
+Use stdout as the preview source; the command owns the canonical build shape,
+provider/judge defaults, budgets,
 `build.verify[].argv`, and self-validation. Metric verifier drafts, generated
 fixtures, and protected benchmark harnesses still use careful manual drafting.
 
@@ -360,6 +378,19 @@ background-run conversion. Include full JSON only if at most 120 lines and
 10 KB; otherwise say `show` can print it. For build previews, include
 `Why this loop: build-verifier path`. This line is for `/bakeoff:run` build
 drafting only, not escalation.
+For explicit duplicate-provider previews, include:
+`Same-model note: this runs two independent attempts with the same backend,
+model, scope, and prompt. Treat agreement as duplicate sampling, not independent
+model corroboration; there is no majority vote with two workers.` Also mention
+that running the same provider twice can hit provider rate limits or local CLI
+concurrency limits sooner than a heterogeneous pair. If a ready cross-family
+judge was selected for a duplicate draft, include: `Judge note: using <Backend>
+as a non-contestant judge for this <Provider> + <Provider> run. Verifier
+evidence and swapped judging still matter more than judge preference.` If
+falling back to a same-family judge, include: `Judge note: the judge shares
+provider-family metadata with both workers. This is allowed, but judge-heavy
+conclusions are less independent; prefer verifier evidence or rerun with a
+non-contestant judge when available.`
 
 Choice-label conventions: `yes`, `approve`, and `run it` accept every approved
 single-work-order preview. Mode-specific aliases such as `approve witness` are

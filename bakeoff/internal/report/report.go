@@ -303,6 +303,9 @@ func renderOutcome(wo *workorder.WorkOrder, decision map[string]any, workerResul
 	if opts.RunID != "" {
 		lines = append(lines, compactNextStep(opts.RunID, opts.OutDir))
 	}
+	if caveat := workorder.SameBackendModelScopeReportCaveat(wo); caveat != "" {
+		lines = append(lines, caveat)
+	}
 	lines = append(lines, "")
 	return lines
 }

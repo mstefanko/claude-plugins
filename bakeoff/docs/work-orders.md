@@ -93,6 +93,21 @@ may also set the judge to any catalog backend as long as `judge.backend` plus
 `judge.model` differs from each provider backend/model pair. Valid scopes are
 `codebase`, `web`, and `mixed`. Build providers cannot use `web` scope.
 
+Manual work orders may also use the same backend/model/scope twice when the two
+provider IDs are unique. In that shape, `providers[].id` is the attempt identity
+and artifact key:
+
+```json
+"providers": [
+  { "id": "claude-a", "backend": "claude", "model": "sonnet", "scope": "codebase", "effort": "high" },
+  { "id": "claude-b", "backend": "claude", "model": "sonnet", "scope": "codebase", "effort": "high" }
+]
+```
+
+Same-model duplicate runs are repeated sampling, not independent model-family
+corroboration. Agreement is useful evidence only when the cited facts,
+verifiers, or patches support it; two workers do not provide a majority vote.
+
 Provider credentials never belong in work orders. Bakeoff launches the local
 provider CLIs and relies on their existing auth stores; `bakeoff doctor`
 reports whether optional Gemini or Copilot CLIs are installed and ready without
@@ -243,9 +258,11 @@ Required flags are `--id`, `--goal`, at least one `--acceptance`, at least one
 extra context and `--protected-path` for verifier scripts or fixtures providers
 must not edit. Repeat `--provider` exactly twice to override the deterministic
 Claude+Codex default, using either `backend` or `backend:model`, for example
-`--provider claude --provider gemini:pro`. The generated work order preserves
-the order of the two `--provider` flags. Metric verifier drafting remains manual
-for now.
+`--provider claude --provider gemini:pro`. Repeated backends are accepted for
+explicit duplicate attempts, for example `--provider claude --provider claude`,
+and generate suffixed IDs such as `claude-a` and `claude-b`. The generated work
+order preserves the order of the two `--provider` flags. Metric verifier
+drafting remains manual for now.
 
 Verifier fields:
 

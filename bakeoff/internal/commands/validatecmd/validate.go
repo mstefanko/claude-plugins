@@ -213,6 +213,9 @@ func validateWarnings(root string, wo *workorder.WorkOrder) []string {
 	if warning := judgeFamilyWarning(wo); warning != "" {
 		warnings = append(warnings, warning)
 	}
+	if warning := sameBackendModelScopeWarning(wo); warning != "" {
+		warnings = append(warnings, warning)
+	}
 	if wo == nil || wo.Build == nil {
 		return warnings
 	}
@@ -234,6 +237,18 @@ func validateWarnings(root string, wo *workorder.WorkOrder) []string {
 		}
 	}
 	return warnings
+}
+
+func sameBackendModelScopeWarning(wo *workorder.WorkOrder) string {
+	if !workorder.SameBackendModelScopeRun(wo) {
+		return ""
+	}
+	a := wo.Providers[0]
+	b := wo.Providers[1]
+	if a.Effort == b.Effort {
+		return fmt.Sprintf("same-model duplicate advisory: providers %s and %s share backend, model, scope, and effort. This is an exact duplicate baseline: independent attempts, not independent model corroboration; no majority vote is possible with two workers.", a.ID, b.ID)
+	}
+	return fmt.Sprintf("same-model duplicate advisory: providers %s and %s share backend, model, and scope but use different effort. They are independent attempts with the same backend/model/scope, not exact duplicate sampling or independent model corroboration; no majority vote is possible with two workers.", a.ID, b.ID)
 }
 
 func judgeFamilyWarning(wo *workorder.WorkOrder) string {

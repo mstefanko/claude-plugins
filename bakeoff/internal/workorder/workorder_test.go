@@ -438,6 +438,71 @@ func TestProviderValidationRejectsWrongCountsAndUnknownBackends(t *testing.T) {
 	}
 }
 
+func TestProviderValidationAllowsSameBackendModelScopeWithUniqueIDs(t *testing.T) {
+	data := validWorkOrder()
+	data["providers"] = []any{
+		map[string]any{"id": "claude-a", "backend": "claude", "model": "sonnet", "scope": "codebase", "effort": "high"},
+		map[string]any{"id": "claude-b", "backend": "claude", "model": "sonnet", "scope": "codebase", "effort": "high"},
+	}
+	data["judge"] = map[string]any{"backend": "codex", "model": modeldefaults.CodexDefault}
+	wo, err := Validate(data)
+	if err != nil {
+		t.Fatalf("duplicate backend/model/scope with unique ids should validate: %v", err)
+	}
+	if !SameBackendModelScope(wo.Providers[0], wo.Providers[1]) {
+		t.Fatalf("providers should share backend/model/scope: %#v", wo.Providers)
+	}
+}
+
+func TestProviderValidationDuplicateIDsFacetAndJudgeRulesStillApply(t *testing.T) {
+	data := validWorkOrder()
+	data["providers"] = []any{
+		map[string]any{"id": "claude-a", "backend": "claude", "model": "sonnet", "scope": "codebase"},
+		map[string]any{"id": "claude-a", "backend": "claude", "model": "sonnet", "scope": "codebase"},
+	}
+	_, err := Validate(data)
+	if err == nil || !strings.Contains(err.Error(), "id must be unique") {
+		t.Fatalf("expected duplicate provider id error, got %v", err)
+	}
+
+	data = validWorkOrder()
+	data["providers"] = []any{
+		map[string]any{"id": "claude-a", "backend": "claude", "model": "sonnet", "scope": "codebase", "facet": map[string]any{"id": "x"}},
+		map[string]any{"id": "claude-b", "backend": "claude", "model": "sonnet", "scope": "codebase"},
+	}
+	_, err = Validate(data)
+	if err == nil || !strings.Contains(err.Error(), "providers[0].facet is not supported") {
+		t.Fatalf("expected provider facet error, got %v", err)
+	}
+
+	data = validWorkOrder()
+	data["providers"] = []any{
+		map[string]any{"id": "claude-a", "backend": "claude", "model": "sonnet", "scope": "codebase"},
+		map[string]any{"id": "claude-b", "backend": "claude", "model": "sonnet", "scope": "codebase"},
+	}
+	data["judge"] = map[string]any{"backend": "claude", "model": "sonnet"}
+	_, err = Validate(data)
+	if err == nil || !strings.Contains(err.Error(), "judge.backend + judge.model must differ") {
+		t.Fatalf("expected judge same backend/model error, got %v", err)
+	}
+}
+
+func TestProviderValidationAllowsSameBackendModelScopeWithDifferentEffort(t *testing.T) {
+	data := validWorkOrder()
+	data["providers"] = []any{
+		map[string]any{"id": "claude-a", "backend": "claude", "model": "sonnet", "scope": "mixed", "effort": "high"},
+		map[string]any{"id": "claude-b", "backend": "claude", "model": "sonnet", "scope": "mixed", "effort": "medium"},
+	}
+	data["judge"] = map[string]any{"backend": "codex", "model": modeldefaults.CodexDefault}
+	wo, err := Validate(data)
+	if err != nil {
+		t.Fatalf("same backend/model/scope with different effort should validate: %v", err)
+	}
+	if wo.Providers[0].Effort == wo.Providers[1].Effort {
+		t.Fatalf("test setup should preserve different effort: %#v", wo.Providers)
+	}
+}
+
 func TestBuildVerifierBaselineValidation(t *testing.T) {
 	data := validBuildWorkOrder()
 	verify := data["build"].(map[string]any)["verify"].([]any)
