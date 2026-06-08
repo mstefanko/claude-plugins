@@ -1,0 +1,47 @@
+// Intentional single-provider baseline. No judge runs for this work order.
+// Run with:
+//   bakeoff validate examples/single-provider.work-order.json
+//   bakeoff research examples/single-provider.work-order.json
+{
+  "schema_version": 1,
+  "id": "single-provider-baseline",
+  "type": "gather",
+  "run_mode": "single_provider",
+  "goal": "Collect code-review findings from one provider as baseline evidence.",
+  "background": "Replace this with the files, diff summary, report paths, or task context for the baseline run.",
+  "facet": {
+    "id": "code-review",
+    "kind": "generic",
+    "focus": "Find actionable defects introduced or exposed by the change.",
+    "include": [
+      "correctness bugs and edge cases",
+      "security issues with concrete data-flow or control-flow evidence",
+      "user-visible regressions",
+      "missing or misleading tests for changed behavior"
+    ],
+    "exclude": [
+      "style-only preferences without project convention evidence",
+      "large rewrites unrelated to the changed behavior",
+      "speculation without file:line evidence"
+    ]
+  },
+  "providers": [
+    { "id": "claude", "backend": "claude", "model": "sonnet", "scope": "codebase", "effort": "high" }
+  ],
+  "judge": { "backend": "claude", "model": "opus", "effort": "xhigh" },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  },
+  "scope_policy": { "enforcement": "best_effort" },
+  "experiment": {
+    "id": "baseline-example",
+    "task_id": "review-baseline",
+    "condition_id": "claude-single",
+    "run_kind": "single_agent_baseline",
+    "repetition_index": 1
+  }
+}

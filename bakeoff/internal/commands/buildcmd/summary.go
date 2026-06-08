@@ -40,10 +40,12 @@ func buildSummary(repo buildworkspace.Repository, runDir string, runID string, o
 		"warnings":         sourceWarnings(repo),
 		"run_id":           runID,
 		"mode":             "build",
+		"run_mode":         decision["run_mode"],
 		"run_dir":          runDir,
 		"decision_kind":    decision["decision_kind"],
 		"selection_basis":  decision["selection_basis"],
 		"winner":           decision["canonical_winner"],
+		"single_provider":  decision["single_provider"],
 		"judge_ran":        decision["judge_ran"],
 		"baseline":         map[string]any{"gates_passed": baseline.GatesPassed, "results": baseline.Results},
 		"providers":        providers,
@@ -58,6 +60,9 @@ func buildSummary(repo buildworkspace.Repository, runDir string, runID string, o
 	if selectedPatch, ok := selectedBuildPatchPath(decision); ok {
 		out["selected_patch_status"] = "selected"
 		out["selected_patch_path"] = selectedPatch
+		if providerID := selectedBuildPatchProvider(decision); providerID != "" {
+			out["selected_patch_provider"] = providerID
+		}
 	} else {
 		out["selected_patch_status"] = "no selected patch"
 	}

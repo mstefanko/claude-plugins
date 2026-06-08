@@ -83,6 +83,7 @@ func runValidate(_ context.Context, f commands.Factory, opts *ValidateOptions) e
 	streams.Printf("valid work order\n")
 	streams.Printf("  id:      %s\n", wo.ID)
 	streams.Printf("  mode:    %s\n", wo.Type)
+	streams.Printf("  run:     %s\n", wo.RunMode)
 	if wo.Facet != nil {
 		streams.Printf("  facet:   %s\n", wo.Facet.ID)
 	}
@@ -92,7 +93,11 @@ func runValidate(_ context.Context, f commands.Factory, opts *ValidateOptions) e
 	for _, provider := range wo.Providers {
 		streams.Printf("    - %s: %s %s (%s, %s)\n", provider.ID, provider.Backend, provider.Model, provider.Scope, provider.Effort)
 	}
-	streams.Printf("  judge:   %s %s (%s)\n", wo.Judge.Backend, wo.Judge.Model, wo.Judge.Effort)
+	if wo.RunMode == workorder.RunModeSingleProvider {
+		streams.Printf("  judge:   not run for single_provider\n")
+	} else {
+		streams.Printf("  judge:   %s %s (%s)\n", wo.Judge.Backend, wo.Judge.Model, wo.Judge.Effort)
+	}
 	for _, warning := range validateWarnings(root, wo) {
 		streams.Printf("warning: %s\n", warning)
 	}
@@ -252,7 +257,7 @@ func sameBackendModelScopeWarning(wo *workorder.WorkOrder) string {
 }
 
 func judgeFamilyWarning(wo *workorder.WorkOrder) string {
-	if wo == nil || !judgeFamilyAdvisoryContext(wo) {
+	if wo == nil || wo.RunMode == workorder.RunModeSingleProvider || !judgeFamilyAdvisoryContext(wo) {
 		return ""
 	}
 	providerBackends := make([]string, 0, len(wo.Providers))

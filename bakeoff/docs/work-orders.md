@@ -1,8 +1,15 @@
 # Work Orders
 
 Work orders are the input contract for the Go CLI. They are JSON or JSONC
-objects with `schema_version: 1`, exactly two providers, one judge, budgets, a
-scope policy, and a workflow type.
+objects with `schema_version: 1`, a workflow type, run mode, providers, one
+judge field, budgets, and a scope policy.
+
+By default, `run_mode` is `pairwise`: exactly two providers run and Bakeoff may
+judge or compare their outputs. `run_mode: "single_provider"` is the deliberate
+one-provider shape for baselines and one-off standalone runs. It requires
+exactly one provider, skips all judge phases, and records
+`decision_kind: "single_provider_result"` or `single_provider_failed` instead
+of pretending a provider won a comparison.
 
 Bakeoff has no batch work-order schema in v1. Split plugin runs are represented
 as separate normal work-order files. Multi-lens review is also a plugin
@@ -30,8 +37,8 @@ and decision paths cited in `background`; a review follow-up is still
 provide the usual acceptance criteria, edit scope, verifier, and protected-path
 constraints.
 
-Provider escalation is also not a work-order schema feature. Normal work orders
-still require exactly two providers. To add one more provider after a completed
+Provider escalation is also not a work-order schema feature. Pairwise work
+orders still require exactly two providers. To add one more provider after a completed
 non-build research or review run, use `bakeoff escalate SOURCE_RUN_ID
 --provider BACKEND[:MODEL] --mode independent|witness|dispute --dry-run`.
 Escalation creates a separate run with `type: "escalation"` in its manifest and
@@ -75,10 +82,11 @@ as the documented starting point.
 | `schema_version` | Must be `1`. |
 | `id` | Non-empty slug. Must not start with the init placeholder `TODO-`. |
 | `type` | One of `gather`, `compare`, `analyze`, or `build`. |
+| `run_mode` | Optional. Defaults to `pairwise`. Use `single_provider` only for intentional one-provider runs. |
 | `goal` | Non-empty user-facing goal. |
 | `background` | String or array of strings. |
-| `providers` | Exactly two provider participants. |
-| `judge` | Judge participant; backend/model pair must differ from each provider. |
+| `providers` | Exactly two provider participants for `pairwise`; exactly one for `single_provider`. |
+| `judge` | Judge participant. Pairwise runs require its backend/model pair to differ from each provider; single-provider runs keep the field for schema compatibility but do not run the judge. |
 | `budgets` | Wall-clock, output, heartbeat, and output-cap settings. |
 | `scope_policy` | `advisory`, `best_effort`, or `required`, or an object with `enforcement` and optional `repo_layout`. Defaults to `best_effort` with repo layout enabled when omitted. |
 | `facet` | Optional task filter, commonly used for code review. |
@@ -87,7 +95,7 @@ as the documented starting point.
 
 Provider participants require `id`, `backend`, and `model`; provider `scope`
 defaults to `mixed` when omitted. Valid backends are `claude`, `codex`,
-`gemini`, and `copilot`. Work orders always have exactly two providers:
+`gemini`, and `copilot`. Pairwise work orders always have exactly two providers:
 generated defaults are Claude `sonnet` plus Codex `gpt-5.5`, with Claude
 `opus` as judge. Manual work orders may choose any two catalog backends, and
 may also set the judge to any catalog backend as long as `judge.backend` plus
@@ -108,6 +116,21 @@ and artifact key:
 Same-model duplicate runs are repeated sampling, not independent model-family
 corroboration. Agreement is useful evidence only when the cited facts,
 verifiers, or patches support it; two workers do not provide a majority vote.
+
+An intentional single-provider baseline is different:
+
+```json
+{
+  "run_mode": "single_provider",
+  "providers": [
+    { "id": "claude", "backend": "claude", "model": "sonnet", "scope": "codebase", "effort": "high" }
+  ]
+}
+```
+
+This shape is not a degraded pairwise run. It emits `single_provider` in
+`decision.json`, `summary.json`, `manifest.json`, and `bakeoff ls --json`, and
+it never emits a comparative winner.
 
 Provider credentials never belong in work orders. Bakeoff launches the local
 provider CLIs and relies on their existing auth stores; `bakeoff doctor`
@@ -186,6 +209,11 @@ human labels, and paper tables.
 }
 ```
 
+`experiment.run_kind: "single_agent_baseline"` is valid only with
+`run_mode: "single_provider"`. Single-provider experiment labels may use
+`single_agent_baseline`, `ad_hoc`, or `rerun`; pairwise experiment labels may
+use `pairwise`, `multi_lens_child`, `split_child`, `rerun`, or `ad_hoc`.
+
 Required fields are `id`, `task_id`, `condition_id`, `run_kind`, and
 `repetition_index`. Optional fields are `slot_id` and `slot_attempt`.
 Id-like fields use the same slug shape as run ids:
@@ -193,8 +221,8 @@ Id-like fields use the same slug shape as run ids:
 1-based positive integers, and `slot_attempt` requires `slot_id`.
 
 `run_kind` is one of `pairwise`, `multi_lens_child`, `split_child`, `rerun`,
-or `ad_hoc`. `single_agent_baseline` is reserved for a future complete
-baseline mode and is rejected in this version.
+`ad_hoc`, or `single_agent_baseline`, subject to the run-mode compatibility
+rules above.
 
 Run ledgers copy the full object into `meta.experiment`. Manifests hoist
 `experiment_id`, `task_id`, `condition_id`, `run_kind`, `repetition_index`,

@@ -90,6 +90,9 @@ func runRerun(ctx context.Context, f commands.Factory, opts *RerunOptions) error
 		if opts.NoRepoLayout {
 			return &apperror.ValidationError{Message: "--no-repo-layout has no effect with --judge-only; omit it or run a full rerun"}
 		}
+		if wo.RunMode == workorder.RunModeSingleProvider {
+			return &apperror.ValidationError{Message: "--judge-only requires a pairwise source run with judge evidence"}
+		}
 		sourceRunID := opts.SourceRunID
 		if sourceRunID == "latest" {
 			sourceRunID = filepath.Base(sourceRun)

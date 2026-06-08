@@ -89,30 +89,35 @@ func BuildRunManifest(runDir string) (map[string]any, error) {
 	state, staleInputs := triage.DisplayStateDetail(runDir)
 	triageSummary := triageSummary(runDir, state, staleInputs)
 	runType := resolveRunType(workOrder, meta, decision)
+	runMode := resolveRunMode(runType, workOrder, meta, decision)
+	singleProvider := resolveSingleProvider(workOrder, decision, runMode)
 	artifacts, err := artifactPathsForType(runDir, runType)
 	if err != nil {
 		return nil, err
 	}
 	out := map[string]any{
-		"schema_version":        SchemaVersion,
-		"run_id":                filepath.Base(runDir),
-		"bakeoff_version":       buildinfo.Current().Version,
-		"type":                  nilIfEmpty(runType),
-		"facet_id":              nilIfEmpty(facetID),
-		"started_at":            meta["started_at"],
-		"finished_at":           meta["finished_at"],
-		"cwd":                   meta["cwd"],
-		"decision_kind":         decision["decision_kind"],
-		"canonical_winner":      decision["canonical_winner"],
-		"judge_ran":             truthy(decision["judge_ran"]),
-		"judge_attempted":       truthy(decision["judge_attempted"]),
-		"judge_completed":       truthy(decision["judge_completed"]),
-		"triage":                triageSummary,
-		"providers":             providerSummaries(meta, decision),
-		"judge":                 judgeSummary(meta),
-		"review_context":        reviewContextSummary(runDir),
-		"artifacts":             artifacts,
-		"artifact_fingerprints": artifactFingerprintsForType(runDir, runType),
+		"schema_version":          SchemaVersion,
+		"run_id":                  filepath.Base(runDir),
+		"bakeoff_version":         buildinfo.Current().Version,
+		"type":                    nilIfEmpty(runType),
+		"run_mode":                nilIfEmpty(runMode),
+		"single_provider":         nilIfEmpty(singleProvider),
+		"facet_id":                nilIfEmpty(facetID),
+		"started_at":              meta["started_at"],
+		"finished_at":             meta["finished_at"],
+		"cwd":                     meta["cwd"],
+		"decision_kind":           decision["decision_kind"],
+		"canonical_winner":        decision["canonical_winner"],
+		"selected_patch_provider": nilIfEmpty(jsonutil.StringValue(decision["selected_patch_provider"])),
+		"judge_ran":               truthy(decision["judge_ran"]),
+		"judge_attempted":         truthy(decision["judge_attempted"]),
+		"judge_completed":         truthy(decision["judge_completed"]),
+		"triage":                  triageSummary,
+		"providers":               providerSummaries(meta, decision),
+		"judge":                   judgeSummary(meta),
+		"review_context":          reviewContextSummary(runDir),
+		"artifacts":               artifacts,
+		"artifact_fingerprints":   artifactFingerprintsForType(runDir, runType),
 	}
 	addExperimentManifestFields(out, meta)
 	addRerunManifestFields(out, meta, decision)
@@ -158,15 +163,17 @@ func RowForLS(runDir string) map[string]any {
 		triageRow["highest_severity"] = value
 	}
 	row := map[string]any{
-		"run_id":         filepath.Base(runDir),
-		"manifest_state": "present",
-		"type":           loaded.Type,
-		"facet_id":       nilIfEmpty(stringPtrValue(loaded.FacetID)),
-		"decision_kind":  loaded.DecisionKind,
-		"triage_state":   state,
-		"triage":         triageRow,
-		"finished_at":    loaded.FinishedAt,
-		"manifest_path":  manifestPath,
+		"run_id":          filepath.Base(runDir),
+		"manifest_state":  "present",
+		"type":            loaded.Type,
+		"run_mode":        nilIfEmpty(loaded.RunMode),
+		"single_provider": nilIfEmpty(loaded.SingleProvider),
+		"facet_id":        nilIfEmpty(stringPtrValue(loaded.FacetID)),
+		"decision_kind":   loaded.DecisionKind,
+		"triage_state":    state,
+		"triage":          triageRow,
+		"finished_at":     loaded.FinishedAt,
+		"manifest_path":   manifestPath,
 	}
 	if loaded.ExperimentID != nil {
 		row["experiment_id"] = stringPtrValue(loaded.ExperimentID)
@@ -196,6 +203,9 @@ func RowForLS(runDir string) map[string]any {
 	if loaded.RerunMode != "" {
 		row["rerun_mode"] = loaded.RerunMode
 	}
+	if loaded.SelectedPatchProvider != "" {
+		row["selected_patch_provider"] = loaded.SelectedPatchProvider
+	}
 	if loaded.Type == "escalation" {
 		if loaded.SourceType != "" {
 			row["source_type"] = loaded.SourceType
@@ -211,26 +221,29 @@ func RowForLS(runDir string) map[string]any {
 }
 
 type lsManifest struct {
-	SchemaVersion   int               `json:"schema_version"`
-	RunID           string            `json:"run_id"`
-	Type            string            `json:"type"`
-	FacetID         *string           `json:"facet_id"`
-	DecisionKind    string            `json:"decision_kind"`
-	FinishedAt      string            `json:"finished_at"`
-	Artifacts       map[string]string `json:"artifacts"`
-	ExperimentID    *string           `json:"experiment_id"`
-	TaskID          *string           `json:"task_id"`
-	ConditionID     *string           `json:"condition_id"`
-	RunKind         *string           `json:"run_kind"`
-	RepetitionIndex *int              `json:"repetition_index"`
-	SlotID          *string           `json:"slot_id"`
-	SlotAttempt     *int              `json:"slot_attempt"`
-	SourceRunID     string            `json:"source_run_id"`
-	SourceType      string            `json:"source_type"`
-	EscalationMode  string            `json:"escalation_mode"`
-	AddedProvider   any               `json:"added_provider"`
-	RerunMode       string            `json:"rerun_mode"`
-	Triage          map[string]any    `json:"triage"`
+	SchemaVersion         int               `json:"schema_version"`
+	RunID                 string            `json:"run_id"`
+	Type                  string            `json:"type"`
+	RunMode               string            `json:"run_mode"`
+	SingleProvider        string            `json:"single_provider"`
+	FacetID               *string           `json:"facet_id"`
+	DecisionKind          string            `json:"decision_kind"`
+	FinishedAt            string            `json:"finished_at"`
+	Artifacts             map[string]string `json:"artifacts"`
+	ExperimentID          *string           `json:"experiment_id"`
+	TaskID                *string           `json:"task_id"`
+	ConditionID           *string           `json:"condition_id"`
+	RunKind               *string           `json:"run_kind"`
+	RepetitionIndex       *int              `json:"repetition_index"`
+	SlotID                *string           `json:"slot_id"`
+	SlotAttempt           *int              `json:"slot_attempt"`
+	SourceRunID           string            `json:"source_run_id"`
+	SourceType            string            `json:"source_type"`
+	EscalationMode        string            `json:"escalation_mode"`
+	AddedProvider         any               `json:"added_provider"`
+	RerunMode             string            `json:"rerun_mode"`
+	SelectedPatchProvider string            `json:"selected_patch_provider"`
+	Triage                map[string]any    `json:"triage"`
 }
 
 func readLSManifest(path string) (lsManifest, error) {
@@ -442,6 +455,7 @@ func telemetrySummary(runDir string, workOrder map[string]any, meta map[string]a
 		"rerun_mode":     nilIfEmpty(jsonutil.StringValue(manifest["rerun_mode"])),
 		"route": map[string]any{
 			"type":            nilIfEmpty(runType),
+			"run_mode":        nilIfEmpty(resolveRunMode(runType, workOrder, meta, decision)),
 			"facet_id":        manifest["facet_id"],
 			"escalation_mode": nilIfEmpty(jsonutil.StringValue(manifest["escalation_mode"])),
 			"source_type":     nilIfEmpty(jsonutil.StringValue(manifest["source_type"])),
@@ -963,13 +977,15 @@ func legacyLSRow(runDir string, manifestState string) map[string]any {
 		state, _ = triage.DisplayStateDetail(runDir)
 	}
 	row := map[string]any{
-		"run_id":         filepath.Base(runDir),
-		"manifest_state": manifestState,
-		"type":           metaObj["type"],
-		"facet_id":       nilIfEmpty(facetID),
-		"decision_kind":  decisionObj["decision_kind"],
-		"triage_state":   state,
-		"finished_at":    metaObj["finished_at"],
+		"run_id":          filepath.Base(runDir),
+		"manifest_state":  manifestState,
+		"type":            metaObj["type"],
+		"run_mode":        nilIfEmpty(jsonutil.StringValue(decisionObj["run_mode"])),
+		"single_provider": nilIfEmpty(jsonutil.StringValue(decisionObj["single_provider"])),
+		"facet_id":        nilIfEmpty(facetID),
+		"decision_kind":   decisionObj["decision_kind"],
+		"triage_state":    state,
+		"finished_at":     metaObj["finished_at"],
 	}
 	if fsutil.FileExists(filepath.Join(runDir, "report.md")) {
 		row["report_path"] = filepath.Join(runDir, "report.md")
@@ -979,6 +995,9 @@ func legacyLSRow(runDir string, manifestState string) map[string]any {
 	}
 	if value := jsonutil.StringValue(jsonutil.FirstNonNil(metaObj["rerun_mode"], decisionObj["rerun_mode"])); value != "" {
 		row["rerun_mode"] = value
+	}
+	if value := jsonutil.StringValue(decisionObj["selected_patch_provider"]); value != "" {
+		row["selected_patch_provider"] = value
 	}
 	if jsonutil.StringValue(row["type"]) == "escalation" {
 		if value := jsonutil.StringValue(jsonutil.FirstNonNil(metaObj["source_type"], decisionObj["source_mode"])); value != "" {
@@ -1061,6 +1080,33 @@ func resolveRunType(workOrder map[string]any, meta map[string]any, decision map[
 		return runType
 	}
 	return jsonutil.StringValue(meta["type"])
+}
+
+func resolveRunMode(runType string, workOrder map[string]any, meta map[string]any, decision map[string]any) string {
+	if runType == "escalation" {
+		return ""
+	}
+	for _, value := range []any{decision["run_mode"], meta["run_mode"], workOrder["run_mode"]} {
+		if runMode := jsonutil.StringValue(value); runMode != "" {
+			return runMode
+		}
+	}
+	return workorder.RunModePairwise
+}
+
+func resolveSingleProvider(workOrder map[string]any, decision map[string]any, runMode string) string {
+	if runMode != workorder.RunModeSingleProvider {
+		return ""
+	}
+	if providerID := jsonutil.StringValue(decision["single_provider"]); providerID != "" {
+		return providerID
+	}
+	providers := jsonutil.ListValue(workOrder["providers"])
+	if len(providers) != 1 {
+		return ""
+	}
+	providerObj, _ := providers[0].(map[string]any)
+	return jsonutil.StringValue(providerObj["id"])
 }
 
 func RunTypeForRun(runDir string) (string, error) {

@@ -241,7 +241,7 @@ func ShouldAutoTriage(workOrder map[string]any, decision map[string]any) string 
 		return ""
 	}
 	switch decision["decision_kind"] {
-	case "both_failed", "single_provider_only", "tie":
+	case "both_failed", "single_provider_only", "single_provider_result", "single_provider_failed", "tie":
 		return ""
 	default:
 		return "code-review facet - verify actionable findings before fixing"
@@ -254,6 +254,10 @@ func ShouldRecommendTriage(workOrder map[string]any, decision map[string]any, re
 	}
 	findings, _ := BuildFindingIndex(reportText)
 	switch decision["decision_kind"] {
+	case "single_provider_result":
+		return "single-provider baseline; inspect provider output and run triage explicitly if needed"
+	case "single_provider_failed":
+		return "single-provider run failed; inspect decision.json before acting"
 	case "single_provider_only":
 		return "only one provider completed; inspect decision.json and verify before fixing"
 	case "both_failed":

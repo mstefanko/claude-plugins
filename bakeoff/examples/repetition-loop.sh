@@ -37,6 +37,7 @@ write_work_order() {
   "schema_version": 1,
   "id": "${run_id}",
   "type": "gather",
+  "run_mode": "pairwise",
   "goal": "${focus}",
   "background": "Example repetition loop. Replace this with the task context, files, report paths, or benchmark fixture for your study.",
   "experiment": {

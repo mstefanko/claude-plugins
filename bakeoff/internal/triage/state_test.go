@@ -21,6 +21,14 @@ func TestShouldAutoTriageCodeReviewGather(t *testing.T) {
 	if reason := ShouldAutoTriage(workOrder, decision); reason != "" {
 		t.Fatalf("tie should not auto-triage, got %q", reason)
 	}
+	decision["decision_kind"] = "single_provider_result"
+	if reason := ShouldAutoTriage(workOrder, decision); reason != "" {
+		t.Fatalf("single-provider result should not auto-triage, got %q", reason)
+	}
+	reason := ShouldRecommendTriage(workOrder, decision, "# report\n\n## Findings\n\n- **F-001** claim\n")
+	if reason != "single-provider baseline; inspect provider output and run triage explicitly if needed" {
+		t.Fatalf("single-provider recommendation = %q", reason)
+	}
 }
 
 func TestShouldRecommendTriageSuppressesNonGatherModes(t *testing.T) {

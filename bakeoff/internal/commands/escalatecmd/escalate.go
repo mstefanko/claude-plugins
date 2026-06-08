@@ -733,6 +733,9 @@ func loadSourceRun(sourceDir string, requestedRunID string) (sourceRun, error) {
 	if wo.Type == "build" {
 		return sourceRun{}, &apperror.ValidationError{Message: "build source runs cannot be escalated"}
 	}
+	if wo.RunMode == workorder.RunModeSingleProvider {
+		return sourceRun{}, &apperror.ValidationError{Message: "single-provider source runs cannot be escalated yet; run a pairwise bakeoff for comparison"}
+	}
 	workOrderText, err := os.ReadFile(workOrderPath)
 	if err != nil {
 		return sourceRun{}, &apperror.ValidationError{Message: sourceDir + " has no readable work-order.json", Err: err}
@@ -740,6 +743,10 @@ func loadSourceRun(sourceDir string, requestedRunID string) (sourceRun, error) {
 	decisionDoc, err := workorder.ReadRequiredObject(filepath.Join(sourceDir, "decision.json"))
 	if err != nil {
 		return sourceRun{}, &apperror.ValidationError{Message: sourceDir + " has no valid decision.json", Err: err}
+	}
+	switch jsonutil.StringValue(decisionDoc["decision_kind"]) {
+	case "single_provider_result", "single_provider_failed":
+		return sourceRun{}, &apperror.ValidationError{Message: "single-provider source runs cannot be escalated yet; run a pairwise bakeoff for comparison"}
 	}
 	meta, err := workorder.ReadRequiredObject(filepath.Join(sourceDir, "meta.json"))
 	if err != nil {

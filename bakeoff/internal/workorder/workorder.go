@@ -21,6 +21,9 @@ import (
 const (
 	DefaultOutputCapGraceSeconds = 10
 
+	RunModePairwise       = "pairwise"
+	RunModeSingleProvider = "single_provider"
+
 	VerifierBaselineMustPass = "must_pass"
 	VerifierBaselineMayFail  = "may_fail"
 	VerifierBaselineMustFail = "must_fail"
@@ -34,6 +37,7 @@ var (
 	templateFS embed.FS
 
 	modes               = []string{"gather", "compare", "analyze", "build"}
+	runModes            = []string{RunModePairwise, RunModeSingleProvider}
 	initKinds           = []string{"gather", "compare", "analyze", "review", "build"}
 	scopeEnforcements   = []string{"advisory", "best_effort", "required"}
 	repoLayoutPolicies  = []string{ScopeRepoLayoutAuto, ScopeRepoLayoutOff}
@@ -49,7 +53,7 @@ var (
 	verifierKinds       = []string{"gate", "metric"}
 	verifierBaselines   = []string{VerifierBaselineMustPass, VerifierBaselineMayFail, VerifierBaselineMustFail}
 	metricDirections    = []string{"lower", "higher"}
-	experimentRunKinds  = []string{"pairwise", "multi_lens_child", "split_child", "rerun", "ad_hoc"}
+	experimentRunKinds  = []string{"pairwise", "multi_lens_child", "split_child", "rerun", "ad_hoc", "single_agent_baseline"}
 	loserPositions      = []string{"agrees", "disagrees", "not_covered", "adds"}
 	followupKinds       = []string{"bug", "risk", "doc_drift", "test_gap", "follow_up"}
 	triageClasses       = []string{"real_issue", "false_positive", "plan_doc_drift", "product_decision", "needs_repro", "already_fixed", "evidence_gap"}
@@ -179,6 +183,7 @@ type WorkOrder struct {
 	SchemaVersion int             `json:"schema_version"`
 	ID            string          `json:"id"`
 	Type          string          `json:"type"`
+	RunMode       string          `json:"run_mode,omitempty"`
 	Goal          string          `json:"goal"`
 	Background    string          `json:"background"`
 	Facet         *Facet          `json:"facet,omitempty"`
@@ -304,6 +309,11 @@ func Validate(data map[string]any) (*WorkOrder, error) {
 	if !ok || !contains(modes, mode) {
 		return nil, Validationf("type must be one of: %s (got %s)", strings.Join(modes, ", "), pyRepr(data["type"]))
 	}
+	runMode, err := validateRunMode(data["run_mode"])
+	if err != nil {
+		return nil, err
+	}
+	data["run_mode"] = runMode
 
 	goal, ok := data["goal"].(string)
 	if !ok || strings.TrimSpace(goal) == "" {
@@ -314,7 +324,7 @@ func Validate(data map[string]any) (*WorkOrder, error) {
 		return nil, Validationf("background must be a string or an array of strings")
 	}
 
-	providers, err := validateProviders(data["providers"])
+	providers, err := validateProviders(data["providers"], runMode)
 	if err != nil {
 		return nil, err
 	}
@@ -337,7 +347,7 @@ func Validate(data map[string]any) (*WorkOrder, error) {
 	if err != nil {
 		return nil, err
 	}
-	judge, err := validateJudge(data["judge"], providers)
+	judge, err := validateJudge(data["judge"], providers, runMode)
 	if err != nil {
 		return nil, err
 	}
@@ -349,7 +359,7 @@ func Validate(data map[string]any) (*WorkOrder, error) {
 	if err != nil {
 		return nil, err
 	}
-	experiment, err := validateExperimentSpec(data["experiment"])
+	experiment, err := validateExperimentSpec(data["experiment"], runMode)
 	if err != nil {
 		return nil, err
 	}
@@ -365,6 +375,7 @@ func Validate(data map[string]any) (*WorkOrder, error) {
 		SchemaVersion: schemaVersion,
 		ID:            workID,
 		Type:          mode,
+		RunMode:       runMode,
 		Goal:          goal,
 		Background:    background,
 		Facet:         facet,
@@ -457,10 +468,31 @@ func SameBackendModelScopeReportCaveat(wo *WorkOrder) string {
 	return fmt.Sprintf("Same-model duplicate run: both workers used %s/%s with the same scope. Agreement is duplicate sampling, not independent model-family corroboration.", provider.Backend, provider.Model)
 }
 
-func validateProviders(value any) ([]Participant, error) {
+func validateRunMode(value any) (string, error) {
+	if value == nil {
+		return RunModePairwise, nil
+	}
+	runMode, ok := value.(string)
+	if !ok || !contains(runModes, runMode) {
+		return "", Validationf("run_mode must be one of: %s (got %s)", strings.Join(runModes, ", "), pyRepr(value))
+	}
+	return runMode, nil
+}
+
+func validateProviders(value any, runMode string) ([]Participant, error) {
 	items, ok := value.([]any)
-	if !ok || len(items) != 2 {
-		return nil, Validationf("providers must have exactly 2 entries")
+	if !ok {
+		return nil, Validationf("providers must be an array")
+	}
+	expected := 2
+	if runMode == RunModeSingleProvider {
+		expected = 1
+	}
+	if len(items) != expected {
+		if expected == 1 {
+			return nil, Validationf("providers must have exactly 1 entry for run_mode %s", runMode)
+		}
+		return nil, Validationf("providers must have exactly 2 entries for run_mode %s", runMode)
 	}
 	providers := make([]Participant, 0, len(items))
 	ids := map[string]bool{}
@@ -554,7 +586,7 @@ func validateFacet(value any, providerIDs map[string]bool) (*Facet, error) {
 	return &Facet{ID: id, Kind: kind, Focus: focus, Include: include, Exclude: exclude, Notes: notes}, nil
 }
 
-func validateJudge(value any, providers []Participant) (Participant, error) {
+func validateJudge(value any, providers []Participant, runMode string) (Participant, error) {
 	obj, ok := value.(map[string]any)
 	if !ok {
 		return Participant{}, Validationf("judge must be an object")
@@ -562,6 +594,9 @@ func validateJudge(value any, providers []Participant) (Participant, error) {
 	judge, err := validateParticipant(obj, "judge", false)
 	if err != nil {
 		return Participant{}, err
+	}
+	if runMode == RunModeSingleProvider {
+		return judge, nil
 	}
 	for i, provider := range providers {
 		if judge.Backend == provider.Backend && judge.Model == provider.Model {
@@ -712,7 +747,7 @@ func validateScopePolicy(value any) (ScopePolicy, error) {
 	return ScopePolicy{Enforcement: enforcement, RepoLayout: repoLayout}, nil
 }
 
-func validateExperimentSpec(value any) (*ExperimentSpec, error) {
+func validateExperimentSpec(value any, runMode string) (*ExperimentSpec, error) {
 	if value == nil {
 		return nil, nil
 	}
@@ -751,11 +786,11 @@ func validateExperimentSpec(value any) (*ExperimentSpec, error) {
 	if !ok {
 		return nil, Validationf("experiment.run_kind must be one of: %s (got %s)", strings.Join(experimentRunKinds, ", "), pyRepr(obj["run_kind"]))
 	}
-	if runKind == "single_agent_baseline" {
-		return nil, Validationf("experiment.run_kind single_agent_baseline is reserved but not executable in this version")
-	}
 	if !contains(experimentRunKinds, runKind) {
 		return nil, Validationf("experiment.run_kind must be one of: %s (got %s)", strings.Join(experimentRunKinds, ", "), pyRepr(obj["run_kind"]))
+	}
+	if err := validateExperimentRunKindForRunMode(runKind, runMode); err != nil {
+		return nil, err
 	}
 	repetitionIndex, ok := asInt(obj["repetition_index"])
 	if !ok || repetitionIndex < 1 {
@@ -789,6 +824,21 @@ func validateExperimentSpec(value any) (*ExperimentSpec, error) {
 		SlotAttempt:     slotAttempt,
 		Raw:             obj,
 	}, nil
+}
+
+func validateExperimentRunKindForRunMode(runKind string, runMode string) error {
+	if runMode == RunModeSingleProvider {
+		switch runKind {
+		case "single_agent_baseline", "ad_hoc", "rerun":
+			return nil
+		default:
+			return Validationf("experiment.run_kind %s is not valid for run_mode %s", pyRepr(runKind), runMode)
+		}
+	}
+	if runKind == "single_agent_baseline" {
+		return Validationf("experiment.run_kind single_agent_baseline requires run_mode %s", RunModeSingleProvider)
+	}
+	return nil
 }
 
 func experimentSlug(value any, label string) (string, error) {

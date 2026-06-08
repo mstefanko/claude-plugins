@@ -325,6 +325,7 @@ func buildDecision(wo *workorder.WorkOrder, workerResults map[string]map[string]
 	}
 	out := map[string]any{
 		"mode":               "build",
+		"run_mode":           wo.RunMode,
 		"decision_kind":      decisionKind,
 		"selection_basis":    selectionBasis,
 		"canonical_winner":   nilIfEmpty(winner),
@@ -338,6 +339,9 @@ func buildDecision(wo *workorder.WorkOrder, workerResults map[string]map[string]
 	}
 	if decisionKind == "baseline_failed" || decisionKind == "baseline_expectation_failed" {
 		decisionpkg.SetStalledAt(out, decisionpkg.StalledAtBaselineVerify)
+	}
+	if wo.RunMode == workorder.RunModeSingleProvider && len(wo.Providers) == 1 {
+		out["single_provider"] = wo.Providers[0].ID
 	}
 	return out
 }

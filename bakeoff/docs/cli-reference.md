@@ -25,13 +25,14 @@ to print verbose JSON before approving. Straightforward build drafts use
 `bakeoff draft-build` internally so canonical build JSON is generated and
 validated before preview.
 
-Generated drafts keep exactly two providers. The canonical default pair is
-`claude/sonnet` plus `codex/gpt-5.5` with a `claude/opus` judge. If Codex is
-not available and exactly one optional peer (`gemini` or `copilot`) is ready,
-natural-language drafting may use `claude` plus that peer and call out the
-fallback in the preview. Existing work-order paths are never rewritten or
-substituted. Adding a third provider after a completed non-build run uses
-`bakeoff escalate`; it is not a work-order schema change.
+Generated drafts default to pairwise mode with exactly two providers. The
+canonical default pair is `claude/sonnet` plus `codex/gpt-5.5` with a
+`claude/opus` judge. If Codex is not available and exactly one optional peer
+(`gemini` or `copilot`) is ready, natural-language drafting may use `claude`
+plus that peer and call out the fallback in the preview. Existing work-order
+paths are never rewritten or substituted. Adding a third provider after a
+completed non-build run uses `bakeoff escalate`; it is not a work-order schema
+change.
 
 Natural-language route cues used by `/bakeoff:run` previews:
 
@@ -255,6 +256,11 @@ is set. The generated context includes metadata, diffstat, and changed files;
 When the work order includes `experiment`, `research --json` includes the same
 trimmed `experiment` object in its final summary.
 
+When the work order sets `run_mode: "single_provider"`, `research` runs exactly
+one provider, skips the judge, emits `decision_kind:
+"single_provider_result"` or `single_provider_failed`, and includes
+`run_mode` plus `single_provider` in JSON summaries and manifests.
+
 ## `bakeoff build`
 
 ```text
@@ -287,6 +293,11 @@ emit a final aggregate JSON object with `n`.
 When the work order includes `experiment`, `build --json` includes the same
 trimmed `experiment` object in its final summary.
 
+Single-provider build work orders run one provider worktree and skip the build
+judge. When the provider produces a captured patch that passes gates, the JSON
+summary includes `selected_patch_provider` and `selected_patch_path` while
+leaving `winner` / `canonical_winner` null.
+
 ## `bakeoff rerun`
 
 ```text
@@ -307,7 +318,7 @@ Flags:
 | `--judge-only` | Retry only a failed research judge using durable provider artifacts from the source run. |
 | `--no-repo-layout` | Suppress generated `<repo_layout>` prompt context for replayed provider runs; invalid with `--judge-only`. |
 
-`--judge-only` is only for research runs whose providers completed and whose
+`--judge-only` is only for pairwise research runs whose providers completed and whose
 judge has durable failed-attempt evidence in `decision.json` or
 `judge/status*.json`. It creates a fresh run directory, copies provider
 artifacts, reruns only the judge, updates `latest`, and leaves the source run
@@ -518,7 +529,7 @@ nullable keys such as `source_run_id`, `rerun_mode`,
 `judge.family`, and `triage.highest_severity` remain present when their value is
 unknown or inapplicable.
 
-`route` records the resolved run type, facet id, escalation mode, and source
+`route` records the resolved run type, run mode, facet id, escalation mode, and source
 type. Run type follows the work order, with escalation runs reported as
 `escalation`. Judge-only reruns also project `source_run_id` and
 `rerun_mode: "judge_only"` at the manifest and telemetry top level, and
@@ -547,12 +558,13 @@ not raise the actionable severity.
 ## Manifest Data Contract
 
 `manifest.json` is the stable per-run input for external experiment scripts and
-notebooks. Stable fields include `run_id`, `type`, `facet_id`, `started_at`,
-`finished_at`, `decision_kind`, `canonical_winner`, `judge_ran`,
-`judge_attempted`, `judge_completed`, `providers`, `judge`, `triage`,
-`artifacts`, `artifact_fingerprints`, `telemetry`, and, when present,
-`experiment_id`, `task_id`, `condition_id`, `run_kind`, `repetition_index`,
-`slot_id`, and `slot_attempt`.
+notebooks. Stable fields include `run_id`, `type`, `run_mode`,
+`single_provider`, `facet_id`, `started_at`, `finished_at`, `decision_kind`,
+`canonical_winner`, `selected_patch_provider`, `judge_ran`, `judge_attempted`,
+`judge_completed`, `providers`, `judge`, `triage`, `artifacts`,
+`artifact_fingerprints`, `telemetry`, and, when present, `experiment_id`,
+`task_id`, `condition_id`, `run_kind`, `repetition_index`, `slot_id`, and
+`slot_attempt`.
 
 Bakeoff does not provide an experiment scheduler, parent experiment directory,
 cross-run export command, or statistics engine. External harnesses should
@@ -586,7 +598,7 @@ For `bakeoff build --json`, `selected_patch_status` is always present.
 | `1` | Runtime, provider, verifier, or build failure. |
 | `2` | Usage, config, validation, or missing-input error. |
 | `3` | Completed run with unresolved judge disagreement. |
-| `4` | Decision incomplete: judge failed or did not converge. Research runs with successful providers can use `bakeoff rerun <run-id> --judge-only`; build judge failures also use exit `4`, but build runs have no selected patch unless `decision.json.canonical_winner` is non-null. |
+| `4` | Decision incomplete: judge failed or did not converge. Pairwise research runs with successful providers can use `bakeoff rerun <run-id> --judge-only`; build judge failures also use exit `4`, but build runs have no selected patch unless `decision.json.selected_patch_provider` or legacy `decision.json.canonical_winner` is non-null. |
 | `130` | Interrupted. |
 
 Exit code `3` is a completed Bakeoff handoff. Inspect `decision.json` and

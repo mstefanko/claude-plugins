@@ -193,6 +193,155 @@ exit 2
 	}
 }
 
+func TestRunResearchSingleProviderSuccessSkipsJudgeAndWinner(t *testing.T) {
+	root := t.TempDir()
+	fakeBin := filepath.Join(root, "bin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeExecutable(t, filepath.Join(fakeBin, "claude"), `#!/bin/sh
+case " $* " in
+  *" --version "*) printf 'claude fake\n'; exit 0 ;;
+  *" --help "*) printf '%s\n' '--allowedTools --disallowedTools'; exit 0 ;;
+esac
+cat >/dev/null
+cat <<'JSON'
+<final_json>{"status":"complete","claims":[{"id":"R-001","claim":"Single provider claim.","evidence":["fake:1"],"severity":"medium","confidence":"high"}],"conflicts":[],"unknowns":[],"recommended_next_checks":[]}</final_json>
+JSON
+`)
+	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	workOrderPath := filepath.Join(root, "work-order.json")
+	if err := workorder.WriteJSONAtomic(workOrderPath, map[string]any{
+		"schema_version": 1,
+		"id":             "single-provider-success",
+		"type":           "gather",
+		"run_mode":       "single_provider",
+		"goal":           "Gather a baseline fact.",
+		"background":     "Single-provider smoke test.",
+		"facet": map[string]any{
+			"id":      "code-review",
+			"kind":    "generic",
+			"focus":   "Find actionable defects.",
+			"include": []any{"correctness"},
+			"exclude": []any{"style-only"},
+		},
+		"providers": []map[string]any{
+			{"id": "claude", "backend": "claude", "model": "claude-test", "scope": "codebase"},
+		},
+		"scope_policy": map[string]any{"enforcement": "advisory", "repo_layout": "off"},
+		"judge":        map[string]any{"backend": "claude", "model": "judge-test"},
+		"budgets":      map[string]any{"wall_clock_seconds": 3, "max_output_bytes": 20000, "heartbeat_seconds": 0},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	outDir := filepath.Join(root, "runs")
+	factory := researchTestFactory{streams: output.NewStreams(&out, &errOut)}
+	err := RunResearch(context.Background(), factory, &ResearchOptions{WorkOrder: workOrderPath, Out: outDir, RunID: "single-provider-success", Quiet: true})
+	if err != nil {
+		t.Fatalf("RunResearch returned error: %v\nstdout:\n%s\nstderr:\n%s", err, out.String(), errOut.String())
+	}
+	runDir := filepath.Join(outDir, "single-provider-success")
+	decisionDoc := readTestJSON(t, filepath.Join(runDir, "decision.json"))
+	if decisionDoc["decision_kind"] != "single_provider_result" || decisionDoc["run_mode"] != "single_provider" {
+		t.Fatalf("decision = %#v", decisionDoc)
+	}
+	if decisionDoc["canonical_winner"] != nil || decisionDoc["single_provider"] != "claude" {
+		t.Fatalf("single-provider decision should not have winner: %#v", decisionDoc)
+	}
+	if decisionDoc["judge_ran"] != false || decisionDoc["judge_attempted"] != false || decisionDoc["judge_completed"] != false {
+		t.Fatalf("single-provider decision should not run judge: %#v", decisionDoc)
+	}
+	if _, statErr := os.Stat(filepath.Join(runDir, "judge")); !os.IsNotExist(statErr) {
+		t.Fatalf("judge artifacts should not exist: %v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(runDir, "triage")); !os.IsNotExist(statErr) {
+		t.Fatalf("single-provider code-review run should not auto-triage: %v", statErr)
+	}
+
+	reportText := string(mustReadFile(t, filepath.Join(runDir, "report.md")))
+	for _, want := range []string{"Run mode: `single_provider`", "Result: single-provider result", "Single provider: `claude`"} {
+		if !strings.Contains(reportText, want) {
+			t.Fatalf("report missing %q:\n%s", want, reportText)
+		}
+	}
+	if strings.Contains(reportText, "Winner:") || strings.Contains(reportText, "Partial result:") {
+		t.Fatalf("single-provider report used pairwise outcome wording:\n%s", reportText)
+	}
+	promptText := string(mustReadFile(t, filepath.Join(runDir, "providers", "claude", "prompt.txt")))
+	if !strings.Contains(promptText, "standalone single-provider run") || strings.Contains(promptText, "deduplicate your output against a peer") || strings.Contains(promptText, "A separate judge will") {
+		t.Fatalf("single-provider prompt should avoid pairwise comparison wording:\n%s", promptText)
+	}
+	manifest := readTestJSON(t, filepath.Join(runDir, "manifest.json"))
+	if manifest["run_mode"] != "single_provider" || manifest["single_provider"] != "claude" {
+		t.Fatalf("manifest single-provider fields = %#v", manifest)
+	}
+}
+
+func TestRunResearchSingleProviderFailureSkipsJudge(t *testing.T) {
+	root := t.TempDir()
+	fakeBin := filepath.Join(root, "bin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeExecutable(t, filepath.Join(fakeBin, "claude"), `#!/bin/sh
+case " $* " in
+  *" --version "*) printf 'claude fake\n'; exit 0 ;;
+  *" --help "*) printf '%s\n' '--allowedTools --disallowedTools'; exit 0 ;;
+esac
+cat >/dev/null
+printf '%s\n' 'provider failed intentionally' >&2
+exit 7
+`)
+	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	workOrderPath := filepath.Join(root, "work-order.json")
+	if err := workorder.WriteJSONAtomic(workOrderPath, map[string]any{
+		"schema_version": 1,
+		"id":             "single-provider-failure",
+		"type":           "gather",
+		"run_mode":       "single_provider",
+		"goal":           "Gather a baseline fact.",
+		"background":     "Single-provider failure smoke test.",
+		"providers": []map[string]any{
+			{"id": "claude", "backend": "claude", "model": "claude-test", "scope": "codebase"},
+		},
+		"scope_policy": map[string]any{"enforcement": "advisory", "repo_layout": "off"},
+		"judge":        map[string]any{"backend": "claude", "model": "judge-test"},
+		"budgets":      map[string]any{"wall_clock_seconds": 3, "max_output_bytes": 20000, "heartbeat_seconds": 0},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	outDir := filepath.Join(root, "runs")
+	factory := researchTestFactory{streams: output.NewStreams(&out, &errOut)}
+	err := RunResearch(context.Background(), factory, &ResearchOptions{WorkOrder: workOrderPath, Out: outDir, RunID: "single-provider-failure", Quiet: true, NoTriage: true})
+	if err == nil {
+		t.Fatalf("expected RunResearch to fail\nstdout:\n%s\nstderr:\n%s", out.String(), errOut.String())
+	}
+	runDir := filepath.Join(outDir, "single-provider-failure")
+	decisionDoc := readTestJSON(t, filepath.Join(runDir, "decision.json"))
+	if decisionDoc["decision_kind"] != "single_provider_failed" || decisionDoc["stalled_at"] != "providers" {
+		t.Fatalf("decision = %#v", decisionDoc)
+	}
+	if decisionDoc["canonical_winner"] != nil || decisionDoc["single_provider"] != "claude" {
+		t.Fatalf("single-provider failure should not have winner: %#v", decisionDoc)
+	}
+	if decisionDoc["judge_ran"] != false || decisionDoc["judge_attempted"] != false || decisionDoc["judge_completed"] != false {
+		t.Fatalf("single-provider failure should not run judge: %#v", decisionDoc)
+	}
+	if _, statErr := os.Stat(filepath.Join(runDir, "judge")); !os.IsNotExist(statErr) {
+		t.Fatalf("judge artifacts should not exist: %v", statErr)
+	}
+	reportText := string(mustReadFile(t, filepath.Join(runDir, "report.md")))
+	if !strings.Contains(reportText, "Result: single-provider failed") || strings.Contains(reportText, "Winner:") {
+		t.Fatalf("single-provider failure report used wrong wording:\n%s", reportText)
+	}
+}
+
 func TestRunResearchDuplicateProvidersUseSeparateArtifactsAndIdenticalPrompts(t *testing.T) {
 	root := t.TempDir()
 	fakeBin := filepath.Join(root, "bin")

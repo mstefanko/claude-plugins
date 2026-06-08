@@ -552,6 +552,7 @@ func WriteMetaWithExtra(ctx context.Context, runDir string, wo *workorder.WorkOr
 	meta := map[string]any{
 		"run_id":                runID,
 		"type":                  wo.Type,
+		"run_mode":              wo.RunMode,
 		"facet":                 facetMap(wo.Facet),
 		"decision_kind":         nil,
 		"canonical_winner":      nil,

@@ -193,6 +193,38 @@ func TestRunRequiresBuildWinnerArtifactsWhenCanonicalWinnerSelected(t *testing.T
 	}
 }
 
+func TestRunRequiresBuildSelectedPatchProviderArtifacts(t *testing.T) {
+	runDir := writeVerifyBaseRunOfType(t, "build", map[string]any{
+		"decision_kind":           "single_provider_result",
+		"run_mode":                "single_provider",
+		"single_provider":         "claude",
+		"canonical_winner":        nil,
+		"selected_patch_provider": "claude",
+	})
+	if err := workorder.WriteJSONAtomic(filepath.Join(runDir, "build-context.json"), map[string]any{"schema_version": 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	result := Run(runDir, "runs")
+	if result.ExitCode == 0 {
+		t.Fatalf("ExitCode = 0, want missing selected patch artifacts: %#v", result)
+	}
+	if !contains(result.RequiredArtifacts.Missing, "providers/claude/build/diff.patch") || !contains(result.RequiredArtifacts.Missing, "providers/claude/build/verify/result.json") {
+		t.Fatalf("missing selected patch artifacts not reported: %#v", result.RequiredArtifacts)
+	}
+
+	if err := workorder.WriteTextAtomic(filepath.Join(runDir, "providers", "claude", "build", "diff.patch"), "diff --git a/file b/file\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := workorder.WriteJSONAtomic(filepath.Join(runDir, "providers", "claude", "build", "verify", "result.json"), map[string]any{"scope": "provider", "provider_id": "claude"}); err != nil {
+		t.Fatal(err)
+	}
+	result = Run(runDir, "runs")
+	if result.ExitCode != 0 {
+		t.Fatalf("selected patch artifacts should satisfy verify: %#v", result)
+	}
+}
+
 func TestRunDoesNotRequireBuildWinnerArtifactsWithoutCanonicalWinner(t *testing.T) {
 	runDir := writeVerifyBaseRunOfType(t, "build", map[string]any{
 		"decision_kind":    "tie",

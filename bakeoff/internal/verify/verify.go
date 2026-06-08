@@ -291,13 +291,16 @@ func dynamicRequiredArtifacts(runDir string, runType string) []string {
 		return nil
 	}
 	decision := readOptionalObject(filepath.Join(runDir, "decision.json"))
-	winner := strings.TrimSpace(jsonutil.StringValue(decision["canonical_winner"]))
-	if winner == "" {
+	providerID := strings.TrimSpace(jsonutil.StringValue(decision["selected_patch_provider"]))
+	if providerID == "" {
+		providerID = strings.TrimSpace(jsonutil.StringValue(decision["canonical_winner"]))
+	}
+	if providerID == "" {
 		return nil
 	}
 	return []string{
-		filepath.ToSlash(filepath.Join("providers", winner, "build", "diff.patch")),
-		filepath.ToSlash(filepath.Join("providers", winner, "build", "verify", "result.json")),
+		filepath.ToSlash(filepath.Join("providers", providerID, "build", "diff.patch")),
+		filepath.ToSlash(filepath.Join("providers", providerID, "build", "verify", "result.json")),
 	}
 }
 

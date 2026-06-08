@@ -9,6 +9,12 @@ API.
 `plan-review` facet. Use it for actionable defects in an implementation,
 rollout, migration, or verification plan before code is written.
 
+`single-provider.work-order.json` is an intentional Claude-only baseline. It
+uses `run_mode: "single_provider"`, has exactly one provider, skips the judge,
+and may carry `experiment.run_kind: "single_agent_baseline"` for external
+analysis. A same-provider duplicate run is different: keep `run_mode:
+"pairwise"` and use two unique provider ids such as `claude-a` and `claude-b`.
+
 `repetition-loop.sh` is an instructional external harness example. It generates
 ordinary work orders with optional `experiment` labels, validates each one,
 runs with explicit deterministic run ids when `RUN_PROVIDERS=1`, skips runs

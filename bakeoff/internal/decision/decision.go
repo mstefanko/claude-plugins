@@ -36,13 +36,22 @@ func Base(wo *workorder.WorkOrder, workerResults map[string]map[string]any) map[
 		typedStatuses[provider.ID] = status
 		providerIDs = append(providerIDs, provider.ID)
 	}
-	return map[string]any{
+	runMode := workorder.RunModePairwise
+	if wo != nil && wo.RunMode != "" {
+		runMode = wo.RunMode
+	}
+	out := map[string]any{
 		"mode":              wo.Type,
+		"run_mode":          runMode,
 		"provider_statuses": statuses,
 		"canonical_winner":  nil,
 		"judge_rationale":   []string{},
 		"caveats":           scopeFallbackCaveats(providerIDs, typedStatuses),
 	}
+	if runMode == workorder.RunModeSingleProvider && len(wo.Providers) == 1 {
+		out["single_provider"] = wo.Providers[0].ID
+	}
+	return out
 }
 
 func BothFailed(wo *workorder.WorkOrder, workerResults map[string]map[string]any) map[string]any {
@@ -78,6 +87,31 @@ func SingleProviderOnly(wo *workorder.WorkOrder, workerResults map[string]map[st
 	out["judge_ran"] = false
 	out["canonical_winner"] = survivor
 	out["caveats"] = appendCaveat(out["caveats"], SingleProviderCaveat(wo.Type, survivor, failed, status))
+	return out
+}
+
+func SingleProviderResult(wo *workorder.WorkOrder, workerResults map[string]map[string]any, providerID string) map[string]any {
+	out := Base(wo, workerResults)
+	out["decision_kind"] = "single_provider_result"
+	out["selection_basis"] = "none"
+	out["canonical_winner"] = nil
+	out["single_provider"] = providerID
+	out["judge_ran"] = false
+	out["judge_attempted"] = false
+	out["judge_completed"] = false
+	return out
+}
+
+func SingleProviderFailed(wo *workorder.WorkOrder, workerResults map[string]map[string]any, providerID string) map[string]any {
+	out := Base(wo, workerResults)
+	out["decision_kind"] = "single_provider_failed"
+	out["selection_basis"] = "none"
+	out["canonical_winner"] = nil
+	out["single_provider"] = providerID
+	out["judge_ran"] = false
+	out["judge_attempted"] = false
+	out["judge_completed"] = false
+	SetStalledAt(out, StalledAtProviders)
 	return out
 }
 
@@ -229,8 +263,13 @@ func ResolveBuild(input BuildResolutionInput) (map[string]any, int) {
 			providerIDs = append(providerIDs, provider.ID)
 		}
 	}
+	runMode := workorder.RunModePairwise
+	if input.WorkOrder != nil && input.WorkOrder.RunMode != "" {
+		runMode = input.WorkOrder.RunMode
+	}
 	out := map[string]any{
 		"mode":               "build",
+		"run_mode":           runMode,
 		"decision_kind":      "tie",
 		"selection_basis":    "none",
 		"canonical_winner":   nil,
@@ -249,6 +288,9 @@ func ResolveBuild(input BuildResolutionInput) (map[string]any, int) {
 	if input.ProviderBuild != nil {
 		out["provider_build"] = input.ProviderBuild
 	}
+	if runMode == workorder.RunModeSingleProvider && len(providerIDs) == 1 {
+		out["single_provider"] = providerIDs[0]
+	}
 	for _, caveat := range protectedPathCaveats(providerIDs, input.ProviderStatuses) {
 		out["caveats"] = appendCaveat(out["caveats"], caveat)
 	}
@@ -266,6 +308,34 @@ func ResolveBuild(input BuildResolutionInput) (map[string]any, int) {
 				gatePassed = append(gatePassed, id)
 			}
 		}
+	}
+	if runMode == workorder.RunModeSingleProvider {
+		providerID := ""
+		if len(providerIDs) > 0 {
+			providerID = providerIDs[0]
+		}
+		out["decision_kind"] = "single_provider_failed"
+		out["selection_basis"] = "none"
+		out["canonical_winner"] = nil
+		out["single_provider"] = providerID
+		out["judge_ran"] = false
+		out["judge_attempted"] = false
+		out["judge_completed"] = false
+		if len(captured) == 1 && len(gatePassed) == 1 {
+			out["decision_kind"] = "single_provider_result"
+			out["selection_basis"] = "gate"
+			out["selected_patch_provider"] = gatePassed[0]
+			out["selected_patch_path"] = "providers/" + gatePassed[0] + "/build/diff.patch"
+			return out, 0
+		}
+		if len(captured) == 0 {
+			out["caveats"] = appendCaveat(out["caveats"], "single provider did not produce an eligible captured patch")
+			SetStalledAt(out, StalledAtProviders)
+			return out, 1
+		}
+		out["caveats"] = appendCaveat(out["caveats"], "single provider patch failed required gate verifiers")
+		SetStalledAt(out, StalledAtProviderVerify)
+		return out, 1
 	}
 	if len(captured) == 0 {
 		out["decision_kind"] = "both_failed"

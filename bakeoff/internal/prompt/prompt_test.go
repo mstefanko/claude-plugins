@@ -150,6 +150,25 @@ func TestBuildWorkerPromptSameModelDuplicateProvidersAreIdentical(t *testing.T) 
 	}
 }
 
+func TestBuildWorkerPromptSingleProviderAvoidsPeerJudgeLanguage(t *testing.T) {
+	wo := fixtureWorkOrder(t, "compare")
+	wo.RunMode = workorder.RunModeSingleProvider
+	wo.Raw["run_mode"] = workorder.RunModeSingleProvider
+	wo.Providers = wo.Providers[:1]
+	prompt, err := BuildWorkerPrompt(wo, wo.Providers[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prompt, "standalone single-provider run") {
+		t.Fatalf("single-provider prompt missing standalone instruction:\n%s", prompt)
+	}
+	for _, forbidden := range []string{"judge will later", "peer worker who answered the same question independently"} {
+		if strings.Contains(prompt, forbidden) {
+			t.Fatalf("single-provider prompt still contains %q:\n%s", forbidden, prompt)
+		}
+	}
+}
+
 func TestGenericWorkerFixturesStayProviderNeutral(t *testing.T) {
 	for _, mode := range []string{"gather", "compare", "analyze", "build"} {
 		text, err := fixturePrompt("worker-" + mode + "-generic-terminal-agent.txt")

@@ -13,7 +13,7 @@ Every completed run should have:
 | --- | --- |
 | `work-order.json` | Exact work order used by the run. |
 | `decision.json` | Machine-readable decision record. |
-| `meta.json` | Run metadata: type, facet, optional experiment labels, terminal decision kind, canonical winner, judge status, exit code, timestamps, cwd, versions, scope policy, resolved models, input hashes. |
+| `meta.json` | Run metadata: type, run mode, facet, optional experiment labels, terminal decision kind, canonical winner, judge status, exit code, timestamps, cwd, versions, scope policy, resolved models, input hashes. |
 | `report.md` | Human-readable report. |
 | `manifest.json` | Manifest with artifact paths, SHA-256 fingerprints, and local telemetry fields documented in [Manifest Telemetry](cli-reference.md#manifest-telemetry). |
 
@@ -165,11 +165,14 @@ Stable top-level manifest fields include:
 
 - `run_id`
 - `type`
+- `run_mode`
+- `single_provider`
 - `facet_id`
 - `started_at`
 - `finished_at`
 - `decision_kind`
 - `canonical_winner`
+- `selected_patch_provider`
 - `judge_ran`
 - `judge_attempted`
 - `judge_completed`
@@ -190,6 +193,9 @@ Stable top-level manifest fields include:
 Experiment fields are present when `work-order.json` included an
 `experiment` object. `slot_id` and `slot_attempt` are nullable when no slot was
 provided; older non-experiment runs may omit all experiment fields.
+`run_mode` defaults to `pairwise` for old work orders. Intentional
+single-provider runs set `single_provider` and leave `canonical_winner` null;
+single-provider build handoff uses `selected_patch_provider`.
 
 Evidence types are not interchangeable. LLM judge wins are preference evidence;
 build verifier success is executable gate or metric evidence; triage-confirmed

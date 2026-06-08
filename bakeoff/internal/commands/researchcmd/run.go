@@ -157,7 +157,21 @@ func RunResearch(ctx context.Context, f commands.Factory, opts *ResearchOptions)
 	judgeResults := map[string]map[string]any{}
 	exitCode := 0
 	var decisionDoc map[string]any
-	if len(okResults) == 0 {
+	if wo.RunMode == workorder.RunModeSingleProvider {
+		providerID := ""
+		if len(wo.Providers) == 1 {
+			providerID = wo.Providers[0].ID
+		}
+		if len(okResults) == 1 {
+			for id := range okResults {
+				providerID = id
+			}
+			decisionDoc = decision.SingleProviderResult(wo, workerResults, providerID)
+		} else {
+			decisionDoc = decision.SingleProviderFailed(wo, workerResults, providerID)
+			exitCode = 1
+		}
+	} else if len(okResults) == 0 {
 		decisionDoc = decision.BothFailed(wo, workerResults)
 		exitCode = 1
 	} else if len(okResults) == 1 {
@@ -210,6 +224,9 @@ func RunResearchJudgeOnly(ctx context.Context, f commands.Factory, opts *Researc
 	}
 	if wo.Type == "build" {
 		return &apperror.ValidationError{Message: "--judge-only is currently supported only for research runs"}
+	}
+	if wo.RunMode == workorder.RunModeSingleProvider {
+		return &apperror.ValidationError{Message: "--judge-only requires a pairwise source run with judge evidence"}
 	}
 	if err := validateFailedJudgeAttempt(wo, opts.SourceRunDir); err != nil {
 		return err
@@ -563,6 +580,9 @@ type judgePhaseResult struct {
 
 func runJudgePhase(ctx context.Context, f commands.Factory, wo *workorder.WorkOrder, workerResults map[string]map[string]any, runDir string, quiet bool, humanOutput bool) (judgePhaseResult, error) {
 	mode := wo.Type
+	if wo.RunMode != workorder.RunModePairwise || len(wo.Providers) != 2 {
+		return judgePhaseResult{}, workorder.Validationf("judge phase requires a pairwise run with exactly 2 providers")
+	}
 	providerIDs := []string{wo.Providers[0].ID, wo.Providers[1].ID}
 	base := decision.Base(wo, workerResults)
 	if mode == "gather" {
@@ -704,6 +724,7 @@ func printRunHeader(f commands.Factory, wo *workorder.WorkOrder, runDir string, 
 	}
 	f.Streams().Printf("bakeoff research  run-id: %s\n", runID)
 	f.Streams().Printf("  mode:           %s\n", wo.Type)
+	f.Streams().Printf("  run mode:       %s\n", wo.RunMode)
 	if wo.Facet != nil {
 		f.Streams().Printf("  facet:          %s\n", wo.Facet.ID)
 	}
@@ -711,7 +732,11 @@ func printRunHeader(f commands.Factory, wo *workorder.WorkOrder, runDir string, 
 	f.Streams().Printf("  providers:      %s\n", strings.Join(providers, ", "))
 	f.Streams().Printf("  budgets:        %s\n", workorder.FormatBudgetSummary(wo.Budgets))
 	f.Streams().Printf("  scope policy:   %s\n", wo.ScopePolicy.Enforcement)
-	f.Streams().Printf("  judge:          %s %s\n", wo.Judge.Backend, wo.Judge.Model)
+	if wo.RunMode == workorder.RunModeSingleProvider {
+		f.Streams().Printf("  judge:          not run for single_provider\n")
+	} else {
+		f.Streams().Printf("  judge:          %s %s\n", wo.Judge.Backend, wo.Judge.Model)
+	}
 }
 
 func researchResultLine(wo *workorder.WorkOrder, decisionDoc map[string]any, reportText string) string {
@@ -720,6 +745,20 @@ func researchResultLine(wo *workorder.WorkOrder, decisionDoc map[string]any, rep
 		mode = wo.Type
 	}
 	kind := fmt.Sprint(decisionDoc["decision_kind"])
+	if kind == "single_provider_result" {
+		providerID := jsonutil.StringValue(decisionDoc["single_provider"])
+		if providerID == "" {
+			providerID = "unknown"
+		}
+		return "single-provider result=" + providerID
+	}
+	if kind == "single_provider_failed" {
+		providerID := jsonutil.StringValue(decisionDoc["single_provider"])
+		if providerID == "" {
+			providerID = "unknown"
+		}
+		return "single-provider failed=" + providerID
+	}
 	switch mode {
 	case "gather":
 		judge := "no"

@@ -4,26 +4,27 @@
   <img src="assets/bakeoff-logo.png" alt="Bakeoff logo: two cake slices labeled A and B on a cake stand next to the Bakeoff wordmark" width="720">
 </p>
 
-Bakeoff is a second-opinion machine for agent work. You give one clear task to
-two providers, they work independently, and Bakeoff collects the evidence in
-one repeatable run. Instead of wondering which answer to trust, you get the
-provider outputs, the judge or verifier result, and a durable report you can
-inspect later.
+Bakeoff is a second-opinion machine for agent work. You usually give one clear
+task to two providers, they work independently, and Bakeoff collects the
+evidence in one repeatable run. Instead of wondering which answer to trust, you
+get the provider outputs, the judge or verifier result, and a durable report
+you can inspect later.
 
 That is the whole value: two independent attempts, one auditable process, and
 no hidden repo mutations. Bakeoff writes run artifacts under `runs/<run-id>/`.
 For build work, it captures candidate patches from isolated worktrees and hands
-you the selected patch file when there is a clear winner. It does not apply,
+you the selected patch file when there is a clear selection. It does not apply,
 merge, commit, push, or open PRs for you.
 
-Generated work orders normally use exactly two providers. The default pair is
-Claude + Codex; Gemini and GitHub Copilot can replace one of those initial
-peers when you want a different two-agent matchup. After a completed non-build
-run, escalation lets you bring in any available provider for a fresh third
-answer (`independent`), a sanity check on the report (`witness`), or a focused
-challenge to disputed points (`dispute`). Provider secrets stay with the
-provider CLIs. Do not put API keys, tokens, or private credentials in work
-orders or prompts.
+Generated work orders default to pairwise mode with two providers. The default
+pair is Claude + Codex; Gemini and GitHub Copilot can replace one of those
+initial peers when you want a different two-agent matchup. Intentional
+single-provider baselines are available with `run_mode: "single_provider"`.
+After a completed non-build run, escalation lets you bring in any available
+provider for a fresh third answer (`independent`), a sanity check on the report
+(`witness`), or a focused challenge to disputed points (`dispute`). Provider
+secrets stay with the provider CLIs. Do not put API keys, tokens, or private
+credentials in work orders or prompts.
 
 Use Bakeoff when one agent answer would feel too thin: a tricky research
 question, a code review where blind spots matter, a comparison with real
@@ -141,7 +142,7 @@ once; `write and run` or `sequential` keeps the one-after-another behavior.
 Explicit 2-3 lens review can also run sequentially or in parallel after
 preview, and writes a short summary file after the lens runs finish. Sample
 work orders live in `examples/` (`gather`, `compare`, `analyze`, `review`,
-`plan-review`, `build`).
+`plan-review`, `single-provider`, `build`).
 
 After a run finishes, `/bakeoff:run` may recommend one next normal work order
 when the artifacts make it obvious, such as drafting an implementation plan
@@ -149,8 +150,9 @@ from a research report or inspecting a selected build patch. It can also say
 that no follow-up Bakeoff run is recommended. Follow-up work still uses the
 same preview, validation, and approval flow; there is no automatic chaining.
 
-Generated work orders use exactly two providers. Defaults are `claude/sonnet`
-plus `codex/gpt-5.5`, with `claude/opus` as judge. If Codex is missing and
+Generated work orders default to pairwise mode with exactly two providers.
+Defaults are `claude/sonnet` plus `codex/gpt-5.5`, with `claude/opus` as
+judge. If Codex is missing and
 exactly one optional peer is ready, `/bakeoff:run` may draft Claude + that peer
 and call out the fallback in the preview. Use full model ids in the work order
 to pin exact versions.
@@ -448,7 +450,7 @@ runs/<run-id>/
 ├── providers/<provider-id>/
 │   ├── stdout, stderr, prompts
 │   └── build/                 # build runs only
-│       ├── diff.patch         # ← handoff patch (winner only)
+│       ├── diff.patch         # ← handoff patch when selected
 │       ├── diffstat.txt
 │       ├── changed-files.txt
 │       └── verify/result.json
@@ -466,6 +468,10 @@ manifest fingerprints, and triage state.
 Work orders may include optional `experiment` labels for external repetition
 loops; those labels are copied into `meta.json`, hoisted into `manifest.json`,
 and filterable with `bakeoff ls --json --experiment ID` or `--condition ID`.
+Work orders may also set `run_mode: "single_provider"` with exactly one
+provider for an intentional standalone baseline; the default is
+`run_mode: "pairwise"` with exactly two providers. Same-backend duplicate
+pairwise runs still use two unique provider IDs and remain comparative runs.
 Bakeoff still records ordinary per-run ledgers only. Scheduling, retries,
 statistics, and paper tables belong in external scripts or notebooks.
 
@@ -479,8 +485,10 @@ Common inspection flow:
 ```
 
 For review runs, inspect `triage/triage.md` before treating findings as ready
-to fix. For build runs, inspect `diagnostics.json` when present and use the
-selected patch path only when `decision.json.canonical_winner` is non-null.
+to fix. Intentional single-provider review baselines do not auto-triage by
+default. For build runs, inspect `diagnostics.json` when present and use the
+selected patch path only when `decision.json.selected_patch_provider` or the
+legacy `decision.json.canonical_winner` is non-null.
 
 | Exit | Meaning |
 | --- | --- |

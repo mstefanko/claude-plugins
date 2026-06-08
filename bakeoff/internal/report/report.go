@@ -265,10 +265,12 @@ func renderOutcome(wo *workorder.WorkOrder, decision map[string]any, workerResul
 	}
 	kind := jsonutil.StringValue(decision["decision_kind"])
 	winner := jsonutil.StringValue(decision["canonical_winner"])
+	runMode := jsonutil.StringValue(decision["run_mode"])
 	lines := []string{
 		"## Outcome",
 		"",
 		"Mode: `" + mode + "`",
+		"Run mode: `" + defaultString(runMode, workorder.RunModePairwise) + "`",
 		"Decision: `" + kind + "`",
 	}
 	if gloss := statusGloss(kind); gloss != "" {
@@ -283,7 +285,17 @@ func renderOutcome(wo *workorder.WorkOrder, decision map[string]any, workerResul
 			lines = append(lines, "Facet Focus: "+wo.Facet.Focus)
 		}
 	}
-	if winner != "" && mode != "gather" {
+	if kind == "single_provider_result" {
+		lines = append(lines, "Result: single-provider result")
+		if providerID := jsonutil.StringValue(decision["single_provider"]); providerID != "" {
+			lines = append(lines, "Single provider: `"+providerID+"`")
+		}
+	} else if kind == "single_provider_failed" {
+		lines = append(lines, "Result: single-provider failed")
+		if providerID := jsonutil.StringValue(decision["single_provider"]); providerID != "" {
+			lines = append(lines, "Single provider: `"+providerID+"`")
+		}
+	} else if winner != "" && mode != "gather" {
 		lines = append(lines, "Winner: `"+winner+"`")
 	} else if winner != "" && kind == "single_provider_only" {
 		lines = append(lines, "Winner: `"+winner+"`")
@@ -636,6 +648,14 @@ func renderGather(wo *workorder.WorkOrder, decision map[string]any, workerResult
 	switch decision["decision_kind"] {
 	case "both_failed":
 		return []string{"## Findings", "", "No provider completed successfully.", ""}
+	case "single_provider_failed":
+		return []string{"## Findings", "", "The single provider did not complete successfully.", ""}
+	case "single_provider_result":
+		providerID := jsonutil.StringValue(decision["single_provider"])
+		worker := jsonutil.FinalJSONMap(workerResults[providerID])
+		lines := []string{"## Findings", ""}
+		lines = append(lines, claimLines(jsonutil.ListValue(worker["claims"]), providerID, false)...)
+		return append(lines, unknowns(worker)...)
 	case "single_provider_only":
 		providerID := jsonutil.StringValue(decision["canonical_winner"])
 		worker := jsonutil.FinalJSONMap(workerResults[providerID])
@@ -804,6 +824,17 @@ func renderCompare(decision map[string]any, workerResults map[string]map[string]
 		return renderPerProviderComparison(workerResults, "## Comparison")
 	}
 	switch {
+	case kind == "single_provider_result":
+		providerID := jsonutil.StringValue(decision["single_provider"])
+		final := jsonutil.FinalJSONMap(workerResults[providerID])
+		lines = append(lines, "Standalone single-provider result.")
+		if position := jsonutil.StringValue(final["position"]); position != "" {
+			lines = append(lines, "Position: "+position)
+		}
+		lines = append(lines, "")
+		lines = append(lines, claimLines(jsonutil.ListValue(final["claims"]), providerID, false)...)
+	case kind == "single_provider_failed":
+		lines = append(lines, "The single provider did not complete successfully.")
 	case kind == "pick_winner" && winner != "":
 		final := jsonutil.FinalJSONMap(workerResults[winner])
 		lines = append(lines, "Winner: `"+winner+"`")
@@ -847,8 +878,14 @@ func renderAnalyze(decision map[string]any, workerResults map[string]map[string]
 	if decision["decision_kind"] == "both_failed" {
 		return append(lines, "No provider completed successfully.", "")
 	}
+	if decision["decision_kind"] == "single_provider_failed" {
+		return append(lines, "The single provider did not complete successfully.", "")
+	}
 	if decision["decision_kind"] == "judge_failed" || judgeIncomplete(decision) {
 		return renderPerProviderComparison(workerResults, "## Primary Explanation")
+	}
+	if jsonutil.StringValue(decision["decision_kind"]) == "single_provider_result" {
+		winner = jsonutil.StringValue(decision["single_provider"])
 	}
 	if winner == "" {
 		return append(lines, "No stable spine was selected. Human decision required.", "")

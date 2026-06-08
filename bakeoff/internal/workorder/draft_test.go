@@ -62,6 +62,47 @@ func TestDraftBuildDefaults(t *testing.T) {
 	assertJSONInt(t, gate["max_output_bytes"], DefaultBuildDraftGateMaxOutputBytes)
 }
 
+func TestDraftBuildSingleProviderDefaultsToClaudeOnly(t *testing.T) {
+	obj := draftBuildObject(t, BuildDraftOptions{
+		ID:         "single-build",
+		RunMode:    RunModeSingleProvider,
+		Goal:       "Implement a baseline patch.",
+		Acceptance: []string{"The generated single-provider work order validates."},
+		Scopes:     []string{"internal/workorder"},
+		Gates:      []GateDraft{{ID: "tests", Command: "go test ./internal/workorder"}},
+	})
+
+	if obj["run_mode"] != RunModeSingleProvider {
+		t.Fatalf("run_mode = %#v", obj["run_mode"])
+	}
+	providers := obj["providers"].([]any)
+	if len(providers) != 1 {
+		t.Fatalf("providers = %#v", providers)
+	}
+	claude := providers[0].(map[string]any)
+	if claude["id"] != "claude" || claude["model"] != modeldefaults.ClaudeSonnet {
+		t.Fatalf("single provider default = %#v", claude)
+	}
+}
+
+func TestDraftBuildSingleProviderRejectsTwoExplicitProviders(t *testing.T) {
+	_, err := DraftBuild(BuildDraftOptions{
+		ID:         "single-build",
+		RunMode:    RunModeSingleProvider,
+		Goal:       "Implement a baseline patch.",
+		Acceptance: []string{"The generated single-provider work order validates."},
+		Scopes:     []string{"internal/workorder"},
+		Gates:      []GateDraft{{ID: "tests", Command: "go test ./internal/workorder"}},
+		Providers: []Participant{
+			{ID: "claude", Backend: "claude", Model: modeldefaults.ClaudeSonnet, Scope: "codebase"},
+			{ID: "codex", Backend: "codex", Model: modeldefaults.CodexDefault, Scope: "codebase"},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "exactly 1 entry") {
+		t.Fatalf("expected single-provider count error, got %v", err)
+	}
+}
+
 func TestDraftBuildPreservesRepeatedValueOrder(t *testing.T) {
 	obj := draftBuildObject(t, BuildDraftOptions{
 		ID:         "ordered-draft",

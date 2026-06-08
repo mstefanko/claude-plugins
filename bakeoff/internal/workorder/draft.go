@@ -20,6 +20,7 @@ const (
 type BuildDraftOptions struct {
 	ID                   string
 	Goal                 string
+	RunMode              string
 	Acceptance           []string
 	Scopes               []string
 	Background           []string
@@ -43,6 +44,7 @@ type buildDraftDocument struct {
 	SchemaVersion int            `json:"schema_version"`
 	ID            string         `json:"id"`
 	Type          string         `json:"type"`
+	RunMode       string         `json:"run_mode"`
 	Goal          string         `json:"goal"`
 	Background    []string       `json:"background"`
 	Providers     []Participant  `json:"providers"`
@@ -77,6 +79,10 @@ func DraftBuild(opts BuildDraftOptions) (any, error) {
 		return nil, err
 	}
 	gates, err := requiredDraftGates(opts.Gates)
+	if err != nil {
+		return nil, err
+	}
+	runMode, err := validateRunMode(emptyStringNil(opts.RunMode))
 	if err != nil {
 		return nil, err
 	}
@@ -130,12 +136,20 @@ func DraftBuild(opts BuildDraftOptions) (any, error) {
 
 	providers := opts.Providers
 	if len(providers) == 0 {
-		providers = []Participant{
-			{ID: "claude", Backend: "claude", Model: modeldefaults.ClaudeSonnet, Scope: "codebase", Effort: "high"},
-			{ID: "codex", Backend: "codex", Model: modeldefaults.CodexDefault, Scope: "codebase", Effort: "high"},
+		if runMode == RunModeSingleProvider {
+			providers = []Participant{
+				{ID: "claude", Backend: "claude", Model: modeldefaults.ClaudeSonnet, Scope: "codebase", Effort: "high"},
+			}
+		} else {
+			providers = []Participant{
+				{ID: "claude", Backend: "claude", Model: modeldefaults.ClaudeSonnet, Scope: "codebase", Effort: "high"},
+				{ID: "codex", Backend: "codex", Model: modeldefaults.CodexDefault, Scope: "codebase", Effort: "high"},
+			}
 		}
-	} else if len(providers) != 2 {
-		return nil, Validationf("providers must have exactly 2 entries")
+	} else if runMode == RunModeSingleProvider && len(providers) != 1 {
+		return nil, Validationf("providers must have exactly 1 entry for run_mode %s", runMode)
+	} else if runMode == RunModePairwise && len(providers) != 2 {
+		return nil, Validationf("providers must have exactly 2 entries for run_mode %s", runMode)
 	}
 	for i := range providers {
 		if providers[i].ID == "" {
@@ -156,6 +170,7 @@ func DraftBuild(opts BuildDraftOptions) (any, error) {
 		SchemaVersion: 1,
 		ID:            id,
 		Type:          "build",
+		RunMode:       runMode,
 		Goal:          goal,
 		Background:    background,
 		Providers:     providers,
@@ -192,6 +207,13 @@ func DraftBuild(opts BuildDraftOptions) (any, error) {
 		return nil, err
 	}
 	return doc, nil
+}
+
+func emptyStringNil(value string) any {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	return value
 }
 
 func requiredDraftTextList(label string, values []string) ([]string, error) {

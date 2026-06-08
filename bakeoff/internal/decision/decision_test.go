@@ -27,6 +27,26 @@ func TestSingleProviderOnlyHandlesUnexpectedSurvivor(t *testing.T) {
 	}
 }
 
+func TestSingleProviderResultIsIntentionalNotWinner(t *testing.T) {
+	wo := &workorder.WorkOrder{
+		Type:    "gather",
+		RunMode: workorder.RunModeSingleProvider,
+		Providers: []workorder.Participant{
+			{ID: "claude"},
+		},
+	}
+	out := SingleProviderResult(wo, map[string]map[string]any{
+		"claude": {"status": "ok"},
+	}, "claude")
+
+	if out["decision_kind"] != "single_provider_result" || out["run_mode"] != workorder.RunModeSingleProvider || out["single_provider"] != "claude" {
+		t.Fatalf("single provider result = %#v", out)
+	}
+	if out["canonical_winner"] != nil || out["judge_ran"] != false || out["judge_attempted"] != false || out["judge_completed"] != false {
+		t.Fatalf("single provider result should not look judged or won: %#v", out)
+	}
+}
+
 func TestGatherStructuredUnionClassifiesFailedJudgeAsProviderUnionOnly(t *testing.T) {
 	wo := &workorder.WorkOrder{
 		Type: "gather",
@@ -258,6 +278,52 @@ func TestResolveBuildSingleProviderOnly(t *testing.T) {
 	})
 	if exitCode != 0 || decision["decision_kind"] != "single_provider_only" || decision["selection_basis"] != "gate" || decision["canonical_winner"] != "claude" {
 		t.Fatalf("decision=%#v exit=%d", decision, exitCode)
+	}
+}
+
+func TestResolveBuildIntentionalSingleProviderSelectsPatchWithoutWinner(t *testing.T) {
+	wo := &workorder.WorkOrder{
+		Type:    "build",
+		RunMode: workorder.RunModeSingleProvider,
+		Providers: []workorder.Participant{
+			{ID: "claude"},
+		},
+	}
+	decision, exitCode := ResolveBuild(BuildResolutionInput{
+		WorkOrder:   wo,
+		ProviderIDs: []string{"claude"},
+		ProviderStatuses: map[string]map[string]any{
+			"claude": {"patch_state": "patch_captured", "verify_state": "gate_passed"},
+		},
+	})
+	if exitCode != 0 || decision["decision_kind"] != "single_provider_result" || decision["selection_basis"] != "gate" {
+		t.Fatalf("decision=%#v exit=%d", decision, exitCode)
+	}
+	if decision["canonical_winner"] != nil || decision["single_provider"] != "claude" || decision["selected_patch_provider"] != "claude" || decision["selected_patch_path"] != "providers/claude/build/diff.patch" {
+		t.Fatalf("single provider build should select patch without winner: %#v", decision)
+	}
+}
+
+func TestResolveBuildIntentionalSingleProviderFailedGate(t *testing.T) {
+	wo := &workorder.WorkOrder{
+		Type:    "build",
+		RunMode: workorder.RunModeSingleProvider,
+		Providers: []workorder.Participant{
+			{ID: "claude"},
+		},
+	}
+	decision, exitCode := ResolveBuild(BuildResolutionInput{
+		WorkOrder:   wo,
+		ProviderIDs: []string{"claude"},
+		ProviderStatuses: map[string]map[string]any{
+			"claude": {"patch_state": "patch_captured", "verify_state": "gate_failed"},
+		},
+	})
+	if exitCode != 1 || decision["decision_kind"] != "single_provider_failed" || decision["stalled_at"] != StalledAtProviderVerify {
+		t.Fatalf("decision=%#v exit=%d", decision, exitCode)
+	}
+	if decision["canonical_winner"] != nil || decision["selected_patch_provider"] != nil {
+		t.Fatalf("failed single provider build should not select patch or winner: %#v", decision)
 	}
 }
 

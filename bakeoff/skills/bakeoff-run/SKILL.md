@@ -111,13 +111,15 @@ Available provider backends are `claude`, `codex`, `gemini`, and `copilot`.
 Those four names are the full catalog. Never invent provider or model variants
 such as `gemini-pro` unless the exact backend/model pair appears in an
 approved work order or explicit user text.
-Generated drafts must contain exactly two providers. The canonical provider
-pair is `claude/sonnet` plus `codex/gpt-5.5`; the generated judge remains
-`claude/opus`. Manual work orders may use any catalog backend as judge as long
-as validation accepts the backend/model pair. If the user names an unknown
-backend, ask one clarification question. Do not run `bakeoff providers list`,
-`bakeoff --help`, `bakeoff init`, or scratch init commands for drafting
-discovery.
+Generated drafts default to `run_mode: "pairwise"` with exactly two providers.
+The canonical provider pair is `claude/sonnet` plus `codex/gpt-5.5`; the
+generated judge remains `claude/opus`. Use `run_mode: "single_provider"` with
+exactly one provider only when the user explicitly asks for a single agent,
+single provider, Claude-only, Codex-only, or one-agent baseline run. Manual work
+orders may use any catalog backend as judge as long as validation accepts the
+backend/model pair. If the user names an unknown backend, ask one clarification
+question. Do not run `bakeoff providers list`, `bakeoff --help`, `bakeoff
+init`, or scratch init commands for drafting discovery.
 
 Provider-pair extraction rules:
 
@@ -340,7 +342,7 @@ repo-discoverable fields, ask one targeted question for user-owned fields, and
 stop when a missing value cannot be determined safely.
 
 Manual drafts must be clean JSON, not TODO templates. Include explicit
-`schema_version`, `id`, `type`, `goal`, `background`, `providers`, `judge`,
+`schema_version`, `id`, `type`, `run_mode`, `goal`, `background`, `providers`, `judge`,
 `budgets`, and `scope_policy.enforcement: "best_effort"`. Defaults: research
 providers come from the provider-pair rules above with catalog default models
 and high effort; build providers use `scope: "codebase"`; judge is Claude
@@ -353,14 +355,23 @@ Require `metric.min_delta_percent`; prefer explicit `metric.noise_floor_percent`
 and `metric.min_runs >= 2` when a noise floor is declared. If `metric.min_runs`
 is greater than 1, the verifier's final JSON must include `n`.
 
+Use `run_mode: "pairwise"` for normal Claude+Codex runs and for same-provider
+duplicate attempts such as `claude-a` plus `claude-b`. Use `run_mode:
+"single_provider"` only when the user explicitly asks for a single agent,
+single provider, Claude-only, Codex-only, or one-agent baseline run. A
+single-provider work order must have exactly one provider, still includes the
+schema-compatible `judge` field, and should not be described as having a
+winner.
+
 Optional `experiment` metadata is allowed only as a small labeling block for
 external study harnesses. Preserve it when the user supplies explicit
 experiment/task/condition/repetition labels, or when running an approved
 external repetition recipe; otherwise omit it. Do not invent a scheduler,
 parent experiment manifest, retry policy, baseline mode, statistics export, or
-analysis table. Valid `run_kind` values are `pairwise`,
-`multi_lens_child`, `split_child`, `rerun`, and `ad_hoc`; do not use reserved
-`single_agent_baseline`.
+analysis table. Valid pairwise `run_kind` values are `pairwise`,
+`multi_lens_child`, `split_child`, `rerun`, and `ad_hoc`. Valid
+single-provider `run_kind` values are `single_agent_baseline`, `ad_hoc`, and
+`rerun`.
 
 For code-review requests, gather read-only git context when useful
 (`git status --short`, `git diff --stat`, `git rev-parse --show-toplevel`,
@@ -608,8 +619,9 @@ decisions that explicitly report consensus. Then give
 run id, command or exit-code meaning, decision kind, report path, relevant
 triage path/state for code-review research, `bakeoff show <run-id>`, and for
 build runs the selected patch artifact only when
+`decision.json.selected_patch_provider` or legacy
 `decision.json.canonical_winner` is non-null:
-`<out>/<run-id>/providers/<winner>/build/diff.patch`. Include diagnostics for
+`<out>/<run-id>/providers/<provider>/build/diff.patch`. Include diagnostics for
 build runs when present. Stop after the Bakeoff handoff.
 
 When triage fails on an otherwise durable run, use this order:

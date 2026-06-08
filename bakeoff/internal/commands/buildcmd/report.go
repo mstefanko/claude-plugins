@@ -30,6 +30,11 @@ func renderBuildReport(wo *workorder.WorkOrder, runID string, outDir string, run
 		lines = append(lines, "Result: `"+jsonutil.StringValue(decision["decision_kind"])+"`")
 	}
 	lines = append(lines, "Selection basis: `"+jsonutil.StringValue(decision["selection_basis"])+"`")
+	if isSingleProviderBuildDecision(decision) {
+		if providerID := selectedBuildPatchProvider(decision); providerID != "" {
+			lines = append(lines, "Single-provider patch: `"+providerID+"`")
+		}
+	}
 	if selectedPatch, ok := selectedBuildPatchPath(decision); ok {
 		lines = append(lines, "Selected patch: `"+selectedPatch+"`")
 	} else {
@@ -224,18 +229,24 @@ func renderBuildReport(wo *workorder.WorkOrder, runID string, outDir string, run
 		}
 		lines = append(lines, "")
 	}
-	if winner, _ := decision["canonical_winner"].(string); winner != "" {
-		lines = append(lines, "## Winner Handoff", "", "Winner: `"+winner+"`")
+	if selectedProvider := selectedBuildPatchProvider(decision); selectedProvider != "" {
+		heading := "## Winner Handoff"
+		label := "Winner: `" + selectedProvider + "`"
+		if isSingleProviderBuildDecision(decision) {
+			heading = "## Patch Handoff"
+			label = "Single-provider patch: `" + selectedProvider + "`"
+		}
+		lines = append(lines, heading, "", label)
 		lines = append(lines, winnerHandoffAdvisoryLines()...)
 		if rationale := jsonutil.ListValue(decision["judge_rationale"]); len(rationale) > 0 && jsonutil.StringValue(decision["selection_basis"]) == "judge" {
 			lines = append(lines, "Why: "+fmt.Sprint(rationale[0]))
 		}
-		if run := providerRunByID(runs, winner); run != nil {
+		if run := providerRunByID(runs, selectedProvider); run != nil {
 			if run.Capture != nil {
 				if selectedPatch, ok := selectedBuildPatchPath(decision); ok {
 					lines = append(lines, "Selected patch artifact: `"+selectedPatch+"`")
 				}
-				lines = append(lines, "Diffstat artifact: `"+filepath.Join("providers", winner, "build", "diffstat.txt")+"`")
+				lines = append(lines, "Diffstat artifact: `"+filepath.Join("providers", selectedProvider, "build", "diffstat.txt")+"`")
 				if len(run.Capture.TestFiles) > 0 {
 					lines = append(lines, fmt.Sprintf("Provider-authored tests: `%d` (supporting evidence, not selector truth)", len(run.Capture.TestFiles)))
 				}
@@ -294,6 +305,16 @@ func buildVerifierGateSummary(baseline buildverify.Result, runs []providerRun) s
 }
 
 func buildResultLine(decision map[string]any) string {
+	if isSingleProviderBuildDecision(decision) {
+		providerID := jsonutil.StringValue(decision["single_provider"])
+		if providerID == "" {
+			providerID = selectedBuildPatchProvider(decision)
+		}
+		if providerID == "" {
+			providerID = "none"
+		}
+		return fmt.Sprintf("%s, single_provider=%s, basis=%s", jsonutil.StringValue(decision["decision_kind"]), providerID, jsonutil.StringValue(decision["selection_basis"]))
+	}
 	winner := jsonutil.StringValue(decision["canonical_winner"])
 	if winner == "" {
 		winner = "none"
@@ -391,6 +412,9 @@ func buildSelectorEvidence(decision map[string]any, label string) string {
 
 func buildSelectorEffect(decision map[string]any, label string) string {
 	winner := jsonutil.StringValue(decision["canonical_winner"])
+	if winner == "" && isSingleProviderBuildDecision(decision) {
+		winner = selectedBuildPatchProvider(decision)
+	}
 	switch label {
 	case "gate":
 		if winner != "" {
@@ -489,11 +513,14 @@ func providerRunByID(runs []providerRun, id string) *providerRun {
 }
 
 func selectedBuildPatchPath(decision map[string]any) (string, bool) {
-	winner := strings.TrimSpace(jsonutil.StringValue(decision["canonical_winner"]))
-	if winner == "" {
+	if selected := strings.TrimSpace(jsonutil.StringValue(decision["selected_patch_path"])); selected != "" {
+		return filepath.ToSlash(selected), true
+	}
+	providerID := selectedBuildPatchProvider(decision)
+	if providerID == "" {
 		return "", false
 	}
-	return filepath.Join("providers", winner, "build", "diff.patch"), true
+	return filepath.Join("providers", providerID, "build", "diff.patch"), true
 }
 
 func selectedBuildPatchAbsolutePath(runDir string, decision map[string]any) (string, bool) {
@@ -502,6 +529,19 @@ func selectedBuildPatchAbsolutePath(runDir string, decision map[string]any) (str
 		return "", false
 	}
 	return filepath.Join(runDir, path), true
+}
+
+func selectedBuildPatchProvider(decision map[string]any) string {
+	if providerID := strings.TrimSpace(jsonutil.StringValue(decision["selected_patch_provider"])); providerID != "" {
+		return providerID
+	}
+	return strings.TrimSpace(jsonutil.StringValue(decision["canonical_winner"]))
+}
+
+func isSingleProviderBuildDecision(decision map[string]any) bool {
+	return jsonutil.StringValue(decision["run_mode"]) == workorder.RunModeSingleProvider ||
+		jsonutil.StringValue(decision["decision_kind"]) == "single_provider_result" ||
+		jsonutil.StringValue(decision["decision_kind"]) == "single_provider_failed"
 }
 
 // buildNextStep returns the formatted next-step run command line for a build report.

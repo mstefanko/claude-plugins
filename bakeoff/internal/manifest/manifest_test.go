@@ -428,6 +428,63 @@ func TestWriteRunManifestTelemetryResolvedProviderBackendsKeepWorkOrderOrder(t *
 	}
 }
 
+func TestWriteRunManifestProjectsSingleProviderRunModeTelemetry(t *testing.T) {
+	runDir := filepath.Join(t.TempDir(), "runs", "r1")
+	writeJSON(t, filepath.Join(runDir, "work-order.json"), map[string]any{
+		"schema_version": 1,
+		"id":             "single",
+		"type":           "gather",
+		"run_mode":       "single_provider",
+		"goal":           "test",
+		"background":     "",
+		"providers": []map[string]any{
+			{"id": "claude", "backend": "claude", "model": "m", "scope": "codebase"},
+		},
+		"judge":   map[string]any{"backend": "claude", "model": "judge"},
+		"budgets": map[string]any{"wall_clock_seconds": 3, "max_output_bytes": 1000},
+	})
+	writeJSON(t, filepath.Join(runDir, "decision.json"), map[string]any{
+		"decision_kind":     "single_provider_result",
+		"run_mode":          "single_provider",
+		"single_provider":   "claude",
+		"canonical_winner":  nil,
+		"judge_ran":         false,
+		"judge_completed":   false,
+		"provider_statuses": map[string]any{"claude": map[string]any{"status": "ok"}},
+	})
+	writeJSON(t, filepath.Join(runDir, "meta.json"), map[string]any{
+		"run_id":   "r1",
+		"type":     "gather",
+		"run_mode": "single_provider",
+		"resolved_models": map[string]any{
+			"providers": map[string]any{"claude": map[string]any{"backend": "claude", "model": "m", "scope": "codebase"}},
+			"judge":     map[string]any{"backend": "claude", "model": "judge"},
+		},
+	})
+	writeText(t, filepath.Join(runDir, "report.md"), "# report\n")
+
+	value, err := manifest.WriteRunManifest(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value["run_mode"] != "single_provider" || value["single_provider"] != "claude" || value["canonical_winner"] != nil {
+		t.Fatalf("single-provider manifest fields = %#v", value)
+	}
+	telemetry := value["telemetry"].(map[string]any)
+	route := telemetry["route"].(map[string]any)
+	if route["run_mode"] != "single_provider" {
+		t.Fatalf("route telemetry = %#v", route)
+	}
+	providers := telemetry["providers"].(map[string]any)
+	if providers["count"] != 1 || providers["family_diversity"] != "single" || !reflect.DeepEqual(providers["backends"], []string{"claude"}) || !reflect.DeepEqual(providers["families"], []string{provider.ProviderFamilyAnthropic}) {
+		t.Fatalf("provider telemetry = %#v", providers)
+	}
+	judge := telemetry["judge"].(map[string]any)
+	if judge["ran"] != false || judge["completed"] != false || judge["winner_backend"] != nil || judge["winner_family"] != nil {
+		t.Fatalf("judge telemetry = %#v", judge)
+	}
+}
+
 func TestWriteRunManifestTelemetryJudgeDecisionMetadata(t *testing.T) {
 	tests := []struct {
 		name             string

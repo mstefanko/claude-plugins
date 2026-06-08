@@ -48,7 +48,34 @@ func BuildWorkerPromptWithRepoLayout(wo *workorder.WorkOrder, provider workorder
 	text = strings.Replace(text, fixtureWorkerFacetRules(), renderWorkerFacetRules(wo.Facet, wo.Type), 1)
 	text = replaceBlock(text, fixtureBuildSpecBlock(), RenderBuildSpecBlock(wo.Build))
 	text = replaceBlock(text, fixtureRuntimeBudgetBlock(), RenderRuntimeBudgetBlock(wo.Budgets, "worker"))
+	text = renderRunModeWorkerInstructions(text, wo)
 	return text, nil
+}
+
+func renderRunModeWorkerInstructions(text string, wo *workorder.WorkOrder) string {
+	if wo == nil || wo.RunMode != workorder.RunModeSingleProvider {
+		return text
+	}
+	replacements := []struct {
+		old string
+		new string
+	}{
+		{"A separate judge will deduplicate your output against a peer worker's output later.", "This is a standalone single-provider run. Produce the best complete result you can; no peer worker or judge will merge, compare, or rescue the output."},
+		{"A judge will later weigh your case against a peer worker who answered the same question independently.", "This is a standalone single-provider run. Produce the strongest complete answer you can; no peer worker or judge will compare or rescue the output."},
+		{`A judge will later select your analysis or a peer's as the "spine" and overlay the loser's annotations onto the winner.`, "This is a standalone single-provider run. Produce the clearest complete analysis you can; no peer worker or judge will select, merge, or rescue the output."},
+		{`A separate judge will compare your patch against another provider's patch later.`, "This is a standalone single-provider build. Produce the best complete patch you can; no competing provider or judge will compare or rescue the output."},
+		{`A separate judge will compare your output against a peer worker's output later.`, "This is a standalone single-provider run. Produce the best complete result you can; no peer worker or judge will compare or rescue the output."},
+		{`A judge will later compare your output against a peer worker's output.`, "This is a standalone single-provider run. Produce the best complete result you can; no peer worker or judge will compare or rescue the output."},
+		{`that a peer could independently mark "agrees", "disagrees", or "adds nuance"`, `that a reader could independently mark "agrees", "disagrees", or "adds nuance"`},
+		{"Low-confidence steps invite peer corrections.", "Low-confidence steps should state what would change your confidence."},
+		{`a later merger may overlay annotations on each step independently.`, `a later reader may inspect each step independently.`},
+		{"Hidden weaknesses cost you credibility with the judge.", "Hidden weaknesses make the answer less useful."},
+		{"The judge handles synthesis.", "Do not add an uncited synthesis."},
+	}
+	for _, replacement := range replacements {
+		text = strings.ReplaceAll(text, replacement.old, replacement.new)
+	}
+	return text
 }
 
 func BuildJudgePrompt(wo *workorder.WorkOrder, workerA any, workerB any, mode string) (string, error) {

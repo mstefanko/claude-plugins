@@ -330,11 +330,11 @@ func TestExperimentValidationRejectsBadMetadata(t *testing.T) {
 			want: "experiment.run_kind must be one of",
 		},
 		{
-			name: "reserved baseline kind",
+			name: "baseline kind requires single provider run mode",
 			edit: func(experiment map[string]any) {
 				experiment["run_kind"] = "single_agent_baseline"
 			},
-			want: "single_agent_baseline is reserved",
+			want: "single_agent_baseline requires run_mode single_provider",
 		},
 		{
 			name: "zero repetition",
@@ -374,6 +374,112 @@ func TestExperimentValidationRejectsBadMetadata(t *testing.T) {
 			_, err := Validate(data)
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("expected %q error, got %v", tt.want, err)
+			}
+		})
+	}
+}
+
+func TestRunModeValidation(t *testing.T) {
+	t.Run("omitted defaults to pairwise", func(t *testing.T) {
+		wo, err := Validate(validWorkOrder())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if wo.RunMode != RunModePairwise || wo.Raw["run_mode"] != RunModePairwise {
+			t.Fatalf("run mode default = %q raw=%#v", wo.RunMode, wo.Raw["run_mode"])
+		}
+	})
+
+	t.Run("explicit pairwise requires two providers", func(t *testing.T) {
+		data := validWorkOrder()
+		data["run_mode"] = RunModePairwise
+		wo, err := Validate(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if wo.RunMode != RunModePairwise {
+			t.Fatalf("run mode = %q", wo.RunMode)
+		}
+
+		data = validWorkOrder()
+		data["run_mode"] = RunModePairwise
+		data["providers"] = []any{
+			map[string]any{"id": "claude", "backend": "claude", "model": "same", "scope": "codebase"},
+		}
+		_, err = Validate(data)
+		if err == nil || !strings.Contains(err.Error(), "exactly 2 entries") {
+			t.Fatalf("expected pairwise provider count rejection, got %v", err)
+		}
+	})
+
+	t.Run("single provider requires one provider", func(t *testing.T) {
+		data := validWorkOrder()
+		data["run_mode"] = RunModeSingleProvider
+		data["providers"] = []any{
+			map[string]any{"id": "claude", "backend": "claude", "model": "same", "scope": "codebase"},
+		}
+		data["judge"] = map[string]any{"backend": "claude", "model": "same"}
+		wo, err := Validate(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if wo.RunMode != RunModeSingleProvider || len(wo.Providers) != 1 {
+			t.Fatalf("single provider run = %q providers=%#v", wo.RunMode, wo.Providers)
+		}
+
+		data = validWorkOrder()
+		data["run_mode"] = RunModeSingleProvider
+		_, err = Validate(data)
+		if err == nil || !strings.Contains(err.Error(), "exactly 1 entry") {
+			t.Fatalf("expected single-provider count rejection, got %v", err)
+		}
+	})
+
+	t.Run("unknown run mode rejects", func(t *testing.T) {
+		data := validWorkOrder()
+		data["run_mode"] = "matrix"
+		_, err := Validate(data)
+		if err == nil || !strings.Contains(err.Error(), "run_mode must be one of") {
+			t.Fatalf("expected run_mode enum rejection, got %v", err)
+		}
+	})
+}
+
+func TestExperimentRunKindMatchesRunMode(t *testing.T) {
+	baseExperiment := func(kind string) map[string]any {
+		return map[string]any{
+			"id":               "review-auth",
+			"task_id":          "auth-review",
+			"condition_id":     "claude-single",
+			"run_kind":         kind,
+			"repetition_index": 1,
+		}
+	}
+	singleProviderWorkOrder := func(kind string) map[string]any {
+		data := validWorkOrder()
+		data["run_mode"] = RunModeSingleProvider
+		data["providers"] = []any{
+			map[string]any{"id": "claude", "backend": "claude", "model": "same", "scope": "codebase"},
+		}
+		data["experiment"] = baseExperiment(kind)
+		return data
+	}
+	for _, kind := range []string{"single_agent_baseline", "ad_hoc", "rerun"} {
+		t.Run("single provider allows "+kind, func(t *testing.T) {
+			wo, err := Validate(singleProviderWorkOrder(kind))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if wo.Experiment.RunKind != kind {
+				t.Fatalf("run kind = %q", wo.Experiment.RunKind)
+			}
+		})
+	}
+	for _, kind := range []string{"pairwise", "multi_lens_child", "split_child"} {
+		t.Run("single provider rejects "+kind, func(t *testing.T) {
+			_, err := Validate(singleProviderWorkOrder(kind))
+			if err == nil || !strings.Contains(err.Error(), "not valid for run_mode single_provider") {
+				t.Fatalf("expected single-provider run_kind rejection, got %v", err)
 			}
 		})
 	}
@@ -910,6 +1016,13 @@ func assertWorkOrderModelDefaults(t *testing.T, obj map[string]any) {
 	if !ok {
 		t.Fatalf("providers = %#v, want array", obj["providers"])
 	}
+	runMode, _ := obj["run_mode"].(string)
+	if runMode == "" {
+		runMode = RunModePairwise
+	}
+	if runMode == RunModeSingleProvider && len(providers) != 1 {
+		t.Fatalf("single-provider example has %d providers, want 1", len(providers))
+	}
 	seen := map[string]bool{}
 	for _, item := range providers {
 		provider, ok := item.(map[string]any)
@@ -931,9 +1044,11 @@ func assertWorkOrderModelDefaults(t *testing.T, obj map[string]any) {
 		}
 		seen[backend] = true
 	}
-	for _, backend := range []string{"claude", "codex"} {
-		if !seen[backend] {
-			t.Fatalf("providers missing %s backend: %#v", backend, providers)
+	if runMode != RunModeSingleProvider {
+		for _, backend := range []string{"claude", "codex"} {
+			if !seen[backend] {
+				t.Fatalf("providers missing %s backend: %#v", backend, providers)
+			}
 		}
 	}
 	judge, ok := obj["judge"].(map[string]any)
