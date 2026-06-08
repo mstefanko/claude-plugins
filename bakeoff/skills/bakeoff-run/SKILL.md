@@ -353,6 +353,15 @@ Require `metric.min_delta_percent`; prefer explicit `metric.noise_floor_percent`
 and `metric.min_runs >= 2` when a noise floor is declared. If `metric.min_runs`
 is greater than 1, the verifier's final JSON must include `n`.
 
+Optional `experiment` metadata is allowed only as a small labeling block for
+external study harnesses. Preserve it when the user supplies explicit
+experiment/task/condition/repetition labels, or when running an approved
+external repetition recipe; otherwise omit it. Do not invent a scheduler,
+parent experiment manifest, retry policy, baseline mode, statistics export, or
+analysis table. Valid `run_kind` values are `pairwise`,
+`multi_lens_child`, `split_child`, `rerun`, and `ad_hoc`; do not use reserved
+`single_agent_baseline`.
+
 For code-review requests, gather read-only git context when useful
 (`git status --short`, `git diff --stat`, `git rev-parse --show-toplevel`,
 branch/base refs). Use `git diff` only for bounded context the user asked to

@@ -252,6 +252,9 @@ Review context is generated only when `--base`, `--diff`, or `--changed-files`
 is set. The generated context includes metadata, diffstat, and changed files;
 `--diff` also includes a bounded patch.
 
+When the work order includes `experiment`, `research --json` includes the same
+trimmed `experiment` object in its final summary.
+
 ## `bakeoff build`
 
 ```text
@@ -280,6 +283,9 @@ provider run, patch capture, scope checks, and gate verification.
 Metric selectors remain conservative: `metric.min_delta_percent` is required,
 `metric.noise_floor_percent` should be explicit, and repeated metric runs should
 emit a final aggregate JSON object with `n`.
+
+When the work order includes `experiment`, `build --json` includes the same
+trimmed `experiment` object in its final summary.
 
 ## `bakeoff rerun`
 
@@ -428,12 +434,16 @@ Flags:
 | `--triage-state <state>` | Filter by `no`, `dry_run`, `yes`, or `stale`. |
 | `--type <type>` | Filter by `gather`, `compare`, `analyze`, `build`, or `escalation`. |
 | `--source-run <run-id>` | Filter to escalation rows linked to the given source run id. |
+| `--experiment <id>` | Filter by manifest `experiment_id`. |
+| `--condition <id>` | Filter by manifest `condition_id`. |
 | `--limit <n>` | Limit rows after filtering. With `--history`, default is `10`; without it, no limit is applied unless this flag is set. |
 | `--history` | Emit a compact recent-run history table with `work-order.json` summaries for displayed rows. Cannot be combined with `--json`. |
 
 In `--json` mode, escalation rows include `source_run_id`, `source_type`,
 `escalation_mode`, and `added_provider`. These keys are omitted from source
-rows.
+rows. Experiment rows include `experiment_id`, `task_id`, `condition_id`,
+`run_kind`, `repetition_index`, `slot_id`, and `slot_attempt`; older
+non-experiment rows omit those fields.
 
 ## `bakeoff runs verify`
 
@@ -533,6 +543,22 @@ events. Build diagnostics are authoritative when present. `triage` records
 state, item count, and highest actionable severity. Highest severity only rolls
 up `real_issue` items; false positives, evidence gaps, and needs-repro items do
 not raise the actionable severity.
+
+## Manifest Data Contract
+
+`manifest.json` is the stable per-run input for external experiment scripts and
+notebooks. Stable fields include `run_id`, `type`, `facet_id`, `started_at`,
+`finished_at`, `decision_kind`, `canonical_winner`, `judge_ran`,
+`judge_attempted`, `judge_completed`, `providers`, `judge`, `triage`,
+`artifacts`, `artifact_fingerprints`, `telemetry`, and, when present,
+`experiment_id`, `task_id`, `condition_id`, `run_kind`, `repetition_index`,
+`slot_id`, and `slot_attempt`.
+
+Bakeoff does not provide an experiment scheduler, parent experiment directory,
+cross-run export command, or statistics engine. External harnesses should
+generate ordinary work orders with `experiment` labels, invoke `bakeoff
+research` or `bakeoff build` with explicit `--run-id`, verify run manifests,
+and do analysis outside Bakeoff.
 
 ## JSON Modes
 

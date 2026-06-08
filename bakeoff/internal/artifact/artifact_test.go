@@ -384,3 +384,44 @@ func TestWriteMetaIncludesDecisionAndExitCode(t *testing.T) {
 		t.Fatalf("meta should not record unused provider CLI version: %#v", versions)
 	}
 }
+
+func TestWriteMetaIncludesExperiment(t *testing.T) {
+	runDir := t.TempDir()
+	if err := workorder.WriteJSONAtomic(filepath.Join(runDir, "work-order.json"), map[string]any{"id": "sample"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := workorder.WriteJSONAtomic(filepath.Join(runDir, "decision.json"), map[string]any{"decision_kind": "both_failed"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := workorder.WriteTextAtomic(filepath.Join(runDir, "report.md"), "report\n"); err != nil {
+		t.Fatal(err)
+	}
+	wo := &workorder.WorkOrder{
+		Type: "gather",
+		Experiment: &workorder.ExperimentSpec{
+			ID:              "review-auth",
+			TaskID:          "auth-review",
+			ConditionID:     "pairwise.security",
+			RunKind:         "pairwise",
+			RepetitionIndex: 1,
+		},
+		Providers: []workorder.Participant{
+			{ID: "claude", Backend: "claude", Model: "sonnet", Effort: "high", Scope: "codebase"},
+			{ID: "codex", Backend: "codex", Model: "gpt", Effort: "high", Scope: "web"},
+		},
+		Judge: workorder.Participant{Backend: "claude", Model: "opus", Effort: "xhigh"},
+	}
+	err := WriteMeta(context.Background(), runDir, wo, "run-1", "2026-05-19T00:00:00Z", MetaOptions{
+		WorkerResults:  map[string]map[string]any{},
+		Decision:       map[string]any{"decision_kind": "both_failed", "judge_ran": false},
+		LookupProvider: func(string) (string, error) { return "", os.ErrNotExist },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := readArtifactJSON(t, filepath.Join(runDir, "meta.json"))
+	experiment := meta["experiment"].(map[string]any)
+	if experiment["id"] != "review-auth" || experiment["task_id"] != "auth-review" || experiment["condition_id"] != "pairwise.security" || experiment["run_kind"] != "pairwise" || experiment["repetition_index"] != float64(1) {
+		t.Fatalf("experiment meta = %#v", experiment)
+	}
+}

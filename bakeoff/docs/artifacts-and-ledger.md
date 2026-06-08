@@ -13,7 +13,7 @@ Every completed run should have:
 | --- | --- |
 | `work-order.json` | Exact work order used by the run. |
 | `decision.json` | Machine-readable decision record. |
-| `meta.json` | Run metadata: type, facet, terminal decision kind, canonical winner, judge status, exit code, timestamps, cwd, versions, scope policy, resolved models, input hashes. |
+| `meta.json` | Run metadata: type, facet, optional experiment labels, terminal decision kind, canonical winner, judge status, exit code, timestamps, cwd, versions, scope policy, resolved models, input hashes. |
 | `report.md` | Human-readable report. |
 | `manifest.json` | Manifest with artifact paths, SHA-256 fingerprints, and local telemetry fields documented in [Manifest Telemetry](cli-reference.md#manifest-telemetry). |
 
@@ -153,6 +153,48 @@ bakeoff runs verify <run-id>
 
 Use `--json` for a parseable verification report. Verification checks required
 artifacts, manifest state, fingerprints, and triage state.
+
+## Stable Manifest Contract
+
+External scripts and notebooks should treat each `runs/<run-id>/manifest.json`
+as the stable per-run data contract. Bakeoff emits durable evidence rows; it
+does not own orchestration, retry policy, cross-run exports, confidence
+intervals, Bradley-Terry/Elo, `pass@k`, `pass^k`, or paper tables.
+
+Stable top-level manifest fields include:
+
+- `run_id`
+- `type`
+- `facet_id`
+- `started_at`
+- `finished_at`
+- `decision_kind`
+- `canonical_winner`
+- `judge_ran`
+- `judge_attempted`
+- `judge_completed`
+- `providers`
+- `judge`
+- `triage`
+- `artifacts`
+- `artifact_fingerprints`
+- `telemetry`
+- `experiment_id`
+- `task_id`
+- `condition_id`
+- `run_kind`
+- `repetition_index`
+- `slot_id`
+- `slot_attempt`
+
+Experiment fields are present when `work-order.json` included an
+`experiment` object. `slot_id` and `slot_attempt` are nullable when no slot was
+provided; older non-experiment runs may omit all experiment fields.
+
+Evidence types are not interchangeable. LLM judge wins are preference evidence;
+build verifier success is executable gate or metric evidence; triage-confirmed
+findings are post-judge review evidence; human labels and calibration live in
+external study tooling.
 
 ## Retained Worktrees
 

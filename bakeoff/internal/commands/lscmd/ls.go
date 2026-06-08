@@ -27,6 +27,8 @@ type LsOptions struct {
 	TriageState string
 	Type        string
 	SourceRun   string
+	Experiment  string
+	Condition   string
 	Limit       int
 	LimitSet    bool
 	History     bool
@@ -54,6 +56,16 @@ func NewCmdLs(f commands.Factory, runF func(context.Context, *LsOptions) error) 
 					return &apperror.ValidationError{Message: err.Error(), Err: err}
 				}
 			}
+			if opts.Experiment != "" {
+				if err := workorder.ValidateExperimentFilter(opts.Experiment, "experiment"); err != nil {
+					return &apperror.ValidationError{Message: err.Error(), Err: err}
+				}
+			}
+			if opts.Condition != "" {
+				if err := workorder.ValidateExperimentFilter(opts.Condition, "condition"); err != nil {
+					return &apperror.ValidationError{Message: err.Error(), Err: err}
+				}
+			}
 			if opts.LimitSet && opts.Limit < 0 {
 				return &apperror.ValidationError{Message: "--limit must be greater than or equal to 0"}
 			}
@@ -72,6 +84,8 @@ func NewCmdLs(f commands.Factory, runF func(context.Context, *LsOptions) error) 
 	cmd.Flags().StringVar(&opts.TriageState, "triage-state", "", "filter by triage state")
 	cmd.Flags().StringVar(&opts.Type, "type", "", "filter by run type")
 	cmd.Flags().StringVar(&opts.SourceRun, "source-run", "", "filter rows by source run id")
+	cmd.Flags().StringVar(&opts.Experiment, "experiment", "", "filter by experiment id")
+	cmd.Flags().StringVar(&opts.Condition, "condition", "", "filter by experiment condition id")
 	cmd.Flags().IntVar(&opts.Limit, "limit", 0, "limit rows after filtering; 0 returns no rows")
 	cmd.Flags().BoolVar(&opts.History, "history", false, "emit a compact recent-run history with work-order summaries")
 	return cmd
@@ -112,6 +126,12 @@ func runLs(_ context.Context, f commands.Factory, opts *LsOptions) error {
 			continue
 		}
 		if opts.SourceRun != "" && row["source_run_id"] != opts.SourceRun {
+			continue
+		}
+		if opts.Experiment != "" && row["experiment_id"] != opts.Experiment {
+			continue
+		}
+		if opts.Condition != "" && row["condition_id"] != opts.Condition {
 			continue
 		}
 		rows = append(rows, row)

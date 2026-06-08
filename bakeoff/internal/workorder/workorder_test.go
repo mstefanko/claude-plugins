@@ -277,6 +277,108 @@ func TestScopePolicyRepoLayoutValidation(t *testing.T) {
 	}
 }
 
+func TestExperimentValidationAcceptsTrimmedMetadata(t *testing.T) {
+	data := validWorkOrder()
+	data["experiment"] = map[string]any{
+		"id":               "review-auth",
+		"task_id":          "auth-review",
+		"condition_id":     "pairwise.security",
+		"run_kind":         "pairwise",
+		"repetition_index": 1,
+		"slot_id":          "security",
+		"slot_attempt":     2,
+	}
+
+	wo, err := Validate(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wo.Experiment == nil || wo.Experiment.ID != "review-auth" || wo.Experiment.SlotAttempt != 2 {
+		t.Fatalf("experiment = %#v", wo.Experiment)
+	}
+	got := ExperimentMap(wo.Experiment)
+	if got["id"] != "review-auth" || got["task_id"] != "auth-review" || got["condition_id"] != "pairwise.security" || got["run_kind"] != "pairwise" || got["repetition_index"] != 1 || got["slot_id"] != "security" || got["slot_attempt"] != 2 {
+		t.Fatalf("experiment map = %#v", got)
+	}
+}
+
+func TestExperimentValidationRejectsBadMetadata(t *testing.T) {
+	tests := []struct {
+		name string
+		edit func(map[string]any)
+		want string
+	}{
+		{
+			name: "unsupported key",
+			edit: func(experiment map[string]any) {
+				experiment["evaluator_ref"] = "external"
+			},
+			want: "experiment has unsupported keys: evaluator_ref",
+		},
+		{
+			name: "bad slug",
+			edit: func(experiment map[string]any) {
+				experiment["task_id"] = "bad slug"
+			},
+			want: "experiment.task_id must be a slug",
+		},
+		{
+			name: "bad run kind",
+			edit: func(experiment map[string]any) {
+				experiment["run_kind"] = "matrix"
+			},
+			want: "experiment.run_kind must be one of",
+		},
+		{
+			name: "reserved baseline kind",
+			edit: func(experiment map[string]any) {
+				experiment["run_kind"] = "single_agent_baseline"
+			},
+			want: "single_agent_baseline is reserved",
+		},
+		{
+			name: "zero repetition",
+			edit: func(experiment map[string]any) {
+				experiment["repetition_index"] = 0
+			},
+			want: "experiment.repetition_index must be a 1-based positive integer",
+		},
+		{
+			name: "slot attempt without slot id",
+			edit: func(experiment map[string]any) {
+				experiment["slot_attempt"] = 1
+			},
+			want: "experiment.slot_attempt requires experiment.slot_id",
+		},
+		{
+			name: "zero slot attempt",
+			edit: func(experiment map[string]any) {
+				experiment["slot_id"] = "security"
+				experiment["slot_attempt"] = 0
+			},
+			want: "experiment.slot_attempt must be a 1-based positive integer",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data := validWorkOrder()
+			experiment := map[string]any{
+				"id":               "review-auth",
+				"task_id":          "auth-review",
+				"condition_id":     "pairwise.security",
+				"run_kind":         "pairwise",
+				"repetition_index": 1,
+			}
+			tt.edit(experiment)
+			data["experiment"] = experiment
+			_, err := Validate(data)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("expected %q error, got %v", tt.want, err)
+			}
+		})
+	}
+}
+
 func TestInitTemplatesMatchFrozenShape(t *testing.T) {
 	for _, mode := range []string{"gather", "compare", "analyze", "review", "build"} {
 		text, err := InitTemplate(mode)

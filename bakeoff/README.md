@@ -463,6 +463,11 @@ runs/<run-id>/
 Manifest telemetry fields are documented in [docs/cli-reference.md#manifest-telemetry](docs/cli-reference.md#manifest-telemetry).
 Use `bakeoff runs verify <run-id> --json` to check required artifacts,
 manifest fingerprints, and triage state.
+Work orders may include optional `experiment` labels for external repetition
+loops; those labels are copied into `meta.json`, hoisted into `manifest.json`,
+and filterable with `bakeoff ls --json --experiment ID` or `--condition ID`.
+Bakeoff still records ordinary per-run ledgers only. Scheduling, retries,
+statistics, and paper tables belong in external scripts or notebooks.
 
 Common inspection flow:
 

@@ -196,6 +196,58 @@ func TestJSONRowsProjectJudgeOnlyRerunFields(t *testing.T) {
 	}
 }
 
+func TestJSONRowsFilterAndProjectExperimentFields(t *testing.T) {
+	outDir := filepath.Join(t.TempDir(), "runs")
+	writeRun(t, outDir, runSpec{ID: "exp-a-1", Type: "gather", FinishedAt: "2026-05-19T10:00:00Z", Decision: "structured_union", Triage: "no", Goal: "exp a", ExperimentID: "review-auth", TaskID: "auth-review", ConditionID: "pairwise.security", RunKind: "pairwise", RepetitionIndex: 1, SlotID: "security", SlotAttempt: 1})
+	writeRun(t, outDir, runSpec{ID: "exp-a-2", Type: "gather", FinishedAt: "2026-05-19T10:01:00Z", Decision: "structured_union", Triage: "no", Goal: "exp a", ExperimentID: "review-auth", TaskID: "auth-review", ConditionID: "pairwise.ux", RunKind: "pairwise", RepetitionIndex: 1})
+	writeRun(t, outDir, runSpec{ID: "exp-b-1", Type: "gather", FinishedAt: "2026-05-19T10:02:00Z", Decision: "structured_union", Triage: "no", Goal: "exp b", ExperimentID: "review-cache", TaskID: "cache-review", ConditionID: "pairwise.security", RunKind: "pairwise", RepetitionIndex: 1})
+	writeRun(t, outDir, runSpec{ID: "plain", Type: "gather", FinishedAt: "2026-05-19T10:03:00Z", Decision: "structured_union", Triage: "no", Goal: "plain"})
+
+	var stdout bytes.Buffer
+	f := testFactory{streams: output.NewStreams(&stdout, &bytes.Buffer{})}
+	err := runLs(context.Background(), f, &LsOptions{Out: outDir, JSON: true, Experiment: "review-auth", Condition: "pairwise.security"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		Runs []map[string]any `json:"runs"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Runs) != 1 {
+		t.Fatalf("filtered rows = %#v", payload.Runs)
+	}
+	row := payload.Runs[0]
+	for key, want := range map[string]any{
+		"run_id":           "exp-a-1",
+		"experiment_id":    "review-auth",
+		"task_id":          "auth-review",
+		"condition_id":     "pairwise.security",
+		"run_kind":         "pairwise",
+		"repetition_index": float64(1),
+		"slot_id":          "security",
+		"slot_attempt":     float64(1),
+	} {
+		if row[key] != want {
+			t.Fatalf("%s = %#v, want %#v in %#v", key, row[key], want, row)
+		}
+	}
+
+	stdout.Reset()
+	err = runLs(context.Background(), f, &LsOptions{Out: outDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := stdout.String()
+	if !strings.Contains(got, "run_id\ttype\tfacet\tdecision\ttriage\tfinished_at") {
+		t.Fatalf("human ls missing compact header:\n%s", got)
+	}
+	if strings.Contains(got, "experiment") || strings.Contains(got, "condition") {
+		t.Fatalf("human ls should stay compact:\n%s", got)
+	}
+}
+
 func TestSortRowsByFinishedAt(t *testing.T) {
 	t.Run("happy path newest first", func(t *testing.T) {
 		rows := []map[string]any{
@@ -267,17 +319,24 @@ func TestSortRowsByFinishedAt(t *testing.T) {
 }
 
 type runSpec struct {
-	ID             string
-	Type           string
-	FinishedAt     string
-	Decision       string
-	Triage         string
-	Goal           string
-	SourceRunID    string
-	SourceType     string
-	EscalationMode string
-	AddedProvider  string
-	RerunMode      string
+	ID              string
+	Type            string
+	FinishedAt      string
+	Decision        string
+	Triage          string
+	Goal            string
+	SourceRunID     string
+	SourceType      string
+	EscalationMode  string
+	AddedProvider   string
+	RerunMode       string
+	ExperimentID    string
+	TaskID          string
+	ConditionID     string
+	RunKind         string
+	RepetitionIndex int
+	SlotID          string
+	SlotAttempt     int
 }
 
 func writeRun(t *testing.T, outDir string, spec runSpec) {
@@ -301,6 +360,19 @@ func writeRun(t *testing.T, outDir string, spec runSpec) {
 	}
 	if spec.RerunMode != "" {
 		manifestDoc["rerun_mode"] = spec.RerunMode
+	}
+	if spec.ExperimentID != "" {
+		manifestDoc["experiment_id"] = spec.ExperimentID
+		manifestDoc["task_id"] = spec.TaskID
+		manifestDoc["condition_id"] = spec.ConditionID
+		manifestDoc["run_kind"] = spec.RunKind
+		manifestDoc["repetition_index"] = spec.RepetitionIndex
+		if spec.SlotID != "" {
+			manifestDoc["slot_id"] = spec.SlotID
+		}
+		if spec.SlotAttempt > 0 {
+			manifestDoc["slot_attempt"] = spec.SlotAttempt
+		}
 	}
 	if spec.Type == "escalation" {
 		manifestDoc["source_type"] = spec.SourceType

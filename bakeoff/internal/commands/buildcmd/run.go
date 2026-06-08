@@ -306,7 +306,7 @@ func finalizeBuildRun(ctx context.Context, f commands.Factory, opts *BuildOption
 		f.Streams().Printf("next:   %s\n", ledger.BakeoffShowCommand(runID, opts.Out, ""))
 	}
 	if opts.JSON {
-		if err := summary.Print(f.Streams().Out, buildSummary(repo, runDir, runID, opts.Out, decision, baseline, providerRuns, metrics, diagnostics, exitCode)); err != nil {
+		if err := summary.Print(f.Streams().Out, buildSummary(repo, runDir, runID, opts.Out, decision, baseline, providerRuns, metrics, diagnostics, exitCode, wo.Experiment)); err != nil {
 			return &apperror.RuntimeError{Err: err}
 		}
 	}

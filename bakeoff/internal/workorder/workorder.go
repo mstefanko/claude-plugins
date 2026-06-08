@@ -49,6 +49,7 @@ var (
 	verifierKinds       = []string{"gate", "metric"}
 	verifierBaselines   = []string{VerifierBaselineMustPass, VerifierBaselineMayFail, VerifierBaselineMustFail}
 	metricDirections    = []string{"lower", "higher"}
+	experimentRunKinds  = []string{"pairwise", "multi_lens_child", "split_child", "rerun", "ad_hoc"}
 	loserPositions      = []string{"agrees", "disagrees", "not_covered", "adds"}
 	followupKinds       = []string{"bug", "risk", "doc_drift", "test_gap", "follow_up"}
 	triageClasses       = []string{"real_issue", "false_positive", "plan_doc_drift", "product_decision", "needs_repro", "already_fixed", "evidence_gap"}
@@ -66,6 +67,10 @@ var facetKeys = map[string]bool{
 
 var verifierKeys = map[string]bool{
 	"id": true, "kind": true, "argv": true, "metric": true, "wall_clock_seconds": true, "max_output_bytes": true, "baseline": true,
+}
+
+var experimentKeys = map[string]bool{
+	"id": true, "task_id": true, "condition_id": true, "run_kind": true, "repetition_index": true, "slot_id": true, "slot_attempt": true,
 }
 
 var facetReservedIDs = map[string]bool{
@@ -159,19 +164,31 @@ type MetricSpec struct {
 	Raw               map[string]any `json:"-"`
 }
 
+type ExperimentSpec struct {
+	ID              string         `json:"id"`
+	TaskID          string         `json:"task_id"`
+	ConditionID     string         `json:"condition_id"`
+	RunKind         string         `json:"run_kind"`
+	RepetitionIndex int            `json:"repetition_index"`
+	SlotID          string         `json:"slot_id,omitempty"`
+	SlotAttempt     int            `json:"slot_attempt,omitempty"`
+	Raw             map[string]any `json:"-"`
+}
+
 type WorkOrder struct {
-	SchemaVersion int            `json:"schema_version"`
-	ID            string         `json:"id"`
-	Type          string         `json:"type"`
-	Goal          string         `json:"goal"`
-	Background    string         `json:"background"`
-	Facet         *Facet         `json:"facet,omitempty"`
-	Providers     []Participant  `json:"providers"`
-	Judge         Participant    `json:"judge"`
-	Budgets       Budgets        `json:"budgets"`
-	ScopePolicy   ScopePolicy    `json:"scope_policy"`
-	Build         *BuildSpec     `json:"build,omitempty"`
-	Raw           map[string]any `json:"-"`
+	SchemaVersion int             `json:"schema_version"`
+	ID            string          `json:"id"`
+	Type          string          `json:"type"`
+	Goal          string          `json:"goal"`
+	Background    string          `json:"background"`
+	Facet         *Facet          `json:"facet,omitempty"`
+	Providers     []Participant   `json:"providers"`
+	Judge         Participant     `json:"judge"`
+	Budgets       Budgets         `json:"budgets"`
+	ScopePolicy   ScopePolicy     `json:"scope_policy"`
+	Build         *BuildSpec      `json:"build,omitempty"`
+	Experiment    *ExperimentSpec `json:"experiment,omitempty"`
+	Raw           map[string]any  `json:"-"`
 }
 
 func StripJSONCComments(text string) string {
@@ -332,6 +349,10 @@ func Validate(data map[string]any) (*WorkOrder, error) {
 	if err != nil {
 		return nil, err
 	}
+	experiment, err := validateExperimentSpec(data["experiment"])
+	if err != nil {
+		return nil, err
+	}
 	var build *BuildSpec
 	if mode == "build" {
 		build, err = validateBuildSpec(data["build"])
@@ -352,8 +373,29 @@ func Validate(data map[string]any) (*WorkOrder, error) {
 		Budgets:       budgets,
 		ScopePolicy:   scopePolicy,
 		Build:         build,
+		Experiment:    experiment,
 		Raw:           data,
 	}, nil
+}
+
+func ExperimentMap(experiment *ExperimentSpec) map[string]any {
+	if experiment == nil {
+		return nil
+	}
+	out := map[string]any{
+		"id":               experiment.ID,
+		"task_id":          experiment.TaskID,
+		"condition_id":     experiment.ConditionID,
+		"run_kind":         experiment.RunKind,
+		"repetition_index": experiment.RepetitionIndex,
+	}
+	if experiment.SlotID != "" {
+		out["slot_id"] = experiment.SlotID
+	}
+	if experiment.SlotAttempt > 0 {
+		out["slot_attempt"] = experiment.SlotAttempt
+	}
+	return out
 }
 
 func backgroundAsString(value any) (string, bool) {
@@ -668,6 +710,106 @@ func validateScopePolicy(value any) (ScopePolicy, error) {
 		return ScopePolicy{}, Validationf("scope_policy.repo_layout must be one of: %s (got %s)", strings.Join(repoLayoutPolicies, ", "), pyRepr(repoLayout))
 	}
 	return ScopePolicy{Enforcement: enforcement, RepoLayout: repoLayout}, nil
+}
+
+func validateExperimentSpec(value any) (*ExperimentSpec, error) {
+	if value == nil {
+		return nil, nil
+	}
+	obj, ok := value.(map[string]any)
+	if !ok {
+		return nil, Validationf("experiment must be an object")
+	}
+	var unknown []string
+	for key := range obj {
+		if !experimentKeys[key] {
+			unknown = append(unknown, key)
+		}
+	}
+	sort.Strings(unknown)
+	if len(unknown) > 0 {
+		return nil, Validationf("experiment has unsupported keys: %s", strings.Join(unknown, ", "))
+	}
+	for _, field := range []string{"id", "task_id", "condition_id", "run_kind", "repetition_index"} {
+		if _, ok := obj[field]; !ok {
+			return nil, Validationf("experiment.%s is required", field)
+		}
+	}
+	id, err := experimentSlug(obj["id"], "experiment.id")
+	if err != nil {
+		return nil, err
+	}
+	taskID, err := experimentSlug(obj["task_id"], "experiment.task_id")
+	if err != nil {
+		return nil, err
+	}
+	conditionID, err := experimentSlug(obj["condition_id"], "experiment.condition_id")
+	if err != nil {
+		return nil, err
+	}
+	runKind, ok := obj["run_kind"].(string)
+	if !ok {
+		return nil, Validationf("experiment.run_kind must be one of: %s (got %s)", strings.Join(experimentRunKinds, ", "), pyRepr(obj["run_kind"]))
+	}
+	if runKind == "single_agent_baseline" {
+		return nil, Validationf("experiment.run_kind single_agent_baseline is reserved but not executable in this version")
+	}
+	if !contains(experimentRunKinds, runKind) {
+		return nil, Validationf("experiment.run_kind must be one of: %s (got %s)", strings.Join(experimentRunKinds, ", "), pyRepr(obj["run_kind"]))
+	}
+	repetitionIndex, ok := asInt(obj["repetition_index"])
+	if !ok || repetitionIndex < 1 {
+		return nil, Validationf("experiment.repetition_index must be a 1-based positive integer")
+	}
+	slotID := ""
+	if raw, ok := obj["slot_id"]; ok {
+		slotID, err = experimentSlug(raw, "experiment.slot_id")
+		if err != nil {
+			return nil, err
+		}
+	}
+	slotAttempt := 0
+	if raw, ok := obj["slot_attempt"]; ok {
+		if slotID == "" {
+			return nil, Validationf("experiment.slot_attempt requires experiment.slot_id")
+		}
+		value, ok := asInt(raw)
+		if !ok || value < 1 {
+			return nil, Validationf("experiment.slot_attempt must be a 1-based positive integer")
+		}
+		slotAttempt = value
+	}
+	return &ExperimentSpec{
+		ID:              id,
+		TaskID:          taskID,
+		ConditionID:     conditionID,
+		RunKind:         runKind,
+		RepetitionIndex: repetitionIndex,
+		SlotID:          slotID,
+		SlotAttempt:     slotAttempt,
+		Raw:             obj,
+	}, nil
+}
+
+func experimentSlug(value any, label string) (string, error) {
+	text, ok := value.(string)
+	if !ok || strings.TrimSpace(text) == "" {
+		return "", Validationf("%s must be a non-empty slug", label)
+	}
+	if !slugRE.MatchString(text) {
+		return "", Validationf("%s must be a slug matching ^[A-Za-z0-9][A-Za-z0-9._-]*$", label)
+	}
+	return text, nil
+}
+
+func ValidateExperimentFilter(value string, label string) error {
+	if strings.TrimSpace(value) == "" {
+		return Validationf("--%s must be a non-empty slug", label)
+	}
+	if !slugRE.MatchString(value) {
+		return Validationf("--%s must be a slug matching ^[A-Za-z0-9][A-Za-z0-9._-]*$", label)
+	}
+	return nil
 }
 
 func validateBuildSpec(value any) (*BuildSpec, error) {

@@ -8,9 +8,10 @@ import (
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/fsutil"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/ledger"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/summary"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
 )
 
-func buildSummary(repo buildworkspace.Repository, runDir string, runID string, outDir string, decision map[string]any, baseline buildverify.Result, runs []providerRun, metrics []buildverify.MetricComparison, diagnostics buildDiagnostics, exitCode int) map[string]any {
+func buildSummary(repo buildworkspace.Repository, runDir string, runID string, outDir string, decision map[string]any, baseline buildverify.Result, runs []providerRun, metrics []buildverify.MetricComparison, diagnostics buildDiagnostics, exitCode int, experiment *workorder.ExperimentSpec) map[string]any {
 	providers := map[string]any{}
 	for _, run := range runs {
 		entry := map[string]any{
@@ -50,6 +51,9 @@ func buildSummary(repo buildworkspace.Repository, runDir string, runID string, o
 		"diagnostics":      diagnostics,
 		"artifacts":        buildArtifactPaths(runDir),
 		"next":             ledger.BakeoffShowCommand(runID, outDir, ""),
+	}
+	if experimentObject := workorder.ExperimentMap(experiment); experimentObject != nil {
+		out["experiment"] = experimentObject
 	}
 	if selectedPatch, ok := selectedBuildPatchPath(decision); ok {
 		out["selected_patch_status"] = "selected"

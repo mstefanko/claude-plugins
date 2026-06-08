@@ -399,7 +399,7 @@ func finalizeResearchRun(ctx context.Context, f commands.Factory, opts researchF
 		}
 	}
 	if opts.JSON {
-		value := summary.BuildResearch(opts.RunDir, opts.RunID, opts.Out, opts.DecisionDoc, opts.WorkerResults, exitCode, autoTriageStarted, triageExitCode)
+		value := summary.BuildResearch(opts.RunDir, opts.RunID, opts.Out, opts.DecisionDoc, opts.WorkerResults, exitCode, autoTriageStarted, triageExitCode, opts.WorkOrder.Experiment)
 		if err := summary.Print(f.Streams().Out, value); err != nil {
 			return &apperror.RuntimeError{Err: err}
 		}

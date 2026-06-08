@@ -56,6 +56,7 @@ type ResearchSummary struct {
 	StalledAt        string                     `json:"stalled_at,omitempty"`
 	CanonicalWinner  any                        `json:"canonical_winner"`
 	JudgeRan         bool                       `json:"judge_ran"`
+	Experiment       map[string]any             `json:"experiment,omitempty"`
 	Providers        map[string]ProviderSummary `json:"providers"`
 	Judge            JudgeSummary               `json:"judge"`
 	Triage           ResearchTriageSummary      `json:"triage"`
@@ -242,7 +243,7 @@ func JudgeJSONSummary(runDir string, decision map[string]any) JudgeSummary {
 	return out
 }
 
-func BuildResearch(runDir string, runID string, outDir string, decision map[string]any, workerResults map[string]map[string]any, exitCode int, autoTriageStarted bool, triageExitCode any) ResearchSummary {
+func BuildResearch(runDir string, runID string, outDir string, decision map[string]any, workerResults map[string]map[string]any, exitCode int, autoTriageStarted bool, triageExitCode any, experiment *workorder.ExperimentSpec) ResearchSummary {
 	providers := map[string]ProviderSummary{}
 	for providerID, result := range workerResults {
 		providers[providerID] = ProviderStatusSummary(result)
@@ -261,6 +262,7 @@ func BuildResearch(runDir string, runID string, outDir string, decision map[stri
 		StalledAt:        jsonutil.StringValue(decision["stalled_at"]),
 		CanonicalWinner:  decision["canonical_winner"],
 		JudgeRan:         jsonutil.BoolValue(decision["judge_ran"]),
+		Experiment:       workorder.ExperimentMap(experiment),
 		Providers:        providers,
 		Judge:            judge,
 		Triage:           ResearchTriage(runDir, autoTriageStarted, triageExitCode),

@@ -578,6 +578,9 @@ func WriteMetaWithExtra(ctx context.Context, runDir string, wo *workorder.WorkOr
 		meta["canonical_winner"] = opts.Decision["canonical_winner"]
 		meta["judge_ran"] = jsonutil.BoolValue(opts.Decision["judge_ran"])
 	}
+	if experiment := workorder.ExperimentMap(wo.Experiment); experiment != nil {
+		meta["experiment"] = experiment
+	}
 	for key, value := range extra {
 		meta[key] = value
 	}

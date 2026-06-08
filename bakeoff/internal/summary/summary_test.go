@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/workorder"
 )
 
 func TestProviderStatusSummaryCompactsFailure(t *testing.T) {
@@ -59,9 +61,26 @@ func TestBuildResearchIncludesStalledAt(t *testing.T) {
 		"decision_kind": "both_failed",
 		"stalled_at":    "providers",
 		"judge_ran":     false,
-	}, map[string]map[string]any{}, 1, false, nil)
+	}, map[string]map[string]any{}, 1, false, nil, nil)
 	if got.StalledAt != "providers" {
 		t.Fatalf("stalled_at = %q", got.StalledAt)
+	}
+}
+
+func TestBuildResearchIncludesExperiment(t *testing.T) {
+	runDir := t.TempDir()
+	got := BuildResearch(runDir, "run-1", filepath.Dir(runDir), map[string]any{
+		"decision_kind": "both_failed",
+		"judge_ran":     false,
+	}, map[string]map[string]any{}, 1, false, nil, &workorder.ExperimentSpec{
+		ID:              "review-auth",
+		TaskID:          "auth-review",
+		ConditionID:     "pairwise.security",
+		RunKind:         "pairwise",
+		RepetitionIndex: 1,
+	})
+	if got.Experiment["id"] != "review-auth" || got.Experiment["task_id"] != "auth-review" {
+		t.Fatalf("experiment = %#v", got.Experiment)
 	}
 }
 
@@ -79,7 +98,7 @@ func TestBuildResearchRecommendsJudgeOnlyForResearchExit4WithSucceededProvidersA
 			"claude": map[string]any{"status": "ok"},
 			"codex":  map[string]any{"status": "ok_after_format_retry"},
 		},
-	}, nil, 4, false, nil)
+	}, nil, 4, false, nil, nil)
 
 	if got.Next != "bakeoff rerun run-1 --judge-only" {
 		t.Fatalf("next = %q", got.Next)
@@ -102,7 +121,7 @@ func TestBuildResearchRecommendsJudgeOnlyWhenJudgeStatusMissingAfterAttempt(t *t
 			"claude": map[string]any{"status": "ok"},
 			"codex":  map[string]any{"status": "ok"},
 		},
-	}, nil, 4, false, nil)
+	}, nil, 4, false, nil, nil)
 
 	if got.Next != "bakeoff rerun run-1 --judge-only" {
 		t.Fatalf("next = %q", got.Next)
@@ -124,7 +143,7 @@ func TestBuildResearchSuppressesJudgeOnlyWhenAProviderFailed(t *testing.T) {
 			"claude": map[string]any{"status": "ok"},
 			"codex":  map[string]any{"status": "schema_error"},
 		},
-	}, nil, 4, false, nil)
+	}, nil, 4, false, nil, nil)
 
 	if got.Next != "bakeoff show run-1" {
 		t.Fatalf("next = %q", got.Next)
@@ -148,7 +167,7 @@ func TestBuildResearchSuppressesJudgeOnlyForBuildMode(t *testing.T) {
 			"claude": map[string]any{"status": "ok"},
 			"codex":  map[string]any{"status": "ok"},
 		},
-	}, nil, 4, false, nil)
+	}, nil, 4, false, nil, nil)
 
 	if got.Next != "bakeoff show run-1" {
 		t.Fatalf("next = %q", got.Next)
@@ -173,7 +192,7 @@ func TestBuildResearchIgnoresReportMarkdownWhenStructuredJudgeSucceeded(t *testi
 			"claude": map[string]any{"status": "ok"},
 			"codex":  map[string]any{"status": "ok"},
 		},
-	}, nil, 4, false, nil)
+	}, nil, 4, false, nil, nil)
 
 	if got.Next != "bakeoff show run-1" {
 		t.Fatalf("next = %q", got.Next)
@@ -196,7 +215,7 @@ func TestBuildResearchRequiresAllDeclaredProvidersToSucceed(t *testing.T) {
 		"provider_statuses": map[string]any{
 			"claude": map[string]any{"status": "ok"},
 		},
-	}, nil, 4, false, nil)
+	}, nil, 4, false, nil, nil)
 
 	if got.Next != "bakeoff show run-1" {
 		t.Fatalf("next = %q", got.Next)

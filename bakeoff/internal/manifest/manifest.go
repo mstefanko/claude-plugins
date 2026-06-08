@@ -114,6 +114,7 @@ func BuildRunManifest(runDir string) (map[string]any, error) {
 		"artifacts":             artifacts,
 		"artifact_fingerprints": artifactFingerprintsForType(runDir, runType),
 	}
+	addExperimentManifestFields(out, meta)
 	addRerunManifestFields(out, meta, decision)
 	if isEscalationRun(meta, decision) {
 		addEscalationManifestFields(out, meta, decision, workOrder)
@@ -167,6 +168,23 @@ func RowForLS(runDir string) map[string]any {
 		"finished_at":    loaded.FinishedAt,
 		"manifest_path":  manifestPath,
 	}
+	if loaded.ExperimentID != nil {
+		row["experiment_id"] = stringPtrValue(loaded.ExperimentID)
+		row["task_id"] = stringPtrValue(loaded.TaskID)
+		row["condition_id"] = stringPtrValue(loaded.ConditionID)
+		row["run_kind"] = stringPtrValue(loaded.RunKind)
+		if loaded.RepetitionIndex != nil {
+			row["repetition_index"] = *loaded.RepetitionIndex
+		} else {
+			row["repetition_index"] = nil
+		}
+		row["slot_id"] = nilIfEmpty(stringPtrValue(loaded.SlotID))
+		if loaded.SlotAttempt != nil {
+			row["slot_attempt"] = *loaded.SlotAttempt
+		} else {
+			row["slot_attempt"] = nil
+		}
+	}
 	if report := loaded.Artifacts["report"]; report != "" {
 		row["report_path"] = filepath.Join(runDir, report)
 	} else if fsutil.FileExists(filepath.Join(runDir, "report.md")) {
@@ -193,19 +211,26 @@ func RowForLS(runDir string) map[string]any {
 }
 
 type lsManifest struct {
-	SchemaVersion  int               `json:"schema_version"`
-	RunID          string            `json:"run_id"`
-	Type           string            `json:"type"`
-	FacetID        *string           `json:"facet_id"`
-	DecisionKind   string            `json:"decision_kind"`
-	FinishedAt     string            `json:"finished_at"`
-	Artifacts      map[string]string `json:"artifacts"`
-	SourceRunID    string            `json:"source_run_id"`
-	SourceType     string            `json:"source_type"`
-	EscalationMode string            `json:"escalation_mode"`
-	AddedProvider  any               `json:"added_provider"`
-	RerunMode      string            `json:"rerun_mode"`
-	Triage         map[string]any    `json:"triage"`
+	SchemaVersion   int               `json:"schema_version"`
+	RunID           string            `json:"run_id"`
+	Type            string            `json:"type"`
+	FacetID         *string           `json:"facet_id"`
+	DecisionKind    string            `json:"decision_kind"`
+	FinishedAt      string            `json:"finished_at"`
+	Artifacts       map[string]string `json:"artifacts"`
+	ExperimentID    *string           `json:"experiment_id"`
+	TaskID          *string           `json:"task_id"`
+	ConditionID     *string           `json:"condition_id"`
+	RunKind         *string           `json:"run_kind"`
+	RepetitionIndex *int              `json:"repetition_index"`
+	SlotID          *string           `json:"slot_id"`
+	SlotAttempt     *int              `json:"slot_attempt"`
+	SourceRunID     string            `json:"source_run_id"`
+	SourceType      string            `json:"source_type"`
+	EscalationMode  string            `json:"escalation_mode"`
+	AddedProvider   any               `json:"added_provider"`
+	RerunMode       string            `json:"rerun_mode"`
+	Triage          map[string]any    `json:"triage"`
 }
 
 func readLSManifest(path string) (lsManifest, error) {
@@ -341,6 +366,34 @@ func reviewContextSummary(runDir string) map[string]any {
 
 func isEscalationRun(meta map[string]any, decision map[string]any) bool {
 	return jsonutil.StringValue(meta["type"]) == "escalation" || jsonutil.StringValue(decision["mode"]) == "escalation"
+}
+
+func addExperimentManifestFields(out map[string]any, meta map[string]any) {
+	experiment, ok := meta["experiment"].(map[string]any)
+	if !ok {
+		return
+	}
+	if id := jsonutil.StringValue(experiment["id"]); id != "" {
+		out["experiment_id"] = id
+	}
+	if taskID := jsonutil.StringValue(experiment["task_id"]); taskID != "" {
+		out["task_id"] = taskID
+	}
+	if conditionID := jsonutil.StringValue(experiment["condition_id"]); conditionID != "" {
+		out["condition_id"] = conditionID
+	}
+	if runKind := jsonutil.StringValue(experiment["run_kind"]); runKind != "" {
+		out["run_kind"] = runKind
+	}
+	if repetitionIndex := jsonutil.IntValue(experiment["repetition_index"]); repetitionIndex > 0 {
+		out["repetition_index"] = repetitionIndex
+	}
+	out["slot_id"] = nilIfEmpty(jsonutil.StringValue(experiment["slot_id"]))
+	if slotAttempt := jsonutil.IntValue(experiment["slot_attempt"]); slotAttempt > 0 {
+		out["slot_attempt"] = slotAttempt
+	} else {
+		out["slot_attempt"] = nil
+	}
 }
 
 func addRerunManifestFields(out map[string]any, meta map[string]any, decision map[string]any) {

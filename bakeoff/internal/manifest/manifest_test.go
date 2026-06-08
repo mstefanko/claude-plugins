@@ -183,6 +183,68 @@ func TestWriteRunManifestProviderSummaryKeepsRawAndAddsCompactStatus(t *testing.
 	}
 }
 
+func TestWriteRunManifestHoistsExperimentFields(t *testing.T) {
+	runDir := filepath.Join(t.TempDir(), "runs", "r1")
+	writeMinimalRun(t, runDir)
+	writeJSON(t, filepath.Join(runDir, "meta.json"), map[string]any{
+		"run_id":          "r1",
+		"type":            "gather",
+		"resolved_models": map[string]any{},
+		"experiment": map[string]any{
+			"id":               "review-auth",
+			"task_id":          "auth-review",
+			"condition_id":     "pairwise.security",
+			"run_kind":         "pairwise",
+			"repetition_index": 2,
+			"slot_id":          "security",
+			"slot_attempt":     1,
+		},
+	})
+
+	value, err := manifest.WriteRunManifest(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]any{
+		"experiment_id":    "review-auth",
+		"task_id":          "auth-review",
+		"condition_id":     "pairwise.security",
+		"run_kind":         "pairwise",
+		"repetition_index": 2,
+		"slot_id":          "security",
+		"slot_attempt":     1,
+	} {
+		if value[key] != want {
+			t.Fatalf("%s = %#v, want %#v in %#v", key, value[key], want, value)
+		}
+	}
+}
+
+func TestWriteRunManifestHoistsNullableExperimentSlotFields(t *testing.T) {
+	runDir := filepath.Join(t.TempDir(), "runs", "r1")
+	writeMinimalRun(t, runDir)
+	writeJSON(t, filepath.Join(runDir, "meta.json"), map[string]any{
+		"run_id":          "r1",
+		"type":            "gather",
+		"resolved_models": map[string]any{},
+		"experiment": map[string]any{
+			"id":               "review-auth",
+			"task_id":          "auth-review",
+			"condition_id":     "pairwise.security",
+			"run_kind":         "pairwise",
+			"repetition_index": 1,
+		},
+	})
+
+	value, err := manifest.WriteRunManifest(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value["experiment_id"] != "review-auth" || value["slot_id"] != nil || value["slot_attempt"] != nil {
+		t.Fatalf("experiment fields = %#v", value)
+	}
+}
+
 func TestWriteRunManifestAddsDerivedLocalTelemetry(t *testing.T) {
 	runDir := filepath.Join(t.TempDir(), "runs", "r1")
 	writeMinimalRun(t, runDir)
@@ -864,6 +926,30 @@ func TestRowForLSProjectsTriageAndRerunFields(t *testing.T) {
 	triageRow := row["triage"].(map[string]any)
 	if triageRow["state"] != "yes" || triageRow["item_count"] != 2 || triageRow["highest_severity"] != "medium" {
 		t.Fatalf("triage row = %#v", triageRow)
+	}
+}
+
+func TestRowForLSProjectsExperimentFields(t *testing.T) {
+	runDir := filepath.Join(t.TempDir(), "runs", "r1")
+	writeJSON(t, filepath.Join(runDir, "manifest.json"), map[string]any{
+		"schema_version":   manifest.SchemaVersion,
+		"run_id":           "r1",
+		"type":             "gather",
+		"decision_kind":    "structured_union",
+		"finished_at":      "2026-05-25T00:00:00Z",
+		"experiment_id":    "review-auth",
+		"task_id":          "auth-review",
+		"condition_id":     "pairwise.security",
+		"run_kind":         "pairwise",
+		"repetition_index": 1,
+		"artifacts":        map[string]any{"report": "report.md"},
+		"triage":           map[string]any{"state": "no"},
+	})
+	writeText(t, filepath.Join(runDir, "report.md"), "# report\n")
+
+	row := manifest.RowForLS(runDir)
+	if row["experiment_id"] != "review-auth" || row["task_id"] != "auth-review" || row["condition_id"] != "pairwise.security" || row["run_kind"] != "pairwise" || row["repetition_index"] != 1 || row["slot_id"] != nil || row["slot_attempt"] != nil {
+		t.Fatalf("ls row = %#v", row)
 	}
 }
 

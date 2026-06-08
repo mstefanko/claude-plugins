@@ -83,6 +83,7 @@ as the documented starting point.
 | `scope_policy` | `advisory`, `best_effort`, or `required`, or an object with `enforcement` and optional `repo_layout`. Defaults to `best_effort` with repo layout enabled when omitted. |
 | `facet` | Optional task filter, commonly used for code review. |
 | `build` | Required only when `type: "build"`. |
+| `experiment` | Optional comparability labels for external repetition or study harnesses. Metadata only; it does not schedule, retry, or change judging. |
 
 Provider participants require `id`, `backend`, and `model`; provider `scope`
 defaults to `mixed` when omitted. Valid backends are `claude`, `codex`,
@@ -162,6 +163,44 @@ what evidence to prioritize.
 Run ledgers keep the full facet object in `meta.facet`. Manifests also expose
 `manifest.facet_id`, which is only the hoisted `meta.facet.id` used by list and
 filter views.
+
+## Experiment Labels
+
+`experiment` is an optional closed object for runs that belong to an external
+study or repetition loop. It labels an ordinary Bakeoff run; it does not change
+provider count, prompts, judges, worktrees, retry behavior, `latest`, or run
+layout. External scripts own scheduling, retries, aggregation, statistics,
+human labels, and paper tables.
+
+```json
+{
+  "experiment": {
+    "id": "review-auth",
+    "task_id": "auth-review",
+    "condition_id": "pairwise.security",
+    "run_kind": "pairwise",
+    "repetition_index": 1,
+    "slot_id": "security",
+    "slot_attempt": 1
+  }
+}
+```
+
+Required fields are `id`, `task_id`, `condition_id`, `run_kind`, and
+`repetition_index`. Optional fields are `slot_id` and `slot_attempt`.
+Id-like fields use the same slug shape as run ids:
+`^[A-Za-z0-9][A-Za-z0-9._-]*$`. `repetition_index` and `slot_attempt` are
+1-based positive integers, and `slot_attempt` requires `slot_id`.
+
+`run_kind` is one of `pairwise`, `multi_lens_child`, `split_child`, `rerun`,
+or `ad_hoc`. `single_agent_baseline` is reserved for a future complete
+baseline mode and is rejected in this version.
+
+Run ledgers copy the full object into `meta.experiment`. Manifests hoist
+`experiment_id`, `task_id`, `condition_id`, `run_kind`, `repetition_index`,
+`slot_id`, and `slot_attempt`; `slot_id` and `slot_attempt` are null when the
+experiment is present but the optional slot fields are absent. Older runs
+without `experiment` omit these fields.
 
 The `code-review` facet is the standard review shape:
 
