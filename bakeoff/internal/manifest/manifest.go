@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/artifact"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/buildinfo"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/fsutil"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/jsonutil"
@@ -119,7 +120,7 @@ func BuildRunManifest(runDir string) (map[string]any, error) {
 		"artifacts":               artifacts,
 		"artifact_fingerprints":   artifactFingerprintsForType(runDir, runType),
 	}
-	addExperimentManifestFields(out, meta)
+	addExperimentManifestFields(out, meta, workOrder)
 	addRerunManifestFields(out, meta, decision)
 	if isEscalationRun(meta, decision) {
 		addEscalationManifestFields(out, meta, decision, workOrder)
@@ -381,9 +382,12 @@ func isEscalationRun(meta map[string]any, decision map[string]any) bool {
 	return jsonutil.StringValue(meta["type"]) == "escalation" || jsonutil.StringValue(decision["mode"]) == "escalation"
 }
 
-func addExperimentManifestFields(out map[string]any, meta map[string]any) {
+func addExperimentManifestFields(out map[string]any, meta map[string]any, workOrder map[string]any) {
 	experiment, ok := meta["experiment"].(map[string]any)
-	if !ok {
+	if !ok || len(experiment) == 0 {
+		experiment, ok = workOrder["experiment"].(map[string]any)
+	}
+	if !ok || len(experiment) == 0 {
 		return
 	}
 	if id := jsonutil.StringValue(experiment["id"]); id != "" {
@@ -472,7 +476,7 @@ func telemetrySummary(runDir string, workOrder map[string]any, meta map[string]a
 			"family_relation":    judgeFamilyRelation,
 			"ran":                truthy(decision["judge_ran"]),
 			"completed":          truthy(decision["judge_completed"]),
-			"selection_basis":    nilIfEmpty(jsonutil.StringValue(decision["selection_basis"])),
+			"selection_basis":    nilIfEmpty(firstNonEmpty(jsonutil.StringValue(decision["selection_basis"]), jsonutil.StringValue(decision["spine_tiebreak"]))),
 			"winner_backend":     nilIfEmpty(winnerBackend),
 			"winner_family":      winnerFamily,
 			"order_maps":         orderMaps,
@@ -666,11 +670,15 @@ func outputTruncationCount(runDir string, runType string, decision map[string]an
 		if jsonutil.BoolValue(obj["stdout_truncated"]) {
 			count++
 		}
-		if jsonutil.BoolValue(obj["stderr_truncated"]) {
+		if jsonutil.BoolValue(obj["stderr_truncated"]) && !diagnosticStderrOnly(obj) {
 			count++
 		}
 	}
 	return count
+}
+
+func diagnosticStderrOnly(status map[string]any) bool {
+	return jsonutil.StringValue(status["stderr_kind"]) == "diagnostic" && artifact.ProviderSucceeded(status)
 }
 
 func buildDiagnosticsOutputTruncationCount(runDir string) (int, bool) {
@@ -1232,6 +1240,15 @@ func nilIfEmpty(value string) any {
 		return nil
 	}
 	return value
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func shortError(err error) string {

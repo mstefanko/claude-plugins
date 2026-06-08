@@ -302,6 +302,19 @@ func TestExperimentValidationAcceptsTrimmedMetadata(t *testing.T) {
 	}
 }
 
+func TestExperimentMapIncludesNullableSlotFields(t *testing.T) {
+	got := ExperimentMap(&ExperimentSpec{
+		ID:              "review-auth",
+		TaskID:          "auth-review",
+		ConditionID:     "pairwise.security",
+		RunKind:         "pairwise",
+		RepetitionIndex: 1,
+	})
+	if got["slot_id"] != nil || got["slot_attempt"] != nil {
+		t.Fatalf("optional slot fields should be explicit nulls: %#v", got)
+	}
+}
+
 func TestExperimentValidationRejectsBadMetadata(t *testing.T) {
 	tests := []struct {
 		name string

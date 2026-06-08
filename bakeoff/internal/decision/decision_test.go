@@ -89,6 +89,27 @@ func TestGatherStructuredUnionMarksSuccessfulJudgeComplete(t *testing.T) {
 	}
 }
 
+func TestResolveAnalyzeRecordsSelectionBasis(t *testing.T) {
+	decision := ResolveAnalyze(
+		map[string]any{"mode": "analyze", "caveats": []string{}},
+		map[string]map[string]any{},
+		map[string]map[string]any{
+			"pass1": {"spine_winner": "A", "rationale": "A wins"},
+			"pass2": {"spine_winner": "B", "rationale": "B maps to the same provider"},
+		},
+		map[string]string{"A": "claude", "B": "codex"},
+		map[string]string{"A": "codex", "B": "claude"},
+		[]string{"claude", "codex"},
+	)
+
+	if decision["decision_kind"] != "pick_winner" || decision["canonical_winner"] != "claude" {
+		t.Fatalf("decision = %#v", decision)
+	}
+	if decision["spine_tiebreak"] != "swap_agreement" || decision["selection_basis"] != "swap_agreement" {
+		t.Fatalf("selection fields = %#v", decision)
+	}
+}
+
 func TestResolveCompareTieSetsSelectionStall(t *testing.T) {
 	base := map[string]any{"mode": "compare", "provider_statuses": map[string]any{}}
 	decision := ResolveCompare(base, map[string]map[string]any{

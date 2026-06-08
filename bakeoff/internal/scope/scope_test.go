@@ -49,6 +49,9 @@ func TestBuildExecutionForCodexCodebase(t *testing.T) {
 	if execution.CWD != "/work" {
 		t.Fatalf("cwd = %q", execution.CWD)
 	}
+	if execution.Metadata["enforcement_level"] != "enforced" || execution.Metadata["fallback_reason"] != nil {
+		t.Fatalf("codex controls should be recorded as enforced: %#v", execution.Metadata)
+	}
 }
 
 func TestBuildExecutionForClaudeAndCodexWebScopes(t *testing.T) {

@@ -25,6 +25,7 @@ type Result struct {
 	RunID             string            `json:"run_id"`
 	RunDir            string            `json:"run_dir"`
 	Manifest          ManifestStatus    `json:"manifest"`
+	Experiment        map[string]any    `json:"experiment,omitempty"`
 	RequiredArtifacts RequiredArtifacts `json:"required_artifacts"`
 	Fingerprints      Fingerprints      `json:"fingerprints"`
 	Triage            TriageStatus      `json:"triage"`
@@ -96,8 +97,13 @@ func Run(runDir string, displayOutDir string) Result {
 	if runTypeErr != nil {
 		problems = append(problems, runTypeErr.Error())
 	}
+	decision := readOptionalObject(filepath.Join(runDir, "decision.json"))
+	if (loadedManifest != nil && loadedManifest.RunMode == workorder.RunModeSingleProvider) ||
+		jsonutil.StringValue(decision["run_mode"]) == workorder.RunModeSingleProvider {
+		problems = append(problems, validateSingleProviderDecision(decision)...)
+	}
 	requiredArtifacts := manifest.RequiredArtifactsForType(runType)
-	requiredArtifacts = append(requiredArtifacts, dynamicRequiredArtifacts(runDir, runType)...)
+	requiredArtifacts = append(requiredArtifacts, dynamicRequiredArtifacts(runType, decision)...)
 	missingRequired := []string{}
 	for _, relative := range requiredArtifacts {
 		if !fsutil.FileExists(filepath.Join(runDir, relative)) {
@@ -167,6 +173,7 @@ func Run(runDir string, displayOutDir string) Result {
 		RunID:         filepath.Base(runDir),
 		RunDir:        runDir,
 		Manifest:      ManifestStatus{Status: manifestStatus, Path: manifestPath},
+		Experiment:    loadedManifest.ExperimentMap(),
 		RequiredArtifacts: RequiredArtifacts{
 			Status:  requiredStatus,
 			Checked: requiredArtifacts,
@@ -186,7 +193,47 @@ func Run(runDir string, displayOutDir string) Result {
 type manifestDocument struct {
 	SchemaVersion        int                         `json:"schema_version"`
 	RunID                string                      `json:"run_id"`
+	RunMode              string                      `json:"run_mode"`
+	ExperimentID         *string                     `json:"experiment_id"`
+	TaskID               *string                     `json:"task_id"`
+	ConditionID          *string                     `json:"condition_id"`
+	RunKind              *string                     `json:"run_kind"`
+	RepetitionIndex      *int                        `json:"repetition_index"`
+	SlotID               *string                     `json:"slot_id"`
+	SlotAttempt          *int                        `json:"slot_attempt"`
 	ArtifactFingerprints map[string]fingerprintEntry `json:"artifact_fingerprints"`
+}
+
+func (m *manifestDocument) ExperimentMap() map[string]any {
+	if m == nil || m.ExperimentID == nil {
+		return nil
+	}
+	out := map[string]any{
+		"id":               stringPtrValue(m.ExperimentID),
+		"task_id":          stringPtrValue(m.TaskID),
+		"condition_id":     stringPtrValue(m.ConditionID),
+		"run_kind":         stringPtrValue(m.RunKind),
+		"repetition_index": nil,
+		"slot_id":          nil,
+		"slot_attempt":     nil,
+	}
+	if m.RepetitionIndex != nil {
+		out["repetition_index"] = *m.RepetitionIndex
+	}
+	if m.SlotID != nil && *m.SlotID != "" {
+		out["slot_id"] = *m.SlotID
+	}
+	if m.SlotAttempt != nil {
+		out["slot_attempt"] = *m.SlotAttempt
+	}
+	return out
+}
+
+func stringPtrValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 type fingerprintEntry struct {
@@ -286,11 +333,10 @@ func reviewContextRequested(runDir string) bool {
 	return jsonutil.BoolValue(meta["review_context_requested"])
 }
 
-func dynamicRequiredArtifacts(runDir string, runType string) []string {
+func dynamicRequiredArtifacts(runType string, decision map[string]any) []string {
 	if runType != "build" {
 		return nil
 	}
-	decision := readOptionalObject(filepath.Join(runDir, "decision.json"))
 	providerID := strings.TrimSpace(jsonutil.StringValue(decision["selected_patch_provider"]))
 	if providerID == "" {
 		providerID = strings.TrimSpace(jsonutil.StringValue(decision["canonical_winner"]))
@@ -302,6 +348,29 @@ func dynamicRequiredArtifacts(runDir string, runType string) []string {
 		filepath.ToSlash(filepath.Join("providers", providerID, "build", "diff.patch")),
 		filepath.ToSlash(filepath.Join("providers", providerID, "build", "verify", "result.json")),
 	}
+}
+
+func validateSingleProviderDecision(decision map[string]any) []string {
+	if len(decision) == 0 {
+		return []string{"invalid single-provider decision: missing or unreadable decision.json"}
+	}
+	var problems []string
+	kind := jsonutil.StringValue(decision["decision_kind"])
+	if kind != "single_provider_result" && kind != "single_provider_failed" {
+		problems = append(problems, "invalid single-provider decision_kind: "+kind)
+	}
+	if jsonutil.StringValue(decision["canonical_winner"]) != "" {
+		problems = append(problems, "single-provider decision must not set canonical_winner")
+	}
+	if jsonutil.StringValue(decision["single_provider"]) == "" {
+		problems = append(problems, "single-provider decision must set single_provider")
+	}
+	for _, key := range []string{"judge_ran", "judge_attempted", "judge_completed"} {
+		if jsonutil.BoolValue(decision[key]) {
+			problems = append(problems, "single-provider decision must not set "+key+" true")
+		}
+	}
+	return problems
 }
 
 func readOptionalObject(path string) map[string]any {

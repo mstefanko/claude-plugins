@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "id": "live-single-provider-build",
+  "type": "build",
+  "run_mode": "single_provider",
+  "goal": "Add a --run-mode pairwise|single_provider flag to bakeoff draft-build that accepts exactly one --provider only in single_provider mode, preserving default pairwise behavior.",
+  "background": [
+    "Implement a small CLI improvement so `bakeoff draft-build` exposes `--run-mode pairwise|single_provider`. Default (flag omitted) must remain pairwise with current behavior.",
+    "Acceptance criterion 1: `draft-build --run-mode single_provider` emits validated build JSON with run_mode single_provider and exactly one provider.",
+    "Acceptance criterion 2: pairwise mode still accepts zero --provider flags (canonical default pair) or exactly two --provider flags.",
+    "Acceptance criterion 3: invalid provider counts produce validation errors whose message names the offending run mode.",
+    "Edit scope: internal/commands/draftbuildcmd/draft_build.go, internal/commands/draftbuildcmd/draft_build_test.go, internal/workorder/draft.go, internal/workorder/draft_test.go, and docs/cli-reference.md if a flag reference change is warranted.",
+    "Bakeoff captures the candidate patch from an isolated worktree and will not apply it to this checkout."
+  ],
+  "providers": [
+    { "id": "codex", "backend": "codex", "model": "gpt-5.5", "scope": "codebase", "effort": "high" }
+  ],
+  "judge": { "backend": "claude", "model": "opus", "effort": "xhigh" },
+  "scope_policy": { "enforcement": "best_effort" },
+  "build": {
+    "base_ref": "HEAD",
+    "comparison_goal": "Prefer the patch that satisfies the acceptance criteria with the smallest maintainable change.",
+    "verify": [
+      {
+        "id": "tests",
+        "kind": "gate",
+        "argv": ["go", "test", "./internal/commands/draftbuildcmd", "./internal/workorder"],
+        "wall_clock_seconds": 300,
+        "max_output_bytes": 60000
+      }
+    ]
+  },
+  "budgets": {
+    "wall_clock_seconds": 1200,
+    "max_output_bytes": 80000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 80000
+  },
+  "experiment": {
+    "id": "bakeoff-live-build",
+    "task_id": "draft-build-run-mode-flag",
+    "condition_id": "codex-single-build",
+    "run_kind": "single_agent_baseline",
+    "repetition_index": 1
+  }
+}

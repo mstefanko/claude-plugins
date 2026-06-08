@@ -225,6 +225,64 @@ func TestRunRequiresBuildSelectedPatchProviderArtifacts(t *testing.T) {
 	}
 }
 
+func TestRunProjectsExperimentFromManifest(t *testing.T) {
+	runDir := writeVerifyBaseRun(t)
+	if err := workorder.WriteJSONAtomic(filepath.Join(runDir, "manifest.json"), map[string]any{
+		"schema_version":        manifest.SchemaVersion,
+		"run_id":                filepath.Base(runDir),
+		"type":                  "gather",
+		"experiment_id":         "review-auth",
+		"task_id":               "auth-review",
+		"condition_id":          "pairwise.security",
+		"run_kind":              "pairwise",
+		"repetition_index":      1,
+		"slot_id":               nil,
+		"slot_attempt":          nil,
+		"artifact_fingerprints": map[string]any{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	result := Run(runDir, "runs")
+	if result.ExitCode != 0 {
+		t.Fatalf("ExitCode = %d problems = %#v", result.ExitCode, result.Problems)
+	}
+	if result.Experiment["id"] != "review-auth" || result.Experiment["task_id"] != "auth-review" || result.Experiment["slot_id"] != nil || result.Experiment["slot_attempt"] != nil {
+		t.Fatalf("experiment = %#v", result.Experiment)
+	}
+}
+
+func TestRunValidatesSingleProviderDecisionSemantics(t *testing.T) {
+	runDir := writeVerifyBaseRunOfType(t, "gather", map[string]any{
+		"decision_kind":    "single_provider_result",
+		"run_mode":         "single_provider",
+		"single_provider":  "claude",
+		"canonical_winner": "claude",
+		"judge_ran":        true,
+	})
+	if err := workorder.WriteJSONAtomic(filepath.Join(runDir, "manifest.json"), map[string]any{
+		"schema_version":        manifest.SchemaVersion,
+		"run_id":                filepath.Base(runDir),
+		"type":                  "gather",
+		"run_mode":              "single_provider",
+		"single_provider":       "claude",
+		"artifact_fingerprints": map[string]any{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	result := Run(runDir, "runs")
+	if result.ExitCode == 0 {
+		t.Fatalf("ExitCode = 0, want semantic failures")
+	}
+	got := strings.Join(result.Problems, "\n")
+	for _, want := range []string{"single-provider decision must not set canonical_winner", "single-provider decision must not set judge_ran true"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in problems: %#v", want, result.Problems)
+		}
+	}
+}
+
 func TestRunDoesNotRequireBuildWinnerArtifactsWithoutCanonicalWinner(t *testing.T) {
 	runDir := writeVerifyBaseRunOfType(t, "build", map[string]any{
 		"decision_kind":    "tie",

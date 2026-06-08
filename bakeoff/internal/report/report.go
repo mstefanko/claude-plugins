@@ -51,7 +51,7 @@ func Render(wo *workorder.WorkOrder, decision map[string]any, workerResults map[
 		"# Bakeoff Report: " + wo.ID,
 		"",
 	}
-	lines = append(lines, reportGlossary()...)
+	lines = append(lines, reportGlossary(decision, false)...)
 	lines = append(lines, renderJudgeFailureStatus(decision, opts)...)
 	lines = append(lines, renderOutcome(wo, decision, workerResults, opts)...)
 	lines = append(lines, renderSelectorConfidence(decision)...)
@@ -76,7 +76,7 @@ func RenderEscalation(wo *workorder.WorkOrder, decision map[string]any, addedFin
 		"# Bakeoff Escalation Report: " + wo.ID,
 		"",
 	}
-	lines = append(lines, reportGlossary()...)
+	lines = append(lines, reportGlossary(decision, true)...)
 	lines = append(lines, renderEscalationAnswer(decision, opts)...)
 	lines = append(lines, "## Source Run", "")
 	lines = append(lines, "- Run: `"+opts.SourceRunID+"`")
@@ -1110,14 +1110,23 @@ func disputeItemLines(obj map[string]any) ([]string, bool) {
 	return lines, true
 }
 
-func reportGlossary() []string {
-	return []string{
+func reportGlossary(decision map[string]any, escalation bool) []string {
+	idParts := []string{"`F-NNN`: report finding"}
+	if jsonutil.BoolValue(decision["judge_ran"]) {
+		idParts = append(idParts, "`R-NNN`: judge rationale")
+	}
+	if escalation {
+		idParts = append(idParts, "`D-NNN`: escalation dispute point")
+	}
+	lines := []string{
 		"## Glossary",
 		"",
-		"- `F-NNN`: report finding; `R-NNN`: judge rationale; `D-NNN`: escalation dispute point.",
-		"- Kept-from-nonwinner / additions-from-loser sections are material from the non-selected provider that the report preserved.",
-		"",
+		"- " + strings.Join(idParts, "; ") + ".",
 	}
+	if jsonutil.StringValue(decision["run_mode"]) != workorder.RunModeSingleProvider {
+		lines = append(lines, "- Kept-from-nonwinner / additions-from-loser sections are material from the non-selected provider that the report preserved.")
+	}
+	return append(lines, "")
 }
 
 func statusGloss(status string) string {

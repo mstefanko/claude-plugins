@@ -16,6 +16,7 @@ import (
 
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/apperror"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/buildinfo"
+	"github.com/mstefanko/claude-plugins/bakeoff/internal/fsutil"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/ledger"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/output"
 	"github.com/mstefanko/claude-plugins/bakeoff/internal/provider"
@@ -111,6 +112,100 @@ func TestForceReviewContextCaptureFailurePreservesExistingRun(t *testing.T) {
 	}
 	if string(data) != "keep me\n" {
 		t.Fatalf("existing run sentinel changed: %q", string(data))
+	}
+}
+
+func TestRunResearchReclaimsIncompleteRunDirWithoutForce(t *testing.T) {
+	root := t.TempDir()
+	fakeBin := filepath.Join(root, "bin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeExecutable(t, filepath.Join(fakeBin, "claude"), `#!/bin/sh
+case " $* " in
+  *" --version "*) printf 'claude fake\n'; exit 0 ;;
+  *" --help "*) printf '%s\n' '--allowedTools --disallowedTools'; exit 0 ;;
+esac
+cat >/dev/null
+cat <<'JSON'
+<final_json>{"status":"complete","claims":[{"id":"R-001","claim":"Recovered run.","evidence":["fake:1"],"severity":"medium","confidence":"high"}],"conflicts":[],"unknowns":[],"recommended_next_checks":[]}</final_json>
+JSON
+`)
+	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	workOrderPath := filepath.Join(root, "work-order.json")
+	if err := workorder.WriteJSONAtomic(workOrderPath, map[string]any{
+		"schema_version": 1,
+		"id":             "recover-incomplete",
+		"type":           "gather",
+		"run_mode":       "single_provider",
+		"goal":           "Recover an incomplete run.",
+		"background":     "Incomplete run recovery smoke test.",
+		"providers": []map[string]any{
+			{"id": "claude", "backend": "claude", "model": "claude-test", "scope": "codebase"},
+		},
+		"judge":   map[string]any{"backend": "claude", "model": "judge-test"},
+		"budgets": map[string]any{"wall_clock_seconds": 3, "max_output_bytes": 20000, "heartbeat_seconds": 0},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	outDir := filepath.Join(root, "runs")
+	runDir := filepath.Join(outDir, "recover-incomplete")
+	if err := os.MkdirAll(runDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := workorder.WriteTextAtomic(filepath.Join(runDir, "work-order.json"), "{}"); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	factory := researchTestFactory{streams: output.NewStreams(&out, &errOut)}
+	if err := RunResearch(context.Background(), factory, &ResearchOptions{WorkOrder: workOrderPath, Out: outDir, RunID: "recover-incomplete", Quiet: true, NoTriage: true}); err != nil {
+		t.Fatalf("RunResearch returned error: %v\nstdout:\n%s\nstderr:\n%s", err, out.String(), errOut.String())
+	}
+	if !fsutil.FileExists(filepath.Join(runDir, "manifest.json")) {
+		t.Fatalf("recovered run did not complete")
+	}
+}
+
+func TestRunResearchDoesNotReclaimIncompleteRunDirWithUnknownFiles(t *testing.T) {
+	root := t.TempDir()
+	workOrderPath := filepath.Join(root, "work-order.json")
+	if err := workorder.WriteJSONAtomic(workOrderPath, map[string]any{
+		"schema_version": 1,
+		"id":             "preserve-unknown",
+		"type":           "gather",
+		"run_mode":       "single_provider",
+		"goal":           "Do not reclaim unknown files.",
+		"background":     "Preserve unknown files in incomplete run directories.",
+		"providers": []map[string]any{
+			{"id": "claude", "backend": "claude", "model": "claude-test", "scope": "codebase"},
+		},
+		"judge":   map[string]any{"backend": "claude", "model": "judge-test"},
+		"budgets": map[string]any{"wall_clock_seconds": 1, "max_output_bytes": 1000, "heartbeat_seconds": 0},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	outDir := filepath.Join(root, "runs")
+	runDir := filepath.Join(outDir, "preserve-unknown")
+	if err := os.MkdirAll(runDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := workorder.WriteTextAtomic(filepath.Join(runDir, "work-order.json"), "{}"); err != nil {
+		t.Fatal(err)
+	}
+	if err := workorder.WriteTextAtomic(filepath.Join(runDir, "notes.txt"), "keep\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	factory := researchTestFactory{streams: output.NewStreams(&out, &errOut)}
+	err := RunResearch(context.Background(), factory, &ResearchOptions{WorkOrder: workOrderPath, Out: outDir, RunID: "preserve-unknown", Quiet: true, NoTriage: true})
+	if err == nil || !strings.Contains(err.Error(), "already exists; use --force to replace") {
+		t.Fatalf("expected existing-run validation error, got %v", err)
+	}
+	if !fsutil.FileExists(filepath.Join(runDir, "notes.txt")) {
+		t.Fatalf("unknown file was removed")
 	}
 }
 

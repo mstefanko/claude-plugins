@@ -43,7 +43,7 @@ func TestValidateProsePathsSkipsSlashDelimitedProse(t *testing.T) {
 	writeFile(t, filepath.Join(root, "internal", "report", "report.go"), "package report\n")
 	wo := validWorkOrder(t)
 	wo.Goal = "Tune include/exclude/focus and AI/LLM wording for build/research work orders."
-	wo.Background = "Keep yes/no tradeoffs clear; decision/manifest/triage and files/tests are prose here. Audit verify/manifest, findings/report, build/verify, artifact/manifest, and verifier/manifest wording."
+	wo.Background = "Keep yes/no tradeoffs clear; decision/manifest/triage and meta/manifest/ls/summary are prose here. Audit verify/manifest, findings/report, build/verify, artifact/manifest, and verifier/manifest wording."
 
 	warnings, err := ValidateProsePaths(root, wo)
 	if err != nil {

@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "id": "live-single-provider-plan-review",
+  "type": "analyze",
+  "goal": "Review docs/single-provider-run-mode-option-4-implementation-plan-2026-06-08.md as a PLAN REVIEW, not a code review. Return actionable plan defects: assumptions, steps, or claims that are now stale, missing, or contradicted by the implemented June 8 single-provider run mode. For each defect give section/line evidence in the plan AND the concrete evidence from current code/docs, then state the required plan change. Do not implement code and do not rewrite the whole plan.",
+  "background": "Target plan: docs/single-provider-run-mode-option-4-implementation-plan-2026-06-08.md (883 lines, status: proposed). A single-provider implementation has since landed, so parts of the plan may be stale or superseded. Compare the plan against current evidence in: internal/workorder/workorder.go, internal/commands/researchcmd/run.go, internal/decision/decision.go, internal/manifest/manifest.go, internal/verify/verify.go, docs/work-orders.md, docs/cli-reference.md, docs/release-notes.md. Focus on: (1) plan steps already implemented differently or already done; (2) schema/field/flag/CLI names in the plan that don't match what shipped; (3) decision/manifest/verify behavior the plan assumes but code now contradicts; (4) gaps the plan never covered that the implementation revealed. Deliverable: a defect list, each with plan section/line + current-evidence file/line + the required plan change. Out of scope: code review of the implementation quality, and rewriting the plan.",
+  "providers": [
+    { "id": "claude", "backend": "claude", "model": "sonnet", "scope": "codebase", "effort": "high" },
+    { "id": "codex", "backend": "codex", "model": "gpt-5.5", "scope": "codebase", "effort": "high" }
+  ],
+  "judge": { "backend": "claude", "model": "opus", "effort": "xhigh" },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  },
+  "scope_policy": { "enforcement": "best_effort" }
+}

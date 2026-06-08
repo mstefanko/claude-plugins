@@ -254,7 +254,8 @@ is set. The generated context includes metadata, diffstat, and changed files;
 `--diff` also includes a bounded patch.
 
 When the work order includes `experiment`, `research --json` includes the same
-trimmed `experiment` object in its final summary.
+trimmed `experiment` object in its final summary. Optional `slot_id` and
+`slot_attempt` are explicit nulls when absent.
 
 When the work order sets `run_mode: "single_provider"`, `research` runs exactly
 one provider, skips the judge, emits `decision_kind:
@@ -291,7 +292,8 @@ Metric selectors remain conservative: `metric.min_delta_percent` is required,
 emit a final aggregate JSON object with `n`.
 
 When the work order includes `experiment`, `build --json` includes the same
-trimmed `experiment` object in its final summary.
+trimmed `experiment` object in its final summary. Optional `slot_id` and
+`slot_attempt` are explicit nulls when absent.
 
 Single-provider build work orders run one provider worktree and skip the build
 judge. When the provider produces a captured patch that passes gates, the JSON
@@ -304,8 +306,10 @@ leaving `winner` / `canonical_winner` null.
 bakeoff rerun SOURCE_RUN_ID [flags]
 ```
 
-Replays a previous run's `work-order.json` with a fresh run id. Build reruns run
-against the current source tree, not a snapshot of the original checkout.
+Replays a previous run's `work-order.json` with a fresh run id. Experiment
+labels are replayed verbatim; external study harnesses own new attempt labels
+by generating fresh work orders and explicit run ids. Build reruns run against
+the current source tree, not a snapshot of the original checkout.
 
 Flags:
 
@@ -454,7 +458,9 @@ In `--json` mode, escalation rows include `source_run_id`, `source_type`,
 `escalation_mode`, and `added_provider`. These keys are omitted from source
 rows. Experiment rows include `experiment_id`, `task_id`, `condition_id`,
 `run_kind`, `repetition_index`, `slot_id`, and `slot_attempt`; older
-non-experiment rows omit those fields.
+non-experiment rows omit those fields. Use `--json` and post-filter these
+projected fields when filtering by task, run kind, repetition, slot, or slot
+attempt; the human and flag surface intentionally stays compact.
 
 ## `bakeoff runs verify`
 
@@ -473,7 +479,10 @@ Flags:
 | `--json` | Emit a parseable JSON verification report. |
 
 `RUN_ID` can be `latest`. Path-like run ids are allowed only when they stay
-inside `--out`.
+inside `--out`. In `--json` mode, runs with experiment labels include a nested
+`experiment` object with `id`, `task_id`, `condition_id`, `run_kind`,
+`repetition_index`, `slot_id`, and `slot_attempt`; optional slot fields are
+null when absent.
 
 ## `bakeoff doctor`
 
@@ -550,10 +559,12 @@ family relation; an unrecognized non-empty judge backend uses family
 `unknown`.
 
 `artifacts` records local counts such as prompt trims and output truncation
-events. Build diagnostics are authoritative when present. `triage` records
-state, item count, and highest actionable severity. Highest severity only rolls
-up `real_issue` items; false positives, evidence gaps, and needs-repro items do
-not raise the actionable severity.
+events. Successful provider stderr that is classified as diagnostic noise does
+not raise the output-truncation alarm; stdout truncation and non-diagnostic
+stderr truncation still do. Build diagnostics are authoritative when present.
+`triage` records state, item count, and highest actionable severity. Highest
+severity only rolls up `real_issue` items; false positives, evidence gaps, and
+needs-repro items do not raise the actionable severity.
 
 ## Manifest Data Contract
 

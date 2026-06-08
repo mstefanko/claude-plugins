@@ -107,7 +107,7 @@ func BuildExecution(ctx context.Context, registry *provider.CapabilityRegistry, 
 	}
 
 	enforcementLevel := "partial"
-	if requestedScope == "mixed" {
+	if requestedScope == "mixed" || (len(mechanisms) > 0 && len(fallbackReasons) == 0) {
 		enforcementLevel = "enforced"
 	}
 	if len(mechanisms) == 0 {

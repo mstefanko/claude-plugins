@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "id": "live-v2-experiment-plan-review",
+  "type": "gather",
+  "goal": "Review docs/paper-grade-experiment-analysis-implementation-plan-2026-06-05.md for actionable plan defects, comparing each plan claim against the current implementation. Do not implement code or rewrite the plan.",
+  "background": [
+    "Plan under review: docs/paper-grade-experiment-analysis-implementation-plan-2026-06-05.md.",
+    "User goal: a plan review, NOT a code review. Find plan defects that are stale, incomplete, overbuilt, under-tested, or unsupported by current code evidence.",
+    "Current-state evidence to verify the plan against: internal/workorder/workorder.go, internal/manifest/manifest.go, internal/commands/lscmd/ls.go, internal/summary/summary.go, docs/work-orders.md, docs/cli-reference.md, examples/repetition-loop.sh.",
+    "Pay attention to whether 'future' Phase 1-3 work the plan describes (ExperimentSpec, run_kind enum, meta/manifest/ls/summary projection, repetition-loop example) already exists in the cited files, and whether the plan's stated run_kind enum matches the code's experimentRunKinds.",
+    "Return only generic gather claims with id, claim, evidence, severity, and confidence.",
+    "Each claim must start with `Plan: <section>. Issue: ... Failure mode: ... Required plan change: ...`.",
+    "Evidence must cite a plan section/line AND a repo file/line, command output, or `missing evidence`.",
+    "Do not implement code and do not rewrite the whole plan."
+  ],
+  "facet": {
+    "id": "plan-review",
+    "kind": "generic",
+    "focus": "Find plan defects that would cause unsafe, incomplete, incorrect, redundant, or unverifiable implementation, judged against current code evidence.",
+    "include": [
+      "phases or changes the plan presents as new that already exist in current code",
+      "plan claims about current behavior unsupported by or contradicting the cited files",
+      "missing or untestable acceptance criteria",
+      "overbuilt scope or unnecessary rework given existing implementation",
+      "wrong sequencing or hidden dependencies between phases",
+      "under-specified tests, gates, or compatibility guarantees",
+      "enum, schema, or contract mismatches between plan and code"
+    ],
+    "exclude": [
+      "style preferences about plan prose",
+      "new feature ideas outside the stated goal",
+      "implementation code unless needed to explain a plan defect",
+      "speculation without plan citation or repo evidence"
+    ]
+  },
+  "providers": [
+    { "id": "claude", "backend": "claude", "model": "sonnet", "scope": "codebase", "effort": "high" },
+    { "id": "codex", "backend": "codex", "model": "gpt-5.5", "scope": "codebase", "effort": "high" }
+  ],
+  "scope_policy": { "enforcement": "best_effort" },
+  "judge": { "backend": "claude", "model": "opus", "effort": "xhigh" },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  }
+}

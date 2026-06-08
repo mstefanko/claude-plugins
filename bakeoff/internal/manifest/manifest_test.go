@@ -245,6 +245,39 @@ func TestWriteRunManifestHoistsNullableExperimentSlotFields(t *testing.T) {
 	}
 }
 
+func TestWriteRunManifestFallsBackToWorkOrderExperiment(t *testing.T) {
+	runDir := filepath.Join(t.TempDir(), "runs", "r1")
+	writeMinimalRun(t, runDir)
+	writeJSON(t, filepath.Join(runDir, "work-order.json"), map[string]any{
+		"schema_version": 1,
+		"id":             "sample",
+		"type":           "gather",
+		"goal":           "test",
+		"background":     "",
+		"experiment": map[string]any{
+			"id":               "review-auth",
+			"task_id":          "auth-review",
+			"condition_id":     "pairwise.security",
+			"run_kind":         "pairwise",
+			"repetition_index": 3,
+		},
+		"providers": []map[string]any{
+			{"id": "claude", "backend": "claude", "model": "m", "scope": "codebase"},
+			{"id": "codex", "backend": "codex", "model": "m", "scope": "web"},
+		},
+		"judge":   map[string]any{"backend": "claude", "model": "judge"},
+		"budgets": map[string]any{"wall_clock_seconds": 3, "max_output_bytes": 1000},
+	})
+
+	value, err := manifest.WriteRunManifest(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value["experiment_id"] != "review-auth" || value["repetition_index"] != 3 || value["slot_id"] != nil || value["slot_attempt"] != nil {
+		t.Fatalf("experiment fallback fields = %#v", value)
+	}
+}
+
 func TestWriteRunManifestAddsDerivedLocalTelemetry(t *testing.T) {
 	runDir := filepath.Join(t.TempDir(), "runs", "r1")
 	writeMinimalRun(t, runDir)
@@ -583,6 +616,23 @@ func TestWriteRunManifestTelemetryJudgeDecisionMetadata(t *testing.T) {
 			wantOrderMaps:    true,
 			wantJudgePasses:  true,
 		},
+		{
+			name: "analyze tiebreak basis",
+			decision: map[string]any{
+				"decision_kind":     "pick_winner",
+				"spine_tiebreak":    "swap_agreement",
+				"canonical_winner":  "claude",
+				"judge_ran":         true,
+				"judge_completed":   true,
+				"order_maps":        map[string]any{"pass1": map[string]any{"A": "claude", "B": "codex"}, "pass2": map[string]any{"A": "codex", "B": "claude"}},
+				"provider_statuses": map[string]any{"claude": map[string]any{"status": "ok"}, "codex": map[string]any{"status": "ok"}},
+			},
+			wantBasis:        "swap_agreement",
+			wantWinner:       "claude",
+			wantWinnerFamily: provider.ProviderFamilyAnthropic,
+			wantSwap:         true,
+			wantOrderMaps:    true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -890,6 +940,21 @@ func TestBuildManifestTelemetryOutputTruncationCount(t *testing.T) {
 				})
 			},
 			want: 3,
+		},
+		{
+			name: "diagnostic stderr truncation is not alarming",
+			setup: func(t *testing.T, runDir string) {
+				writeJSON(t, filepath.Join(runDir, "decision.json"), map[string]any{
+					"decision_kind":    "pick_winner",
+					"selection_basis":  "gate",
+					"canonical_winner": "claude",
+					"judge_ran":        false,
+					"provider_statuses": map[string]any{
+						"claude": map[string]any{"status": "ok", "stderr_truncated": true, "stderr_kind": "diagnostic"},
+					},
+				})
+			},
+			want: 0,
 		},
 	}
 	for _, tt := range tests {

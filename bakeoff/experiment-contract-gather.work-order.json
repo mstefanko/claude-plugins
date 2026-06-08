@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "id": "experiment-contract-gather",
+  "type": "gather",
+  "run_mode": "pairwise",
+  "goal": "Gather concrete evidence on whether the current experiment-metadata implementation is sufficient for an external repetition harness to drive, identify, and aggregate Bakeoff runs. Do not implement or propose code changes; report findings only.",
+  "background": "Read-only inspection of these files only:\n- examples/repetition-loop.sh (reference external repetition driver)\n- docs/work-orders.md (work-order schema and experiment block docs)\n- docs/cli-reference.md (CLI/run-id/retry surface docs)\n- internal/workorder/workorder.go (experiment metadata struct + validation)\n- internal/manifest/manifest.go (how experiment metadata is projected into run manifests)\n- internal/commands/lscmd/ls.go (run listing/filtering surface)\n- internal/summary/summary.go (JSON summary surface)\n\nReturn concrete, file-and-line-grounded findings on each of these axes:\n1. Validation: which experiment fields exist, which are required vs optional, allowed run_kind values per run_mode, and any gaps that would let an inconsistent or unidentifiable run through.\n2. Manifest projection: whether every experiment field a harness needs (id, task_id, condition_id, run_kind, repetition_index, slot_id, slot_attempt) is faithfully written into the run manifest, and whether anything is dropped or renamed.\n3. ls filtering: whether `ls` can filter/select runs by experiment id, task, condition, repetition, or slot well enough for a harness to enumerate a study's runs.\n4. JSON summaries: whether machine-readable summaries expose the experiment metadata and per-run outcome a harness needs to aggregate results.\n5. Retry/run-id behavior: how run-id assignment, reruns, retries, and slot_attempt interact, and whether a harness can deterministically address and re-drive a specific repetition/slot.\n6. Missing harness-facing docs or tests: gaps in documentation or test coverage that an external repetition harness author would hit.\n\nFor each axis, state what is present, what is missing, and the concrete impact on an external repetition harness. Cite file paths and line numbers. This is a sufficiency assessment, not an implementation task.",
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "sonnet",
+      "scope": "codebase",
+      "effort": "high"
+    },
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "scope": "codebase",
+      "effort": "high"
+    }
+  ],
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "scope_policy": {
+    "enforcement": "best_effort"
+  },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  },
+  "experiment": {
+    "id": "bakeoff-live-experiment-v2",
+    "task_id": "experiment-contract-gather",
+    "condition_id": "pairwise.gather",
+    "run_kind": "pairwise",
+    "repetition_index": 1,
+    "slot_id": "gather",
+    "slot_attempt": 1
+  }
+}

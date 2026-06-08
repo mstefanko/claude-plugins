@@ -147,6 +147,52 @@ func TestRenderIncludesSameModelDuplicateCaveat(t *testing.T) {
 	}
 }
 
+func TestRenderSingleProviderGlossaryOmitsPairwiseTerms(t *testing.T) {
+	text := Render(
+		&workorder.WorkOrder{ID: "single", Type: "gather", RunMode: workorder.RunModeSingleProvider},
+		map[string]any{
+			"mode":              "gather",
+			"run_mode":          workorder.RunModeSingleProvider,
+			"decision_kind":     "single_provider_result",
+			"single_provider":   "claude",
+			"judge_ran":         false,
+			"provider_statuses": map[string]any{},
+		},
+		map[string]map[string]any{},
+		map[string]map[string]any{},
+		RenderOptions{},
+	)
+	for _, forbidden := range []string{"Kept-from-nonwinner", "additions-from-loser", "R-NNN", "D-NNN"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("single-provider glossary contains %q:\n%s", forbidden, text)
+		}
+	}
+	if !strings.Contains(text, "`F-NNN`: report finding") {
+		t.Fatalf("single-provider glossary lost finding id help:\n%s", text)
+	}
+}
+
+func TestRenderPairwiseGlossaryKeepsJudgeAndNonwinnerTerms(t *testing.T) {
+	text := Render(
+		&workorder.WorkOrder{ID: "pairwise", Type: "compare"},
+		map[string]any{
+			"mode":              "compare",
+			"decision_kind":     "pick_winner",
+			"canonical_winner":  "claude",
+			"judge_ran":         true,
+			"provider_statuses": map[string]any{},
+		},
+		map[string]map[string]any{},
+		map[string]map[string]any{},
+		RenderOptions{},
+	)
+	for _, want := range []string{"R-NNN", "Kept-from-nonwinner", "additions-from-loser"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("pairwise glossary missing %q:\n%s", want, text)
+		}
+	}
+}
+
 func TestRenderSelectorConfidenceByResearchMode(t *testing.T) {
 	cases := []struct {
 		name     string

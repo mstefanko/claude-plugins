@@ -399,6 +399,8 @@ func ExperimentMap(experiment *ExperimentSpec) map[string]any {
 		"condition_id":     experiment.ConditionID,
 		"run_kind":         experiment.RunKind,
 		"repetition_index": experiment.RepetitionIndex,
+		"slot_id":          nil,
+		"slot_attempt":     nil,
 	}
 	if experiment.SlotID != "" {
 		out["slot_id"] = experiment.SlotID

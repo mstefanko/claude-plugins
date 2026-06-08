@@ -60,12 +60,19 @@ func RunResearch(ctx context.Context, f commands.Factory, opts *ResearchOptions)
 	replaceRunDir := false
 	if _, err := os.Stat(runDir); err == nil {
 		if !opts.Force {
-			return &apperror.ValidationError{Message: fmt.Sprintf("%s already exists; use --force to replace", runDir)}
+			if researchRunDirIsIncomplete(runDir) {
+				replaceRunDir = true
+			} else {
+				return &apperror.ValidationError{Message: fmt.Sprintf("%s already exists; use --force to replace", runDir)}
+			}
+		} else {
+			if err := ledger.EnsureChildPath(opts.Out, runDir); err != nil {
+				return &apperror.ValidationError{Message: err.Error(), Err: err}
+			}
+			replaceRunDir = true
 		}
-		if err := ledger.EnsureChildPath(opts.Out, runDir); err != nil {
-			return &apperror.ValidationError{Message: err.Error(), Err: err}
-		}
-		replaceRunDir = true
+	} else if !os.IsNotExist(err) {
+		return &apperror.RuntimeError{Err: err}
 	}
 	startedAt := artifact.UTCNow()
 	var reviewContext *reviewcontext.Context
@@ -91,6 +98,9 @@ func RunResearch(ctx context.Context, f commands.Factory, opts *ResearchOptions)
 		metaExtra["review_context_requested"] = true
 	}
 	if replaceRunDir {
+		if err := ledger.EnsureChildPath(opts.Out, runDir); err != nil {
+			return &apperror.ValidationError{Message: err.Error(), Err: err}
+		}
 		if err := os.RemoveAll(runDir); err != nil {
 			return &apperror.RuntimeError{Err: err}
 		}
@@ -214,6 +224,30 @@ func RunResearch(ctx context.Context, f commands.Factory, opts *ResearchOptions)
 		LookupProvider: f.LookupProvider,
 		MetaExtra:      metaExtra,
 	})
+}
+
+func researchRunDirIsIncomplete(runDir string) bool {
+	if !fsutil.FileExists(filepath.Join(runDir, "work-order.json")) ||
+		fsutil.FileExists(filepath.Join(runDir, "decision.json")) ||
+		fsutil.FileExists(filepath.Join(runDir, "manifest.json")) {
+		return false
+	}
+	entries, err := os.ReadDir(runDir)
+	if err != nil {
+		return false
+	}
+	allowed := map[string]bool{
+		"work-order.json":        true,
+		"source-work-order.json": true,
+		"review-context.md":      true,
+		"review-context.json":    true,
+	}
+	for _, entry := range entries {
+		if !allowed[entry.Name()] {
+			return false
+		}
+	}
+	return true
 }
 
 func RunResearchJudgeOnly(ctx context.Context, f commands.Factory, opts *ResearchJudgeOnlyOptions) error {

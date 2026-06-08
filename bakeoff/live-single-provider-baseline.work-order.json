@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "id": "live-single-provider-baseline",
+  "type": "gather",
+  "run_mode": "single_provider",
+  "goal": "Review the intentional single-provider run-mode implementation for actionable correctness, artifact-contract, stale pairwise-wording, and missing-test defects.",
+  "background": [
+    "Review only these files in the current working tree (no diff): internal/workorder/workorder.go, internal/commands/researchcmd/run.go, internal/decision/decision.go, internal/summary/summary.go, internal/manifest/manifest.go, internal/verify/verify.go, docs/work-orders.md, examples/single-provider.work-order.json.",
+    "Focus on the single-provider run mode: judge skipping, triage skipping, decision_kind, canonical_winner, single_provider, and selected_patch_provider.",
+    "Find actionable correctness bugs, artifact-contract mismatches (decision.json/manifest/summary fields), stale pairwise wording left over from two-provider assumptions, and missing or misleading tests for the new behavior.",
+    "Do not implement code; report findings with file:line evidence only."
+  ],
+  "facet": {
+    "id": "code-review",
+    "kind": "generic",
+    "focus": "Find actionable correctness, artifact-contract, stale pairwise-wording, and missing-test defects in the intentional single-provider run-mode implementation.",
+    "include": [
+      "judge-skipping correctness in single_provider mode",
+      "triage-skipping behavior and its artifact contract",
+      "decision_kind and canonical_winner values for single-provider decisions",
+      "single_provider and selected_patch_provider artifact fields",
+      "stale pairwise wording or two-provider assumptions in code and docs",
+      "missing or misleading tests for single-provider behavior"
+    ],
+    "exclude": [
+      "style-only preferences without project convention evidence",
+      "large rewrites unrelated to the changed behavior",
+      "speculation without file:line evidence"
+    ]
+  },
+  "providers": [
+    { "id": "claude", "backend": "claude", "model": "sonnet", "scope": "codebase", "effort": "high" }
+  ],
+  "judge": { "backend": "claude", "model": "opus", "effort": "xhigh" },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  },
+  "scope_policy": { "enforcement": "best_effort" },
+  "experiment": {
+    "id": "bakeoff-live-runmode",
+    "task_id": "single-provider-review",
+    "condition_id": "claude-single-baseline",
+    "run_kind": "single_agent_baseline",
+    "repetition_index": 1
+  }
+}

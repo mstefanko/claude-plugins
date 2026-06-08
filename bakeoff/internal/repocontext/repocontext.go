@@ -304,17 +304,15 @@ func slashDelimitedProse(ref string) bool {
 		return false
 	}
 	parts := strings.Split(ref, "/")
-	if len(parts) != 2 {
+	if len(parts) < 2 {
 		return false
 	}
-	left, right := parts[0], parts[1]
-	if strings.Contains(left, ".") || strings.Contains(right, ".") {
-		return false
+	for _, part := range parts {
+		if strings.Contains(part, ".") || !allLowerASCIIWord(part) {
+			return false
+		}
 	}
-	if !allLowerASCIIWord(left) || !allLowerASCIIWord(right) {
-		return false
-	}
-	switch left {
+	switch parts[0] {
 	case "internal", "cmd", "pkg", "src", "app", "apps", "lib", "libs", "docs", "test", "tests", "scripts":
 		return false
 	default:

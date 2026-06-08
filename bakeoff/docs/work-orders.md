@@ -129,8 +129,8 @@ An intentional single-provider baseline is different:
 ```
 
 This shape is not a degraded pairwise run. It emits `single_provider` in
-`decision.json`, `summary.json`, `manifest.json`, and `bakeoff ls --json`, and
-it never emits a comparative winner.
+`decision.json`, command JSON summaries, `manifest.json`, and
+`bakeoff ls --json`, and it never emits a comparative winner.
 
 Provider credentials never belong in work orders. Bakeoff launches the local
 provider CLIs and relies on their existing auth stores; `bakeoff doctor`
@@ -229,6 +229,14 @@ Run ledgers copy the full object into `meta.experiment`. Manifests hoist
 `slot_id`, and `slot_attempt`; `slot_id` and `slot_attempt` are null when the
 experiment is present but the optional slot fields are absent. Older runs
 without `experiment` omit these fields.
+`bakeoff research --json`, `bakeoff build --json`, and `bakeoff runs verify
+--json` expose a nested `experiment` object with the same identity fields; the
+optional slot fields are explicit nulls when absent.
+
+`bakeoff rerun` replays the source work order's experiment labels verbatim. A
+study that needs attempt-aware `run_kind`, `repetition_index`, `slot_id`, or
+`slot_attempt` values should mint a fresh work order and explicit run id, as in
+`examples/repetition-loop.sh`.
 
 The `code-review` facet is the standard review shape:
 
@@ -258,7 +266,9 @@ implementation, rollout, migration, or verification plans before code is
 written. Runtime type remains `gather`; do not add plan-specific fields to
 worker or judge JSON. Put plan section, failure mode, and required plan change
 inside `claim`, and put plan section labels, repo file lines, URLs, command
-output, or `missing evidence` inside `evidence`.
+output, or `missing evidence` inside `evidence`. Plan-review runs do not start
+automatic code-review triage; treat their findings as raw plan-review
+candidates unless you run `bakeoff triage` explicitly.
 
 ```json
 {

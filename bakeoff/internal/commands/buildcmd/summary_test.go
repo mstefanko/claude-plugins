@@ -32,4 +32,7 @@ func TestBuildSummaryIncludesExperiment(t *testing.T) {
 	if experiment["id"] != "review-auth" || experiment["task_id"] != "auth-review" {
 		t.Fatalf("experiment = %#v", experiment)
 	}
+	if experiment["slot_id"] != nil || experiment["slot_attempt"] != nil {
+		t.Fatalf("optional slot fields should be null in build summary: %#v", experiment)
+	}
 }

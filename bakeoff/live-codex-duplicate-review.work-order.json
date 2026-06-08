@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "id": "live-codex-duplicate-review",
+  "type": "gather",
+  "goal": "Review duplicate same-provider (Codex + Codex) support across the listed files for correctness, safety, and test coverage.",
+  "background": [
+    "Codebase review (clean working tree, no diff) of duplicate-provider support.",
+    "Review ONLY these files: internal/workorder/workorder.go, internal/commands/draftbuildcmd/draft_build.go, internal/commands/researchcmd/run.go, internal/commands/buildcmd/run.go, internal/commands/buildcmd/judge.go, internal/prompt/prompt.go, skills/bakeoff-run/SKILL.md.",
+    "Intent: a same-provider duplicate pair (two codex providers, unique ids) is now supported; verify the code paths that depend on provider identity, prompt parity, judging, and artifact isolation are correct.",
+    "Known risk areas: provider id uniqueness vs backend/model collision, prompt construction parity, judge family/validation when both contestants share a backend, per-provider artifact paths, and concurrency/rate-limit assumptions for two same-backend calls."
+  ],
+  "facet": {
+    "id": "code-review",
+    "kind": "generic",
+    "focus": "Review duplicate same-provider support: unique provider IDs, identical prompt construction, duplicate-provider caveats, judge selection/validation, per-provider artifact paths, and concurrency/rate-limit assumptions.",
+    "include": [
+      "unique provider IDs preserved when two providers share backend and model",
+      "identical prompt construction across duplicate providers",
+      "duplicate-provider caveats surfaced or enforced where needed",
+      "judge selection and validation correctness with a same-provider pair",
+      "per-provider artifact path isolation keyed by provider id",
+      "rate-limit and concurrency assumptions for two same-backend parallel calls",
+      "tests that could miss same-provider drift or id collisions"
+    ],
+    "exclude": [
+      "files outside the seven listed paths",
+      "style-only preferences without project convention evidence",
+      "speculation without file:line evidence",
+      "large refactors unrelated to duplicate-provider support"
+    ]
+  },
+  "providers": [
+    { "id": "codex-gpt55", "backend": "codex", "model": "gpt-5.5", "scope": "codebase", "effort": "high" },
+    { "id": "codex-gpt5",  "backend": "codex", "model": "gpt-5",   "scope": "codebase", "effort": "high" }
+  ],
+  "judge": { "backend": "claude", "model": "opus", "effort": "xhigh" },
+  "scope_policy": { "enforcement": "best_effort" },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  }
+}

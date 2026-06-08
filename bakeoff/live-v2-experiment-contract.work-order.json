@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "id": "live-v2-experiment-contract",
+  "type": "gather",
+  "run_mode": "pairwise",
+  "goal": "Gather concrete evidence on whether the experiment-metadata implementation is sufficient for an external repetition harness to drive, identify, and aggregate Bakeoff runs. Evidence-only: do not implement or modify any code.",
+  "background": "Inspect these files and report findings as concrete observations grounded in the source, with file/line references where possible:\n- examples/repetition-loop.sh\n- docs/work-orders.md\n- docs/cli-reference.md\n- internal/workorder/workorder.go\n- internal/manifest/manifest.go\n- internal/commands/lscmd/ls.go\n- internal/summary/summary.go\n\nReturn concrete findings on each of the following dimensions:\n1. Validation: which experiment-metadata fields (id, task_id, condition_id, run_kind, repetition_index, slot_id, slot_attempt) are validated in internal/workorder/workorder.go, what the allowed run_kind values are, and which fields are optional/required, defaulted, or unvalidated.\n2. Manifest projection: whether and how experiment metadata is projected into internal/manifest/manifest.go (manifest.json), so a harness can recover the experiment labels from run artifacts.\n3. ls filtering: whether internal/commands/lscmd/ls.go lets a harness filter or select runs by experiment fields (e.g. by experiment id, task_id, condition_id, run_kind, repetition_index), and what columns/output it exposes.\n4. JSON summaries: whether internal/summary/summary.go surfaces experiment metadata in machine-readable (JSON) output suitable for harness aggregation.\n5. Retry / run-id behavior: how run ids are assigned, whether experiment metadata round-trips across retries/reruns, and whether a harness can deterministically correlate repetitions and slot attempts.\n6. Missing harness-facing docs or tests: gaps in docs/work-orders.md and docs/cli-reference.md, and missing tests, that would block an external repetition harness from relying on this contract.\n\nUse examples/repetition-loop.sh as the reference for what an external harness is expected to do, and assess whether the current implementation supports that workflow. Do not propose or write code changes; report evidence and concrete gaps.",
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "sonnet",
+      "scope": "codebase",
+      "effort": "high"
+    },
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "scope": "codebase",
+      "effort": "high"
+    }
+  ],
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "scope_policy": {
+    "enforcement": "best_effort"
+  },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  },
+  "experiment": {
+    "id": "bakeoff-live-experiment-v2",
+    "task_id": "experiment-contract-gather",
+    "condition_id": "pairwise.gather",
+    "run_kind": "pairwise",
+    "repetition_index": 1,
+    "slot_id": "gather",
+    "slot_attempt": 1
+  }
+}

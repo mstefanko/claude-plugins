@@ -67,6 +67,20 @@ func TestBuildResearchIncludesStalledAt(t *testing.T) {
 	}
 }
 
+func TestBuildResearchProjectsSingleProviderFields(t *testing.T) {
+	runDir := t.TempDir()
+	got := BuildResearch(runDir, "run-1", filepath.Dir(runDir), map[string]any{
+		"decision_kind":    "single_provider_result",
+		"run_mode":         workorder.RunModeSingleProvider,
+		"single_provider":  "claude",
+		"canonical_winner": nil,
+		"judge_ran":        false,
+	}, map[string]map[string]any{}, 0, false, nil, nil)
+	if got.RunMode != workorder.RunModeSingleProvider || got.SingleProvider != "claude" || got.CanonicalWinner != nil || got.JudgeRan {
+		t.Fatalf("single provider summary = %#v", got)
+	}
+}
+
 func TestBuildResearchIncludesExperiment(t *testing.T) {
 	runDir := t.TempDir()
 	got := BuildResearch(runDir, "run-1", filepath.Dir(runDir), map[string]any{
@@ -81,6 +95,9 @@ func TestBuildResearchIncludesExperiment(t *testing.T) {
 	})
 	if got.Experiment["id"] != "review-auth" || got.Experiment["task_id"] != "auth-review" {
 		t.Fatalf("experiment = %#v", got.Experiment)
+	}
+	if got.Experiment["slot_id"] != nil || got.Experiment["slot_attempt"] != nil {
+		t.Fatalf("optional slot fields should be null in summary: %#v", got.Experiment)
 	}
 }
 

@@ -227,6 +227,7 @@ func ResolveAnalyze(base map[string]any, workerResults map[string]map[string]any
 	}
 	out["canonical_winner"] = spine
 	out["spine_tiebreak"] = tiebreak
+	out["selection_basis"] = tiebreak
 	out["judge_rationale"] = []string{rationale(pass1), rationale(pass2)}
 	out["claim_verdicts"] = valueOrList(chosen["claim_verdicts"])
 	out["additions_from_loser"] = AnnotateSource(asList(chosen["additions_from_loser"]), loser)

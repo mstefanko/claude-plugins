@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "id": "live-v2-single-provider-artifacts",
+  "type": "analyze",
+  "run_mode": "single_provider",
+  "goal": "Analyze whether the single_provider run mode is consistently represented across the decision.json, summary.json, manifest.json, and report.md artifacts and the `bakeoff ls` output. Identify artifact-contract drift, stale pairwise-only wording (e.g. winner/loser, two-provider assumptions), and missing test coverage. Do not implement code; produce findings and recommendations only.",
+  "background": "Read-only analysis of the Bakeoff Go codebase at /Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/bakeoff. Inspect: internal/decision/decision.go, internal/summary/summary.go, internal/manifest/manifest.go, internal/commands/researchcmd/run.go, internal/commands/lscmd/ls.go, internal/verify/verify.go. Known questions: (1) Does each artifact writer emit single_provider consistently (field names, run_mode, absence of a winner)? (2) Is there stale pairwise wording or two-provider assumptions that leak into single-provider artifacts or `bakeoff ls` output? (3) Where is single_provider behavior untested? Report drift between the artifact contract and what each writer actually emits.",
+  "providers": [
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "scope": "codebase",
+      "effort": "high"
+    }
+  ],
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  },
+  "scope_policy": {
+    "enforcement": "best_effort"
+  },
+  "experiment": {
+    "id": "bakeoff-live-runmode-v2",
+    "task_id": "single-provider-artifact-contract",
+    "condition_id": "codex-single-analyze",
+    "run_kind": "single_agent_baseline",
+    "repetition_index": 1
+  }
+}

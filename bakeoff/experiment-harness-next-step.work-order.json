@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "id": "experiment-harness-next-step",
+  "type": "compare",
+  "goal": "Decide the lower-risk near-term improvement to the Bakeoff experiment-harness pieces. Option A: keep the current external-script-only model and only tighten validation, docs, and tests. Option B: add a first-class export/aggregate CLI command. Pick exactly one option as the lower-risk near-term improvement, justify the choice on risk and named files, and list the exact tests and docs that should change. Do not implement code.",
+  "background": "Bakeoff currently drives repeated experiment runs through external shell scripting rather than a built-in aggregate/export command. The decision is which next step is lower risk in the near term.\n\nOption A - Tighten the existing external-script-only model: keep run orchestration and aggregation in user-authored shell (see examples/repetition-loop.sh), and invest only in stricter work-order experiment-metadata validation, clearer docs, and additional tests. No new command surface.\n\nOption B - Add a first-class export/aggregate CLI command: introduce a new Bakeoff subcommand that reads run ledgers/manifests and emits an aggregated export, reducing reliance on external scripting but adding command surface, schema/version surface, and maintenance burden.\n\nEvidence to ground the comparison (read these before deciding):\n- docs/paper-grade-experiment-analysis-implementation-plan-2026-06-05.md (the experiment analysis plan and its intended end state)\n- docs/work-orders.md (work-order schema and experiment metadata expectations)\n- docs/cli-reference.md (current command surface; what a new command would have to fit into)\n- examples/repetition-loop.sh (the current external-script repetition/aggregation pattern)\n- internal/workorder/workorder.go (ExperimentSpec fields: id, task_id, condition_id, run_kind, repetition_index, slot_id, slot_attempt; and their validation)\n- internal/manifest/manifest.go (run manifest structure that any aggregate/export would consume)\n- internal/commands/lscmd/ls.go (existing listing command as a precedent for read-only run enumeration)\n- internal/summary/summary.go (existing summary/aggregation logic and how results are currently rolled up)\n\nConstraints:\n- Near-term and lower-risk is the deciding axis; prefer the option that minimizes new failure surface and migration cost while still advancing the experiment-analysis plan.\n- This is a design comparison only. Do not write or modify code, and do not produce patches.\n\nAcceptance criteria:\n- A single, explicit recommendation (Option A or Option B) chosen as the lower-risk near-term improvement.\n- The recommendation is justified by concrete risk reasoning that cites specific files from the evidence list above.\n- An exact, itemized list of the tests and docs that should change to ship the recommended option (specific file paths and what each change covers), separating test changes from doc changes.\n- No code implementation, no diffs, no new files proposed as patches.",
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "sonnet",
+      "scope": "mixed",
+      "effort": "high"
+    },
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "scope": "mixed",
+      "effort": "high"
+    }
+  ],
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  },
+  "scope_policy": {
+    "enforcement": "best_effort"
+  },
+  "experiment": {
+    "id": "bakeoff-live-experiment",
+    "task_id": "experiment-harness-next-step",
+    "condition_id": "pairwise.compare",
+    "run_kind": "pairwise",
+    "repetition_index": 1,
+    "slot_id": "compare",
+    "slot_attempt": 1
+  }
+}
