@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "id": "runmode-review-1273dce-single-claude",
+  "type": "gather",
+  "run_mode": "single_provider",
+  "goal": "Review the diff 386accc..HEAD for actionable defects in the single-provider and experiment-metadata change.",
+  "background": [
+    "Base ref: 386accc (intentional Claude-only single-provider baseline).",
+    "Review range: 386accc..HEAD (HEAD=1273dce).",
+    "Diff command: git diff 386accc..HEAD; generated review context is supplied via --base 386accc --diff --changed-files.",
+    "Changed files: 34 files, +1796/-43. Go: internal/commands/researchcmd/run.go, internal/verify/verify.go, internal/manifest/manifest.go, internal/report/report.go, internal/decision/decision.go, internal/scope/scope.go, internal/repocontext/repocontext.go, internal/workorder/workorder.go and matching _test.go files; docs/cli-reference.md, docs/work-orders.md; new plans/ docs and several live-*.work-order.json fixtures.",
+    "Focus areas: correctness, artifact-contract drift across manifest/summary/report/ls output, stale pairwise wording or winner assumptions, missing or misleading tests, and single_provider experiment metadata.",
+    "This is a single-provider baseline: there is no winner. Do not flag the absence of a second provider or of a competitive decision as a defect.",
+    "Acceptance criteria: report only actionable findings with file/line evidence; do not implement code."
+  ],
+  "facet": {
+    "id": "code-review",
+    "kind": "generic",
+    "focus": "Find actionable defects in the single-provider and experiment-metadata change: correctness, artifact-contract drift, stale pairwise wording, missing tests, and manifest/summary/report/ls output.",
+    "include": [
+      "correctness bugs and edge cases in researchcmd/run.go, verify, manifest, report, decision, scope, repocontext, and workorder changes",
+      "artifact-contract drift across manifest.json, summary, report.md, and ls output for single_provider runs",
+      "stale pairwise wording or winner assumptions that no longer hold for single_provider runs",
+      "missing or misleading tests for changed behavior",
+      "single_provider experiment metadata correctness (run_kind, condition, repetition labels)",
+      "manifest/summary/report/ls output rendering for single-provider runs"
+    ],
+    "exclude": [
+      "style-only preferences without project convention evidence",
+      "large rewrites unrelated to the changed behavior",
+      "speculation without file:line evidence"
+    ]
+  },
+  "providers": [
+    {
+      "id": "claude",
+      "backend": "claude",
+      "model": "sonnet",
+      "scope": "codebase",
+      "effort": "high"
+    }
+  ],
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  },
+  "scope_policy": {
+    "enforcement": "best_effort"
+  },
+  "experiment": {
+    "id": "bakeoff-live-agent-eval",
+    "task_id": "runmode-review-1273dce",
+    "condition_id": "single.claude",
+    "run_kind": "single_agent_baseline",
+    "repetition_index": 1
+  }
+}

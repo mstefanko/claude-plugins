@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "command": "research",
+  "status": "ok",
+  "exit_code": 0,
+  "warnings": [],
+  "run_id": "bakeoff-live-agent-eval.r001.multilens.operator-docs",
+  "run_dir": "runs/bakeoff-live-agent-eval.r001.multilens.operator-docs",
+  "run_mode": "pairwise",
+  "decision_kind": "structured_union",
+  "canonical_winner": null,
+  "judge_ran": true,
+  "experiment": {
+    "condition_id": "multilens.operator-docs",
+    "id": "bakeoff-live-agent-eval",
+    "repetition_index": 1,
+    "run_kind": "multi_lens_child",
+    "slot_attempt": 1,
+    "slot_id": "operator-docs",
+    "task_id": "runmode-review-1273dce"
+  },
+  "providers": {
+    "claude": {
+      "status": "ok",
+      "raw_status": "ok",
+      "wall_seconds": 423.742,
+      "output_bytes": 16936,
+      "stdout_bytes": 16936,
+      "stderr_bytes": 0
+    },
+    "codex": {
+      "status": "ok",
+      "raw_status": "ok",
+      "wall_seconds": 251.802,
+      "output_bytes": 9818,
+      "stdout_bytes": 9818,
+      "stderr_bytes": 60000
+    }
+  },
+  "judge": {
+    "status": "ok",
+    "raw_status": "ok"
+  },
+  "triage": {
+    "auto_started": false,
+    "state": "no",
+    "status": null,
+    "exit_code": null,
+    "artifacts": {}
+  },
+  "artifacts": {
+    "work_order": "runs/bakeoff-live-agent-eval.r001.multilens.operator-docs/work-order.json",
+    "decision": "runs/bakeoff-live-agent-eval.r001.multilens.operator-docs/decision.json",
+    "meta": "runs/bakeoff-live-agent-eval.r001.multilens.operator-docs/meta.json",
+    "manifest": "runs/bakeoff-live-agent-eval.r001.multilens.operator-docs/manifest.json",
+    "report": "runs/bakeoff-live-agent-eval.r001.multilens.operator-docs/report.md",
+    "source_work_order": "runs/bakeoff-live-agent-eval.r001.multilens.operator-docs/source-work-order.json",
+    "review_context_md": "runs/bakeoff-live-agent-eval.r001.multilens.operator-docs/review-context.md",
+    "review_context_json": "runs/bakeoff-live-agent-eval.r001.multilens.operator-docs/review-context.json"
+  },
+  "next": "bakeoff show bakeoff-live-agent-eval.r001.multilens.operator-docs"
+}

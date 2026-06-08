@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "id": "bakeoff-live-agent-eval.r001.evaluator",
+  "type": "analyze",
+  "run_mode": "single_provider",
+  "run_kind": "ad_hoc",
+  "goal": "Acting as a single-provider evaluator, build an atomic finding ledger across the six completed bakeoff-live-agent-eval r001 conditions, compute a primary score per condition from the summed severity weights of unique valid actionable findings, and report the derived comparison metrics (precision, union coverage, wall time, provider-call count, score per provider call, pairwise lift, multi-lens lift).",
+  "background": "You are evaluating the OUTPUTS of a completed code-review/eval bakeoff. Do not run any providers or modify the repo. Read only the artifacts already on disk for these six run ids under runs/:\n  1. bakeoff-live-agent-eval.r001.single.claude        (condition: single.claude)\n  2. bakeoff-live-agent-eval.r001.single.codex         (condition: single.codex)\n  3. bakeoff-live-agent-eval.r001.pairwise.claude-codex (condition: pairwise)\n  4. bakeoff-live-agent-eval.r001.multilens.artifact-contract (condition: multilens, lens: artifact-contract)\n  5. bakeoff-live-agent-eval.r001.multilens.test-coverage     (condition: multilens, lens: test-coverage)\n  6. bakeoff-live-agent-eval.r001.multilens.operator-docs     (condition: multilens, lens: operator-docs)\nPlus the multi-lens rollup file, which lives at the REPO ROOT (not under runs/): ./bakeoff-live-agent-eval.r001.multilens.multi-lens-summary.md . Read it if present.\n\nFor each run id, the relevant artifacts are: report.md (the findings), decision.json (decision kind / selected provider / disagreements), providers/<id>/ (per-provider raw output), manifest.json (timing + provider-call accounting), and meta.json. Use report.md as the primary findings surface and decision.json/manifest.json for structured signals and timing. The three multilens runs collectively form ONE 'multilens' condition (treat their findings as a union for the multilens condition, but also keep the per-lens source label on each finding).\n\nSTEP 1 - ATOMIC FINDING LEDGER. Extract every distinct finding from every condition into one ledger. Each ledger row has these fields:\n  - finding_id: stable short slug you assign.\n  - source_condition: one of single.claude | single.codex | pairwise | multilens (and for multilens also record the lens: artifact-contract | test-coverage | operator-docs).\n  - title: one line.\n  - validity: yes | no | needs_repro. Judge from the evidence in the artifact: does the claimed defect actually hold given the cited code/diff context in review-context.* and the report's own evidence? 'yes' = substantiated; 'no' = false positive / not a real issue; 'needs_repro' = plausible but evidence insufficient to confirm without reproduction.\n  - severity_weight: blocker=5, high=3, medium=2, low=1. Map the report's stated severity; if unstated, assign conservatively from impact.\n  - evidence_quality: 0 | 1 | 2. 0 = assertion only; 1 = cites location/context; 2 = cites location AND a concrete reproduction/exact mechanism.\n  - actionable: 0 | 1. 1 = there is a clear, bounded fix or next step; 0 = vague or informational.\n  - duplicate_cluster: a cluster id shared by findings that describe the same underlying issue (across conditions). Pick one row per cluster as the canonical/unique representative.\n\nSTEP 2 - PRIMARY SCORE PER CONDITION. For each of the four conditions (single.claude, single.codex, pairwise, multilens), primary_score = sum of severity_weight over findings that are simultaneously (validity == yes) AND (actionable == 1) AND (the unique/canonical representative of its duplicate_cluster). Do not double-count duplicates within a condition; a cluster contributes at most once per condition.\n\nSTEP 3 - DERIVED METRICS. Report, per condition where applicable:\n  - precision = (unique valid findings) / (unique findings) for that condition.\n  - union_coverage = for each condition, the count and fraction of the global union of unique valid clusters that the condition covers.\n  - wall_time_seconds: read from each run's manifest.json (start/finish timestamps or recorded duration). State the field you used.\n  - provider_call_count: number of provider invocations for the condition from manifest.json (single=1 provider call; pairwise=2; each multilens lens=its own provider call(s); sum lenses for the multilens condition). State how you counted.\n  - score_per_provider_call = primary_score / provider_call_count.\n  - pairwise_lift = pairwise.primary_score - max(single.claude.primary_score, single.codex.primary_score). Also give the ratio.\n  - multilens_lift = multilens.primary_score relative to (a) pairwise.primary_score and (b) best single condition. Give absolute and ratio for both.\n\nOUTPUT FORMAT. Produce a clear report with: (1) the full finding ledger as a table; (2) a per-condition score table (primary_score, unique findings, valid findings, precision, provider_call_count, wall_time_seconds, score_per_provider_call, union_coverage); (3) a lift section (pairwise_lift, multilens_lift over pairwise and over best single); (4) a short interpretation of which condition delivered the most validated, actionable signal per provider call. Show your validity/severity judgments transparently so they can be audited. If an artifact or timing field is missing, say so explicitly rather than guessing.",
+  "providers": [
+    {
+      "id": "gemini",
+      "backend": "gemini",
+      "model": "pro",
+      "scope": "codebase",
+      "effort": "high"
+    }
+  ],
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "budgets": {
+    "wall_clock_seconds": 1800,
+    "max_output_bytes": 80000,
+    "heartbeat_seconds": 30,
+    "output_cap_grace_seconds": 30,
+    "max_output_overrun_bytes": 16000
+  },
+  "scope_policy": {
+    "enforcement": "best_effort"
+  }
+}

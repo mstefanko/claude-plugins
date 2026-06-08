@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "id": "runmode-review-1273dce",
+  "type": "gather",
+  "run_mode": "pairwise",
+  "goal": "Review the 386accc..HEAD diff for actionable defects. Report findings only with file:line evidence; do not implement or propose code changes.",
+  "background": [
+    "Base: 386accc (single provider run).",
+    "Review head: 1273dce (Code review), branch main.",
+    "Diff command: git diff 386accc HEAD (--base 386accc --diff --changed-files).",
+    "Scale: 34 files changed, +1796/-43.",
+    "Changed Go packages: internal/{decision,manifest,repocontext,report,scope,verify,workorder}, internal/commands/{researchcmd,buildcmd}, internal/summary (tests only).",
+    "Also changed: docs/cli-reference.md, docs/work-orders.md, three new hardening plan docs, plans/{experiment-metadata-hardening.md,single-provider-hardening-plan.md}, and 7 new *.work-order.json fixtures.",
+    "Focus axes: (1) correctness of changed Go code; (2) artifact-contract drift across manifest/summary/report/ls output; (3) stale or incorrect pairwise/winner wording for single_provider runs; (4) missing or misleading tests for changed behavior; (5) single_provider experiment-metadata validation and projection.",
+    "Acceptance criteria: every finding is actionable and cites file:line; no implementation; no style-only noise."
+  ],
+  "facet": {
+    "id": "code-review",
+    "kind": "generic",
+    "focus": "Find actionable defects in the 386accc..HEAD diff: correctness, artifact-contract drift, stale pairwise/winner wording for single_provider, missing tests, and single_provider experiment metadata.",
+    "include": [
+      "correctness bugs and edge cases in the changed Go packages",
+      "artifact-contract drift across manifest, summary, report, and ls output",
+      "stale or incorrect pairwise/winner wording on single_provider runs",
+      "missing or misleading tests for changed behavior",
+      "single_provider experiment-metadata validation and projection gaps",
+      "inconsistencies between docs/cli-reference.md, work-orders.md, and code"
+    ],
+    "exclude": [
+      "style-only preferences without project convention evidence",
+      "large rewrites unrelated to the changed behavior",
+      "speculation without file:line evidence",
+      "re-litigating the design of the new plan documents"
+    ]
+  },
+  "providers": [
+    { "id": "claude", "backend": "claude", "model": "sonnet", "scope": "codebase", "effort": "high" },
+    { "id": "codex", "backend": "codex", "model": "gpt-5.5", "scope": "codebase", "effort": "high" }
+  ],
+  "judge": { "backend": "claude", "model": "opus", "effort": "xhigh" },
+  "scope_policy": { "enforcement": "best_effort" },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  },
+  "experiment": {
+    "id": "bakeoff-live-agent-eval",
+    "task_id": "runmode-review-1273dce",
+    "condition_id": "pairwise.claude-codex",
+    "run_kind": "pairwise",
+    "repetition_index": 1
+  }
+}

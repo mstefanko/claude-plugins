@@ -6,6 +6,13 @@ set -u
 # outside script can generate ordinary work orders with experiment labels.
 
 BAKEOFF_CLI="${BAKEOFF_CLI:-bakeoff}"
+# OUT_DIR defaults to runs/, which is .gitignored. A later meta-evaluation that
+# uses a gemini provider to READ these run artifacts will see nothing: gemini's
+# file tools honor .gitignore. claude/codex evaluators are unaffected, and the
+# judge phase is unaffected (judge inputs are passed inline, not read from disk).
+# If you plan to meta-evaluate this batch with a gemini worker, set OUT_DIR to a
+# non-ignored dir (e.g. OUT_DIR=experiments); show/ls/history stay compatible via
+# --out. See plans/experiment-metadata-hardening.md ("Gemini evaluator reads").
 OUT_DIR="${OUT_DIR:-runs}"
 WORKORDER_DIR="${WORKORDER_DIR:-/tmp/bakeoff-repetition-loop}"
 EXPERIMENT_ID="${EXPERIMENT_ID:-review-auth}"

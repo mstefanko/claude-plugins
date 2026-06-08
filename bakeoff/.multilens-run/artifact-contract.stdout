@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "command": "research",
+  "status": "ok",
+  "exit_code": 0,
+  "warnings": [],
+  "run_id": "bakeoff-live-agent-eval.r001.multilens.artifact-contract",
+  "run_dir": "runs/bakeoff-live-agent-eval.r001.multilens.artifact-contract",
+  "run_mode": "pairwise",
+  "decision_kind": "structured_union",
+  "canonical_winner": null,
+  "judge_ran": true,
+  "experiment": {
+    "condition_id": "multilens.artifact-contract",
+    "id": "bakeoff-live-agent-eval",
+    "repetition_index": 1,
+    "run_kind": "multi_lens_child",
+    "slot_attempt": 1,
+    "slot_id": "artifact-contract",
+    "task_id": "runmode-review-1273dce"
+  },
+  "providers": {
+    "claude": {
+      "status": "ok",
+      "raw_status": "ok",
+      "wall_seconds": 527.578,
+      "output_bytes": 13237,
+      "stdout_bytes": 13237,
+      "stderr_bytes": 0
+    },
+    "codex": {
+      "status": "ok",
+      "raw_status": "ok",
+      "wall_seconds": 267.537,
+      "output_bytes": 6651,
+      "stdout_bytes": 6651,
+      "stderr_bytes": 60000
+    }
+  },
+  "judge": {
+    "status": "ok",
+    "raw_status": "ok"
+  },
+  "triage": {
+    "auto_started": false,
+    "state": "no",
+    "status": null,
+    "exit_code": null,
+    "artifacts": {}
+  },
+  "artifacts": {
+    "work_order": "runs/bakeoff-live-agent-eval.r001.multilens.artifact-contract/work-order.json",
+    "decision": "runs/bakeoff-live-agent-eval.r001.multilens.artifact-contract/decision.json",
+    "meta": "runs/bakeoff-live-agent-eval.r001.multilens.artifact-contract/meta.json",
+    "manifest": "runs/bakeoff-live-agent-eval.r001.multilens.artifact-contract/manifest.json",
+    "report": "runs/bakeoff-live-agent-eval.r001.multilens.artifact-contract/report.md",
+    "source_work_order": "runs/bakeoff-live-agent-eval.r001.multilens.artifact-contract/source-work-order.json",
+    "review_context_md": "runs/bakeoff-live-agent-eval.r001.multilens.artifact-contract/review-context.md",
+    "review_context_json": "runs/bakeoff-live-agent-eval.r001.multilens.artifact-contract/review-context.json"
+  },
+  "next": "bakeoff show bakeoff-live-agent-eval.r001.multilens.artifact-contract"
+}

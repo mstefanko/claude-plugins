@@ -119,6 +119,42 @@ not a fact. Line numbers reflect the tree as of 2026-06-08 and may drift.
   `meta.json`, or (b) `verify --json` omits experiment fields.
 - **Act:** add both notes once #1/#2 are resolved (so docs match final behavior).
 
+### 6. Gemini evaluator reads are blocked by `runs/` being gitignored  (CONFIRMED; convention, not code)
+- **Observed (live run `bakeoff-live-agent-eval.r001.evaluator`):** a single-provider
+  `analyze` worker on `gemini/pro`, tasked to read the six prior r001 run dirs
+  under `runs/`, could only read the repo-root `*.multi-lens-summary.md`. It
+  reported `status: complete_with_concerns`: it could not compute single/pairwise
+  scores, precision, union coverage, or any lift metric. Root cause: gemini's file
+  tools honor `.gitignore`, and `runs/` is gitignored (`bakeoff/.gitignore:5`).
+- **Scope of impact (verified against source):**
+  - `claude` and `codex` workers are **unaffected** — their read tool / sandbox do
+    not filter on `.gitignore`.
+  - The **judge phase is unaffected** for all providers, including gemini-as-judge:
+    judge inputs are built inline from worker outputs
+    (`runSingleJudge` → `prompt.BuildJudgePrompt`, `internal/commands/researchcmd/run.go`)
+    and passed as the prompt, never read from `runs/`. Triage is likewise fed
+    inline (`internal/triage/citation.go`).
+  - So this bites exactly one case: a **gemini worker whose task input lives under a
+    gitignored path** (i.e. meta-evaluation of prior runs).
+- **Rejected fix (option 3 — disabling gitignore in the gemini adapter):** not
+  surgical and carries risk. Gemini CLI 0.43.0 has no gitignore flag (only
+  `--include-directories`, which still honors `.gitignore`); the only lever is the
+  settings file `fileFiltering.respectGitIgnore`, which would require writing
+  `./.gemini/settings.json` into the workspace CWD (collision/concurrency risk
+  under shared-CWD pairwise/parallel runs; `.gemini/` is already a protected path
+  at `internal/commands/buildcmd/scope.go:222`) and would broaden gemini's reads to
+  secrets/`*.pem`/run noise in **every** codebase run — the opposite of scope's
+  purpose.
+- **Resolution (option 1 — convention, no code change):** the harness already
+  parameterizes the output dir (`OUT_DIR="${OUT_DIR:-runs}"` in
+  `examples/repetition-loop.sh`). When a batch will be meta-evaluated by a gemini
+  worker, run it with `OUT_DIR` set to a **non-gitignored** dir (e.g.
+  `OUT_DIR=experiments`); `<out>/<run-id>/` stays `show`/`ls`/`history`-compatible
+  via `--out`, and the evaluator's `runs/`-relative reads become `experiments/`
+  reads that gemini can see. Alternatively, run the evaluator on `claude`/`codex`.
+  Do **not** rely on a gemini worker reading `runs/` directly.
+- **Tracked by:** beads `mstefanko-plugins-a7xw`.
+
 ## Explicit non-issues (do not act)
 - **Empty-vs-absent `slot_id` (report F-003/F-011):** moot — `slot_id` validates
   as a non-empty slug (`^[A-Za-z0-9][A-Za-z0-9._-]*$`), so it cannot be set to an

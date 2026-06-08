@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "id": "runmode-review-1273dce-single-codex",
+  "type": "gather",
+  "run_mode": "single_provider",
+  "goal": "Review the 386accc..HEAD diff for correctness, artifact-contract drift, stale pairwise wording, missing tests, manifest/summary/report/ls output, and single_provider experiment metadata. Report only actionable findings with file and line evidence. Do not implement code changes.",
+  "background": "Intentional Codex-only single-provider baseline review of the diff from 386accc to HEAD (1273dce), a 34-file change hardening single-provider artifacts and experiment metadata across internal/commands/researchcmd/run.go, decision, manifest, repocontext, report, scope, verify, and workorder packages plus docs and work-order fixtures. This is a single_provider run with no winner; treat the agent as one independent reviewer. Focus areas: (1) correctness bugs in the changed Go packages; (2) artifact-contract drift across manifest.json, summary output, report.md, and ls output, especially for single-provider runs; (3) stale pairwise or winner-oriented wording that should now be single-provider aware; (4) missing or insufficient test coverage for the new single-provider behavior; (5) single_provider experiment metadata correctness and validation. Cite file paths and line numbers for every finding. Do not propose or apply patches.",
+  "providers": [
+    {
+      "id": "codex",
+      "backend": "codex",
+      "model": "gpt-5.5",
+      "scope": "codebase",
+      "effort": "high"
+    }
+  ],
+  "judge": {
+    "backend": "claude",
+    "model": "opus",
+    "effort": "xhigh"
+  },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 30,
+    "output_cap_grace_seconds": 30,
+    "max_output_overrun_bytes": 8000
+  },
+  "scope_policy": {
+    "enforcement": "best_effort"
+  },
+  "facet": {
+    "id": "code-review",
+    "kind": "generic",
+    "focus": "Review the 386accc..HEAD diff as a single-provider Codex baseline: flag correctness bugs, artifact-contract drift, stale pairwise wording, missing test coverage, and single_provider experiment metadata handling, with file and line evidence.",
+    "include": [
+      "Correctness bugs in internal/commands/researchcmd/run.go, decision, manifest, repocontext, report, scope, verify, and workorder changes",
+      "Artifact-contract drift across manifest.json, summary, report.md, and ls output",
+      "Stale pairwise or winner wording that should be single-provider aware",
+      "Missing or insufficient test coverage for new single-provider behavior",
+      "single_provider experiment metadata correctness and validation",
+      "Manifest, summary, report, and ls output for single-provider runs"
+    ],
+    "exclude": [
+      "Unrelated style or formatting nits without behavior impact",
+      "Pre-existing issues outside the 386accc..HEAD diff"
+    ]
+  },
+  "experiment": {
+    "id": "bakeoff-live-agent-eval",
+    "task_id": "runmode-review-1273dce",
+    "condition_id": "single.codex",
+    "run_kind": "single_agent_baseline",
+    "repetition_index": 1
+  }
+}
