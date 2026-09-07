@@ -1,0 +1,8 @@
+{
+  "name": "deglaze",
+  "version": "0.1.0",
+  "description": "Blunt, sassy, evidence-grounded second opinion on one idea, claim, diff, screen, paper, URL, or a few named files. Single pass, under 250 words, max three findings. User-invoked only.",
+  "author": { "name": "mstefanko" },
+  "license": "MIT",
+  "keywords": ["deglaze", "roast", "critique", "adversarial", "gut-check", "second-opinion", "pre-mortem", "red-team"]
+}

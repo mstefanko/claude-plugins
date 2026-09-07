@@ -1,0 +1,105 @@
+{
+  "bakeoff_version": "source",
+  "canonical_winner": null,
+  "cwd": "/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/bakeoff",
+  "decision_kind": "structured_union",
+  "exit_code": 0,
+  "experiment": {
+    "condition_id": "multilens.artifact-contract",
+    "id": "bakeoff-live-agent-eval",
+    "repetition_index": 1,
+    "run_kind": "multi_lens_child",
+    "slot_attempt": 1,
+    "slot_id": "artifact-contract",
+    "task_id": "runmode-review-1273dce"
+  },
+  "facet": {
+    "exclude": [
+      "test-only files (*_test.go) which are covered by a separate lens",
+      "documentation files which are covered by a separate lens",
+      "style-only preferences without project convention evidence",
+      "speculation without file:line evidence"
+    ],
+    "focus": "Find actionable defects in the run artifact contract introduced or exposed by the diff: manifest, decision, report, verify, scope, and workorder shape and field consistency.",
+    "id": "code-review",
+    "include": [
+      "missing, mistyped, or never-populated fields in manifest.go, decision.go, or report.go",
+      "experiment metadata that is accepted but not persisted into durable artifacts",
+      "single-provider artifact shape that incorrectly implies a winner or majority vote",
+      "verifier output JSON contract mismatches in verify.go",
+      "schema_version or run_kind handling that breaks backward compatibility",
+      "scope or repocontext changes that alter the recorded artifact contract"
+    ],
+    "kind": "generic"
+  },
+  "finished_at": "2026-06-08T18:44:03Z",
+  "input_hashes": {
+    "decision_sha256": "7687db2014a22b934c30cf4f660dfa79b6f7e96b4cc392618d24dbcdda6853b0",
+    "provider_failures_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "report_sha256": "362c90e46cafe4cc857b1638c03219cdc614907fb60a71e7eb66c6cbe3ebdd2b",
+    "review_context_json_sha256": "1a8d17b54bc5f2108d8e002b006e559dcba09c14b31e1230fa527d02d793de97",
+    "review_context_md_sha256": "04657e3bdc495a45c36b1b610ed48021b193cb555b036e6b9a65ecae92c23266",
+    "source_work_order_sha256": "28e86b107a5e7f339829d83af68409869c71268b174c4d7ad98d911b1a6e71dd",
+    "work_order_sha256": "1fee367285f34fcfb3cd253c9fa535161fe2faf69573b0de205e4ba0a1eea6ec"
+  },
+  "judge_ran": true,
+  "provider_cli_versions": {
+    "claude": "2.1.168 (Claude Code)",
+    "codex": "codex-cli 0.125.0",
+    "git": "git version 2.49.0"
+  },
+  "resolved_models": {
+    "judge": {
+      "backend": "claude",
+      "effort": "xhigh",
+      "model": "opus"
+    },
+    "providers": {
+      "claude": {
+        "backend": "claude",
+        "effort": "high",
+        "model": "sonnet",
+        "scope": "codebase",
+        "scope_enforcement": {
+          "cwd": "/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/bakeoff",
+          "effective_scope": "codebase",
+          "enforcement_level": "enforced",
+          "fallback_reason": null,
+          "mechanisms": [
+            "claude:disallowedTools=WebFetch,WebSearch"
+          ],
+          "policy": "best_effort",
+          "requested_scope": "codebase",
+          "temporary_cwd": false
+        }
+      },
+      "codex": {
+        "backend": "codex",
+        "effort": "high",
+        "model": "gpt-5.5",
+        "scope": "codebase",
+        "scope_enforcement": {
+          "cwd": "/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/bakeoff",
+          "effective_scope": "codebase",
+          "enforcement_level": "enforced",
+          "fallback_reason": null,
+          "mechanisms": [
+            "codex:sandbox=read-only",
+            "codex:disable=web_search"
+          ],
+          "policy": "best_effort",
+          "requested_scope": "codebase",
+          "temporary_cwd": false
+        }
+      }
+    }
+  },
+  "review_context_requested": true,
+  "run_id": "bakeoff-live-agent-eval.r001.multilens.artifact-contract",
+  "run_mode": "pairwise",
+  "scope_policy": {
+    "enforcement": "best_effort"
+  },
+  "started_at": "2026-06-08T18:31:10Z",
+  "type": "gather"
+}

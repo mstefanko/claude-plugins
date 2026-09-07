@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "id": "bakeoff-live-agent-eval.r001.multilens.test-coverage",
+  "type": "gather",
+  "run_mode": "pairwise",
+  "goal": "Review the 386accc..HEAD diff for actionable test-coverage defects: whether the changed *_test.go files actually exercise the new behavior, cover edge cases, and assert meaningfully. Report only actionable findings with file:line evidence. Do not implement code.",
+  "background": [
+    "Base ref: 386accc. Review ref: HEAD (working diff generated via --base 386accc --diff --changed-files).",
+    "Lens: test-coverage. Focus on test adequacy for the behavior changed in this diff.",
+    "Changed test files: internal/manifest/manifest_test.go, internal/decision/decision_test.go, internal/report/report_test.go, internal/verify/verify_test.go, internal/scope/scope_test.go, internal/summary/summary_test.go, internal/workorder/workorder_test.go, internal/repocontext/repocontext_test.go, internal/commands/researchcmd/run_test.go, internal/commands/buildcmd/summary_test.go.",
+    "Pair each test change against the corresponding production change (manifest.go, decision.go, report.go, verify.go, scope.go, workorder.go, researchcmd/run.go) to judge whether new branches and fields are tested.",
+    "Acceptance criteria: every finding must cite a file:line and name a specific untested branch, missing edge case, weak/tautological assertion, or behavior changed in the diff that lacks a corresponding test.",
+    "Known risk areas: experiment-metadata and single-provider artifact changes; confirm new fields and the no-winner single-provider path have assertions."
+  ],
+  "facet": {
+    "id": "code-review",
+    "kind": "generic",
+    "focus": "Find actionable test-coverage gaps for behavior changed in the diff: untested branches, missing edge cases, and weak assertions in the changed *_test.go files.",
+    "include": [
+      "new production branches or fields with no corresponding test assertion",
+      "edge cases (empty, nil, single-provider, error paths) left untested",
+      "assertions that are tautological or do not validate the new behavior",
+      "experiment metadata fields written by code but never asserted in tests",
+      "single-provider no-winner semantics lacking a regression test",
+      "verifier output contract changes lacking test coverage"
+    ],
+    "exclude": [
+      "production-only files which are covered by the artifact-contract lens",
+      "documentation files which are covered by a separate lens",
+      "style-only test preferences without project convention evidence",
+      "speculation without file:line evidence"
+    ]
+  },
+  "providers": [
+    { "id": "claude", "backend": "claude", "model": "sonnet", "scope": "codebase", "effort": "high" },
+    { "id": "codex", "backend": "codex", "model": "gpt-5.5", "scope": "codebase", "effort": "high" }
+  ],
+  "scope_policy": { "enforcement": "best_effort" },
+  "judge": { "backend": "claude", "model": "opus", "effort": "xhigh" },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  },
+  "experiment": {
+    "id": "bakeoff-live-agent-eval",
+    "task_id": "runmode-review-1273dce",
+    "run_kind": "multi_lens_child",
+    "repetition_index": 1,
+    "condition_id": "multilens.test-coverage",
+    "slot_id": "test-coverage",
+    "slot_attempt": 1
+  }
+}

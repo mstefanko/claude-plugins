@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "id": "bakeoff-live-agent-eval.r001.multilens.artifact-contract",
+  "type": "gather",
+  "run_mode": "pairwise",
+  "goal": "Review the 386accc..HEAD diff for actionable defects in the run artifact contract: manifest, decision, report, summary, verify, scope, workorder, and researchcmd changes. Report only actionable findings with file:line evidence. Do not implement code.",
+  "background": [
+    "Base ref: 386accc. Review ref: HEAD (working diff generated via --base 386accc --diff --changed-files).",
+    "Lens: artifact-contract. Focus on the durable artifact shape and schema contract for single-provider and pairwise runs.",
+    "Primary changed files: internal/manifest/manifest.go, internal/decision/decision.go, internal/report/report.go, internal/verify/verify.go, internal/scope/scope.go, internal/workorder/workorder.go, internal/repocontext/repocontext.go, internal/commands/researchcmd/run.go.",
+    "Contract concerns: schema_version stability, experiment metadata (id/task_id/run_kind/repetition_index/condition_id/slot_id/slot_attempt) persistence into manifest/decision, single-provider semantics (no winner / no majority vote), decision.json field consistency, and verifier output JSON contract.",
+    "Acceptance criteria: every finding must cite a concrete file:line in the diff and describe an observable contract break, inconsistency, or missing field rather than style.",
+    "Known risk areas: single-provider artifact-contract hardening and experiment-metadata hardening landed together; check for fields that are written but never validated, or validated but never written."
+  ],
+  "facet": {
+    "id": "code-review",
+    "kind": "generic",
+    "focus": "Find actionable defects in the run artifact contract introduced or exposed by the diff: manifest, decision, report, verify, scope, and workorder shape and field consistency.",
+    "include": [
+      "missing, mistyped, or never-populated fields in manifest.go, decision.go, or report.go",
+      "experiment metadata that is accepted but not persisted into durable artifacts",
+      "single-provider artifact shape that incorrectly implies a winner or majority vote",
+      "verifier output JSON contract mismatches in verify.go",
+      "schema_version or run_kind handling that breaks backward compatibility",
+      "scope or repocontext changes that alter the recorded artifact contract"
+    ],
+    "exclude": [
+      "test-only files (*_test.go) which are covered by a separate lens",
+      "documentation files which are covered by a separate lens",
+      "style-only preferences without project convention evidence",
+      "speculation without file:line evidence"
+    ]
+  },
+  "providers": [
+    { "id": "claude", "backend": "claude", "model": "sonnet", "scope": "codebase", "effort": "high" },
+    { "id": "codex", "backend": "codex", "model": "gpt-5.5", "scope": "codebase", "effort": "high" }
+  ],
+  "scope_policy": { "enforcement": "best_effort" },
+  "judge": { "backend": "claude", "model": "opus", "effort": "xhigh" },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  },
+  "experiment": {
+    "id": "bakeoff-live-agent-eval",
+    "task_id": "runmode-review-1273dce",
+    "run_kind": "multi_lens_child",
+    "repetition_index": 1,
+    "condition_id": "multilens.artifact-contract",
+    "slot_id": "artifact-contract",
+    "slot_attempt": 1
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "exit_code": 0,
+  "final_json_source": "stdout",
+  "io": {
+    "stdout_bytes": 15996,
+    "stderr_bytes": 0,
+    "stdout_observed_bytes": 15996,
+    "stderr_observed_bytes": 0,
+    "total_observed_bytes": 15996,
+    "last_stdout_age": 0.586,
+    "last_stderr_age": null,
+    "last_output_age": 0.586,
+    "heartbeat_count": 3,
+    "quiet_tick_observations": 2,
+    "quiet_tick_count": 1,
+    "quiet_threshold_seconds": 120,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  },
+  "output_bytes": 15996,
+  "status": "ok",
+  "stderr_bytes": 0,
+  "stderr_kind": "none",
+  "stderr_observed_bytes": 0,
+  "stderr_truncated": false,
+  "stdout_bytes": 15996,
+  "stdout_observed_bytes": 15996,
+  "stdout_truncated": false,
+  "wall_seconds": 195.6
+}

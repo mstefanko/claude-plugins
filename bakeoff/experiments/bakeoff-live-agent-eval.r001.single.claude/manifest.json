@@ -1,0 +1,197 @@
+{
+  "artifact_fingerprints": {
+    "decision.json": {
+      "mtime_ns": 1780943856352022978,
+      "sha256": "1e2eae30dbf25586ef5a81cc3dd634fffff3b2bdfc329ad05843023e1356dccb",
+      "size_bytes": 1725
+    },
+    "meta.json": {
+      "mtime_ns": 1780943856997510060,
+      "sha256": "3e6ffe9c5981646843b350812bdd015b1d582aa11877f875c924bc238dd51fd9",
+      "size_bytes": 3400
+    },
+    "providers/claude/final.json": {
+      "mtime_ns": 1780943856339517957,
+      "sha256": "2d8b8985d02e3547b4760431784ba4e3d9f153f7611f18b8c1f544387c717d10",
+      "size_bytes": 10403
+    },
+    "providers/claude/prompt.txt": {
+      "mtime_ns": 1780943359427472140,
+      "sha256": "b96dc208553080f91865b658a2c52d231084c70ab1fcc951e6c27146f7247d26",
+      "size_bytes": 128639
+    },
+    "providers/claude/status.json": {
+      "mtime_ns": 1780943856333167695,
+      "sha256": "28c67e1f2dfff20b928a61ec7f204182cd583fe2003a28503cc9b026585cfce5",
+      "size_bytes": 1156
+    },
+    "providers/claude/stderr.txt": {
+      "mtime_ns": 1780943856327966069,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size_bytes": 0
+    },
+    "providers/claude/stdout.txt": {
+      "mtime_ns": 1780943856321512557,
+      "sha256": "e1d7f4c9885cece9366d88ed72b59c3a64697a8923c971351db7943e1d9cefed",
+      "size_bytes": 14619
+    },
+    "report.md": {
+      "mtime_ns": 1780943856358279030,
+      "sha256": "dc370b0beee9a94050084c3cf177a3c8da0df054b368d85d4f2c9a5dd4ca163f",
+      "size_bytes": 9790
+    },
+    "review-context.json": {
+      "mtime_ns": 1780943359070187257,
+      "sha256": "53a097f07b5c09b8666bb5d630121a8ce3364f955e95569deb80ef06dbb68fe3",
+      "size_bytes": 126013
+    },
+    "review-context.md": {
+      "mtime_ns": 1780943359063517667,
+      "sha256": "5daf125bc0d3ff750598492de046d8d97b52d6605c42b5f7bade1c55741a7a52",
+      "size_bytes": 120095
+    },
+    "source-work-order.json": {
+      "mtime_ns": 1780943359041942761,
+      "sha256": "c31243916c36d0d1510dfb476cf8b8ae746a7a34f8fd8b3f440594ef29182833",
+      "size_bytes": 3202
+    },
+    "work-order.json": {
+      "mtime_ns": 1780943359058033628,
+      "sha256": "df47464a341e6601866613a544673fb7a4bd04e734ba426bf9c05a18592df453",
+      "size_bytes": 129668
+    }
+  },
+  "artifacts": {
+    "decision": "decision.json",
+    "meta": "meta.json",
+    "report": "report.md",
+    "review_context_json": "review-context.json",
+    "review_context_md": "review-context.md",
+    "source_work_order": "source-work-order.json",
+    "work_order": "work-order.json"
+  },
+  "bakeoff_version": "source",
+  "canonical_winner": null,
+  "condition_id": "single.claude",
+  "cwd": "/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/bakeoff",
+  "decision_kind": "single_provider_result",
+  "experiment_id": "bakeoff-live-agent-eval",
+  "facet_id": "code-review",
+  "finished_at": "2026-06-08T18:37:36Z",
+  "judge": {
+    "backend": "claude",
+    "effort": "xhigh",
+    "model": "opus"
+  },
+  "judge_attempted": false,
+  "judge_completed": false,
+  "judge_ran": false,
+  "providers": {
+    "claude": {
+      "backend": "claude",
+      "compact_status": "ok",
+      "effort": "high",
+      "exit_code": 0,
+      "final_json_source": "stdout",
+      "model": "sonnet",
+      "output_bytes": 14619,
+      "scope": "codebase",
+      "scope_enforcement": {
+        "cwd": "/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/bakeoff",
+        "effective_scope": "codebase",
+        "enforcement_level": "enforced",
+        "fallback_reason": null,
+        "mechanisms": [
+          "claude:disallowedTools=WebFetch,WebSearch"
+        ],
+        "policy": "best_effort",
+        "requested_scope": "codebase",
+        "temporary_cwd": false
+      },
+      "status": "ok",
+      "stderr_bytes": 0,
+      "stderr_observed_bytes": 0,
+      "stderr_path": "providers/claude/stderr.txt",
+      "stderr_truncated": false,
+      "stdout_bytes": 14619,
+      "stdout_observed_bytes": 14619,
+      "stdout_truncated": false,
+      "wall_seconds": 496.881
+    }
+  },
+  "repetition_index": 1,
+  "review_context": {
+    "base_commit": "386accc8b8f08cc895b000327b289aca63f6f644",
+    "base_ref": "386accc",
+    "capture_cwd": "/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/bakeoff",
+    "git_root": "/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins",
+    "head_commit": "1273dce5c9f6cdf4eab9ca753d1879e985ff6d14",
+    "included_sections": [
+      "metadata",
+      "diffstat",
+      "changed_files",
+      "patch"
+    ],
+    "pathspec": ".",
+    "present": true
+  },
+  "run_id": "bakeoff-live-agent-eval.r001.single.claude",
+  "run_kind": "single_agent_baseline",
+  "run_mode": "single_provider",
+  "schema_version": 1,
+  "selected_patch_provider": null,
+  "single_provider": "claude",
+  "slot_attempt": null,
+  "slot_id": null,
+  "started_at": "2026-06-08T18:29:18Z",
+  "task_id": "runmode-review-1273dce",
+  "telemetry": {
+    "artifacts": {
+      "output_truncation_count": 0,
+      "prompt_trim_count": 0
+    },
+    "judge": {
+      "backend": "claude",
+      "completed": false,
+      "family": "anthropic",
+      "family_relation": "same_as_all",
+      "judge_passes": null,
+      "order_maps": null,
+      "position_swap_used": false,
+      "ran": false,
+      "selection_basis": "none",
+      "winner_backend": null,
+      "winner_family": null
+    },
+    "providers": {
+      "backends": [
+        "claude"
+      ],
+      "count": 1,
+      "families": [
+        "anthropic"
+      ],
+      "family_diversity": "single"
+    },
+    "rerun_mode": null,
+    "route": {
+      "escalation_mode": null,
+      "facet_id": "code-review",
+      "run_mode": "single_provider",
+      "source_type": null,
+      "type": "gather"
+    },
+    "schema_version": 2,
+    "source_run_id": null,
+    "triage": {
+      "highest_severity": null,
+      "item_count": null,
+      "state": "no"
+    }
+  },
+  "triage": {
+    "stale_inputs": [],
+    "state": "no"
+  },
+  "type": "gather"
+}

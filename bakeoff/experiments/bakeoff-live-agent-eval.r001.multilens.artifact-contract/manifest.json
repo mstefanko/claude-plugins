@@ -1,0 +1,291 @@
+{
+  "artifact_fingerprints": {
+    "decision.json": {
+      "mtime_ns": 1780944243091288642,
+      "sha256": "7687db2014a22b934c30cf4f660dfa79b6f7e96b4cc392618d24dbcdda6853b0",
+      "size_bytes": 3158
+    },
+    "judge/prompt.txt": {
+      "mtime_ns": 1780943998448078978,
+      "sha256": "0b78fd0ec6e198e988241c359e0247e237adc9103c7ad0224a28259df298b7bc",
+      "size_bytes": 19606
+    },
+    "judge/result.json": {
+      "mtime_ns": 1780944243086535144,
+      "sha256": "782eaa7db60bc8a031914112c28aed6094cabc1da98486b4e45f8c632a2499f0",
+      "size_bytes": 14008
+    },
+    "judge/status.json": {
+      "mtime_ns": 1780944243081393392,
+      "sha256": "5e54937092d9c8dfc3204b1631d22f233707c1ec2e624f582d6ea4660c5aee65",
+      "size_bytes": 771
+    },
+    "judge/stderr.txt": {
+      "mtime_ns": 1780944243074966589,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size_bytes": 0
+    },
+    "judge/stdout.txt": {
+      "mtime_ns": 1780944243067879197,
+      "sha256": "9db3b8b606242c91920c9700a289858df55c68bf0222954ab5df87e3920b948d",
+      "size_bytes": 17098
+    },
+    "meta.json": {
+      "mtime_ns": 1780944243224392917,
+      "sha256": "013225747f9afb35ee6c62cd7d009bbb083bc288653cac3a401090b9fb84b9ad",
+      "size_bytes": 4039
+    },
+    "providers/claude/final.json": {
+      "mtime_ns": 1780943998439727491,
+      "sha256": "181bd7892188d4a7b6364423cabf35a8d385e1b5aea702f8be0460038b6980dc",
+      "size_bytes": 9876
+    },
+    "providers/claude/prompt.txt": {
+      "mtime_ns": 1780943470820572149,
+      "sha256": "29c037c8644c5e0484e3e369e5d91bd4e5833d80ff2964babc3ae15dab22b878",
+      "size_bytes": 128738
+    },
+    "providers/claude/status.json": {
+      "mtime_ns": 1780943998431623507,
+      "sha256": "fa186438eea7a04850c333eaf26caaa729816e59a1b5e2dc7b46ff05a75f9585",
+      "size_bytes": 1156
+    },
+    "providers/claude/stderr.txt": {
+      "mtime_ns": 1780943998423287729,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size_bytes": 0
+    },
+    "providers/claude/stdout.txt": {
+      "mtime_ns": 1780943998412134012,
+      "sha256": "5151dee16bbc799225fcc564a8866c5b0d5ea822a682851b3ad305d26659b121",
+      "size_bytes": 13237
+    },
+    "providers/codex/final.json": {
+      "mtime_ns": 1780943738395471592,
+      "sha256": "98c4ded6810143b440389c5e94860550e7ec1f37bf1c5b675d71e32a2ea533d4",
+      "size_bytes": 4845
+    },
+    "providers/codex/last-message.txt": {
+      "mtime_ns": 1780943738286031013,
+      "sha256": "9e379bdd1b0496bf6ba316804e74801bd2b867e6d588c573f1c2bb67a2f2dcc7",
+      "size_bytes": 6650
+    },
+    "providers/codex/prompt.txt": {
+      "mtime_ns": 1780943470826494525,
+      "sha256": "29c037c8644c5e0484e3e369e5d91bd4e5833d80ff2964babc3ae15dab22b878",
+      "size_bytes": 128738
+    },
+    "providers/codex/status.json": {
+      "mtime_ns": 1780943738390394217,
+      "sha256": "97e565269d96240cc4abf93405ce176e0af84078a4fb7ccb177fa6587fb28eff",
+      "size_bytes": 1192
+    },
+    "providers/codex/stderr.txt": {
+      "mtime_ns": 1780943738385190507,
+      "sha256": "e5c62e4334754cbd1a7d5ee81cffd79f6b8c389038dd27f5e07ad0bd67ce907b",
+      "size_bytes": 60049
+    },
+    "providers/codex/stdout.txt": {
+      "mtime_ns": 1780943738377758111,
+      "sha256": "039fff37a8d4c3ea6ef9ad526ab66caa47b92d59487d2f49d7edcdbff39ccddc",
+      "size_bytes": 6651
+    },
+    "report.md": {
+      "mtime_ns": 1780944243096612936,
+      "sha256": "362c90e46cafe4cc857b1638c03219cdc614907fb60a71e7eb66c6cbe3ebdd2b",
+      "size_bytes": 13603
+    },
+    "review-context.json": {
+      "mtime_ns": 1780943470296467723,
+      "sha256": "1a8d17b54bc5f2108d8e002b006e559dcba09c14b31e1230fa527d02d793de97",
+      "size_bytes": 126013
+    },
+    "review-context.md": {
+      "mtime_ns": 1780943470282951792,
+      "sha256": "04657e3bdc495a45c36b1b610ed48021b193cb555b036e6b9a65ecae92c23266",
+      "size_bytes": 120095
+    },
+    "source-work-order.json": {
+      "mtime_ns": 1780943470261537261,
+      "sha256": "28e86b107a5e7f339829d83af68409869c71268b174c4d7ad98d911b1a6e71dd",
+      "size_bytes": 3498
+    },
+    "work-order.json": {
+      "mtime_ns": 1780943470270384659,
+      "sha256": "1fee367285f34fcfb3cd253c9fa535161fe2faf69573b0de205e4ba0a1eea6ec",
+      "size_bytes": 130052
+    }
+  },
+  "artifacts": {
+    "decision": "decision.json",
+    "meta": "meta.json",
+    "report": "report.md",
+    "review_context_json": "review-context.json",
+    "review_context_md": "review-context.md",
+    "source_work_order": "source-work-order.json",
+    "work_order": "work-order.json"
+  },
+  "bakeoff_version": "source",
+  "canonical_winner": null,
+  "condition_id": "multilens.artifact-contract",
+  "cwd": "/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/bakeoff",
+  "decision_kind": "structured_union",
+  "experiment_id": "bakeoff-live-agent-eval",
+  "facet_id": "code-review",
+  "finished_at": "2026-06-08T18:44:03Z",
+  "judge": {
+    "backend": "claude",
+    "effort": "xhigh",
+    "model": "opus"
+  },
+  "judge_attempted": true,
+  "judge_completed": true,
+  "judge_ran": true,
+  "providers": {
+    "claude": {
+      "backend": "claude",
+      "compact_status": "ok",
+      "effort": "high",
+      "exit_code": 0,
+      "final_json_source": "stdout",
+      "model": "sonnet",
+      "output_bytes": 13237,
+      "scope": "codebase",
+      "scope_enforcement": {
+        "cwd": "/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/bakeoff",
+        "effective_scope": "codebase",
+        "enforcement_level": "enforced",
+        "fallback_reason": null,
+        "mechanisms": [
+          "claude:disallowedTools=WebFetch,WebSearch"
+        ],
+        "policy": "best_effort",
+        "requested_scope": "codebase",
+        "temporary_cwd": false
+      },
+      "status": "ok",
+      "stderr_bytes": 0,
+      "stderr_observed_bytes": 0,
+      "stderr_path": "providers/claude/stderr.txt",
+      "stderr_truncated": false,
+      "stdout_bytes": 13237,
+      "stdout_observed_bytes": 13237,
+      "stdout_truncated": false,
+      "wall_seconds": 527.578
+    },
+    "codex": {
+      "backend": "codex",
+      "compact_status": "ok",
+      "effort": "high",
+      "exit_code": 0,
+      "final_json_source": "stdout",
+      "model": "gpt-5.5",
+      "output_bytes": 6651,
+      "scope": "codebase",
+      "scope_enforcement": {
+        "cwd": "/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/bakeoff",
+        "effective_scope": "codebase",
+        "enforcement_level": "enforced",
+        "fallback_reason": null,
+        "mechanisms": [
+          "codex:sandbox=read-only",
+          "codex:disable=web_search"
+        ],
+        "policy": "best_effort",
+        "requested_scope": "codebase",
+        "temporary_cwd": false
+      },
+      "status": "ok",
+      "stderr_bytes": 60000,
+      "stderr_observed_bytes": 388665,
+      "stderr_path": "providers/codex/stderr.txt",
+      "stderr_truncated": true,
+      "stdout_bytes": 6651,
+      "stdout_observed_bytes": 6651,
+      "stdout_truncated": false,
+      "wall_seconds": 267.537
+    }
+  },
+  "repetition_index": 1,
+  "review_context": {
+    "base_commit": "386accc8b8f08cc895b000327b289aca63f6f644",
+    "base_ref": "386accc",
+    "capture_cwd": "/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/bakeoff",
+    "git_root": "/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins",
+    "head_commit": "1273dce5c9f6cdf4eab9ca753d1879e985ff6d14",
+    "included_sections": [
+      "metadata",
+      "diffstat",
+      "changed_files",
+      "patch"
+    ],
+    "pathspec": ".",
+    "present": true
+  },
+  "run_id": "bakeoff-live-agent-eval.r001.multilens.artifact-contract",
+  "run_kind": "multi_lens_child",
+  "run_mode": "pairwise",
+  "schema_version": 1,
+  "selected_patch_provider": null,
+  "single_provider": null,
+  "slot_attempt": 1,
+  "slot_id": "artifact-contract",
+  "started_at": "2026-06-08T18:31:10Z",
+  "task_id": "runmode-review-1273dce",
+  "telemetry": {
+    "artifacts": {
+      "output_truncation_count": 0,
+      "prompt_trim_count": 0
+    },
+    "judge": {
+      "backend": "claude",
+      "completed": true,
+      "family": "anthropic",
+      "family_relation": "same_as_some",
+      "judge_passes": null,
+      "order_maps": {
+        "pass1": {
+          "A": "claude",
+          "B": "codex"
+        }
+      },
+      "position_swap_used": false,
+      "ran": true,
+      "selection_basis": null,
+      "winner_backend": null,
+      "winner_family": null
+    },
+    "providers": {
+      "backends": [
+        "claude",
+        "codex"
+      ],
+      "count": 2,
+      "families": [
+        "anthropic",
+        "openai"
+      ],
+      "family_diversity": "mixed"
+    },
+    "rerun_mode": null,
+    "route": {
+      "escalation_mode": null,
+      "facet_id": "code-review",
+      "run_mode": "pairwise",
+      "source_type": null,
+      "type": "gather"
+    },
+    "schema_version": 2,
+    "source_run_id": null,
+    "triage": {
+      "highest_severity": null,
+      "item_count": null,
+      "state": "no"
+    }
+  },
+  "triage": {
+    "stale_inputs": [],
+    "state": "no"
+  },
+  "type": "gather"
+}

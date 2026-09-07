@@ -1,0 +1,1 @@
+worker final_json.recommended_next_checks must be an array of strings (worker final_json.recommended_next_checks[0] got object)

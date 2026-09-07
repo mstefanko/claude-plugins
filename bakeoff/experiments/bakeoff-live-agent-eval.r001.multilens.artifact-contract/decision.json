@@ -1,0 +1,106 @@
+{
+  "canonical_winner": null,
+  "caveats": [],
+  "decision_kind": "structured_union",
+  "judge_attempted": true,
+  "judge_completed": true,
+  "judge_ran": true,
+  "judge_rationale": [],
+  "mode": "gather",
+  "order_maps": {
+    "pass1": {
+      "A": "claude",
+      "B": "codex"
+    }
+  },
+  "provider_statuses": {
+    "claude": {
+      "exit_code": 0,
+      "final_json_source": "stdout",
+      "io": {
+        "stdout_bytes": 13237,
+        "stderr_bytes": 0,
+        "stdout_observed_bytes": 13237,
+        "stderr_observed_bytes": 0,
+        "total_observed_bytes": 13237,
+        "last_stdout_age": 0.377,
+        "last_stderr_age": null,
+        "last_output_age": 0.377,
+        "heartbeat_count": 8,
+        "quiet_tick_observations": 7,
+        "quiet_tick_count": 1,
+        "quiet_threshold_seconds": 120,
+        "output_cap_grace_seconds": 10,
+        "max_output_overrun_bytes": 60000
+      },
+      "output_bytes": 13237,
+      "scope_enforcement": {
+        "cwd": "/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/bakeoff",
+        "effective_scope": "codebase",
+        "enforcement_level": "enforced",
+        "fallback_reason": null,
+        "mechanisms": [
+          "claude:disallowedTools=WebFetch,WebSearch"
+        ],
+        "policy": "best_effort",
+        "requested_scope": "codebase",
+        "temporary_cwd": false
+      },
+      "status": "ok",
+      "stderr_bytes": 0,
+      "stderr_kind": "none",
+      "stderr_observed_bytes": 0,
+      "stderr_path": "providers/claude/stderr.txt",
+      "stderr_truncated": false,
+      "stdout_bytes": 13237,
+      "stdout_observed_bytes": 13237,
+      "stdout_truncated": false,
+      "wall_seconds": 527.578
+    },
+    "codex": {
+      "exit_code": 0,
+      "final_json_source": "stdout",
+      "io": {
+        "stdout_bytes": 6651,
+        "stderr_bytes": 60000,
+        "stdout_observed_bytes": 6651,
+        "stderr_observed_bytes": 388665,
+        "total_observed_bytes": 395316,
+        "last_stdout_age": 0.091,
+        "last_stderr_age": 0.091,
+        "last_output_age": 0.091,
+        "heartbeat_count": 4,
+        "quiet_tick_observations": 0,
+        "quiet_tick_count": 0,
+        "quiet_threshold_seconds": 120,
+        "output_cap_grace_seconds": 10,
+        "max_output_overrun_bytes": 60000
+      },
+      "output_bytes": 6651,
+      "scope_enforcement": {
+        "cwd": "/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/bakeoff",
+        "effective_scope": "codebase",
+        "enforcement_level": "enforced",
+        "fallback_reason": null,
+        "mechanisms": [
+          "codex:sandbox=read-only",
+          "codex:disable=web_search"
+        ],
+        "policy": "best_effort",
+        "requested_scope": "codebase",
+        "temporary_cwd": false
+      },
+      "status": "ok",
+      "stderr_bytes": 60000,
+      "stderr_kind": "diagnostic",
+      "stderr_observed_bytes": 388665,
+      "stderr_path": "providers/codex/stderr.txt",
+      "stderr_truncated": true,
+      "stdout_bytes": 6651,
+      "stdout_observed_bytes": 6651,
+      "stdout_truncated": false,
+      "wall_seconds": 267.537
+    }
+  },
+  "run_mode": "pairwise"
+}

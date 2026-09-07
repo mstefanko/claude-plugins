@@ -1,0 +1,114 @@
+<scratchpad>
+Candidate findings, checked against diff evidence:
+
+1. **reportGlossary gates on decision["run_mode"]** — report.go:1132 checks `jsonutil.StringValue(decision["run_mode"]) != workorder.RunModeSingleProvider`, but plan doc enumerates live decision.json fields as: `canonical_winner, single_provider, decision_kind, selection_basis, judge_ran/attempted/completed` — NO `run_mode`. Unit test explicitly passes `"run_mode": workorder.RunModeSingleProvider` in the decision map, masking production behavior. Fix would be a no-op if decision.json doesn't contain run_mode.
+
+2. **verify.ExperimentMap stringPtrValue returns "" for nil** — verify.go adds `stringPtrValue` helper that returns `""` for nil pointer. Required string fields (task_id, condition_id, run_kind) in ExperimentMap use this, so nil pointer → `""` in verify JSON, not `nil`. Contract mismatch with workorder.ExperimentMap and manifest which use nilIfEmpty.
+
+3. **scope.go enforcement_level backward-incompatible change** — scope.go:110 adds `|| (len(mechanisms) > 0 && len(fallbackReasons) == 0)` to the "enforced" condition. Codex codebase scope previously emitted `"partial"`, now emits `"enforced"`. Breaks consumers checking for `"partial"` to detect limitations.
+
+4. **repocontext.go 3+ part paths now treated as prose** — old code `len(parts) != 2` returned false (real path) for 3+ part paths. New code `len(parts) < 2` lets 3+ part paths through. Switch only checks parts[0]. Any 3+ part all-lowercase path with unknown root prefix (e.g., "examples/mylib/foo") is now classified as prose, silently skipping validation.
+
+5. **validateSingleProviderDecision missing selection_basis invariant** — verify.go:350-379 checks canonical_winner, single_provider, judge flags, decision_kind, but not `selection_basis == "none"` for single-provider decisions.
+
+6. **decision.go adds selection_basis = spine_tiebreak creating redundant canonical fields** — decision.go:230 sets `out["selection_basis"] = tiebreak` and `out["spine_tiebreak"] = tiebreak`. Manifest reads via `firstNonEmpty(selection_basis, spine_tiebreak)`. Consumers face ambiguity about which field is canonical.
+
+7. **addExperimentManifestFields fallback — repetition_index type from workOrder may be float64** — manifest.go:384-395 fallback reads workOrder["experiment"]["repetition_index"] from JSON-unmarshal map, where integers arrive as float64. Primary meta path likely uses int. The manifest serialization would emit correct JSON integer, but intermediate Go values differ. Cannot fully confirm without seeing function body — mark as unknown.
+
+8. **report.go reportGlossary uses decision["judge_ran"] not wo field for R-NNN** — if decision.json lacks judge_ran key (empty map case), R-NNN is silently omitted. For the single-provider case where judge_ran=false this is correct. Not a defect.
+
+9. **dynamicRequiredArtifacts signature change** — decision map now passed as parameter, shared from outer scope. If decision.json read fails (empty map), dynamic artifacts for build based on selected_patch_provider/canonical_winner would silently return nil. This was the same behavior before (file was read with same function). Not a regression.
+
+Finalized claims: 1, 2, 3, 4, 5, 6. Drop 7 (low confidence, move to unknown). Drop 8, 9 (not defects).
+</scratchpad>
+
+<final_json>
+{
+  "status": "complete",
+  "claims": [
+    {
+      "id": "R-001",
+      "claim": "reportGlossary gates the nonwinner/loser glossary bullet on `decision[\"run_mode\"] != workorder.RunModeSingleProvider`, but the live single-provider run's decision.json field inventory in the hardening plan (canonical_winner, single_provider, decision_kind, selection_basis, judge_ran/attempted/completed) does not include a `run_mode` key. The unit test explicitly injects `\"run_mode\": workorder.RunModeSingleProvider` into its decision map (report_test.go:157), masking whether production code actually writes that key to decision.json. If `SingleProviderResult` omits `run_mode` from decision.json, `reportGlossary` always evaluates `\"\" != \"single_provider\"` as true and always appends the pairwise nonwinner text, making the entire P2 glossary fix a no-op.",
+      "evidence": [
+        "bakeoff/internal/report/report.go:1132 — if jsonutil.StringValue(decision[\"run_mode\"]) != workorder.RunModeSingleProvider",
+        "bakeoff/docs/single-provider-artifact-contract-hardening-plan-2026-06-08.md:31 — live decision.json reference shape enumerates: canonical_winner, single_provider, decision_kind, selection_basis, judge_ran/attempted/completed (no run_mode)",
+        "bakeoff/internal/report/report_test.go:157 — test explicitly passes \"run_mode\": workorder.RunModeSingleProvider in decision map"
+      ],
+      "severity": "medium",
+      "confidence": "medium"
+    },
+    {
+      "id": "R-002",
+      "claim": "`verify.ExperimentMap` uses `stringPtrValue` for required string fields (task_id, condition_id, run_kind), which returns `\"\"` (empty string) when the pointer is nil. This means a manifest with null or absent task_id/condition_id/run_kind fields would produce `\"task_id\": \"\"` in the verify JSON output instead of `null`. This is a contract inconsistency with `workorder.ExperimentMap` and `manifest.addExperimentManifestFields`, both of which use `nilIfEmpty` to emit explicit null for absent string fields. A consumer comparing the verify JSON against the manifest JSON would see mismatched representations for the same absent field.",
+      "evidence": [
+        "bakeoff/internal/verify/verify.go:226-233 — ExperimentMap sets id/task_id/condition_id/run_kind via stringPtrValue(m.TaskID) etc.",
+        "bakeoff/internal/verify/verify.go:247-253 — stringPtrValue returns \"\" for nil pointer",
+        "bakeoff/internal/workorder/workorder.go:399 — ExperimentMap emits fields via direct assignment (non-nil required), compare to nilIfEmpty usage in manifest"
+      ],
+      "severity": "low",
+      "confidence": "high"
+    },
+    {
+      "id": "R-003",
+      "claim": "`scope.go` changes `enforcementLevel` from `\"partial\"` to `\"enforced\"` when `len(mechanisms) > 0 && len(fallbackReasons) == 0`, covering codex codebase scope (sandbox=read-only + disable=web_search) and any other scope where all requested mechanisms were applied without fallback. Prior to this diff, those cases emitted `\"partial\"`. Existing `meta.json` and manifest consumers (run ledgers, external harnesses) that branch on `enforcement_level == \"partial\"` to detect scope limitations would now see `\"enforced\"` and behave differently. The test confirms the new value (`scope_test.go:52`) but does not verify backward compatibility with existing run artifacts that already recorded `\"partial\"` under the same conditions.",
+      "evidence": [
+        "bakeoff/internal/scope/scope.go:110 — if requestedScope == \"mixed\" || (len(mechanisms) > 0 && len(fallbackReasons) == 0) { enforcementLevel = \"enforced\" }",
+        "bakeoff/docs/single-provider-telemetry-hardening-plan-2026-06-08.md:149-155 — live run shows partial + null reason for fully-applied codex controls, confirming the old value",
+        "bakeoff/internal/scope/scope_test.go:52 — asserts enforcement_level == \"enforced\" for codex codebase controls"
+      ],
+      "severity": "medium",
+      "confidence": "high"
+    },
+    {
+      "id": "R-004",
+      "claim": "`slashDelimitedProse` in `repocontext.go` previously returned `false` (treat as real path) for any slash-separated token with more than two parts. After the diff it allows 3+ part tokens through to the switch check. The switch only tests `parts[0]` against a fixed list of known directory roots (`internal`, `cmd`, `pkg`, `src`, `app`, `apps`, `lib`, `libs`, `docs`, `test`, `tests`, `scripts`). Any 3+ part all-lowercase path whose first component is not in that list — such as `examples/mylib/foo` or `bakeoff/internal/manifest` — is now classified as prose and silently excluded from path-existence validation. A genuinely missing reference in a work order background field that uses a 3+ component path with an unknown root would no longer produce a warning.",
+      "evidence": [
+        "bakeoff/internal/repocontext/repocontext.go:307 — old: if len(parts) != 2 { return false }; new: if len(parts) < 2 { return false }",
+        "bakeoff/internal/repocontext/repocontext.go:316-322 — switch parts[0] covers only the listed directory prefixes; any other root returns true (prose)"
+      ],
+      "severity": "low",
+      "confidence": "high"
+    },
+    {
+      "id": "R-005",
+      "claim": "`validateSingleProviderDecision` in `verify.go` checks `decision_kind`, `canonical_winner`, `single_provider`, and all three `judge_*` boolean flags, but does not assert the `selection_basis` invariant. For a valid single-provider run `selection_basis` must be `\"none\"`. A corrupted or manually edited `decision.json` with `selection_basis` set to an unexpected value (e.g., `\"swap_agreement\"`) would pass semantic validation silently. This leaves a gap in the regression-guard that the verify change is otherwise introducing.",
+      "evidence": [
+        "bakeoff/internal/verify/verify.go:350-379 — validateSingleProviderDecision checks kind, canonical_winner, single_provider, judge_ran/attempted/completed; no selection_basis assertion",
+        "bakeoff/docs/single-provider-artifact-contract-hardening-plan-2026-06-08.md:31 — live reference shape: selection_basis: \"none\""
+      ],
+      "severity": "low",
+      "confidence": "high"
+    },
+    {
+      "id": "R-006",
+      "claim": "`ResolveAnalyze` in `decision.go` now writes both `out[\"selection_basis\"] = tiebreak` and `out[\"spine_tiebreak\"] = tiebreak` (the two assignments are one line apart). `manifest.go` reads `firstNonEmpty(decision[\"selection_basis\"], decision[\"spine_tiebreak\"])`, making `spine_tiebreak` dead for telemetry purposes on new runs since `selection_basis` is always set first. Decision.json for every new analyze run now carries two fields with identical values but different names. External consumers reading decision.json directly (not via manifest telemetry) are left with an ambiguous canonical field: `selection_basis` or `spine_tiebreak`. Older runs still have only `spine_tiebreak`, so the two fields carry different information depending on when the run was created.",
+      "evidence": [
+        "bakeoff/internal/decision/decision.go:228-231 — out[\"spine_tiebreak\"] = tiebreak followed immediately by out[\"selection_basis\"] = tiebreak",
+        "bakeoff/internal/manifest/manifest.go:476 — firstNonEmpty(decision[\"selection_basis\"], decision[\"spine_tiebreak\"]) — selection_basis always wins on new runs"
+      ],
+      "severity": "low",
+      "confidence": "high"
+    },
+    {
+      "id": "R-007",
+      "claim": "`addExperimentManifestFields` now falls back to `workOrder[\"experiment\"]` when `meta[\"experiment\"]` is absent or empty. The `workOrder` map is the result of JSON-unmarshaling the archived `work-order.json` into `map[string]any`, where all JSON number values — including `repetition_index` — arrive as `float64`. The meta path likely writes `repetition_index` as a Go integer. If the fallback path passes the `float64` value directly into the manifest output map without integer coercion, the manifest field type diverges between the primary and fallback paths. Whether this causes a downstream issue depends on how the manifest serializes and how verify.go's `RepetitionIndex *int` field reads it back.",
+      "evidence": [
+        "bakeoff/internal/manifest/manifest.go:384-395 — addExperimentManifestFields reads experiment from workOrder when meta is absent; workOrder is a map[string]any from JSON unmarshal",
+        "bakeoff/internal/verify/verify.go:206 — manifestDocument.RepetitionIndex *int json:\"repetition_index\" — strict int unmarshal target"
+      ],
+      "severity": "medium",
+      "confidence": "low"
+    }
+  ],
+  "conflicts": [],
+  "unknowns": [
+    "Does SingleProviderResult in decision.go write run_mode into decision.json? The diff does not include the SingleProviderResult function body, and the plan doc's enumeration of live decision.json fields omits run_mode. Cannot confirm without reading the unchanged function.",
+    "Does addExperimentManifestFields apply integer coercion to repetition_index before writing to the manifest output map? The function body beyond the signature is not visible in the diff.",
+    "Does ProviderSucceeded in artifact package check status==\"ok\" only, or does it accept other passing statuses? Used in diagnosticStderrOnly; cannot verify without seeing artifact package."
+  ],
+  "recommended_next_checks": [
+    "Verify whether SingleProviderResult (decision.go, not changed in diff) includes run_mode in its output map. If absent, reportGlossary fix at report.go:1132 must be changed to gate on decision_kind or decision[\"single_provider\"] instead of decision[\"run_mode\"].",
+    "Check whether researchcmd/run.go augments the decision map with run_mode from the work order before passing it to report.Render. If it does, R-001 is resolved; if it does not, the fix is inoperative."
+  ]
+}
+</final_json>

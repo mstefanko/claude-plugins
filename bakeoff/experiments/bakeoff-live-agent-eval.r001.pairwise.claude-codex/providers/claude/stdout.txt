@@ -1,0 +1,197 @@
+<scratchpad>
+## Candidate Findings
+
+### 1. reportGlossary depends on decision["run_mode"] — unreliable
+- `internal/report/report.go:1123`: `jsonutil.StringValue(decision["run_mode"]) != workorder.RunModeSingleProvider`
+- But `Render` has `wo *workorder.WorkOrder` in scope with reliable `wo.RunMode`
+- Plan doc (`single-provider-artifact-contract-hardening-plan-2026-06-08.md`) lists confirmed decision.json keys for single_provider: `canonical_winner:null`, `single_provider:codex`, `decision_kind:single_provider_result`, `selection_basis:none`, `judge_ran/attempted/completed:false` — no `run_mode`
+- Test `report_test.go:152-170` artificially injects `"run_mode": workorder.RunModeSingleProvider` into decision map, so test passes regardless of whether real decision.json has this field
+- If `decision.json` lacks `run_mode`, `reportGlossary` always renders the pairwise "Kept-from-nonwinner" text, silently breaking the fix
+- HIGH severity, MEDIUM confidence
+
+### 2. Double EnsureChildPath call on force path
+- In researchcmd/run.go: force branch calls `ledger.EnsureChildPath(opts.Out, runDir)` at ~line 68
+- Then `if replaceRunDir` block at ~line 101 calls it again
+- When `opts.Force=true`, both branches execute, so two calls happen
+- MEDIUM severity, HIGH confidence
+
+### 3. firstNonEmpty(selection_basis, spine_tiebreak) can pollute telemetry
+- `internal/manifest/manifest.go:479`: `nilIfEmpty(firstNonEmpty(jsonutil.StringValue(decision["selection_basis"]), jsonutil.StringValue(decision["spine_tiebreak"])))`
+- For non-analyze decision types (compare, gather structured_union) where `selection_basis` is intentionally absent, if `spine_tiebreak` is present, it gets reported as `selection_basis` — misleading telemetry
+- For single_provider: `selection_basis:"none"` is set, `spine_tiebreak` absent → `nilIfEmpty("none")` returns `"none"` which is correct
+- For compare tie: `selection_basis` may be empty, `spine_tiebreak` might be set to tiebreak value → incorrect telemetry
+- MEDIUM severity, MEDIUM confidence
+
+### 4. scope.go: len(mechanisms)==0 block may override new "enforced" logic
+- `internal/scope/scope.go:107-111`: new condition `(len(mechanisms) > 0 && len(fallbackReasons) == 0)` adds "enforced" path
+- The subsequent `if len(mechanisms) == 0` block content not visible in diff — if it unconditionally overwrites enforcementLevel, the first condition is dead for that edge case
+- Cannot confirm without full scope.go context
+- MEDIUM severity, LOW confidence
+
+### 5. TestRunResearchReclaimsIncompleteRunDirWithoutForce: weak coverage
+- `internal/commands/researchcmd/run_test.go:117-168`: test only checks `fsutil.FileExists(filepath.Join(runDir, "manifest.json"))` — doesn't verify decision.json shape, report content, or that provider output was correctly recorded
+- MEDIUM severity, MEDIUM confidence (test quality finding)
+
+### 6. docs/work-orders.md silently takes Option B on summary.json
+- `bakeoff/docs/work-orders.md:129-131`: changes "summary.json" to "command JSON summaries" but doesn't explicitly state `summary.json` is not written as a file artifact
+- Plan (`single-provider-artifact-contract-hardening-plan-2026-06-08.md` P1) flagged this as requiring a human product decision; the doc change is vague
+- LOW severity, HIGH confidence
+
+### 7. ExperimentMap returns "" for nil pointer required fields
+- `internal/verify/verify.go:219-222`: `stringPtrValue(m.TaskID)`, `stringPtrValue(m.ConditionID)`, `stringPtrValue(m.RunKind)` return `""` for nil
+- If `experiment_id` is set but `task_id` is nil (malformed manifest), `"task_id":""` appears in experiment map rather than nil/absent
+- LOW severity, HIGH confidence
+
+### 8. addExperimentManifestFields: partial meta.experiment blocks prevent workOrder fallback
+- `internal/manifest/manifest.go:382-397`: fallback to `workOrder["experiment"]` only fires when `meta["experiment"]` is not ok OR `len(experiment) == 0`
+- If `meta["experiment"]` is non-empty but partial (partial write scenario), fallback never fires, manifest gets incomplete experiment fields
+- MEDIUM severity, HIGH confidence
+
+### 9. TestBuildResearchProjectsSingleProviderFields injects run_mode not in real decision.json
+- `internal/summary/summary_test.go:67-81`: passes `"run_mode": workorder.RunModeSingleProvider` in the decision map
+- If `BuildResearch` reads `run_mode` from the decision map to populate `got.RunMode`, but actual production decision.json lacks `run_mode`, the test doesn't validate real behavior
+- LOW severity, MEDIUM confidence
+
+### 10. researchRunDirIsIncomplete: meta.json not in allowed set
+- `internal/commands/researchcmd/run.go:233-247`: allowed set includes `work-order.json`, `source-work-order.json`, `review-context.md`, `review-context.json` but NOT `meta.json`
+- If a run fails after writing `meta.json` but before writing `decision.json`/`manifest.json`, the dir is NOT auto-reclaimable (meta.json is unknown → returns false)
+- This means the feature only saves from the very earliest orphan (just work-order.json)
+- LOW severity, MEDIUM confidence (could argue this is intentional conservative design)
+
+### 11. decision.go: selection_basis set only in ResolveAnalyze, not other decision paths
+- `internal/decision/decision.go:230`: `out["selection_basis"] = tiebreak` added to `ResolveAnalyze` only
+- `ResolveCompare`, `SingleProviderResult`, `SingleProviderFailed`, `GatherStructuredUnion` etc. presumably don't set it
+- manifest.go's `firstNonEmpty` fallback covers the analyze case; other paths still get nil/empty `selection_basis` in telemetry
+- LOW severity, HIGH confidence (this may be intentional for non-analyze paths)
+
+### 12. Verify Result.Experiment: RunMode field in manifestDocument
+- `internal/verify/verify.go:197`: `RunMode string` added to `manifestDocument`
+- Old manifests without `run_mode` in JSON would unmarshal `RunMode = ""` → verify activation `loadedManifest.RunMode == RunModeSingleProvider` is `false` → single_provider validation skipped for old runs
+- This is correct backward-compatible behavior, not a defect
+
+### Cross-check of evidence quality:
+- R-001 (HIGH, MEDIUM): reportGlossary — plan doc lists decision keys explicitly, no run_mode listed. Test injects artificially. STRONG finding.
+- R-002 (MEDIUM, HIGH): Double EnsureChildPath — clearly visible in diff. STRONG finding.
+- R-003 (MEDIUM, MEDIUM): firstNonEmpty — need to reason about which decision types have spine_tiebreak without selection_basis. MODERATE.
+- R-004 (MEDIUM, LOW): scope.go interaction — diff only shows 2 lines, full context unknown. WEAK.
+- R-005 (MEDIUM, MEDIUM): test coverage gap — visible in test diff. MODERATE.
+- R-006 (LOW, HIGH): docs gap — clear from plan and diff. STRONG.
+- R-007 (LOW, HIGH): stringPtrValue — clear from code. STRONG.
+- R-008 (MEDIUM, HIGH): partial meta fallback — logic visible in diff. STRONG.
+- R-009 (LOW, MEDIUM): test injects run_mode — same issue as R-001 but in different test. MODERATE.
+- R-010 (LOW, MEDIUM): meta.json not in allowed set — visible in diff. MODERATE.
+</scratchpad>
+
+<final_json>
+{
+  "status": "complete",
+  "claims": [
+    {
+      "id": "R-001",
+      "claim": "reportGlossary gates the pairwise 'Kept-from-nonwinner' text on decision[\"run_mode\"], but the confirmed single_provider decision.json keys (canonical_winner, single_provider, decision_kind, selection_basis, judge_ran/attempted/completed) do not include run_mode. The test artificially injects \"run_mode\": workorder.RunModeSingleProvider into the decision map, so it passes regardless of what decision.json actually contains. If SingleProviderResult omits run_mode from the decision map, the glossary fix silently fails in production and every single-provider report still prints the pairwise-only gloss. Render already receives wo *workorder.WorkOrder with reliable wo.RunMode, which reportGlossary does not use.",
+      "evidence": [
+        "bakeoff/internal/report/report.go:1123 (gates on jsonutil.StringValue(decision[\"run_mode\"]))",
+        "bakeoff/internal/report/report_test.go:152-170 (TestRenderSingleProviderGlossaryOmitsPairwiseTerms injects run_mode into decision map)",
+        "bakeoff/docs/single-provider-artifact-contract-hardening-plan-2026-06-08.md (Confirmed-correct baseline lists decision.json keys without run_mode)",
+        "bakeoff/plans/single-provider-hardening-plan.md (Verified OK section: decision.json shape lists canonical_winner, selection_basis:none, judge_ran/attempted/completed, single_provider — no run_mode)"
+      ],
+      "severity": "high",
+      "confidence": "medium"
+    },
+    {
+      "id": "R-002",
+      "claim": "When opts.Force=true and the run dir exists, EnsureChildPath(opts.Out, runDir) is called twice: once in the else/force branch and again in the if replaceRunDir block. The double call is redundant. If EnsureChildPath is not idempotent or carries side effects in future changes, this will silently misfire. Failing scenario: any --force run where the force-branch EnsureChildPath succeeds but the second call (after state changes between them) would fail.",
+      "evidence": [
+        "bakeoff/internal/commands/researchcmd/run.go (diff: force branch adds EnsureChildPath at ~line 68; if replaceRunDir block adds another EnsureChildPath at ~line 101)"
+      ],
+      "severity": "medium",
+      "confidence": "high"
+    },
+    {
+      "id": "R-003",
+      "claim": "addExperimentManifestFields falls back to workOrder[\"experiment\"] only when meta[\"experiment\"] is absent or len==0. If meta.json carries a non-empty but partial experiment block (e.g. partial write under crash), the condition !ok || len(experiment)==0 is false, the fallback to workOrder never fires, and the manifest gets incomplete experiment fields. The authoritative archived work-order.json always has the full block.",
+      "evidence": [
+        "bakeoff/internal/manifest/manifest.go:382-397 (addExperimentManifestFields; fallback gated on !ok || len(experiment)==0)"
+      ],
+      "severity": "medium",
+      "confidence": "high"
+    },
+    {
+      "id": "R-004",
+      "claim": "firstNonEmpty(decision[\"selection_basis\"], decision[\"spine_tiebreak\"]) in telemetrySummary can surface spine_tiebreak as selection_basis for decision types where selection_basis is intentionally absent. For compare tiebreak runs where selection_basis is empty but spine_tiebreak is set, the manifest would emit selection_basis=spine_tiebreak value. For single_provider runs selection_basis is \"none\" so nilIfEmpty returns \"none\" correctly; the risk is for compare/tie paths where the two fields have distinct semantics.",
+      "evidence": [
+        "bakeoff/internal/manifest/manifest.go:479 (nilIfEmpty(firstNonEmpty(...selection_basis, ...spine_tiebreak)))"
+      ],
+      "severity": "medium",
+      "confidence": "medium"
+    },
+    {
+      "id": "R-005",
+      "claim": "TestRunResearchReclaimsIncompleteRunDirWithoutForce verifies only that manifest.json is created after recovery, not that decision.json has the correct single_provider shape, that provider artifacts are present, or that the report renders correctly. An implementation that silently replaces an incomplete dir and produces a malformed manifest would pass this test.",
+      "evidence": [
+        "bakeoff/internal/commands/researchcmd/run_test.go:117-168 (test body ends with fsutil.FileExists(manifest.json) check only)"
+      ],
+      "severity": "medium",
+      "confidence": "medium"
+    },
+    {
+      "id": "R-006",
+      "claim": "docs/work-orders.md silently replaces \"summary.json\" with \"command JSON summaries\" without explicitly stating that summary.json is not written as a file artifact. The single-provider artifact contract plan identified this as requiring a human product decision (Option A: write summary.json; Option B: correct docs with an explicit file-not-written statement). The implemented change takes Option B implicitly but the wording remains ambiguous — a harness author reading the contract would not know summary.json is absent.",
+      "evidence": [
+        "bakeoff/docs/work-orders.md:129-131 (diff: 'summary.json' → 'command JSON summaries')",
+        "bakeoff/docs/single-provider-artifact-contract-hardening-plan-2026-06-08.md P1 section (identifies this as a ship-blocker human decision)"
+      ],
+      "severity": "low",
+      "confidence": "high"
+    },
+    {
+      "id": "R-007",
+      "claim": "ExperimentMap in verify.go uses stringPtrValue(m.TaskID), stringPtrValue(m.ConditionID), stringPtrValue(m.RunKind) which returns empty string for nil pointers. A manifest with experiment_id set but task_id/condition_id/run_kind unexpectedly nil would produce {\"task_id\":\"\", ...} rather than nil, making the experiment map misleadingly populated for malformed manifests.",
+      "evidence": [
+        "bakeoff/internal/verify/verify.go:219-222 (ExperimentMap uses stringPtrValue for required string pointer fields)"
+      ],
+      "severity": "low",
+      "confidence": "high"
+    },
+    {
+      "id": "R-008",
+      "claim": "TestBuildResearchProjectsSingleProviderFields in summary_test.go passes \"run_mode\": workorder.RunModeSingleProvider in the decision map to BuildResearch. If BuildResearch reads run_mode from the decision map to populate the RunMode field in the result (mirroring the reportGlossary issue in R-001), and real decision.json doesn't contain run_mode, then got.RunMode would be \"\" in production while the test expects RunModeSingleProvider.",
+      "evidence": [
+        "bakeoff/internal/summary/summary_test.go:67-81 (test injects run_mode in decision map passed to BuildResearch)"
+      ],
+      "severity": "low",
+      "confidence": "medium"
+    },
+    {
+      "id": "R-009",
+      "claim": "researchRunDirIsIncomplete's allowed set omits meta.json. A run that proceeds far enough to write meta.json before crashing (but before writing decision.json or manifest.json) leaves a dir with work-order.json + meta.json. The function sees meta.json as an unknown file and returns false, so the run is NOT auto-reclaimable without --force. This limits the feature to only the very earliest orphan scaffold (just work-order.json), which may surprise users who see a run fail mid-flight after meta.json is written.",
+      "evidence": [
+        "bakeoff/internal/commands/researchcmd/run.go:233-247 (allowed set: work-order.json, source-work-order.json, review-context.md, review-context.json — meta.json absent)"
+      ],
+      "severity": "low",
+      "confidence": "medium"
+    },
+    {
+      "id": "R-010",
+      "claim": "selection_basis is now set to tiebreak only in ResolveAnalyze. Other decision resolution paths (ResolveCompare, SingleProviderResult, SingleProviderFailed, GatherStructuredUnion) do not receive this fix. The manifest telemetrySummary's firstNonEmpty fallback covers analyze paths, but for compare or gather paths where selection_basis remains absent and spine_tiebreak is also absent, selection_basis stays nil in telemetry. This is asymmetric coverage of the original Finding 1 from the telemetry hardening plan.",
+      "evidence": [
+        "bakeoff/internal/decision/decision.go:230 (out[\"selection_basis\"] = tiebreak added only to ResolveAnalyze)",
+        "bakeoff/docs/single-provider-telemetry-hardening-plan-2026-06-08.md Finding 1 (describes selection_basis as null in manifest.telemetry.judge)"
+      ],
+      "severity": "low",
+      "confidence": "high"
+    }
+  ],
+  "conflicts": [],
+  "unknowns": [
+    "Whether SingleProviderResult in internal/decision/decision.go writes run_mode to the decision map output (not shown in diff; determines whether R-001 and R-008 are production bugs or just test-quality gaps)",
+    "Full content of the if len(mechanisms)==0 block in internal/scope/scope.go — the diff shows only 2 changed lines; the interaction with the new enforced condition for edge cases like requestedScope==mixed and len(mechanisms)==0 is unresolvable from the diff alone",
+    "Whether BuildResearch in internal/summary/summary.go reads run_mode from the decision map or from the work order struct (determines R-008 severity)"
+  ],
+  "recommended_next_checks": [
+    "Grep for run_mode in internal/decision/decision.go to confirm whether SingleProviderResult writes run_mode into the decision output map — this is the key question for R-001",
+    "Read full internal/scope/scope.go to confirm the len(mechanisms)==0 block does not override the new 'enforced' assignment for the requestedScope=='mixed' path",
+    "Verify that examples/repetition-loop.sh and examples/single-provider.work-order.json (cited in work orders but not in diff) are consistent with the updated summary.json contract in docs/work-orders.md"
+  ]
+}
+</final_json>

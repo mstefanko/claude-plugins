@@ -11,6 +11,7 @@ Source of truth: `.claude-plugin/marketplace.json`.
 | `swarmdaddy`     | `swarm-do/`       | Beads-backed multi-agent orchestration. The big one.       |
 | `obsidian-notes` | `obsidian-notes/` | Save/search notes in an Obsidian vault.                    |
 | `tech-radar`     | `tech-radar/`     | Scan trending repos against the user's stack.              |
+| `deglaze`          | `deglaze/`          | `/deglaze`: single-pass sassy adversarial critic. Prompt-only, no scripts in the skill. Evals in `deglaze/evals/`. |
 
 **Gotcha:** the plugin is `swarmdaddy`; the directory is `swarm-do/`. Slash commands and skill IDs use `swarmdaddy:*`; filesystem paths use `swarm-do/`.
 

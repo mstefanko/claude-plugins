@@ -1,0 +1,203 @@
+{
+  "artifact_fingerprints": {
+    "decision.json": {
+      "mtime_ns": 1780943776189977940,
+      "sha256": "d9afde05b24a506f2dd3ed4f8d4c4e726a64fd0f9fff76905ef49478bd28b56f",
+      "size_bytes": 1761
+    },
+    "meta.json": {
+      "mtime_ns": 1780943776323263549,
+      "sha256": "7381212859aedbd2b43dcb8cd53feeffcdc979272a61f0487b4df9cebc114fda",
+      "size_bytes": 3404
+    },
+    "providers/codex/final.json": {
+      "mtime_ns": 1780943776183795471,
+      "sha256": "5344e83e2f078985c479322c898543fd6aae1508ddfa39f980e26d3f6f805b64",
+      "size_bytes": 5212
+    },
+    "providers/codex/last-message.txt": {
+      "mtime_ns": 1780943776069966690,
+      "sha256": "a23f8e93963cfdc644d4e5e2107142b779713efc5b2cdffa0005fa50e976b1b0",
+      "size_bytes": 6970
+    },
+    "providers/codex/prompt.txt": {
+      "mtime_ns": 1780943440454558974,
+      "sha256": "28bb12046ad9b4cd0b036689c1a87120c58a55bb6ece576245618b1852952de6",
+      "size_bytes": 128594
+    },
+    "providers/codex/status.json": {
+      "mtime_ns": 1780943776178975931,
+      "sha256": "0d28c9e658c83d6b4a28718b375699cc7a682aca3228ae4bd9f99489e625105d",
+      "size_bytes": 1191
+    },
+    "providers/codex/stderr.txt": {
+      "mtime_ns": 1780943776174796522,
+      "sha256": "a2d4e661606e5f517aa0eedd2de44f95245d1005d88bccbbf8645610942a6a4b",
+      "size_bytes": 60049
+    },
+    "providers/codex/stdout.txt": {
+      "mtime_ns": 1780943776167255042,
+      "sha256": "b344227396c77bdfc96edc2f08c904997e52e81bf61188156ee60fce2901ea23",
+      "size_bytes": 6971
+    },
+    "report.md": {
+      "mtime_ns": 1780943776196330493,
+      "sha256": "122bb82f13c05eb881b5a58aeb1f2e3db167c9f04fedc84c8d1f26c3e04b2cba",
+      "size_bytes": 5381
+    },
+    "review-context.json": {
+      "mtime_ns": 1780943440430610217,
+      "sha256": "5827f105bcdee21b09d281095c756c53e6b0ac41a27d54f4d25eb006c0da64b5",
+      "size_bytes": 126013
+    },
+    "review-context.md": {
+      "mtime_ns": 1780943440423632625,
+      "sha256": "98e23f27a0279a3290ca5bd506f32450b3a4a07f9a150e0f11e571e3c5e2eb8c",
+      "size_bytes": 120095
+    },
+    "source-work-order.json": {
+      "mtime_ns": 1780943440408116637,
+      "sha256": "faddd8e544413fd518c36795cd7f01e459767d4a5a763587b13a75f239ab9a24",
+      "size_bytes": 3100
+    },
+    "work-order.json": {
+      "mtime_ns": 1780943440419005925,
+      "sha256": "5608863bb509fed426fa9f81cc2b97b5b83de655435bc7d65429609c2a40df11",
+      "size_bytes": 129562
+    }
+  },
+  "artifacts": {
+    "decision": "decision.json",
+    "meta": "meta.json",
+    "report": "report.md",
+    "review_context_json": "review-context.json",
+    "review_context_md": "review-context.md",
+    "source_work_order": "source-work-order.json",
+    "work_order": "work-order.json"
+  },
+  "bakeoff_version": "source",
+  "canonical_winner": null,
+  "condition_id": "single.codex",
+  "cwd": "/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/bakeoff",
+  "decision_kind": "single_provider_result",
+  "experiment_id": "bakeoff-live-agent-eval",
+  "facet_id": "code-review",
+  "finished_at": "2026-06-08T18:36:16Z",
+  "judge": {
+    "backend": "claude",
+    "effort": "xhigh",
+    "model": "opus"
+  },
+  "judge_attempted": false,
+  "judge_completed": false,
+  "judge_ran": false,
+  "providers": {
+    "codex": {
+      "backend": "codex",
+      "compact_status": "ok",
+      "effort": "high",
+      "exit_code": 0,
+      "final_json_source": "stdout",
+      "model": "gpt-5.5",
+      "output_bytes": 6971,
+      "scope": "codebase",
+      "scope_enforcement": {
+        "cwd": "/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/bakeoff",
+        "effective_scope": "codebase",
+        "enforcement_level": "enforced",
+        "fallback_reason": null,
+        "mechanisms": [
+          "codex:sandbox=read-only",
+          "codex:disable=web_search"
+        ],
+        "policy": "best_effort",
+        "requested_scope": "codebase",
+        "temporary_cwd": false
+      },
+      "status": "ok",
+      "stderr_bytes": 60000,
+      "stderr_observed_bytes": 614167,
+      "stderr_path": "providers/codex/stderr.txt",
+      "stderr_truncated": true,
+      "stdout_bytes": 6971,
+      "stdout_observed_bytes": 6971,
+      "stdout_truncated": false,
+      "wall_seconds": 335.701
+    }
+  },
+  "repetition_index": 1,
+  "review_context": {
+    "base_commit": "386accc8b8f08cc895b000327b289aca63f6f644",
+    "base_ref": "386accc",
+    "capture_cwd": "/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/bakeoff",
+    "git_root": "/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins",
+    "head_commit": "1273dce5c9f6cdf4eab9ca753d1879e985ff6d14",
+    "included_sections": [
+      "metadata",
+      "diffstat",
+      "changed_files",
+      "patch"
+    ],
+    "pathspec": ".",
+    "present": true
+  },
+  "run_id": "bakeoff-live-agent-eval.r001.single.codex",
+  "run_kind": "single_agent_baseline",
+  "run_mode": "single_provider",
+  "schema_version": 1,
+  "selected_patch_provider": null,
+  "single_provider": "codex",
+  "slot_attempt": null,
+  "slot_id": null,
+  "started_at": "2026-06-08T18:30:40Z",
+  "task_id": "runmode-review-1273dce",
+  "telemetry": {
+    "artifacts": {
+      "output_truncation_count": 0,
+      "prompt_trim_count": 0
+    },
+    "judge": {
+      "backend": "claude",
+      "completed": false,
+      "family": "anthropic",
+      "family_relation": "different_from_all",
+      "judge_passes": null,
+      "order_maps": null,
+      "position_swap_used": false,
+      "ran": false,
+      "selection_basis": "none",
+      "winner_backend": null,
+      "winner_family": null
+    },
+    "providers": {
+      "backends": [
+        "codex"
+      ],
+      "count": 1,
+      "families": [
+        "openai"
+      ],
+      "family_diversity": "single"
+    },
+    "rerun_mode": null,
+    "route": {
+      "escalation_mode": null,
+      "facet_id": "code-review",
+      "run_mode": "single_provider",
+      "source_type": null,
+      "type": "gather"
+    },
+    "schema_version": 2,
+    "source_run_id": null,
+    "triage": {
+      "highest_severity": null,
+      "item_count": null,
+      "state": "no"
+    }
+  },
+  "triage": {
+    "stale_inputs": [],
+    "state": "no"
+  },
+  "type": "gather"
+}

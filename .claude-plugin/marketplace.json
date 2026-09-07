@@ -34,6 +34,12 @@
       "source": "./review-kit",
       "description": "Assemble curated code-review context, route by risk, and delegate ledgered swarm reviews to bakeoff.",
       "category": "orchestration"
+    },
+    {
+      "name": "deglaze",
+      "source": "./deglaze",
+      "description": "Blunt, sassy, evidence-grounded second opinion on one idea, claim, diff, screen, paper, URL, or a few named files. Single pass, under 250 words, user-invoked only.",
+      "category": "review"
     }
   ]
 }

@@ -1,0 +1,84 @@
+{
+  "bakeoff_version": "source",
+  "canonical_winner": null,
+  "cwd": "/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/bakeoff",
+  "decision_kind": "single_provider_result",
+  "exit_code": 0,
+  "experiment": {
+    "condition_id": "single.claude",
+    "id": "bakeoff-live-agent-eval",
+    "repetition_index": 1,
+    "run_kind": "single_agent_baseline",
+    "slot_attempt": null,
+    "slot_id": null,
+    "task_id": "runmode-review-1273dce"
+  },
+  "facet": {
+    "exclude": [
+      "style-only preferences without project convention evidence",
+      "large rewrites unrelated to the changed behavior",
+      "speculation without file:line evidence"
+    ],
+    "focus": "Find actionable defects in the single-provider and experiment-metadata change: correctness, artifact-contract drift, stale pairwise wording, missing tests, and manifest/summary/report/ls output.",
+    "id": "code-review",
+    "include": [
+      "correctness bugs and edge cases in researchcmd/run.go, verify, manifest, report, decision, scope, repocontext, and workorder changes",
+      "artifact-contract drift across manifest.json, summary, report.md, and ls output for single_provider runs",
+      "stale pairwise wording or winner assumptions that no longer hold for single_provider runs",
+      "missing or misleading tests for changed behavior",
+      "single_provider experiment metadata correctness (run_kind, condition, repetition labels)",
+      "manifest/summary/report/ls output rendering for single-provider runs"
+    ],
+    "kind": "generic"
+  },
+  "finished_at": "2026-06-08T18:37:36Z",
+  "input_hashes": {
+    "decision_sha256": "1e2eae30dbf25586ef5a81cc3dd634fffff3b2bdfc329ad05843023e1356dccb",
+    "provider_failures_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "report_sha256": "dc370b0beee9a94050084c3cf177a3c8da0df054b368d85d4f2c9a5dd4ca163f",
+    "review_context_json_sha256": "53a097f07b5c09b8666bb5d630121a8ce3364f955e95569deb80ef06dbb68fe3",
+    "review_context_md_sha256": "5daf125bc0d3ff750598492de046d8d97b52d6605c42b5f7bade1c55741a7a52",
+    "source_work_order_sha256": "c31243916c36d0d1510dfb476cf8b8ae746a7a34f8fd8b3f440594ef29182833",
+    "work_order_sha256": "df47464a341e6601866613a544673fb7a4bd04e734ba426bf9c05a18592df453"
+  },
+  "judge_ran": false,
+  "provider_cli_versions": {
+    "claude": "2.1.168 (Claude Code)",
+    "git": "git version 2.49.0"
+  },
+  "resolved_models": {
+    "judge": {
+      "backend": "claude",
+      "effort": "xhigh",
+      "model": "opus"
+    },
+    "providers": {
+      "claude": {
+        "backend": "claude",
+        "effort": "high",
+        "model": "sonnet",
+        "scope": "codebase",
+        "scope_enforcement": {
+          "cwd": "/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/bakeoff",
+          "effective_scope": "codebase",
+          "enforcement_level": "enforced",
+          "fallback_reason": null,
+          "mechanisms": [
+            "claude:disallowedTools=WebFetch,WebSearch"
+          ],
+          "policy": "best_effort",
+          "requested_scope": "codebase",
+          "temporary_cwd": false
+        }
+      }
+    }
+  },
+  "review_context_requested": true,
+  "run_id": "bakeoff-live-agent-eval.r001.single.claude",
+  "run_mode": "single_provider",
+  "scope_policy": {
+    "enforcement": "best_effort"
+  },
+  "started_at": "2026-06-08T18:29:18Z",
+  "type": "gather"
+}

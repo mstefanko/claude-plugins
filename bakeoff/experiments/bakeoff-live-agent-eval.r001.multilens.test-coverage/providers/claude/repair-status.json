@@ -1,0 +1,29 @@
+{
+  "status": "schema_error",
+  "exit_code": 0,
+  "wall_seconds": 49.04,
+  "output_bytes": 11012,
+  "stdout_bytes": 11012,
+  "stderr_bytes": 0,
+  "stdout_observed_bytes": 11012,
+  "stderr_observed_bytes": 0,
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "final_json_source": "stdout",
+  "io": {
+    "stdout_bytes": 11012,
+    "stderr_bytes": 0,
+    "stdout_observed_bytes": 11012,
+    "stderr_observed_bytes": 0,
+    "total_observed_bytes": 11012,
+    "last_stdout_age": 0.43,
+    "last_stderr_age": null,
+    "last_output_age": 0.43,
+    "heartbeat_count": 0,
+    "quiet_tick_observations": 0,
+    "quiet_tick_count": 0,
+    "quiet_threshold_seconds": 120,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "exit_code": 0,
+  "final_json_source": "stdout",
+  "io": {
+    "stdout_bytes": 6971,
+    "stderr_bytes": 60000,
+    "stdout_observed_bytes": 6971,
+    "stderr_observed_bytes": 614167,
+    "total_observed_bytes": 621138,
+    "last_stdout_age": 0.096,
+    "last_stderr_age": 0.096,
+    "last_output_age": 0.096,
+    "heartbeat_count": 11,
+    "quiet_tick_observations": 0,
+    "quiet_tick_count": 0,
+    "quiet_threshold_seconds": 60,
+    "output_cap_grace_seconds": 30,
+    "max_output_overrun_bytes": 8000
+  },
+  "output_bytes": 6971,
+  "scope_enforcement": {
+    "cwd": "/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/bakeoff",
+    "effective_scope": "codebase",
+    "enforcement_level": "enforced",
+    "fallback_reason": null,
+    "mechanisms": [
+      "codex:sandbox=read-only",
+      "codex:disable=web_search"
+    ],
+    "policy": "best_effort",
+    "requested_scope": "codebase",
+    "temporary_cwd": false
+  },
+  "status": "ok",
+  "stderr_bytes": 60000,
+  "stderr_kind": "diagnostic",
+  "stderr_observed_bytes": 614167,
+  "stderr_truncated": true,
+  "stdout_bytes": 6971,
+  "stdout_observed_bytes": 6971,
+  "stdout_truncated": false,
+  "wall_seconds": 335.701
+}

@@ -1,0 +1,109 @@
+<scratchpad>
+Candidate findings kept: stale hardening-plan claims about summary.json, single-provider glossary, verify semantics, telemetry selection_basis, prose path validation, diagnostic truncation, scope enforcement, schema-version docs, experiment verify JSON, experiment manifest fallback, and incomplete-run recovery. Sources are changed docs/plans plus current code/docs lines. Candidate dropped: ls human table provider column because the doc marks it optional/cosmetic and current cli-reference documents --json post-filtering; draft-build flag because it is not part of the changed operator docs in scope.
+</scratchpad>
+<final_json>{
+  "status": "complete",
+  "claims": [
+    {
+      "id": "R-001",
+      "claim": "The single-provider artifact hardening plan still says current docs name `summary.json` as a single-provider contract surface and labels that a ship-blocking product decision, but the changed work-order docs now say `command JSON summaries`, and the research path only prints the JSON summary to stdout under `--json`.",
+      "evidence": ["docs/single-provider-artifact-contract-hardening-plan-2026-06-08.md:54", "docs/single-provider-artifact-contract-hardening-plan-2026-06-08.md:76", "docs/work-orders.md:131", "internal/commands/researchcmd/run.go:452"],
+      "severity": "medium",
+      "confidence": "high"
+    },
+    {
+      "id": "R-002",
+      "claim": "The single-provider artifact hardening plan still describes stale pairwise glossary text as an open single-provider report defect, but current report rendering gates the nonwinner/loser line out when `run_mode` is `single_provider` and only includes judge/escalation legends when those contexts apply.",
+      "evidence": ["docs/single-provider-artifact-contract-hardening-plan-2026-06-08.md:82", "docs/single-provider-artifact-contract-hardening-plan-2026-06-08.md:96", "internal/report/report.go:54", "internal/report/report.go:1115", "internal/report/report.go:1126"],
+      "severity": "medium",
+      "confidence": "high"
+    },
+    {
+      "id": "R-003",
+      "claim": "The single-provider artifact hardening plan still says `runs verify` never checks single-provider invariants, but current verify code reads `decision.json` and validates single-provider `decision_kind`, null winner, `single_provider`, and judge flags.",
+      "evidence": ["docs/single-provider-artifact-contract-hardening-plan-2026-06-08.md:104", "docs/single-provider-artifact-contract-hardening-plan-2026-06-08.md:112", "internal/verify/verify.go:100", "internal/verify/verify.go:353", "internal/verify/verify.go:359", "internal/verify/verify.go:362", "internal/verify/verify.go:368"],
+      "severity": "medium",
+      "confidence": "high"
+    },
+    {
+      "id": "R-004",
+      "claim": "The single-provider telemetry hardening plan still says `telemetry.judge.selection_basis` is null and unwired for swap-agreement analyze decisions, but current decision and manifest code populate `selection_basis` from the tiebreak path.",
+      "evidence": ["docs/single-provider-telemetry-hardening-plan-2026-06-08.md:58", "docs/single-provider-telemetry-hardening-plan-2026-06-08.md:74", "internal/decision/decision.go:229", "internal/decision/decision.go:230", "internal/manifest/manifest.go:479"],
+      "severity": "medium",
+      "confidence": "high"
+    },
+    {
+      "id": "R-005",
+      "claim": "Both plan-review and telemetry hardening docs still present slash-delimited prose path warnings as open validator defects, but current path classification explicitly treats multi-part lowercase slash-delimited tokens without dots and without common path roots as prose.",
+      "evidence": ["docs/plan-review-facet-hardening-2026-06-08.md:45", "docs/plan-review-facet-hardening-2026-06-08.md:81", "docs/single-provider-telemetry-hardening-plan-2026-06-08.md:88", "docs/single-provider-telemetry-hardening-plan-2026-06-08.md:111", "internal/repocontext/repocontext.go:302", "internal/repocontext/repocontext.go:310", "internal/repocontext/repocontext.go:315"],
+      "severity": "medium",
+      "confidence": "high"
+    },
+    {
+      "id": "R-006",
+      "claim": "The plan-review hardening plan still says diagnostic stderr truncation increments `output_truncation_count`, but current manifest telemetry excludes successful provider stderr classified as diagnostic from the truncation alarm.",
+      "evidence": ["docs/plan-review-facet-hardening-2026-06-08.md:166", "docs/plan-review-facet-hardening-2026-06-08.md:193", "internal/manifest/manifest.go:661", "internal/manifest/manifest.go:673", "internal/manifest/manifest.go:680", "docs/cli-reference.md:561"],
+      "severity": "medium",
+      "confidence": "high"
+    },
+    {
+      "id": "R-007",
+      "claim": "The single-provider telemetry hardening plan says the provider status table lacks a stderr truncation indicator, but current report rendering passes the stderr truncation flag into `byteCell`, which appends `(trunc, +...)` when observed bytes exceed captured bytes.",
+      "evidence": ["docs/single-provider-telemetry-hardening-plan-2026-06-08.md:123", "docs/single-provider-telemetry-hardening-plan-2026-06-08.md:136", "internal/report/report.go:553", "internal/report/report.go:554", "internal/report/report.go:608", "internal/report/report.go:615"],
+      "severity": "low",
+      "confidence": "high"
+    },
+    {
+      "id": "R-008",
+      "claim": "The single-provider telemetry hardening plan still says best-effort codebase scope resolves to `enforcement_level: \"partial\"` with null fallback reason, but current scope code records `enforced` whenever mechanisms were applied and no fallback reasons were recorded.",
+      "evidence": ["docs/single-provider-telemetry-hardening-plan-2026-06-08.md:157", "docs/single-provider-telemetry-hardening-plan-2026-06-08.md:172", "internal/scope/scope.go:109", "internal/scope/scope.go:110", "internal/scope/scope.go:111"],
+      "severity": "medium",
+      "confidence": "high"
+    },
+    {
+      "id": "R-009",
+      "claim": "The single-provider telemetry hardening plan says the manifest-vs-telemetry schema-version distinction is undocumented, but the changed CLI reference now documents telemetry schema version 2 under Manifest Telemetry.",
+      "evidence": ["docs/single-provider-telemetry-hardening-plan-2026-06-08.md:183", "docs/single-provider-telemetry-hardening-plan-2026-06-08.md:187", "docs/cli-reference.md:535", "docs/cli-reference.md:536", "internal/manifest/manifest.go:457"],
+      "severity": "low",
+      "confidence": "high"
+    },
+    {
+      "id": "R-010",
+      "claim": "The experiment-metadata hardening plan still calls missing `runs verify --json` experiment identity a confirmed gap, but current verify results include a nested `experiment` object built from manifest experiment fields.",
+      "evidence": ["plans/experiment-metadata-hardening.md:67", "plans/experiment-metadata-hardening.md:75", "plans/experiment-metadata-hardening.md:131", "internal/verify/verify.go:28", "internal/verify/verify.go:176", "internal/verify/verify.go:207", "docs/cli-reference.md:481"],
+      "severity": "medium",
+      "confidence": "high"
+    },
+    {
+      "id": "R-011",
+      "claim": "The experiment-metadata hardening plan still says manifest experiment data is sourced from `meta.json` rather than `work-order.json` and asks for a fallback, but current manifest code falls back to the archived work order experiment when meta has no experiment object.",
+      "evidence": ["plans/experiment-metadata-hardening.md:81", "plans/experiment-metadata-hardening.md:91", "internal/manifest/manifest.go:385", "internal/manifest/manifest.go:386", "internal/manifest/manifest.go:388"],
+      "severity": "medium",
+      "confidence": "high"
+    },
+    {
+      "id": "R-012",
+      "claim": "The single-provider hardening plan still says an orphan run directory containing only `work-order.json` forces operators to rerun with `--force`, but current research startup reclaims incomplete run directories without `--force` when only allowed scaffold files are present.",
+      "evidence": ["plans/single-provider-hardening-plan.md:31", "plans/single-provider-hardening-plan.md:43", "plans/single-provider-hardening-plan.md:55", "internal/commands/researchcmd/run.go:61", "internal/commands/researchcmd/run.go:63", "internal/commands/researchcmd/run.go:229", "internal/commands/researchcmd/run.go:239"],
+      "severity": "medium",
+      "confidence": "high"
+    },
+    {
+      "id": "R-013",
+      "claim": "The plan-review hardening plan asks operators to decide whether plan-review should auto-triage or be documented as untriaged-by-design, but the changed work-order docs already state plan-review runs do not start automatic code-review triage and should be treated as raw unless explicitly triaged.",
+      "evidence": ["docs/plan-review-facet-hardening-2026-06-08.md:103", "docs/plan-review-facet-hardening-2026-06-08.md:113", "docs/plan-review-facet-hardening-2026-06-08.md:118", "docs/work-orders.md:269", "docs/work-orders.md:270", "internal/triage/state.go:239", "internal/triage/state.go:240"],
+      "severity": "medium",
+      "confidence": "high"
+    },
+    {
+      "id": "R-014",
+      "claim": "The build CLI reference says the single-provider build JSON summary leaves both `winner` and `canonical_winner` null, but the actual build JSON summary only has a `winner` key populated from `decision[\"canonical_winner\"]`; it does not emit a `canonical_winner` key for summary consumers.",
+      "evidence": ["docs/cli-reference.md:298", "docs/cli-reference.md:300", "internal/commands/buildcmd/summary.go:35", "internal/commands/buildcmd/summary.go:47"],
+      "severity": "low",
+      "confidence": "high"
+    }
+  ],
+  "conflicts": [],
+  "unknowns": [],
+  "recommended_next_checks": []
+}</final_json>

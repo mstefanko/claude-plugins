@@ -1,0 +1,183 @@
+<scratchpad>
+Candidate findings kept:
+- Manifest work-order experiment fallback test supplies task_id/condition_id/run_kind but only asserts experiment_id/repetition_index/null slots.
+- Verify JSON experiment projection test supplies condition_id/run_kind/repetition_index but only asserts id/task_id/null slots.
+- Single-provider verify semantic test only asserts canonical_winner and judge_ran errors, leaving other validator branches unexercised.
+- Single-provider verify trigger test sets run_mode on both manifest and decision, leaving each side of the OR untested independently.
+- Diagnostic stderr telemetry test covers only succeeded provider; failed diagnostic stderr branch remains untested.
+- Research incomplete-run reclaim tests cover work-order-only and unknown-file cases but not allowed review-context artifacts or completed-run sentinels.
+- Scope enforcement test covers codex enforced metadata but not the same new mechanism/no-fallback branch for Claude codebase.
+- ResolveAnalyze selection_basis test covers only swap_agreement, not atomic_count or position_a tiebreak values.
+
+Dropped:
+- Report escalation D-NNN glossary coverage: existing RenderEscalation tests exercise escalation rendering, but I did not find a crisp changed-behavior assertion gap beyond glossary wording.
+- Repocontext multi-slash prose: changed test directly covers the new multi-segment prose case.
+</scratchpad>
+<final_json>{
+  "status": "complete",
+  "claims": [
+    {
+      "id": "R-001",
+      "claim": "The manifest fallback test does not meaningfully assert all experiment fields on the new work-order fallback path: the fixture includes task_id, condition_id, and run_kind, and production writes those fields, but the assertion only checks experiment_id, repetition_index, slot_id, and slot_attempt.",
+      "evidence": [
+        "internal/manifest/manifest.go:385",
+        "internal/manifest/manifest.go:396",
+        "internal/manifest/manifest.go:399",
+        "internal/manifest/manifest.go:402",
+        "internal/manifest/manifest_test.go:257",
+        "internal/manifest/manifest_test.go:276"
+      ],
+      "severity": "medium",
+      "confidence": "high"
+    },
+    {
+      "id": "R-002",
+      "claim": "The verify JSON experiment projection test leaves condition_id, run_kind, and repetition_index unasserted even though the new Result.Experiment contract projects them; a regression dropping those fields from runs verify --json would still pass this test.",
+      "evidence": [
+        "internal/verify/verify.go:211",
+        "internal/verify/verify.go:214",
+        "internal/verify/verify.go:215",
+        "internal/verify/verify.go:220",
+        "internal/verify/verify_test.go:236",
+        "internal/verify/verify_test.go:250"
+      ],
+      "severity": "medium",
+      "confidence": "high"
+    },
+    {
+      "id": "R-003",
+      "claim": "The new single-provider decision verifier has branches for missing/unreadable decision.json, invalid decision_kind, missing single_provider, judge_attempted, and judge_completed, but the changed test asserts only canonical_winner and judge_ran failures.",
+      "evidence": [
+        "internal/verify/verify.go:353",
+        "internal/verify/verify.go:359",
+        "internal/verify/verify.go:365",
+        "internal/verify/verify.go:368",
+        "internal/verify/verify_test.go:255",
+        "internal/verify/verify_test.go:279"
+      ],
+      "severity": "medium",
+      "confidence": "high"
+    },
+    {
+      "id": "R-004",
+      "claim": "The single-provider verify trigger is an OR over manifest.run_mode and decision.run_mode, but the changed test sets run_mode in both places, so it does not cover either source independently.",
+      "evidence": [
+        "internal/verify/verify.go:100",
+        "internal/verify/verify.go:101",
+        "internal/verify/verify.go:102",
+        "internal/verify/verify_test.go:257",
+        "internal/verify/verify_test.go:267"
+      ],
+      "severity": "medium",
+      "confidence": "high"
+    },
+    {
+      "id": "R-005",
+      "claim": "The diagnostic-stderr truncation test only covers a successful provider, leaving the ProviderSucceeded guard untested for failed providers; a regression that ignores failed diagnostic stderr truncation would undercount a real failed-run output alarm.",
+      "evidence": [
+        "internal/manifest/manifest.go:673",
+        "internal/manifest/manifest.go:680",
+        "internal/manifest/manifest.go:681",
+        "internal/manifest/manifest_test.go:945",
+        "internal/manifest/manifest_test.go:953",
+        "internal/manifest/manifest_test.go:957"
+      ],
+      "severity": "medium",
+      "confidence": "high"
+    },
+    {
+      "id": "R-006",
+      "claim": "The incomplete-run reclaim tests do not exercise the allowed review-context scaffold branch: production treats source-work-order.json, review-context.md, and review-context.json as reclaimable, but the success test creates only work-order.json.",
+      "evidence": [
+        "internal/commands/researchcmd/run.go:239",
+        "internal/commands/researchcmd/run.go:241",
+        "internal/commands/researchcmd/run.go:242",
+        "internal/commands/researchcmd/run.go:243",
+        "internal/commands/researchcmd/run_test.go:153",
+        "internal/commands/researchcmd/run_test.go:157"
+      ],
+      "severity": "low",
+      "confidence": "high"
+    },
+    {
+      "id": "R-007",
+      "claim": "The incomplete-run reclaim tests do not assert that directories containing decision.json or manifest.json are preserved without --force; a regression in this branch could delete a completed run when retrying a run id.",
+      "evidence": [
+        "internal/commands/researchcmd/run.go:61",
+        "internal/commands/researchcmd/run.go:63",
+        "internal/commands/researchcmd/run.go:230",
+        "internal/commands/researchcmd/run.go:231",
+        "internal/commands/researchcmd/run.go:232",
+        "internal/commands/researchcmd/run_test.go:171",
+        "internal/commands/researchcmd/run_test.go:197",
+        "internal/commands/researchcmd/run_test.go:207"
+      ],
+      "severity": "high",
+      "confidence": "high"
+    },
+    {
+      "id": "R-008",
+      "claim": "The scope enforcement test added for the new enforced-with-mechanisms/no-fallback behavior covers Codex codebase only; Claude codebase with disallowed_tools takes the same production branch but its existing test does not assert enforcement_level or fallback_reason.",
+      "evidence": [
+        "internal/scope/scope.go:71",
+        "internal/scope/scope.go:74",
+        "internal/scope/scope.go:109",
+        "internal/scope/scope.go:110",
+        "internal/scope/scope_test.go:52",
+        "internal/scope/scope_test.go:186",
+        "internal/scope/scope_test.go:194",
+        "internal/scope/scope_test.go:200"
+      ],
+      "severity": "low",
+      "confidence": "high"
+    },
+    {
+      "id": "R-009",
+      "claim": "The ResolveAnalyze selection_basis test covers only the swap_agreement tiebreak, leaving the new selection_basis assignment untested for the atomic_count and position_a tiebreak paths.",
+      "evidence": [
+        "internal/decision/decision.go:198",
+        "internal/decision/decision.go:204",
+        "internal/decision/decision.go:207",
+        "internal/decision/decision.go:229",
+        "internal/decision/decision.go:230",
+        "internal/decision/decision_test.go:96",
+        "internal/decision/decision_test.go:108"
+      ],
+      "severity": "low",
+      "confidence": "high"
+    },
+    {
+      "id": "R-010",
+      "claim": "The research command JSON summary experiment test supplies condition_id, run_kind, and repetition_index but does not assert them, so BuildResearch could stop projecting those experiment metadata fields while this test still passes.",
+      "evidence": [
+        "internal/summary/summary.go:269",
+        "internal/workorder/workorder.go:397",
+        "internal/workorder/workorder.go:399",
+        "internal/workorder/workorder.go:400",
+        "internal/workorder/workorder.go:401",
+        "internal/summary/summary_test.go:90",
+        "internal/summary/summary_test.go:96"
+      ],
+      "severity": "low",
+      "confidence": "high"
+    },
+    {
+      "id": "R-011",
+      "claim": "The build command JSON summary experiment test supplies condition_id, run_kind, and repetition_index but does not assert them, so buildSummary could regress to a partial experiment object while the changed test still passes.",
+      "evidence": [
+        "internal/commands/buildcmd/summary.go:57",
+        "internal/workorder/workorder.go:397",
+        "internal/workorder/workorder.go:399",
+        "internal/workorder/workorder.go:400",
+        "internal/workorder/workorder.go:401",
+        "internal/commands/buildcmd/summary_test.go:23",
+        "internal/commands/buildcmd/summary_test.go:31"
+      ],
+      "severity": "low",
+      "confidence": "high"
+    }
+  ],
+  "conflicts": [],
+  "unknowns": [],
+  "recommended_next_checks": []
+}</final_json>

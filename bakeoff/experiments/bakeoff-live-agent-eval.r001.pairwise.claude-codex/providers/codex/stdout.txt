@@ -1,0 +1,107 @@
+<scratchpad>
+Candidate findings and sources:
+- R-001: Compare-mode winner decisions still do not populate `selection_basis`; telemetry only reads `selection_basis` or `spine_tiebreak`, so compare pick-winner telemetry remains null. Sources: internal/decision/decision.go:163, internal/decision/decision.go:168, internal/decision/decision.go:169, internal/decision/decision.go:170, internal/manifest/manifest.go:479, docs/cli-reference.md:554.
+- R-002: `runs verify` rejects valid single-provider build baseline failures because it applies research-style single-provider decision-kind validation to all `run_mode: single_provider` runs. Sources: internal/commands/buildcmd/run.go:161, internal/commands/buildcmd/run.go:164, internal/commands/buildcmd/decision.go:343, internal/verify/verify.go:101, internal/verify/verify.go:359.
+- R-003: `runs verify` can miss a broken successful single-provider build decision with no `selected_patch_provider`, because dynamic selected-patch artifact checks become a no-op when that field and `canonical_winner` are empty. Sources: internal/decision/decision.go:325, internal/decision/decision.go:328, internal/decision/decision.go:329, internal/verify/verify.go:340, internal/verify/verify.go:344, internal/verify/verify.go:345, internal/verify/verify.go:365.
+- R-004: Output truncation telemetry suppresses all successful diagnostic stderr truncation, but successful stderr with a trailing `ERROR` is explicitly classified as diagnostic, so real truncated stderr can be hidden from the alarm count. Sources: internal/artifact/artifact.go:137, internal/artifact/artifact.go:143, internal/artifact/artifact_test.go:87, internal/artifact/artifact_test.go:92, internal/manifest/manifest.go:673, internal/manifest/manifest.go:680.
+- R-005: Incomplete run-dir reclaim deletes an allowlisted run directory without checking that the archived `work-order.json` matches the current work order; the new test even uses an existing `{}` work-order and expects reclaim. Sources: internal/commands/researchcmd/run.go:61, internal/commands/researchcmd/run.go:63, internal/commands/researchcmd/run.go:100, internal/commands/researchcmd/run.go:104, internal/commands/researchcmd/run.go:229, internal/commands/researchcmd/run.go:239, internal/commands/researchcmd/run_test.go:136, internal/commands/researchcmd/run_test.go:157.
+- R-006: Manifest experiment fallback only triggers when `meta.experiment` is absent or empty; a stale partial non-empty meta experiment prevents fallback to the full archived work-order experiment and can drop validated experiment fields. Sources: internal/manifest/manifest.go:385, internal/manifest/manifest.go:386, internal/manifest/manifest.go:387, internal/manifest/manifest.go:388, internal/manifest/manifest.go:393, internal/manifest/manifest.go:405, internal/manifest/manifest.go:408, internal/workorder/workorder.go:770.
+- ~~Report glossary still stale for current single_provider decisions~~ dropped: current generated single-provider decisions include `run_mode`, and the changed report tests cover the primary path.
+- ~~ls human table omits single provider~~ dropped: docs explicitly direct machine filtering to `--json`, and this is not clearly a defect.
+</scratchpad>
+<final_json>{
+  "status": "complete",
+  "claims": [
+    {
+      "id": "R-001",
+      "claim": "Compare-mode pick-winner runs still produce null telemetry selection basis: `ResolveCompare` sets the winner but never sets `selection_basis` or `spine_tiebreak`, while manifest telemetry only projects those two fields into `telemetry.judge.selection_basis`.",
+      "evidence": [
+        "internal/decision/decision.go:163",
+        "internal/decision/decision.go:168",
+        "internal/decision/decision.go:169",
+        "internal/decision/decision.go:170",
+        "internal/manifest/manifest.go:479",
+        "docs/cli-reference.md:554"
+      ],
+      "severity": "medium",
+      "confidence": "high"
+    },
+    {
+      "id": "R-002",
+      "claim": "A valid single-provider build whose baseline gate fails before providers launch will be reported invalid by `runs verify`: the build path emits `baseline_failed` or `baseline_expectation_failed` while preserving `run_mode: single_provider`, but verify accepts only `single_provider_result` and `single_provider_failed` for every single-provider run.",
+      "evidence": [
+        "internal/commands/buildcmd/run.go:161",
+        "internal/commands/buildcmd/run.go:164",
+        "internal/commands/buildcmd/decision.go:343",
+        "internal/verify/verify.go:101",
+        "internal/verify/verify.go:359"
+      ],
+      "severity": "medium",
+      "confidence": "high"
+    },
+    {
+      "id": "R-003",
+      "claim": "`runs verify` does not enforce the successful single-provider build handoff contract: if a `single_provider_result` build decision loses `selected_patch_provider`, the dynamic required patch artifact check returns no selected-patch requirements and the single-provider semantic check only requires a non-empty `single_provider`.",
+      "evidence": [
+        "internal/decision/decision.go:325",
+        "internal/decision/decision.go:328",
+        "internal/decision/decision.go:329",
+        "internal/verify/verify.go:340",
+        "internal/verify/verify.go:344",
+        "internal/verify/verify.go:345",
+        "internal/verify/verify.go:365"
+      ],
+      "severity": "medium",
+      "confidence": "medium"
+    },
+    {
+      "id": "R-004",
+      "claim": "The new truncation alarm suppression can hide real stderr loss: successful provider stderr is classified as `diagnostic` even when it contains a trailing `ERROR`, and `output_truncation_count` now ignores truncated diagnostic stderr for successful providers.",
+      "evidence": [
+        "internal/artifact/artifact.go:137",
+        "internal/artifact/artifact.go:143",
+        "internal/artifact/artifact_test.go:87",
+        "internal/artifact/artifact_test.go:92",
+        "internal/manifest/manifest.go:673",
+        "internal/manifest/manifest.go:680"
+      ],
+      "severity": "medium",
+      "confidence": "high"
+    },
+    {
+      "id": "R-005",
+      "claim": "Run-id collision safety regressed for incomplete research directories: any existing run directory with only the allowlisted scaffold files is removed without checking that its archived `work-order.json` matches the work order being launched, so reusing a run id can silently overwrite a different incomplete run.",
+      "evidence": [
+        "internal/commands/researchcmd/run.go:61",
+        "internal/commands/researchcmd/run.go:63",
+        "internal/commands/researchcmd/run.go:100",
+        "internal/commands/researchcmd/run.go:104",
+        "internal/commands/researchcmd/run.go:229",
+        "internal/commands/researchcmd/run.go:239",
+        "internal/commands/researchcmd/run_test.go:136",
+        "internal/commands/researchcmd/run_test.go:157"
+      ],
+      "severity": "medium",
+      "confidence": "high"
+    },
+    {
+      "id": "R-006",
+      "claim": "Experiment manifest fallback is still fragile for partial metadata: a non-empty `meta.experiment` prevents falling back to `work-order.json`, so stale or partial meta can drop otherwise validated experiment fields such as `repetition_index`, `slot_id`, or `slot_attempt` from the manifest.",
+      "evidence": [
+        "internal/manifest/manifest.go:385",
+        "internal/manifest/manifest.go:386",
+        "internal/manifest/manifest.go:387",
+        "internal/manifest/manifest.go:388",
+        "internal/manifest/manifest.go:393",
+        "internal/manifest/manifest.go:405",
+        "internal/manifest/manifest.go:408",
+        "internal/workorder/workorder.go:770"
+      ],
+      "severity": "low",
+      "confidence": "medium"
+    }
+  ],
+  "conflicts": [],
+  "unknowns": [],
+  "recommended_next_checks": []
+}</final_json>

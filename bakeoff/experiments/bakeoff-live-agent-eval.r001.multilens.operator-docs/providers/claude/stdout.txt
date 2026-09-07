@@ -1,0 +1,147 @@
+<scratchpad>
+Candidate findings — cross-checking doc claims against code changes:
+
+1. `work-orders.md` new line says "unless you run `bakeoff triage` explicitly" — no `bakeoff triage` section appears in cli-reference.md diff; command may not exist.
+
+2. `single-provider-artifact-contract-hardening-plan-2026-06-08.md:P1` calls summary.json decision an unresolved "product call / ship-blocker" — but work-orders.md diff already implements Option B (removes summary.json from contract).
+
+3. Same plan has two sections labeled "## P2" (stale pairwise wording AND verify semantics) — duplicate numbering breaks priority/sequencing for operators.
+
+4. `single-provider-artifact-contract-hardening-plan-2026-06-08.md` P2(wording) presents stale glossary as open fix — but report.go diff already gates nonwinner bullet on run_mode.
+
+5. Same plan P2(verify) presents single-provider verify semantics as open fix — but verify.go diff already adds validateSingleProviderDecision().
+
+6. `single-provider-telemetry-hardening-plan-2026-06-08.md:Finding 1` presents selection_basis:null as open bug — but decision.go diff adds `out["selection_basis"] = tiebreak` and manifest.go adds firstNonEmpty fallback.
+
+7. Same plan Finding 4 presents enforcement_level:partial as open bug — but scope.go diff already fixes: `len(mechanisms) > 0 && len(fallbackReasons) == 0` now yields "enforced".
+
+8. `plans/experiment-metadata-hardening.md` says "no code written yet" (Status field) — but Findings 1 and 2 are both implemented in this diff (verify.go + manifest.go).
+
+9. `plans/experiment-metadata-hardening.md:Finding 1` presents verify experiment fields as open harden item — but verify.go diff adds `Experiment map[string]any` to Result struct.
+
+10. Same plan Finding 2 presents manifest fallback as open harden — but manifest.go diff adds the exact fallback to work-order.json.
+
+11. `plans/single-provider-hardening-plan.md:P1` presents orphan run-dir fix as open — but researchcmd/run.go diff already implements researchRunDirIsIncomplete() and conditional reclaim.
+
+12. `plans/single-provider-hardening-plan.md:P3` says "Locate...the Glossary string...in `summary.go`" — glossary is in report.go (reportGlossary function), not summary.go. Grepping summary.go would find nothing.
+
+13. Same plan P3 presents stale pairwise wording as open investigation+fix — but report.go diff already gates the nonwinner/R-NNN/D-NNN text.
+
+14. `single-provider-artifact-contract-hardening-plan-2026-06-08.md` P2(wording) evidence cites `report.go:54 — Render unconditionally appends reportGlossary()` — after the diff, that call is now conditional (passes decision + escalation params). Evidence statement is now false.
+
+15. `single-provider-telemetry-hardening-plan-2026-06-08.md` "Not a bug" section says "Document the manifest-vs-telemetry schema distinction in docs/cli-reference.md and/or docs/work-orders.md" — neither doc adds this in the diff; item remains undone.
+
+16. `plan-review-facet-hardening-2026-06-08.md:Item 4` presents diagnostic stderr truncation as open fix — but manifest.go diff already implements diagnosticStderrOnly() and gates outputTruncationCount.
+
+All findings can be cited from the diff. Proceeding with final JSON.
+</scratchpad>
+
+<final_json>
+{
+  "status": "complete",
+  "claims": [
+    {
+      "id": "R-001",
+      "claim": "`docs/work-orders.md` adds the instruction 'unless you run `bakeoff triage` explicitly' for plan-review findings, but no `bakeoff triage` subcommand section appears anywhere in the `docs/cli-reference.md` diff, and no triage command is introduced in any changed source file. If this command does not exist as a top-level CLI subcommand, the guidance would direct operators to a nonexistent recovery path.",
+      "evidence": ["bakeoff/docs/work-orders.md (new lines at plan-review facet section: 'Plan-review runs do not start automatic code-review triage; treat their findings as raw plan-review candidates unless you run `bakeoff triage` explicitly.')", "bakeoff/docs/cli-reference.md diff (no `bakeoff triage` section added or referenced)"],
+      "severity": "medium",
+      "confidence": "medium"
+    },
+    {
+      "id": "R-002",
+      "claim": "`docs/single-provider-artifact-contract-hardening-plan-2026-06-08.md` P1 calls the `summary.json` question 'the only ship-blocker that needs a human decision before coding' and presents Options A and B as unresolved. In the same diff, `docs/work-orders.md` already implements Option B by replacing '`decision.json`, `summary.json`, `manifest.json`' with '`decision.json`, command JSON summaries, `manifest.json`'. An operator picking up the P1 item would believe it is still unresolved when it is not.",
+      "evidence": ["bakeoff/docs/single-provider-artifact-contract-hardening-plan-2026-06-08.md (P1 section: 'This is the only ship-blocker that needs a human decision before coding.')", "bakeoff/docs/work-orders.md diff (line removing `summary.json` from single-provider contract surface, replacing with 'command JSON summaries')"],
+      "severity": "medium",
+      "confidence": "high"
+    },
+    {
+      "id": "R-003",
+      "claim": "`docs/single-provider-artifact-contract-hardening-plan-2026-06-08.md` contains two sections both labelled '## P2': one for stale pairwise wording and one for verify semantics. The duplicate heading breaks the plan's priority/sequencing structure; an operator executing by P-level would be unable to distinguish or order these two items.",
+      "evidence": ["bakeoff/docs/single-provider-artifact-contract-hardening-plan-2026-06-08.md (two consecutive '## P2' headings visible in diff: '## P2 — Stale pairwise wording leaks into single-provider reports' and '## P2 — `verify` does not assert single-provider semantics')"],
+      "severity": "medium",
+      "confidence": "high"
+    },
+    {
+      "id": "R-004",
+      "claim": "`docs/single-provider-artifact-contract-hardening-plan-2026-06-08.md` first P2 section presents 'Stale pairwise wording leaks into single-provider reports' as an open investigation and fix. The same diff already applies the fix: `report.go:reportGlossary` now accepts `decision` and `escalation` params, and the 'Kept-from-nonwinner / additions-from-loser' line is gated on `run_mode != RunModeSingleProvider`. An operator following the plan would waste time investigating already-resolved code.",
+      "evidence": ["bakeoff/docs/single-provider-artifact-contract-hardening-plan-2026-06-08.md (P2 stale-wording section, 'Fix: Gate the kept-from-nonwinner glossary bullet')", "bakeoff/internal/report/report.go diff (reportGlossary signature change to accept decision+escalation; `if jsonutil.StringValue(decision[\"run_mode\"]) != workorder.RunModeSingleProvider` gate added)"],
+      "severity": "low",
+      "confidence": "high"
+    },
+    {
+      "id": "R-005",
+      "claim": "`docs/single-provider-artifact-contract-hardening-plan-2026-06-08.md` second P2 section presents '`verify` does not assert single-provider semantics' as an open fix. The same diff already implements `validateSingleProviderDecision()` in `verify.go` with all stated assertions: null canonical_winner, single_provider set, judge flags false, decision_kind in the single-provider set. An operator following this plan would find it already done.",
+      "evidence": ["bakeoff/docs/single-provider-artifact-contract-hardening-plan-2026-06-08.md (second P2 section: 'Fix: When run_mode == single_provider, add semantic assertions to verify')", "bakeoff/internal/verify/verify.go diff (validateSingleProviderDecision function, approximately lines 350–378 in new file)"],
+      "severity": "low",
+      "confidence": "high"
+    },
+    {
+      "id": "R-006",
+      "claim": "`docs/single-provider-telemetry-hardening-plan-2026-06-08.md:Finding 1` presents `telemetry.judge.selection_basis: null` as an open medium-severity bug and says 'Definition of done: A re-run yields a non-null `selection_basis`.' The same diff already achieves this: `decision.go` adds `out[\"selection_basis\"] = tiebreak` and `manifest.go` adds a `firstNonEmpty(decision[\"selection_basis\"], decision[\"spine_tiebreak\"])` fallback for the telemetry field. An operator reading Finding 1 as an action item would file work that is already done.",
+      "evidence": ["bakeoff/docs/single-provider-telemetry-hardening-plan-2026-06-08.md (Finding 1, severity medium, 'Required change: Populate telemetry.judge.selection_basis')", "bakeoff/internal/decision/decision.go diff (line ~230: `out[\"selection_basis\"] = tiebreak`)", "bakeoff/internal/manifest/manifest.go diff (telemetrySummary: `firstNonEmpty(jsonutil.StringValue(decision[\"selection_basis\"]), jsonutil.StringValue(decision[\"spine_tiebreak\"]))`)"],
+      "severity": "medium",
+      "confidence": "high"
+    },
+    {
+      "id": "R-007",
+      "claim": "`docs/single-provider-telemetry-hardening-plan-2026-06-08.md:Finding 4` presents `enforcement_level: 'partial'` with null reason as an open low-severity bug when all available mechanisms were applied. The same diff already fixes it: `scope.go` now sets `enforcementLevel = \"enforced\"` when `len(mechanisms) > 0 && len(fallbackReasons) == 0`, covering the case the plan says is mislabeled. An operator reading Finding 4 would investigate already-corrected code.",
+      "evidence": ["bakeoff/docs/single-provider-telemetry-hardening-plan-2026-06-08.md (Finding 4, 'Required change: relabel to convey best_effort fully applied when all available mechanisms succeeded')", "bakeoff/internal/scope/scope.go diff (`if requestedScope == \"mixed\" || (len(mechanisms) > 0 && len(fallbackReasons) == 0)` now yields \"enforced\")"],
+      "severity": "low",
+      "confidence": "high"
+    },
+    {
+      "id": "R-008",
+      "claim": "`plans/experiment-metadata-hardening.md` Status line says 'investigation + hardening backlog (no code written yet)' and the Definition of Done lists Findings #1 and #2 as unimplemented. Both are implemented in this diff: Finding 1 (verify experiment fields) is live in `verify.go:Result.Experiment`; Finding 2 (manifest fallback to work-order) is live in `manifest.go:addExperimentManifestFields`. The 'Suggested next Bakeoff move' ('build work order targeting findings #1 + #2') is also stale for the same reason.",
+      "evidence": ["bakeoff/plans/experiment-metadata-hardening.md (Status: 'no code written yet'; Definition of done, findings #1 and #2)", "bakeoff/internal/verify/verify.go diff (Result.Experiment field and ExperimentMap method)", "bakeoff/internal/manifest/manifest.go diff (addExperimentManifestFields fallback to workOrder parameter)"],
+      "severity": "medium",
+      "confidence": "high"
+    },
+    {
+      "id": "R-009",
+      "claim": "`plans/single-provider-hardening-plan.md:P3` instructs the operator to 'Locate where the Glossary string and the `F/R/D` legend are emitted in `summary.go`' and lists `summary.go` as the file to search for `nonwinner`, `additions-from-loser`, `R-NNN`, and `Glossary`. The glossary is defined and emitted in `internal/report/report.go:reportGlossary`, not `summary.go`. Grepping `summary.go` for these terms would find nothing, blocking the operator.",
+      "evidence": ["bakeoff/plans/single-provider-hardening-plan.md (P3 section: 'Locate where the Glossary string and the F/R/D legend are emitted in summary.go')", "bakeoff/internal/report/report.go diff (reportGlossary function is in report.go, not summary.go; the 'nonwinner' line is gated here)"],
+      "severity": "medium",
+      "confidence": "high"
+    },
+    {
+      "id": "R-010",
+      "claim": "`plans/single-provider-hardening-plan.md:P1` presents the orphan run-dir problem as open investigation with three options. The same diff already implements the first option: `researchcmd/run.go` adds `researchRunDirIsIncomplete()` and inserts conditional reclaim logic so an incomplete dir (only `work-order.json`, no `decision.json`/`manifest.json`) is reclaimed without `--force`. The plan's cited evidence lines (`run.go:61-63`, `:94`) now describe pre-fix behavior that no longer matches the post-diff source.",
+      "evidence": ["bakeoff/plans/single-provider-hardening-plan.md (P1 section, 'Options to harden (pick one)')", "bakeoff/internal/commands/researchcmd/run.go diff (researchRunDirIsIncomplete function; conditional branch at ~line 63 for incomplete run reclaim)"],
+      "severity": "medium",
+      "confidence": "high"
+    },
+    {
+      "id": "R-011",
+      "claim": "`docs/plan-review-facet-hardening-2026-06-08.md:Item 4` presents the diagnostic-stderr truncation alarm as an open fix ('Proposed fix (confirm before implementing)'). The same diff already implements the fix: `manifest.go:diagnosticStderrOnly()` gates `output_truncation_count` so successful diagnostic stderr does not increment the alarm. An operator acting on Item 4 would find it already resolved.",
+      "evidence": ["bakeoff/docs/plan-review-facet-hardening-2026-06-08.md (Item 4: 'Do not increment the truncation/overrun alarm for stderr already classified diagnostic')", "bakeoff/internal/manifest/manifest.go diff (diagnosticStderrOnly function; `outputTruncationCount` now calls `&& !diagnosticStderrOnly(obj)`)"],
+      "severity": "low",
+      "confidence": "high"
+    },
+    {
+      "id": "R-012",
+      "claim": "`docs/single-provider-artifact-contract-hardening-plan-2026-06-08.md` P2(wording) section cites '`report.go:54` — `Render` unconditionally appends `reportGlossary()`' as the evidence for the bug. After the diff, that call site reads `lines = append(lines, reportGlossary(decision, false)...)` — a conditional call that is no longer unconditional. An operator verifying the evidence would find that the cited behavior no longer exists, creating a false negative.",
+      "evidence": ["bakeoff/docs/single-provider-artifact-contract-hardening-plan-2026-06-08.md (P2 stale-wording evidence: 'report.go:54 — Render unconditionally appends reportGlossary()')", "bakeoff/internal/report/report.go diff (line ~54: `lines = append(lines, reportGlossary(decision, false)...)` — now conditional)"],
+      "severity": "low",
+      "confidence": "high"
+    },
+    {
+      "id": "R-013",
+      "claim": "`docs/single-provider-telemetry-hardening-plan-2026-06-08.md` 'Not a bug' section explicitly says the dual `manifest.schema_version: 1` vs `telemetry.schema_version: 2` is 'undocumented' and directs operators to 'Document the manifest-vs-telemetry schema distinction in `docs/cli-reference.md` and/or `docs/work-orders.md`.' Neither document adds this explanation in the diff; the gap the plan flags as needing documentation remains absent.",
+      "evidence": ["bakeoff/docs/single-provider-telemetry-hardening-plan-2026-06-08.md ('Not a bug' section: 'Document the manifest-vs-telemetry schema distinction in docs/cli-reference.md and/or docs/work-orders.md')", "bakeoff/docs/cli-reference.md diff (no schema versioning note added)", "bakeoff/docs/work-orders.md diff (no schema versioning note added)"],
+      "severity": "low",
+      "confidence": "high"
+    }
+  ],
+  "conflicts": [],
+  "unknowns": [
+    "Whether `bakeoff triage` exists as a first-class CLI subcommand in the pre-diff cli-reference.md baseline (not visible in the diff); if it does exist, R-001 is moot.",
+    "Whether `examples/repetition-loop.sh` exists at that exact path; both work-orders.md and cli-reference.md reference it but the file is not in the diff.",
+    "Whether `docs/single-provider-run-mode-option-4-implementation-plan-2026-06-08.md` referenced in the telemetry hardening plan 'Not a bug' section (as 'F-008') exists and is up-to-date with the shipped behavior; file not in diff."
+  ],
+  "recommended_next_checks": [
+    "verify.go:ExperimentMap() returns empty-string ('') for nil TaskID/ConditionID/RunKind (via stringPtrValue), not JSON null. cli-reference.md:479-482 says the experiment object includes these fields but does not document the empty-string vs null distinction for required fields; operators relying on null-checks in harness code could be surprised. Check bakeoff/internal/verify/verify.go:stringPtrValue and the manifest struct nullable field types.",
+    "plans/experiment-metadata-hardening.md Finding 3 (rerun not attempt-aware) says 'decide and act' but work-orders.md was updated to document the verbatim-replay behavior. The plan's Definition of done does not mention this item as closed; an operator may duplicate the documentation fix. Cross-check bakeoff/plans/experiment-metadata-hardening.md Finding 3 against the work-orders.md change.",
+    "researchcmd/run.go post-diff has two EnsureChildPath calls (one added at ~line 98 inside the replaceRunDir block, one at the original location). Review whether the pre-existing call at the original location is now dead code or a double-check. This is a code correctness concern for a separate code-review lens, not a docs defect."
+  ]
+}
+</final_json>

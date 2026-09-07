@@ -1,0 +1,105 @@
+{
+  "bakeoff_version": "source",
+  "canonical_winner": null,
+  "cwd": "/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/bakeoff",
+  "decision_kind": "structured_union",
+  "exit_code": 0,
+  "experiment": {
+    "condition_id": "pairwise.claude-codex",
+    "id": "bakeoff-live-agent-eval",
+    "repetition_index": 1,
+    "run_kind": "pairwise",
+    "slot_attempt": null,
+    "slot_id": null,
+    "task_id": "runmode-review-1273dce"
+  },
+  "facet": {
+    "exclude": [
+      "style-only preferences without project convention evidence",
+      "large rewrites unrelated to the changed behavior",
+      "speculation without file:line evidence",
+      "re-litigating the design of the new plan documents"
+    ],
+    "focus": "Find actionable defects in the 386accc..HEAD diff: correctness, artifact-contract drift, stale pairwise/winner wording for single_provider, missing tests, and single_provider experiment metadata.",
+    "id": "code-review",
+    "include": [
+      "correctness bugs and edge cases in the changed Go packages",
+      "artifact-contract drift across manifest, summary, report, and ls output",
+      "stale or incorrect pairwise/winner wording on single_provider runs",
+      "missing or misleading tests for changed behavior",
+      "single_provider experiment-metadata validation and projection gaps",
+      "inconsistencies between docs/cli-reference.md, work-orders.md, and code"
+    ],
+    "kind": "generic"
+  },
+  "finished_at": "2026-06-08T18:40:31Z",
+  "input_hashes": {
+    "decision_sha256": "2d6f0a0e8ee1edbca3895bb4cac85449cc2482bb0f1ce02743626464c70f6c8c",
+    "provider_failures_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "report_sha256": "e848e48ea20173bcc7f39b5a7d4aed92bc4c47078a70a044c9b66d1ae9a78796",
+    "review_context_json_sha256": "774a556fedb196fceaa2c76c9d6c62c1c08057ccf1bab11340cc9acbcd858a51",
+    "review_context_md_sha256": "0ab0f375fd28c9ac6186c18995f1e0bb6273e833593dd318b0828e43969d1ab4",
+    "source_work_order_sha256": "02d545749eca8e6b7845d2a32657ecef5948ca7aa110f67b70b9f42afefdc607",
+    "work_order_sha256": "86ea92d635c4d97fdb0d7aa01edd4987078bc0ebf2b7357eb6098ceef00e5b07"
+  },
+  "judge_ran": true,
+  "provider_cli_versions": {
+    "claude": "2.1.168 (Claude Code)",
+    "codex": "codex-cli 0.125.0",
+    "git": "git version 2.49.0"
+  },
+  "resolved_models": {
+    "judge": {
+      "backend": "claude",
+      "effort": "xhigh",
+      "model": "opus"
+    },
+    "providers": {
+      "claude": {
+        "backend": "claude",
+        "effort": "high",
+        "model": "sonnet",
+        "scope": "codebase",
+        "scope_enforcement": {
+          "cwd": "/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/bakeoff",
+          "effective_scope": "codebase",
+          "enforcement_level": "enforced",
+          "fallback_reason": null,
+          "mechanisms": [
+            "claude:disallowedTools=WebFetch,WebSearch"
+          ],
+          "policy": "best_effort",
+          "requested_scope": "codebase",
+          "temporary_cwd": false
+        }
+      },
+      "codex": {
+        "backend": "codex",
+        "effort": "high",
+        "model": "gpt-5.5",
+        "scope": "codebase",
+        "scope_enforcement": {
+          "cwd": "/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/bakeoff",
+          "effective_scope": "codebase",
+          "enforcement_level": "enforced",
+          "fallback_reason": null,
+          "mechanisms": [
+            "codex:sandbox=read-only",
+            "codex:disable=web_search"
+          ],
+          "policy": "best_effort",
+          "requested_scope": "codebase",
+          "temporary_cwd": false
+        }
+      }
+    }
+  },
+  "review_context_requested": true,
+  "run_id": "bakeoff-live-agent-eval.r001.pairwise.claude-codex",
+  "run_mode": "pairwise",
+  "scope_policy": {
+    "enforcement": "best_effort"
+  },
+  "started_at": "2026-06-08T18:29:27Z",
+  "type": "gather"
+}

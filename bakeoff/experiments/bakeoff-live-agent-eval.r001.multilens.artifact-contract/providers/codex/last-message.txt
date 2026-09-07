@@ -1,0 +1,114 @@
+<scratchpad>
+Candidate findings and sources:
+- R-001 compare pick_winner lacks selection_basis: internal/decision/decision.go:165-171, internal/manifest/manifest.go:479. Fact: decision path returns without setting basis; manifest only consumes selection_basis/spine_tiebreak.
+- R-002 research JSON summary omits selection_basis while analyze decision now writes it and build summary includes it: internal/decision/decision.go:229-230, internal/summary/summary.go:47-67, internal/summary/summary.go:263-269, internal/commands/buildcmd/summary.go:45-47. Fact: field absent from research summary contract.
+- R-003 manifest experiment fallback only handles absent/empty meta experiment, not partial meta: internal/manifest/manifest.go:385-390, internal/manifest/manifest.go:393-407, internal/workorder/workorder.go:770-799. Fact: partial meta shadows complete work-order.
+- R-004 verify JSON can emit incomplete experiment object and still pass: internal/verify/verify.go:85-91, internal/verify/verify.go:176, internal/verify/verify.go:207-221. Fact: required experiment fields are not validated.
+- R-005 output_truncation_count suppresses every successful diagnostic stderr truncation, while diagnostic includes all successful stderr: internal/manifest/manifest.go:670-681, internal/artifact/artifact.go:137-143. Fact: telemetry can undercount truncated stderr.
+- R-006 report glossary still says nonwinner/loser for pairwise no-winner results: internal/report/report.go:1126-1127, internal/decision/decision.go:122-128, internal/decision/decision.go:157-161. Fact: gate is run_mode only.
+- R-007 single-provider verify validation omits decision.run_mode: internal/decision/decision.go:43-52, internal/verify/verify.go:353-373. Fact: field is written but not validated.
+</scratchpad>
+<final_json>{
+  "status": "complete",
+  "claims": [
+    {
+      "id": "R-001",
+      "claim": "A pairwise compare run can write a stable `pick_winner` decision with `canonical_winner` but no `selection_basis`; `ResolveCompare` sets `decision_kind` and `canonical_winner` then returns, while manifest telemetry only projects `decision.selection_basis` or `spine_tiebreak`, so `manifest.telemetry.judge.selection_basis` remains null for this winner path.",
+      "evidence": [
+        "internal/decision/decision.go:165",
+        "internal/decision/decision.go:168",
+        "internal/decision/decision.go:169",
+        "internal/decision/decision.go:171",
+        "internal/manifest/manifest.go:479"
+      ],
+      "severity": "medium",
+      "confidence": "high"
+    },
+    {
+      "id": "R-002",
+      "claim": "`research --json` summaries do not expose `selection_basis`, even though analyze decisions now write that field and build summaries already include it; a machine consumer gets the selection reason from build summaries but not research summaries.",
+      "evidence": [
+        "internal/decision/decision.go:229",
+        "internal/decision/decision.go:230",
+        "internal/summary/summary.go:47",
+        "internal/summary/summary.go:67",
+        "internal/summary/summary.go:263",
+        "internal/summary/summary.go:269",
+        "internal/commands/buildcmd/summary.go:45",
+        "internal/commands/buildcmd/summary.go:47"
+      ],
+      "severity": "medium",
+      "confidence": "high"
+    },
+    {
+      "id": "R-003",
+      "claim": "Manifest experiment fallback only uses `work-order.json` when `meta.experiment` is absent or empty; a partial `meta.experiment` shadows the complete archived work order, so required experiment labels accepted by work-order validation can still be omitted from `manifest.json`.",
+      "evidence": [
+        "internal/manifest/manifest.go:385",
+        "internal/manifest/manifest.go:388",
+        "internal/manifest/manifest.go:393",
+        "internal/manifest/manifest.go:407",
+        "internal/workorder/workorder.go:770",
+        "internal/workorder/workorder.go:799"
+      ],
+      "severity": "medium",
+      "confidence": "high"
+    },
+    {
+      "id": "R-004",
+      "claim": "`runs verify --json` can return an incomplete experiment object without failing verification: it validates manifest schema and run id, then `ExperimentMap` fills missing required fields with empty strings or null rather than adding problems.",
+      "evidence": [
+        "internal/verify/verify.go:85",
+        "internal/verify/verify.go:91",
+        "internal/verify/verify.go:176",
+        "internal/verify/verify.go:207",
+        "internal/verify/verify.go:221"
+      ],
+      "severity": "medium",
+      "confidence": "high"
+    },
+    {
+      "id": "R-005",
+      "claim": "`output_truncation_count` now undercounts truncated stderr because it suppresses every successful provider status whose `stderr_kind` is `diagnostic`, while `StderrKind` classifies any non-empty stderr from a successful provider as diagnostic unless it is the special transport-noise case.",
+      "evidence": [
+        "internal/manifest/manifest.go:670",
+        "internal/manifest/manifest.go:674",
+        "internal/manifest/manifest.go:680",
+        "internal/manifest/manifest.go:681",
+        "internal/artifact/artifact.go:137",
+        "internal/artifact/artifact.go:143"
+      ],
+      "severity": "medium",
+      "confidence": "high"
+    },
+    {
+      "id": "R-006",
+      "claim": "Reports still print the kept-from-nonwinner/additions-from-loser glossary for pairwise no-winner decisions such as `structured_union` and `consensus`, because the glossary gates only on `run_mode != single_provider` rather than on whether the decision actually has a non-selected provider.",
+      "evidence": [
+        "internal/report/report.go:1126",
+        "internal/report/report.go:1127",
+        "internal/decision/decision.go:122",
+        "internal/decision/decision.go:127",
+        "internal/decision/decision.go:157",
+        "internal/decision/decision.go:161"
+      ],
+      "severity": "low",
+      "confidence": "high"
+    },
+    {
+      "id": "R-007",
+      "claim": "Single-provider verification does not validate the `decision.json` `run_mode` field: the decision writer records `run_mode`, but `validateSingleProviderDecision` checks only decision kind, winner, provider, and judge flags, so a missing or mistyped decision run mode can pass when the manifest says `single_provider`.",
+      "evidence": [
+        "internal/decision/decision.go:43",
+        "internal/decision/decision.go:52",
+        "internal/verify/verify.go:353",
+        "internal/verify/verify.go:373"
+      ],
+      "severity": "low",
+      "confidence": "high"
+    }
+  ],
+  "conflicts": [],
+  "unknowns": [],
+  "recommended_next_checks": []
+}</final_json>

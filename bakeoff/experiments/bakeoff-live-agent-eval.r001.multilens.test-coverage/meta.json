@@ -1,0 +1,105 @@
+{
+  "bakeoff_version": "source",
+  "canonical_winner": "codex",
+  "cwd": "/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/bakeoff",
+  "decision_kind": "single_provider_only",
+  "exit_code": 0,
+  "experiment": {
+    "condition_id": "multilens.test-coverage",
+    "id": "bakeoff-live-agent-eval",
+    "repetition_index": 1,
+    "run_kind": "multi_lens_child",
+    "slot_attempt": 1,
+    "slot_id": "test-coverage",
+    "task_id": "runmode-review-1273dce"
+  },
+  "facet": {
+    "exclude": [
+      "production-only files which are covered by the artifact-contract lens",
+      "documentation files which are covered by a separate lens",
+      "style-only test preferences without project convention evidence",
+      "speculation without file:line evidence"
+    ],
+    "focus": "Find actionable test-coverage gaps for behavior changed in the diff: untested branches, missing edge cases, and weak assertions in the changed *_test.go files.",
+    "id": "code-review",
+    "include": [
+      "new production branches or fields with no corresponding test assertion",
+      "edge cases (empty, nil, single-provider, error paths) left untested",
+      "assertions that are tautological or do not validate the new behavior",
+      "experiment metadata fields written by code but never asserted in tests",
+      "single-provider no-winner semantics lacking a regression test",
+      "verifier output contract changes lacking test coverage"
+    ],
+    "kind": "generic"
+  },
+  "finished_at": "2026-06-08T18:35:34Z",
+  "input_hashes": {
+    "decision_sha256": "1acc15103cc19e140c95cf3b1cb72c7ed006ac16c27d488ebe25e4a95c3a118a",
+    "provider_failures_sha256": "f9abfc36895cf2581aa7a15551df10ca6ebe18b494f971a2b12a9f38955d1287",
+    "report_sha256": "80a86f38f412e1aae7491434f95143c7080c6d346ea2c2fb46d6112b7000e30e",
+    "review_context_json_sha256": "1a8d17b54bc5f2108d8e002b006e559dcba09c14b31e1230fa527d02d793de97",
+    "review_context_md_sha256": "04657e3bdc495a45c36b1b610ed48021b193cb555b036e6b9a65ecae92c23266",
+    "source_work_order_sha256": "d1caf18aabb9ef1b5453a42285e599e219c96455c3a4ac42af6b26f7456a95a4",
+    "work_order_sha256": "43b607db70ff62c68ff398566634491b057b366536e4c2c279b0c24e1a12ba26"
+  },
+  "judge_ran": false,
+  "provider_cli_versions": {
+    "claude": "2.1.168 (Claude Code)",
+    "codex": "codex-cli 0.125.0",
+    "git": "git version 2.49.0"
+  },
+  "resolved_models": {
+    "judge": {
+      "backend": "claude",
+      "effort": "xhigh",
+      "model": "opus"
+    },
+    "providers": {
+      "claude": {
+        "backend": "claude",
+        "effort": "high",
+        "model": "sonnet",
+        "scope": "codebase",
+        "scope_enforcement": {
+          "cwd": "/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/bakeoff",
+          "effective_scope": "codebase",
+          "enforcement_level": "enforced",
+          "fallback_reason": null,
+          "mechanisms": [
+            "claude:disallowedTools=WebFetch,WebSearch"
+          ],
+          "policy": "best_effort",
+          "requested_scope": "codebase",
+          "temporary_cwd": false
+        }
+      },
+      "codex": {
+        "backend": "codex",
+        "effort": "high",
+        "model": "gpt-5.5",
+        "scope": "codebase",
+        "scope_enforcement": {
+          "cwd": "/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/bakeoff",
+          "effective_scope": "codebase",
+          "enforcement_level": "enforced",
+          "fallback_reason": null,
+          "mechanisms": [
+            "codex:sandbox=read-only",
+            "codex:disable=web_search"
+          ],
+          "policy": "best_effort",
+          "requested_scope": "codebase",
+          "temporary_cwd": false
+        }
+      }
+    }
+  },
+  "review_context_requested": true,
+  "run_id": "bakeoff-live-agent-eval.r001.multilens.test-coverage",
+  "run_mode": "pairwise",
+  "scope_policy": {
+    "enforcement": "best_effort"
+  },
+  "started_at": "2026-06-08T18:31:10Z",
+  "type": "gather"
+}

@@ -1,0 +1,262 @@
+{
+  "artifact_fingerprints": {
+    "decision.json": {
+      "mtime_ns": 1780943734121657580,
+      "sha256": "1acc15103cc19e140c95cf3b1cb72c7ed006ac16c27d488ebe25e4a95c3a118a",
+      "size_bytes": 5386
+    },
+    "meta.json": {
+      "mtime_ns": 1780943734305500197,
+      "sha256": "67e1586f6405e5f5f1e66698870c1f8cd95944501416f666cb5a666629d19f94",
+      "size_bytes": 3984
+    },
+    "providers/claude/failure.json": {
+      "mtime_ns": 1780943726388525757,
+      "sha256": "883d880c7b6decb86f56780e304ec198789b2bf64c049684eb78c150e17a3edb",
+      "size_bytes": 65360
+    },
+    "providers/claude/prompt.txt": {
+      "mtime_ns": 1780943470806421921,
+      "sha256": "e616331b422e4ce03b547cec83e495a6ef3f7891194d6da5814df8aa7d4d1ccc",
+      "size_bytes": 128675
+    },
+    "providers/claude/status.json": {
+      "mtime_ns": 1780943726382430956,
+      "sha256": "9556029e8e32af2ad394ee7380fe37cb932d028096fa1654f0f87fef46ec508d",
+      "size_bytes": 3170
+    },
+    "providers/claude/stderr.txt": {
+      "mtime_ns": 1780943726358176379,
+      "sha256": "fea56901bb7dbbfa28b9fdfcd0f9caf36a0517f31f10a8d9ed4f3de110620f43",
+      "size_bytes": 127
+    },
+    "providers/claude/stdout.txt": {
+      "mtime_ns": 1780943726350353105,
+      "sha256": "92f5883c331c83c6b994fb9fd7565ca8d8f111faff71a585f09741757fa7ff6a",
+      "size_bytes": 18843
+    },
+    "providers/codex/final.json": {
+      "mtime_ns": 1780943734115140234,
+      "sha256": "98a087c1453238760fb25f8e9d96f8d4a074817616694c3aff7da8bda189dbc0",
+      "size_bytes": 7579
+    },
+    "providers/codex/last-message.txt": {
+      "mtime_ns": 1780943733997585254,
+      "sha256": "b71e7e40d869f2ba958e406c57d5d6aa3755321c2a316e43b3a6efbabb2b0cf4",
+      "size_bytes": 9011
+    },
+    "providers/codex/prompt.txt": {
+      "mtime_ns": 1780943470805510414,
+      "sha256": "e616331b422e4ce03b547cec83e495a6ef3f7891194d6da5814df8aa7d4d1ccc",
+      "size_bytes": 128675
+    },
+    "providers/codex/status.json": {
+      "mtime_ns": 1780943734109568021,
+      "sha256": "6d033e99178a0f57d7dd5a1d71281f88f25d8c33249da789a3a13ebf2791cf54",
+      "size_bytes": 1192
+    },
+    "providers/codex/stderr.txt": {
+      "mtime_ns": 1780943734105090775,
+      "sha256": "50c4adf6e2c37e267fb99ecaa601e064a7dd381c5f9330dbec516daee51794f4",
+      "size_bytes": 60049
+    },
+    "providers/codex/stdout.txt": {
+      "mtime_ns": 1780943734099132226,
+      "sha256": "b6db705a39af74267abb7a59071523f0af80cbdda9af99ca45957ae12ec91bc8",
+      "size_bytes": 9012
+    },
+    "report.md": {
+      "mtime_ns": 1780943734126851998,
+      "sha256": "80a86f38f412e1aae7491434f95143c7080c6d346ea2c2fb46d6112b7000e30e",
+      "size_bytes": 7737
+    },
+    "review-context.json": {
+      "mtime_ns": 1780943470292469319,
+      "sha256": "1a8d17b54bc5f2108d8e002b006e559dcba09c14b31e1230fa527d02d793de97",
+      "size_bytes": 126013
+    },
+    "review-context.md": {
+      "mtime_ns": 1780943470277472377,
+      "sha256": "04657e3bdc495a45c36b1b610ed48021b193cb555b036e6b9a65ecae92c23266",
+      "size_bytes": 120095
+    },
+    "source-work-order.json": {
+      "mtime_ns": 1780943470250621307,
+      "sha256": "d1caf18aabb9ef1b5453a42285e599e219c96455c3a4ac42af6b26f7456a95a4",
+      "size_bytes": 3423
+    },
+    "work-order.json": {
+      "mtime_ns": 1780943470266377088,
+      "sha256": "43b607db70ff62c68ff398566634491b057b366536e4c2c279b0c24e1a12ba26",
+      "size_bytes": 129977
+    }
+  },
+  "artifacts": {
+    "decision": "decision.json",
+    "meta": "meta.json",
+    "report": "report.md",
+    "review_context_json": "review-context.json",
+    "review_context_md": "review-context.md",
+    "source_work_order": "source-work-order.json",
+    "work_order": "work-order.json"
+  },
+  "bakeoff_version": "source",
+  "canonical_winner": "codex",
+  "condition_id": "multilens.test-coverage",
+  "cwd": "/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/bakeoff",
+  "decision_kind": "single_provider_only",
+  "experiment_id": "bakeoff-live-agent-eval",
+  "facet_id": "code-review",
+  "finished_at": "2026-06-08T18:35:34Z",
+  "judge": {
+    "backend": "claude",
+    "effort": "xhigh",
+    "model": "opus"
+  },
+  "judge_attempted": false,
+  "judge_completed": false,
+  "judge_ran": false,
+  "providers": {
+    "claude": {
+      "backend": "claude",
+      "compact_status": "failed",
+      "effort": "high",
+      "exit_code": 0,
+      "failure_kind": "schema_error",
+      "final_json_source": "stdout",
+      "model": "sonnet",
+      "output_bytes": 18843,
+      "scope": "codebase",
+      "scope_enforcement": {
+        "cwd": "/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/bakeoff",
+        "effective_scope": "codebase",
+        "enforcement_level": "enforced",
+        "fallback_reason": null,
+        "mechanisms": [
+          "claude:disallowedTools=WebFetch,WebSearch"
+        ],
+        "policy": "best_effort",
+        "requested_scope": "codebase",
+        "temporary_cwd": false
+      },
+      "status": "schema_error",
+      "stderr_bytes": 0,
+      "stderr_observed_bytes": 0,
+      "stderr_path": "providers/claude/stderr.txt",
+      "stderr_truncated": false,
+      "stdout_bytes": 18843,
+      "stdout_observed_bytes": 18843,
+      "stdout_truncated": false,
+      "wall_seconds": 206.485
+    },
+    "codex": {
+      "backend": "codex",
+      "compact_status": "ok",
+      "effort": "high",
+      "exit_code": 0,
+      "final_json_source": "stdout",
+      "model": "gpt-5.5",
+      "output_bytes": 9012,
+      "scope": "codebase",
+      "scope_enforcement": {
+        "cwd": "/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/bakeoff",
+        "effective_scope": "codebase",
+        "enforcement_level": "enforced",
+        "fallback_reason": null,
+        "mechanisms": [
+          "codex:sandbox=read-only",
+          "codex:disable=web_search"
+        ],
+        "policy": "best_effort",
+        "requested_scope": "codebase",
+        "temporary_cwd": false
+      },
+      "status": "ok",
+      "stderr_bytes": 60000,
+      "stderr_observed_bytes": 425520,
+      "stderr_path": "providers/codex/stderr.txt",
+      "stderr_truncated": true,
+      "stdout_bytes": 9012,
+      "stdout_observed_bytes": 9012,
+      "stdout_truncated": false,
+      "wall_seconds": 263.281
+    }
+  },
+  "repetition_index": 1,
+  "review_context": {
+    "base_commit": "386accc8b8f08cc895b000327b289aca63f6f644",
+    "base_ref": "386accc",
+    "capture_cwd": "/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins/bakeoff",
+    "git_root": "/Users/mstefanko/.claude/plugins/marketplaces/mstefanko-plugins",
+    "head_commit": "1273dce5c9f6cdf4eab9ca753d1879e985ff6d14",
+    "included_sections": [
+      "metadata",
+      "diffstat",
+      "changed_files",
+      "patch"
+    ],
+    "pathspec": ".",
+    "present": true
+  },
+  "run_id": "bakeoff-live-agent-eval.r001.multilens.test-coverage",
+  "run_kind": "multi_lens_child",
+  "run_mode": "pairwise",
+  "schema_version": 1,
+  "selected_patch_provider": null,
+  "single_provider": null,
+  "slot_attempt": 1,
+  "slot_id": "test-coverage",
+  "started_at": "2026-06-08T18:31:10Z",
+  "task_id": "runmode-review-1273dce",
+  "telemetry": {
+    "artifacts": {
+      "output_truncation_count": 0,
+      "prompt_trim_count": 0
+    },
+    "judge": {
+      "backend": "claude",
+      "completed": false,
+      "family": "anthropic",
+      "family_relation": "same_as_some",
+      "judge_passes": null,
+      "order_maps": null,
+      "position_swap_used": false,
+      "ran": false,
+      "selection_basis": null,
+      "winner_backend": "codex",
+      "winner_family": "openai"
+    },
+    "providers": {
+      "backends": [
+        "claude",
+        "codex"
+      ],
+      "count": 2,
+      "families": [
+        "anthropic",
+        "openai"
+      ],
+      "family_diversity": "mixed"
+    },
+    "rerun_mode": null,
+    "route": {
+      "escalation_mode": null,
+      "facet_id": "code-review",
+      "run_mode": "pairwise",
+      "source_type": null,
+      "type": "gather"
+    },
+    "schema_version": 2,
+    "source_run_id": null,
+    "triage": {
+      "highest_severity": null,
+      "item_count": null,
+      "state": "no"
+    }
+  },
+  "triage": {
+    "stale_inputs": [],
+    "state": "no"
+  },
+  "type": "gather"
+}

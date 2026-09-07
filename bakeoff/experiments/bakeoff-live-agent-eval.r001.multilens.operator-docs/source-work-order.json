@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "id": "bakeoff-live-agent-eval.r001.multilens.operator-docs",
+  "type": "gather",
+  "run_mode": "pairwise",
+  "goal": "Review the 386accc..HEAD diff for actionable operator-documentation defects: whether cli-reference, work-orders, and the new hardening-plan docs accurately describe the changed behavior and give operators correct guidance. Report only actionable findings with file:line evidence. Do not implement code.",
+  "background": [
+    "Base ref: 386accc. Review ref: HEAD (working diff generated via --base 386accc --diff --changed-files).",
+    "Lens: operator-docs. Focus on accuracy and completeness of operator-facing documentation versus the code changes in the same diff.",
+    "Changed/added docs: docs/cli-reference.md, docs/work-orders.md, docs/plan-review-facet-hardening-2026-06-08.md, docs/single-provider-artifact-contract-hardening-plan-2026-06-08.md, docs/single-provider-telemetry-hardening-plan-2026-06-08.md, plans/experiment-metadata-hardening.md, plans/single-provider-hardening-plan.md.",
+    "Cross-check doc claims against the code changes (researchcmd/run.go, workorder.go, manifest.go, decision.go, verify.go) to catch drift: flags, fields, run_kind values, single-provider semantics, and experiment metadata described inaccurately.",
+    "Acceptance criteria: every finding must cite a file:line in a changed doc and describe a concrete inaccuracy, omission, or drift from code behavior that would misguide an operator.",
+    "Known risk areas: docs describing single-provider no-winner behavior, experiment metadata fields, and new/changed CLI flags must match the implementation in this diff."
+  ],
+  "facet": {
+    "id": "code-review",
+    "kind": "generic",
+    "focus": "Find actionable defects in operator-facing docs changed in the diff: inaccuracies, omissions, or drift from the code behavior in the same change.",
+    "include": [
+      "doc statements that contradict the code changed in this diff",
+      "CLI flags, fields, or run_kind values documented incorrectly or missing",
+      "single-provider or experiment-metadata behavior described inaccurately",
+      "operator guidance that is incomplete for the new behavior",
+      "broken cross-references or commands that would not work as written",
+      "plan/hardening docs whose stated contract diverges from the shipped code"
+    ],
+    "exclude": [
+      "source or test files which are covered by separate lenses",
+      "prose style or wording preferences without a correctness impact",
+      "speculation without file:line evidence",
+      "requests to author entirely new documentation sections"
+    ]
+  },
+  "providers": [
+    { "id": "claude", "backend": "claude", "model": "sonnet", "scope": "codebase", "effort": "high" },
+    { "id": "codex", "backend": "codex", "model": "gpt-5.5", "scope": "codebase", "effort": "high" }
+  ],
+  "scope_policy": { "enforcement": "best_effort" },
+  "judge": { "backend": "claude", "model": "opus", "effort": "xhigh" },
+  "budgets": {
+    "wall_clock_seconds": 900,
+    "max_output_bytes": 60000,
+    "heartbeat_seconds": 60,
+    "output_cap_grace_seconds": 10,
+    "max_output_overrun_bytes": 60000
+  },
+  "experiment": {
+    "id": "bakeoff-live-agent-eval",
+    "task_id": "runmode-review-1273dce",
+    "run_kind": "multi_lens_child",
+    "repetition_index": 1,
+    "condition_id": "multilens.operator-docs",
+    "slot_id": "operator-docs",
+    "slot_attempt": 1
+  }
+}
