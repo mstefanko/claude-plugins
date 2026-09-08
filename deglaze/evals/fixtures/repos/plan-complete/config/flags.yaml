@@ -1,0 +1,16 @@
+# Runtime feature flags. Read on every request by src/config/flags.ts, which watches this
+# file, so a change takes effect without a deploy.
+#
+# Each flag supports either a boolean, or a staged rollout with an allow list and a
+# percentage. Percentages hash the tenant id, so a tenant stays on the same side across
+# requests.
+
+search.use_composite_index:
+  enabled: false
+  tenants: []
+  percent: 0
+
+search.highlight_matches:
+  enabled: true
+  tenants: []
+  percent: 100

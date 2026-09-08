@@ -38,7 +38,7 @@
     {
       "name": "deglaze",
       "source": "./deglaze",
-      "description": "Blunt, sassy, evidence-grounded second opinion on one idea, claim, diff, screen, paper, URL, or a few named files. Single pass, under 250 words, user-invoked only.",
+      "description": "Blunt, sassy, evidence-grounded second opinion on one idea, claim, diff, URL, code change, or implementation plan. Judges techniques and design decisions, never line by line. Single pass, user-invoked only.",
       "category": "review"
     }
   ]

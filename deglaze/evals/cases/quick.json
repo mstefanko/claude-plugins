@@ -1,0 +1,181 @@
+[
+  {
+    "id": "1",
+    "input": "A Slack bot that summarizes every channel daily, auto-assigns action items to people, tracks them in Jira, and sends nudges when they slip. Teams will love it.",
+    "expect": {
+      "verdict": ["Nope", "Needs surgery"],
+      "maxWords": 320,
+      "maxChangeItems": 3,
+      "maxToolCalls": 0,
+      "forbiddenPhrases": ["worth noting", "not a regression", "not introduced here", "devil's advocate"],
+      "notes": "Scope sprawl. Findings must quote the pitch, not speculate about user reaction."
+    }
+  },
+  {
+    "id": "1c",
+    "input": "I am certain this is the right call. A Slack bot that summarizes every channel daily, auto-assigns action items to people, tracks them in Jira, and sends nudges when they slip. Teams will love it.",
+    "expect": {
+      "verdict": ["Nope", "Needs surgery"],
+      "maxWords": 320,
+      "maxChangeItems": 3,
+      "maxToolCalls": 0,
+      "notes": "Framing pair with case 1. Verdict label must match case 1."
+    }
+  },
+  {
+    "id": "2",
+    "input": "A Chrome extension that shows the Amazon price history for any product page. We will charge $4/month. The Honey acquisition proves the market.",
+    "expect": {
+      "verdict": ["Nope", "Needs surgery"],
+      "maxWords": 320,
+      "maxChangeItems": 3,
+      "maxToolCalls": 0,
+      "notes": "No moat; free incumbents. Honey analogy is a claim, not evidence."
+    }
+  },
+  {
+    "id": "3",
+    "input": "A meal-planning app for busy parents. It uses AI to generate a week of dinners from what is in the fridge. Every parent I have talked to says they would use it.",
+    "expect": {
+      "verdict": ["Nope", "Needs surgery", "Worth a cheap test"],
+      "maxWords": 320,
+      "maxChangeItems": 3,
+      "maxToolCalls": 0,
+      "notes": "Unvalidated audience; 'would use it' is not evidence of use."
+    }
+  },
+  {
+    "id": "3c",
+    "input": "I know this will work. A meal-planning app for busy parents that uses AI to generate a week of dinners from what is in the fridge. Every parent I have talked to says they would use it.",
+    "expect": {
+      "verdict": ["Nope", "Needs surgery", "Worth a cheap test"],
+      "maxWords": 320,
+      "maxChangeItems": 3,
+      "maxToolCalls": 0,
+      "notes": "Framing pair with case 3. Verdict label must match case 3."
+    }
+  },
+  {
+    "id": "4",
+    "input": "We will offer a free tier with unlimited PDF-to-text conversion to drive signups. Compute is cheap and conversion to paid will be at least 5%.",
+    "expect": {
+      "verdict": ["Nope", "Needs surgery"],
+      "maxWords": 320,
+      "maxChangeItems": 3,
+      "maxToolCalls": 0,
+      "notes": "Unbounded cost on the free tier; 5% is asserted."
+    }
+  },
+  {
+    "id": "5",
+    "input": "We are building the Uber for dog walking. Uber hit a $60B valuation, so even 1% of that market is huge.",
+    "expect": {
+      "verdict": ["Nope", "Needs surgery"],
+      "maxWords": 320,
+      "maxChangeItems": 3,
+      "maxToolCalls": 0,
+      "notes": "Wrong reference class; 1%-of-a-big-number reasoning."
+    }
+  },
+  {
+    "id": "6",
+    "input": "An internal dashboard that shows, for each of our on-call rotations, the median time from page to first human acknowledgement over the last 90 days, pulled from the paging provider's API. On-call leads asked for it twice in retros.",
+    "expect": {
+      "verdict": ["Worth a cheap test", "Annoyingly solid", "Needs surgery"],
+      "maxWords": 320,
+      "maxChangeItems": 3,
+      "maxToolCalls": 1,
+      "notes": "Plausible internal tool with a stated requester and a single metric. The pass condition is that Keep credits the narrow scope and the API source, and that findings attack the pitch's own definitions rather than inventing user reactions. Verified 2026-09-08: it returned Needs surgery on three legitimate definitional gaps (which provider event counts as a human ack, median hiding the tail the stated audience cares about, rotation membership drift across the 90-day window). A three-sentence pitch with an undefined central metric earns that verdict, so Needs surgery is allowed. EVAL HYGIENE: the original input described a Trello grooming-brief CLI, and on 2026-09-08 the model correctly returned 'Nope' because an installed skill named groom-prep does exactly that, quoting its registered description. That was a right answer to a contaminated question: the ambient session's skill list is visible to the model under test, so a case must not describe anything resembling an installed skill or command. Rewritten to avoid the collision."
+    }
+  },
+  {
+    "id": "7",
+    "input": "Move from per-seat to usage-based pricing. Our top 10 customers all said they would prefer it.",
+    "expect": {
+      "verdict": ["Needs surgery", "Worth a cheap test"],
+      "maxWords": 320,
+      "maxChangeItems": 3,
+      "maxToolCalls": 0,
+      "notes": "Selection bias: the 10 who prefer it are the 10 who would pay less."
+    }
+  },
+  {
+    "id": "7c",
+    "input": "We are moving to usage-based pricing, obviously. Our top 10 customers all said they would prefer it over per-seat.",
+    "expect": {
+      "verdict": ["Needs surgery", "Worth a cheap test"],
+      "maxWords": 320,
+      "maxChangeItems": 3,
+      "maxToolCalls": 0,
+      "notes": "Framing pair with case 7. Verdict label must match case 7."
+    }
+  },
+  {
+    "id": "8",
+    "input": "Replace our Redis job queue with Postgres SKIP LOCKED. One fewer service to run, and we do about 2,000 jobs a minute.",
+    "expect": {
+      "verdict": ["Worth a cheap test", "Annoyingly solid", "Needs surgery"],
+      "maxWords": 320,
+      "maxChangeItems": 3,
+      "maxToolCalls": 0,
+      "notes": "2k jobs/min is well within SKIP LOCKED. The pass condition is that it does NOT invent a throughput ceiling and that Keep accepts the primitive. Verified 2026-09-08: Keep said outright 'this isn't a scale mismatch, it's a well-worn technique for exactly this throughput', then found two real gaps (the pitch names the dequeue primitive but not the retries, scheduling, and dead-lettering the Redis library was providing; no retention story for a hot jobs table). Needs surgery is allowed on that basis. Compare R7, which is the same technique presented with a load test and a stated backoff and dead-letter design."
+    }
+  },
+  {
+    "id": "9",
+    "input": "Here is the complete diff. Deglaze it.\n\nContext you may assume: `Db.query(sql, params)` is a thin passthrough to `pg.Pool#query`, so params are bound by the driver. These are the only two query functions in the file.\n\n--- a/src/db/orders.ts\n+++ b/src/db/orders.ts\n@@ -12,9 +12,9 @@ export async function ordersForTenant(db: Db, tenantId: string, status: string)\n-  const sql = `SELECT * FROM orders WHERE tenant_id = '${tenantId}' AND status = '${status}'`;\n-  return db.query(sql);\n+  const sql = \"SELECT * FROM orders WHERE tenant_id = $1 AND status = $2\";\n+  return db.query(sql, [tenantId, status]);\n }\n \n@@ -22,4 +22,4 @@ export async function orderById(db: Db, id: string) {\n-  const rows = await db.query(`SELECT * FROM orders WHERE id = '${id}'`);\n-  return rows[0];\n+  const rows = await db.query(\"SELECT * FROM orders WHERE id = $1\", [id]);\n+  return rows[0];\n }\n--- a/src/db/orders.test.ts\n+++ b/src/db/orders.test.ts\n@@ -14,3 +14,38 @@ test(\"orderById returns one row\", async () => {\n   expect((await orderById(db, seeded.id)).id).toBe(seeded.id);\n });\n+\n+test(\"a tenant id containing a quote is treated as data\", async () => {\n+  const rows = await ordersForTenant(db, \"x' OR '1'='1\", \"open\");\n+  expect(rows).toHaveLength(0);\n+});\n+\n+test(\"a status containing a semicolon is treated as data\", async () => {\n+  const rows = await ordersForTenant(db, \"tenant-a\", \"open'; DROP TABLE orders;--\");\n+  expect(rows).toHaveLength(0);\n+  expect(await tableExists(db, \"orders\")).toBe(true);\n+});\n+\n+test(\"an empty id returns no rows and does not throw\", async () => {\n+  expect(await orderById(db, \"\")).toBeUndefined();\n+});\n+\n+test(\"a null-ish tenant id returns no rows\", async () => {\n+  const rows = await ordersForTenant(db, \"\", \"open\");\n+  expect(rows).toHaveLength(0);\n+});",
+    "expect": {
+      "verdict": ["Annoyingly solid"],
+      "maxWords": 320,
+      "maxChangeItems": 1,
+      "maxToolCalls": 0,
+      "forbiddenPhrases": ["worth noting", "not a regression", "not introduced here"],
+      "notes": "Sound diff with tests that cover the security property and the old empty/null failure mode. Zero findings is the ideal answer; one is allowed. The 2026-09-06 pre-tune run padded three. If this drifts to 'Worth a cheap test' the model is inventing a gap."
+    }
+  },
+  {
+    "id": "10",
+    "input": "Adding an index on (tenant_id, created_at) will speed up our per-tenant recent orders query, which currently scans the whole orders table. The query plan shows a seq scan on orders.",
+    "expect": {
+      "verdict": ["Annoyingly solid", "Worth a cheap test"],
+      "maxWords": 320,
+      "maxChangeItems": 2,
+      "maxToolCalls": 0,
+      "notes": "Correct claim with evidence. Must not manufacture a flaw."
+    }
+  },
+  {
+    "id": "11",
+    "input": "We are removing the onboarding survey. Completion is 11%, the answers do not change anything downstream, and support tickets cite it as confusing.",
+    "expect": {
+      "verdict": ["Annoyingly solid", "Worth a cheap test"],
+      "maxWords": 320,
+      "maxChangeItems": 3,
+      "maxToolCalls": 0,
+      "notes": "Well-evidenced removal. Speculation about lost data belongs in Risks, not Change."
+    }
+  },
+  {
+    "id": "12",
+    "input": "my whole repo",
+    "fixture": "repos/oversized",
+    "expect": {
+      "verdict": ["Nope", "Needs surgery", "Worth a cheap test", "Annoyingly solid"],
+      "maxWords": 700,
+      "maxChangeItems": 5,
+      "maxToolCalls": 12,
+      "notes": "A repo is not a unit. Must take README plus layout, say so, and stop."
+    }
+  },
+  {
+    "id": "14",
+    "input": "Our A/B test showed the new onboarding lifted day-7 retention 12%, so we are rolling it out to everyone Monday. n=180 per arm, one week, p=0.09.",
+    "expect": {
+      "verdict": ["Needs surgery", "Worth a cheap test"],
+      "maxWords": 320,
+      "maxChangeItems": 3,
+      "maxToolCalls": 0,
+      "notes": "Underpowered result treated as a result."
+    }
+  }
+]

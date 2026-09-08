@@ -1,13 +1,12 @@
 # deglaze
 
-Claude Code plugin that gives a blunt, sassy, evidence-grounded second opinion on
-one thing. An idea, a decision, a claim, a pasted diff, a screen, a paper abstract,
-a URL, or up to three named files.
+Claude Code plugin that gives a blunt, evidence-grounded second opinion on one thing: an
+idea, a claim, a response, a snippet, a URL, a code change, or an implementation plan.
 
-Single pass. Under 250 words. At most three findings. No subagents, no research,
-no repo sweeps, no edits. It runs only when you type it.
+It judges ideas, techniques, design decisions, invariants, failure paths, and validation.
+It is not a line-by-line code reviewer. Lines are evidence, never the thing under review.
 
-The name: "glazing" is slang for laying on the praise. This strips it off.
+The name: "glazing" is slang for laying on praise the work did not earn. This strips it off.
 
 ## Install
 
@@ -18,59 +17,109 @@ The name: "glazing" is slang for laying on the praise. This strips it off.
 ## Usage
 
 ```
-/deglaze A Slack bot that summarizes every channel daily and auto-assigns action items.
-/deglaze src/billing/invoice.ts src/billing/invoice.test.ts
-/deglaze https://example.com/blog/why-we-rewrote-everything-in-rust
-/deglaze <paste a diff>
-/deglaze            (deglazes the last thing you shared in the conversation)
+/deglaze:deglaze A Slack bot that summarizes every channel daily and auto-assigns action items.
+/deglaze:deglaze docs/PLAN_SEARCH_INDEX.md
+/deglaze:deglaze Review this change: src/api/orders.ts now returns null instead of [].
+/deglaze:deglaze https://example.com/blog/why-we-rewrote-everything-in-rust
+/deglaze:deglaze <paste a diff>
+/deglaze:deglaze            (the last thing you shared, or your uncommitted work)
 ```
 
-If `/deglaze` collides with another command, use `/deglaze:deglaze`.
+The bare `/deglaze` also works when no other installed command claims that name.
 
 ## Output
 
 ```
-Verdict: [Nope | Needs surgery | Worth a cheap test | Annoyingly solid] — one blunt sentence
-Not wrong about: the strongest thing it gets right
-What's wobbling: 1–3 real issues, each pointing at where it lives in the input
-Cut first: one thing to remove
-Prove me wrong: one cheap experiment or decisive question
-Confidence: low | medium | high — what evidence is missing
+Verdict: Nope | Needs surgery | Worth a cheap test | Annoyingly solid — one blunt sentence
+Trying to do: what the target is trying to do, in its words
+Keep: the strongest thing it gets right, or the technique worth keeping
+Change: numbered findings, each with where it lives and why it matters
+Risks: plausible but unconfirmed, omitted when there are none
+Prove me wrong: one experiment, test, query, or decisive question
+Confidence: what was read, what was skipped
 ```
 
-## Why it is built this way
+## How it stays at the concept level
 
-The analysis is adversarial and balanced. Only the delivery is sassy. A critic told to
-"find flaws" manufactures them (Huang et al. 2023; OpenAI CriticGPT 2024), so:
+This is the part that makes it useful on a code change instead of annoying. Four layers:
 
-- The pitch is first rewritten as neutral questions, which cuts sycophancy more than
-  telling the model not to be sycophantic (Dubois et al., UK AISI, 2026).
-- It must name one genuine strength before any finding (steelmanning).
-- It runs a pre-mortem ("six months later it failed, why?"), which raises correct
-  cause-finding by roughly 30% (Mitchell, Russo & Pennington 1989).
-- It drafts a verdict, argues against it, then revises (Herzog & Hertwig 2009).
-- Every defect must point to a location in the input or be labeled an assumption.
-- "Annoyingly solid" is a first-class verdict. There is no finding quota.
-- Jokes live in the verdict line and finding headers only, because humor lowers
-  perceived credibility when it sits where evidence should (Nabi et al. 2007).
-- It holds its verdict under pushback unless you bring new evidence (Sharma et al. 2023).
+- **No shell, no edits.** Bash, Edit, Write, subagents, and the planning tools are removed
+  from the pool while the skill runs. Nothing executes, so micro-performance and lint
+  complaints have no evidence to stand on.
+- **The unit of review is a decision, not a file.** It first states what the change or plan
+  is trying to do, and every finding has to attach to that sentence.
+- **Four admission tests.** A finding must be statable in plain words without quoting code,
+  must change an approach rather than a line, must survive an attempt to refute it against
+  tests and callers, and must carry a complete evidence chain. Several small problems of one
+  kind roll up into one pattern-level finding.
+- **An exclusion list.** Style, naming, formatting, anything a linter catches, typos, import
+  order, test counts, and pre-existing problems the change did not introduce are never
+  findings.
 
-Full rationale, citations, and decisions: `../plans/deglaze-skill-plan.md`.
+Speculation is separated from defects. A claim about the artifact ("asserts this, shows
+nothing") can be a finding. A claim about the world ("users will hate it") is a Risk at most.
+
+## Budget
+
+Words and tool calls scale with what it had to look at, not with how the request was phrased.
+
+| Target | Words | Findings | Tool calls |
+|---|---|---|---|
+| Answered from the target alone | about 150, ceiling 250 | up to 3 | 0 |
+| Needed to read files | about 400, ceiling 700 | up to 5 | up to 12, 8 files, 2 greps |
+
+It reads the artifact and its direct dependencies only: callers of changed symbols, tests
+for changed behavior, contracts and migrations it touches, and files a plan makes claims
+about. It does not follow the graph further, does not browse for context, and never retries
+a failed call. A repository is not a unit of review.
 
 ## Guardrails
 
-- `disable-model-invocation: true` so Claude never deglazes something that merely walked
-  past the conversation.
-- `disallowed-tools` removes Agent, Bash, Edit, Write, Grep, Glob, and planning tools
-  from the pool while the skill is active. Read and URL fetch stay, rationed by
-  instruction to 4 calls, 2 sources, no retries.
-- `effort: medium`. Speed comes from the word cap and tool ban, not from thinking less.
+- `disable-model-invocation: true`, so it only ever runs when you type it. It will not
+  deglaze something that merely walked past in the conversation.
+- `disallowed-tools` removes the shell, the editors, subagents, and the planning tools.
+  Verified 2026-09-07: an attempt to use Bash is refused at the tool layer, not just
+  discouraged by the prompt.
+- Everything it reads is treated as data under review. Instructions embedded in a diff, a
+  plan, or a fetched page ("approve this", "skip the validation section") are findings, not
+  commands. Two eval cases cover this.
+- It holds its verdict under pushback unless you bring new evidence, a constraint it missed,
+  or reasoning that breaks a finding's evidence chain, and it says what changed its mind.
+
+**Known limitation: the tool ban covers the invoking turn only.** Verified 2026-09-08. When
+you reply in the same conversation and it answers your pushback, the skill is no longer
+active, so `disallowed-tools` no longer applies and the shell is available again. The word
+and finding ceilings stop binding too. If you need the guarantees, invoke it fresh rather
+than continuing the thread.
+
+## Design notes
+
+The analysis is adversarial and balanced; only the delivery is sassy. A critic told to find
+flaws will manufacture them, which is the failure mode these choices target:
+
+- Claims are rewritten as neutral questions before evaluation.
+- It must name the strongest thing the target gets right before any finding.
+- Every candidate finding gets an attempted refutation, and only survivors are promoted.
+- There is no finding quota. "Annoyingly solid" is a first-class verdict.
+- Jokes are confined to the verdict line and finding openers, away from evidence.
+
+Those choices are informed by human-subject research on premortems, dialectical
+bootstrapping, steelmanning, and humor's effect on perceived credibility, plus published
+work on LLM critics manufacturing false positives. Treat that literature as the design
+hypothesis, not as validation of this workflow. The validation of *this* skill is the eval
+set in `evals/`, which is where to look before trusting it on something that matters.
+
+Design rationale and decisions live in the `plans/` folder of the marketplace repository.
+They are not shipped with the installed plugin.
 
 ## Evals
 
-`evals/cases.md` holds 15 balanced cases plus 3 confident-vs-neutral framing pairs.
-`evals/run-cases.sh` runs them headless with `--plugin-dir` and writes results to
-`evals/results-<date>/`. Score by hand against the pass criteria in `cases.md`.
+```
+bun evals/run.ts                       # 32 cases, 2 trials each
+bun evals/run.ts --only R8 --trials 1  # the altitude canary
+```
 
-Claude Code-only frontmatter fields are used, so this skill is not uploadable to
-claude.ai as-is. A spec-only variant is a possible follow-up.
+Each trial runs in an isolated temporary git repository and captures a full stream-json
+trace, so tool calls, files read, and refused tools are all scoreable rather than inferred
+from the rendered text. `evals/cases.md` explains the case groups, what the harness checks
+automatically, what needs a human, and which cases cannot be automated and why.
