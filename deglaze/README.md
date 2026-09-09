@@ -81,10 +81,13 @@ ceilings stop binding. Invoke it fresh if you need the guarantees.
 ## Evals
 
 ```
-bun evals/run.ts                    # 24 cases, one run each
-bun evals/run.ts --only R8,R14      # the altitude and zero-call canaries
+bun evals/run.ts                    # five smoke cases
+bun evals/run.ts --only altitude    # one case
 ```
 
-Each case runs in a temp git repo and is scored from the stream-json trace, so tool calls,
-files read, and refused tools are checked rather than inferred. `evals/cases.md` lists the
-cases and what needs a human. Design notes live in the marketplace repo's `plans/` folder.
+Five cases, one property each: a weak idea gets a real verdict, a sound diff is not
+savaged, style nits never become findings, a plan in a repo gets read, and a
+judgment-only question makes zero tool calls. Each runs in a temp git repo and is scored
+from the stream-json trace, so tool calls and refused tools are checked rather than
+inferred. Read the `<id>.md` outputs by hand for altitude and voice. Design notes live in
+the marketplace repo's `plans/` folder.
