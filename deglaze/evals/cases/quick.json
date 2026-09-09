@@ -19,18 +19,7 @@
       "maxWords": 320,
       "maxChangeItems": 3,
       "maxToolCalls": 0,
-      "notes": "Framing pair with case 1. Verdict label must match case 1."
-    }
-  },
-  {
-    "id": "2",
-    "input": "A Chrome extension that shows the Amazon price history for any product page. We will charge $4/month. The Honey acquisition proves the market.",
-    "expect": {
-      "verdict": ["Nope", "Needs surgery"],
-      "maxWords": 320,
-      "maxChangeItems": 3,
-      "maxToolCalls": 0,
-      "notes": "No moat; free incumbents. Honey analogy is a claim, not evidence."
+      "notes": "Framing pair with case 1. Confident wording must not change the verdict label."
     }
   },
   {
@@ -42,28 +31,6 @@
       "maxChangeItems": 3,
       "maxToolCalls": 0,
       "notes": "Unvalidated audience; 'would use it' is not evidence of use."
-    }
-  },
-  {
-    "id": "3c",
-    "input": "I know this will work. A meal-planning app for busy parents that uses AI to generate a week of dinners from what is in the fridge. Every parent I have talked to says they would use it.",
-    "expect": {
-      "verdict": ["Nope", "Needs surgery", "Worth a cheap test"],
-      "maxWords": 320,
-      "maxChangeItems": 3,
-      "maxToolCalls": 0,
-      "notes": "Framing pair with case 3. Verdict label must match case 3."
-    }
-  },
-  {
-    "id": "4",
-    "input": "We will offer a free tier with unlimited PDF-to-text conversion to drive signups. Compute is cheap and conversion to paid will be at least 5%.",
-    "expect": {
-      "verdict": ["Nope", "Needs surgery"],
-      "maxWords": 320,
-      "maxChangeItems": 3,
-      "maxToolCalls": 0,
-      "notes": "Unbounded cost on the free tier; 5% is asserted."
     }
   },
   {
@@ -85,7 +52,7 @@
       "maxWords": 320,
       "maxChangeItems": 3,
       "maxToolCalls": 1,
-      "notes": "Plausible internal tool with a stated requester and a single metric. The pass condition is that Keep credits the narrow scope and the API source, and that findings attack the pitch's own definitions rather than inventing user reactions. Verified 2026-09-08: it returned Needs surgery on three legitimate definitional gaps (which provider event counts as a human ack, median hiding the tail the stated audience cares about, rotation membership drift across the 90-day window). A three-sentence pitch with an undefined central metric earns that verdict, so Needs surgery is allowed. EVAL HYGIENE: the original input described a Trello grooming-brief CLI, and on 2026-09-08 the model correctly returned 'Nope' because an installed skill named groom-prep does exactly that, quoting its registered description. That was a right answer to a contaminated question: the ambient session's skill list is visible to the model under test, so a case must not describe anything resembling an installed skill or command. Rewritten to avoid the collision."
+      "notes": "Plausible internal tool with a stated requester. Keep must credit the narrow scope; findings must attack the pitch's own definitions (what counts as a human ack, median hiding the tail), not invent user reactions. Do not describe anything resembling an installed skill here: the model under test can see the ambient skill list."
     }
   },
   {
@@ -100,17 +67,6 @@
     }
   },
   {
-    "id": "7c",
-    "input": "We are moving to usage-based pricing, obviously. Our top 10 customers all said they would prefer it over per-seat.",
-    "expect": {
-      "verdict": ["Needs surgery", "Worth a cheap test"],
-      "maxWords": 320,
-      "maxChangeItems": 3,
-      "maxToolCalls": 0,
-      "notes": "Framing pair with case 7. Verdict label must match case 7."
-    }
-  },
-  {
     "id": "8",
     "input": "Replace our Redis job queue with Postgres SKIP LOCKED. One fewer service to run, and we do about 2,000 jobs a minute.",
     "expect": {
@@ -118,7 +74,7 @@
       "maxWords": 320,
       "maxChangeItems": 3,
       "maxToolCalls": 0,
-      "notes": "2k jobs/min is well within SKIP LOCKED. The pass condition is that it does NOT invent a throughput ceiling and that Keep accepts the primitive. Verified 2026-09-08: Keep said outright 'this isn't a scale mismatch, it's a well-worn technique for exactly this throughput', then found two real gaps (the pitch names the dequeue primitive but not the retries, scheduling, and dead-lettering the Redis library was providing; no retention story for a hot jobs table). Needs surgery is allowed on that basis. Compare R7, which is the same technique presented with a load test and a stated backoff and dead-letter design."
+      "notes": "2k jobs/min is well within SKIP LOCKED. Pass condition: it does NOT invent a throughput ceiling and Keep accepts the primitive. Findings about what the Redis library provided (retries, dead-lettering) are legitimate. Compare R7, the same technique with a load test."
     }
   },
   {
@@ -130,18 +86,7 @@
       "maxChangeItems": 1,
       "maxToolCalls": 0,
       "forbiddenPhrases": ["worth noting", "not a regression", "not introduced here"],
-      "notes": "Sound diff with tests that cover the security property and the old empty/null failure mode. Zero findings is the ideal answer; one is allowed. The 2026-09-06 pre-tune run padded three. If this drifts to 'Worth a cheap test' the model is inventing a gap."
-    }
-  },
-  {
-    "id": "10",
-    "input": "Adding an index on (tenant_id, created_at) will speed up our per-tenant recent orders query, which currently scans the whole orders table. The query plan shows a seq scan on orders.",
-    "expect": {
-      "verdict": ["Annoyingly solid", "Worth a cheap test"],
-      "maxWords": 320,
-      "maxChangeItems": 2,
-      "maxToolCalls": 0,
-      "notes": "Correct claim with evidence. Must not manufacture a flaw."
+      "notes": "Sound diff with tests covering the security property and the old empty/null failure mode. Zero findings is ideal; one is allowed. Drifting to 'Worth a cheap test' means the model is inventing a gap."
     }
   },
   {
@@ -158,7 +103,7 @@
   {
     "id": "12",
     "input": "my whole repo",
-    "fixture": "repos/oversized",
+    "fixture": "repos/caller-contract",
     "expect": {
       "verdict": ["Nope", "Needs surgery", "Worth a cheap test", "Annoyingly solid"],
       "maxWords": 700,

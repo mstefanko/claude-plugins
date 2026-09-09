@@ -1,20 +1,7 @@
 {
   "name": "deglaze",
-  "version": "0.2.0",
   "description": "Blunt, sassy, evidence-grounded second opinion on ONE thing — an idea, claim, response, snippet, URL, code change, or implementation plan. Judges techniques, design decisions, invariants, failure paths, and validation. Never a line-by-line code review. User-invoked only.",
   "author": { "name": "mstefanko" },
   "license": "MIT",
-  "keywords": [
-    "deglaze",
-    "roast",
-    "critique",
-    "adversarial",
-    "code-review",
-    "plan-review",
-    "design-review",
-    "gut-check",
-    "second-opinion",
-    "pre-mortem",
-    "red-team"
-  ]
+  "keywords": ["deglaze", "critique", "second-opinion", "code-review", "plan-review", "red-team"]
 }
