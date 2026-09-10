@@ -31,7 +31,7 @@ polite.
 Verdict: Nope | Needs surgery | Worth a cheap test | Annoyingly solid — one blunt sentence
 Trying to do: what the thing is trying to do
 Keep: the strongest part, worth keeping
-Change: numbered problems, each with where it is and why it matters
+Change: numbered problems, each opening with a one-line jab, then where it is and why it matters
 Risks: things that might be wrong but aren't proven (skipped if none)
 Prove me wrong: one test, query, or question that would settle it
 Confidence: what it read, what it skipped
