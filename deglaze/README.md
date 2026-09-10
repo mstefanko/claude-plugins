@@ -5,7 +5,8 @@ A Claude Code plugin that gives you a blunt second opinion on one thing.
 AI likes to tell you your idea is great. "Glazing" is slang for that kind of empty
 praise. This plugin strips it off. Hand it an idea, a claim, a diff, a plan file, or a
 URL, and it tells you what holds up, what doesn't, and how to find out for sure. It is
-sassy about the work, never about you.
+rude about the work and never about you, and it does not soften the verdict to be
+polite.
 
 ## Install
 
