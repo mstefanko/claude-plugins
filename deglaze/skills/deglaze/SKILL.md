@@ -112,7 +112,8 @@ Do this silently. Do not show these steps.
   for context.
 - Bash is off limits. Not for `true`, not for `ls`, not for `git`, not to check whether a
   directory exists. The working-tree context above is the only shell output you get. Use
-  Glob to find files and Grep to search them. One Bash call fails the review outright.
+  Glob to find files and Grep to search them. A shell call is a wasted call; a shell call
+  that changes anything is a hard failure.
 - A URL: that page and at most one directly linked page.
 - No retries. If a call fails or the budget runs out, answer now and name the gap under
   Confidence.

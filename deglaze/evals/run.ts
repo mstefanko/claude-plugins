@@ -8,7 +8,8 @@
  *
  * Each case runs headless in a temp git repo and is scored from the stream-json trace, the
  * only place tool calls, refused tools, and the --md Write are visible. The skill's own
- * !`.../scripts/context.sh` line shows up as a Bash call and is ignored. Output lands in
+ * !`.../scripts/context.sh` line is ignored if it shows up as a Bash call. Read-only Bash calls
+ * are tolerated and counted as shell=N; a mutating one is a guard breach. Output lands in
  * results-<date>/ (gitignored); read <id>.md by hand for the verdict, altitude, and voice.
  * Verdict labels move run to run on the same prompt, so they are parsed but never asserted.
  */
@@ -24,6 +25,14 @@ const SECTIONS = ["Verdict", "Trying to do", "Keep", "Change", "Prove me wrong",
 const VERDICTS = ["Nope", "Needs surgery", "Worth a cheap test", "Annoyingly solid"];
 const FORBIDDEN_TOOLS = ["Bash", "Agent", "Task", "Edit", "NotebookEdit", "EnterPlanMode",
   "EnterWorktree", "Workflow", "Skill", "AskUserQuestion", "WebSearch"];
+// Bash is not in disallowed-tools (the ban broke back-to-back invocations), so the model
+// occasionally runs harmless read-only commands. Those are tolerated; a mutating one is a breach.
+const READ_ONLY_BASH = /^(true|false|echo|printf|pwd|ls|cat|head|tail|wc|stat|file|test|\[|find|grep|rg|sort|uniq|cut|tr|awk|sed -n|which|date|git (-C \S+ )?(status|log|diff|show|grep|rev-parse|branch|ls-files|blame|describe))(\s|$)/;
+function isReadOnlyBash(cmd: string): boolean {
+  const stripped = cmd.replace(/2>\/dev\/null|2>&1/g, "");
+  if (/>/.test(stripped)) return false; // any remaining redirection writes somewhere
+  return stripped.split(/\|\||&&|;|\|/).every((seg) => READ_ONLY_BASH.test(seg.trim()));
+}
 
 type Case = {
   id: string;
@@ -114,7 +123,11 @@ function score(c: Case, text: string, calls: ToolCall[]) {
   if (e.minChangeItems != null && items < e.minChangeItems) f.push(`change items ${items} < ${e.minChangeItems}`);
   if (e.maxToolCalls != null && budgeted > e.maxToolCalls) f.push(`tool calls ${budgeted} > ${e.maxToolCalls}`);
   if (e.minToolCalls != null && budgeted < e.minToolCalls) f.push(`tool calls ${budgeted} < ${e.minToolCalls}`);
-  const breached = calls.filter((t) => FORBIDDEN_TOOLS.includes(t.name) && !t.denied).map((t) => t.name);
+  const bashCmd = (t: ToolCall) => (typeof t.input?.command === "string" ? t.input.command.trim() : "");
+  const shell = calls.filter((t) => t.name === "Bash" && !t.denied);
+  const breached = calls
+    .filter((t) => FORBIDDEN_TOOLS.includes(t.name) && !t.denied && !(t.name === "Bash" && isReadOnlyBash(bashCmd(t))))
+    .map((t) => (t.name === "Bash" ? `Bash(${bashCmd(t).slice(0, 60)})` : t.name));
   if (breached.length) f.push(`GUARD BREACH, forbidden tool ran: ${[...new Set(breached)].join(",")}`);
   const read = calls.filter((t) => t.name === "Read").map((t) => String(t.input?.file_path ?? ""));
   for (const w of e.mustRead ?? []) if (!read.some((p) => p.endsWith(w))) f.push(`did not read: ${w}`);
@@ -133,7 +146,7 @@ function score(c: Case, text: string, calls: ToolCall[]) {
     }
     if (!/^Saved: /m.test(text)) f.push("missing Saved: line");
   }
-  return { verdict, words, items, calls: budgeted, failures: f };
+  return { verdict, words, items, calls: budgeted, shell: shell.length, failures: f };
 }
 
 const all = JSON.parse(readFileSync(join(HERE, "cases.json"), "utf8")) as Case[];
@@ -159,7 +172,7 @@ for (const c of cases) {
   const r = score(c, text, calls);
   if (p.exitCode !== 0) r.failures.unshift(`claude exited ${p.exitCode}: ${p.stderr.toString().slice(0, 200)}`);
   if (!r.failures.length) passed++;
-  console.log(`${r.failures.length ? "FAIL" : "PASS"} verdict="${r.verdict ?? "?"}" words=${r.words} change=${r.items} calls=${r.calls}` +
+  console.log(`${r.failures.length ? "FAIL" : "PASS"} verdict="${r.verdict ?? "?"}" words=${r.words} change=${r.items} calls=${r.calls} shell=${r.shell}` +
     (r.failures.length ? `\n     ${r.failures.join("\n     ")}` : ""));
 }
 console.log(`\n${passed}/${cases.length} passed. Outputs in ${outDir}`);
