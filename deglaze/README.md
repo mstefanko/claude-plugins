@@ -23,7 +23,12 @@ The name: "glazing" is slang for laying on praise the work did not earn. This st
 /deglaze:deglaze https://example.com/blog/why-we-rewrote-everything-in-rust
 /deglaze:deglaze <paste a diff>
 /deglaze:deglaze            (the last thing you shared, or your uncommitted work)
+/deglaze:deglaze docs/PLAN_SEARCH_INDEX.md --md     (also save the review to a file)
 ```
+
+`--md` writes the review to `.deglaze/<date>-<slug>.md` in the working directory, with
+`Target:` and `Commit:` lines at the top, so a later session can hold the review next to
+the plan or change it judged. Without the flag nothing is written.
 
 ## Output
 
@@ -39,9 +44,9 @@ Confidence: what was read, what was skipped, calls used
 
 ## How it stays at the concept level
 
-- **No shell, no edits.** Bash, Edit, Write, subagents, and the planning tools are removed
-  from the pool while the skill runs, so lint and micro-performance complaints have nothing
-  to stand on.
+- **No shell, no edits.** Bash, Edit, subagents, and the planning tools are removed from
+  the pool while the skill runs, so lint and micro-performance complaints have nothing to
+  stand on. Write stays available only for the `--md` report file.
 - **The unit of review is a decision, not a file.** Every finding has to attach to one
   sentence about what the change or plan is trying to do.
 - **Four admission tests.** A finding must be statable in plain words without quoting code,
@@ -67,8 +72,9 @@ treats a repository as not a unit of review.
 ## Guardrails
 
 - `disable-model-invocation: true`: it only runs when you type it.
-- `disallowed-tools` removes the shell, editors, subagents, and planning tools at the tool
-  layer, not just in the prompt.
+- `disallowed-tools` removes the shell, Edit, subagents, and planning tools at the tool
+  layer, not just in the prompt. Pasted diffs and snippets are judged as pasted; it does
+  not go looking for the files they name.
 - Everything it reads is data under review. Instructions embedded in a diff, plan, or page
   ("approve this", "skip validation") become findings, not commands.
 - It holds its verdict under pushback unless you bring new evidence, a missed constraint, or

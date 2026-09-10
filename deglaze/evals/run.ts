@@ -21,7 +21,7 @@ const PLUGIN_DIR = resolve(HERE, "..");
 const INJECTED_BASH = [/^git diff --stat HEAD/, /^git log --oneline -3/];
 const SECTIONS = ["Verdict", "Trying to do", "Keep", "Change", "Prove me wrong", "Confidence"];
 const VERDICTS = ["Nope", "Needs surgery", "Worth a cheap test", "Annoyingly solid"];
-const FORBIDDEN_TOOLS = ["Bash", "Agent", "Task", "Edit", "Write", "NotebookEdit", "EnterPlanMode",
+const FORBIDDEN_TOOLS = ["Bash", "Agent", "Task", "Edit", "NotebookEdit", "EnterPlanMode",
   "EnterWorktree", "Workflow", "Skill", "AskUserQuestion", "WebSearch"];
 
 type Case = {
@@ -38,6 +38,7 @@ type Case = {
     mustRead?: string[];
     mustMention?: string[];
     forbiddenPhrases?: string[];
+    mustWrite?: boolean;
     notes?: string;
   };
 };
@@ -89,8 +90,10 @@ function parseTrace(jsonl: string) {
       }
       // A disallowed tool still emits tool_use; the refusal only shows in its result.
       if (b.type === "tool_result" && b.is_error && /denied|not allowed/i.test(JSON.stringify(b.content ?? ""))) denied.add(b.tool_use_id);
+      // Join every assistant text block: with --md the review comes before the Write and
+      // the trailing "Saved:" line after it, and the final `result` field holds only the last.
+      if (e.type === "assistant" && b.type === "text") text += (text ? "\n" : "") + b.text;
     }
-    if (e.type === "result" && typeof e.result === "string") text = e.result;
   }
   for (const c of calls) c.denied = denied.has(c.id);
   return { calls, text };
@@ -123,10 +126,23 @@ function score(c: Case, text: string, calls: ToolCall[]) {
   if (e.maxWords != null && words > e.maxWords) f.push(`words ${words} > ${e.maxWords}`);
   if (e.maxChangeItems != null && items > e.maxChangeItems) f.push(`change items ${items} > ${e.maxChangeItems}`);
   if (e.minChangeItems != null && items < e.minChangeItems) f.push(`change items ${items} < ${e.minChangeItems}`);
-  if (e.maxToolCalls != null && calls.length > e.maxToolCalls) f.push(`tool calls ${calls.length} > ${e.maxToolCalls}`);
-  if (e.minToolCalls != null && calls.length < e.minToolCalls) f.push(`tool calls ${calls.length} < ${e.minToolCalls}`);
+  const budgeted = calls.filter((t) => t.name !== "Write").length; // the --md report Write is outside the budget
+  if (e.maxToolCalls != null && budgeted > e.maxToolCalls) f.push(`tool calls ${budgeted} > ${e.maxToolCalls}`);
+  if (e.minToolCalls != null && budgeted < e.minToolCalls) f.push(`tool calls ${budgeted} < ${e.minToolCalls}`);
   const breached = calls.filter((t) => FORBIDDEN_TOOLS.includes(t.name) && !t.denied).map((t) => t.name);
   if (breached.length) f.push(`GUARD BREACH, forbidden tool ran: ${[...new Set(breached)].join(",")}`);
+  // Write is allowed only for the --md report: one file, under .deglaze/, with the header lines.
+  const writes = calls.filter((t) => t.name === "Write" && !t.denied);
+  if (!e.mustWrite && writes.length) f.push(`wrote a file without --md: ${writes.map((t) => t.input?.file_path).join(",")}`);
+  if (e.mustWrite) {
+    if (writes.length !== 1) f.push(`expected exactly one Write, got ${writes.length}`);
+    for (const w of writes) {
+      if (!/\/\.deglaze\/\d{4}-\d{2}-\d{2}-[a-z0-9-]+\.md$/.test(String(w.input?.file_path))) f.push(`report path off-pattern: ${w.input?.file_path}`);
+      const body = String(w.input?.content ?? "");
+      for (const h of ["# deglaze", "Target:", "Commit:", "Verdict:"]) if (!body.includes(h)) f.push(`report missing "${h}"`);
+    }
+    if (!/^Saved: /m.test(text)) f.push("missing Saved: line");
+  }
   const read = calls.filter((t) => t.name === "Read").map((t) => String(t.input?.file_path ?? ""));
   for (const w of e.mustRead ?? []) if (!read.some((p) => p.endsWith(w))) f.push(`did not read: ${w}`);
   for (const w of e.mustMention ?? []) if (!lower.includes(w.toLowerCase())) f.push(`missing mention: "${w}"`);

@@ -36,7 +36,7 @@
   },
   {
     "id": "plan",
-    "input": "docs/PLAN_SEARCH_INDEX.md",
+    "input": "docs/PLAN_SEARCH_INDEX.md --md",
     "fixture": "repos/plan-incomplete",
     "expect": {
       "verdict": ["Nope", "Needs surgery"],
@@ -47,7 +47,8 @@
       "minToolCalls": 1,
       "mustRead": ["docs/PLAN_SEARCH_INDEX.md"],
       "mustMention": ["rollback"],
-      "notes": "The read-the-repo path. A plan with no rollback step and 'test it' as validation; both must be Change items, which requires opening the file."
+      "mustWrite": true,
+      "notes": "The read-the-repo path plus the --md report. A plan with no rollback step and 'test it' as validation; both must be Change items, which requires opening the file. Exactly one Write, under .deglaze/, with Target and Commit lines."
     }
   },
   {
