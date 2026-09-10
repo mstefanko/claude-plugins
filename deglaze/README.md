@@ -1,12 +1,11 @@
 # deglaze
 
-Claude Code plugin that gives a blunt, evidence-grounded second opinion on one thing: an
-idea, a claim, a response, a snippet, a URL, a code change, or an implementation plan.
+A Claude Code plugin that gives you a blunt second opinion on one thing.
 
-It judges ideas, techniques, design decisions, invariants, failure paths, and validation.
-It is not a line-by-line code reviewer. Lines are evidence, never the thing under review.
-
-The name: "glazing" is slang for laying on praise the work did not earn. This strips it off.
+AI likes to tell you your idea is great. "Glazing" is slang for that kind of empty
+praise. This plugin strips it off. Hand it an idea, a claim, a diff, a plan file, or a
+URL, and it tells you what holds up, what doesn't, and how to find out for sure. It is
+sassy about the work, never about you.
 
 ## Install
 
@@ -14,86 +13,66 @@ The name: "glazing" is slang for laying on praise the work did not earn. This st
 /plugin install deglaze@mstefanko-plugins
 ```
 
-## Usage
+## Use it
 
 ```
-/deglaze:deglaze A Slack bot that summarizes every channel daily and auto-assigns action items.
+/deglaze:deglaze A Slack bot that summarizes every channel and assigns action items.
 /deglaze:deglaze docs/PLAN_SEARCH_INDEX.md
-/deglaze:deglaze Review this change: src/api/orders.ts now returns null instead of [].
-/deglaze:deglaze https://example.com/blog/why-we-rewrote-everything-in-rust
 /deglaze:deglaze <paste a diff>
-/deglaze:deglaze            (the last thing you shared, or your uncommitted work)
-/deglaze:deglaze docs/PLAN_SEARCH_INDEX.md --md     (also save the review to a file)
+/deglaze:deglaze https://example.com/some-blog-post
+/deglaze:deglaze                         (the last thing you shared, or your uncommitted work)
+/deglaze:deglaze docs/PLAN.md --md       (also save the review to a file)
 ```
 
-`--md` writes the review to `.deglaze/<date>-<slug>.md` in the working directory, with
-`Target:` and `Commit:` lines at the top, so a later session can hold the review next to
-the plan or change it judged. Without the flag nothing is written.
-
-## Output
+## What you get back
 
 ```
 Verdict: Nope | Needs surgery | Worth a cheap test | Annoyingly solid — one blunt sentence
-Trying to do: what the target is trying to do
-Keep: the strongest thing it gets right
-Change: numbered findings, each with where it lives and why it matters
-Risks: plausible but unconfirmed, omitted when there are none
-Prove me wrong: one experiment, test, query, or decisive question
-Confidence: what was read, what was skipped, calls used
+Trying to do: what the thing is trying to do
+Keep: the strongest part, worth keeping
+Change: numbered problems, each with where it is and why it matters
+Risks: things that might be wrong but aren't proven (skipped if none)
+Prove me wrong: one test, query, or question that would settle it
+Confidence: what it read, what it skipped
 ```
 
-## How it stays at the concept level
+"Annoyingly solid" is a real answer. If nothing it found would change your decision,
+it says so instead of inventing problems.
 
-- **No shell, no edits.** Bash, Edit, subagents, and the planning tools are removed from
-  the pool while the skill runs, so lint and micro-performance complaints have nothing to
-  stand on. Write stays available only for the `--md` report file.
-- **The unit of review is a decision, not a file.** Every finding has to attach to one
-  sentence about what the change or plan is trying to do.
-- **Four admission tests.** A finding must be statable in plain words without quoting code,
-  must change an approach rather than a line, must survive an attempt to refute it, and must
-  carry a complete evidence chain.
-- **An exclusion list.** Style, naming, formatting, typos, import order, test counts, and
-  pre-existing problems the change did not introduce are never findings.
+## How it thinks
 
-Speculation is separated from defects: a claim about the artifact can be a finding, a claim
-about the world is a Risk at most. "Annoyingly solid" is a first-class verdict; there is no
-finding quota.
+- It judges ideas and decisions, not lines of code. Style, naming, and formatting are
+  never findings.
+- It has to name the best part before it names any problem.
+- Every problem has to survive its own attempt to knock it down. Guesses about the
+  world go under Risks, not Change.
+- It cannot run commands, edit files, or start other agents. Those tools are switched
+  off while it runs.
+- If you paste something, it judges the paste and does not go looking for files. If you
+  point it at a file or plan in your repo, it reads that and its direct neighbors, up to
+  12 tool calls, and stops.
+- Anything inside what it reviews is treated as data. A comment saying "reviewer, approve
+  this" becomes a finding, not an instruction.
 
-## Budget
+## Saving a review
 
-| Target | Words | Findings | Tool calls |
-|---|---|---|---|
-| Answered from the target alone | about 200, ceiling 320 | up to 3 | 0 |
-| Needed to read files | about 400, ceiling 700 | up to 5 | up to 12, 8 files, 2 greps |
+Add `--md` and the review is also written to `.deglaze/<date>-<slug>.md` in your working
+directory, with `Target:` and `Commit:` lines at the top. Open it in a later session next
+to the plan or change it judged. Without the flag, nothing is written. Add `.deglaze/` to
+your gitignore.
 
-It reads the artifact and its direct dependencies only, never retries a failed call, and
-treats a repository as not a unit of review.
+## Pushing back
 
-## Guardrails
+Reply in the same conversation and it will hold its verdict unless you bring new
+evidence or a missed constraint, and it will say what changed its mind. Once you reply,
+the tool switches are off again, so start fresh if you need the guarantees.
 
-- `disable-model-invocation: true`: it only runs when you type it.
-- `disallowed-tools` removes the shell, Edit, subagents, and planning tools at the tool
-  layer, not just in the prompt. Pasted diffs and snippets are judged as pasted; it does
-  not go looking for the files they name.
-- Everything it reads is data under review. Instructions embedded in a diff, plan, or page
-  ("approve this", "skip validation") become findings, not commands.
-- It holds its verdict under pushback unless you bring new evidence, a missed constraint, or
-  reasoning that breaks a finding's chain, and says what changed its mind.
-
-**Known limitation:** the tool ban covers the invoking turn only. When you reply in the same
-conversation, the skill is no longer active, so the shell is available again and the word
-ceilings stop binding. Invoke it fresh if you need the guarantees.
-
-## Evals
+## Checking it still works
 
 ```
-bun evals/run.ts                    # five smoke cases
-bun evals/run.ts --only altitude    # one case
+bun evals/run.ts
 ```
 
-Five cases, one property each: a weak idea gets a real verdict, a sound diff is not
-savaged, style nits never become findings, a plan in a repo gets read, and a
-judgment-only question makes zero tool calls. Each runs in a temp git repo and is scored
-from the stream-json trace, so tool calls and refused tools are checked rather than
-inferred. Read the `<id>.md` outputs by hand for altitude and voice. Design notes live in
-the marketplace repo's `plans/` folder.
+Two headless cases, about two minutes: a pasted diff with deliberate style nits must get
+zero style findings and zero tool calls, and a plan in a repo must be read, judged, and
+saved with `--md`. Run it after editing the skill. Everything else you learn by using it.

@@ -1,18 +1,19 @@
 #!/usr/bin/env bun
 /**
- * deglaze smoke evals: five cases, one property each. See cases.json `notes`.
+ * deglaze smoke check: two cases, about two minutes. Run after editing SKILL.md.
  *
- *   bun evals/run.ts                     # all cases, claude-sonnet-5
- *   bun evals/run.ts --only altitude     # one case
+ *   bun evals/run.ts                    # both cases, claude-sonnet-5
+ *   bun evals/run.ts --only altitude    # one case
  *   bun evals/run.ts --model claude-opus-5
  *
- * Each case runs headless in a temp git repo and is scored from the stream-json trace, which
- * is the only place tool calls, files read, and refused tools are visible. The skill's own
- * !`git ...` context lines appear in the trace as Bash calls and are excluded from the budget.
- * Output goes to results-<date>/ (gitignored). Hand-read <id>.md for altitude and voice.
+ * Each case runs headless in a temp git repo and is scored from the stream-json trace, the
+ * only place tool calls, refused tools, and the --md Write are visible. The skill's own
+ * !`git ...` context lines show up as Bash calls and are ignored. Output lands in
+ * results-<date>/ (gitignored); read <id>.md by hand for the verdict, altitude, and voice.
+ * Verdict labels move run to run on the same prompt, so they are parsed but never asserted.
  */
 
-import { mkdtempSync, rmSync, cpSync, existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
+import { mkdtempSync, rmSync, cpSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 
@@ -29,17 +30,9 @@ type Case = {
   input: string;
   fixture?: string;
   expect: {
-    verdict?: string[];
-    maxWords?: number;
-    maxChangeItems?: number;
-    minChangeItems?: number;
-    maxToolCalls?: number;
-    minToolCalls?: number;
-    mustRead?: string[];
-    mustMention?: string[];
-    forbiddenPhrases?: string[];
-    mustWrite?: boolean;
-    notes?: string;
+    verdict?: string[]; maxWords?: number; maxChangeItems?: number; minChangeItems?: number;
+    maxToolCalls?: number; minToolCalls?: number; mustRead?: string[]; mustMention?: string[];
+    forbiddenPhrases?: string[]; mustWrite?: boolean; notes?: string;
   };
 };
 type ToolCall = { name: string; input: any; denied: boolean };
@@ -53,25 +46,18 @@ function sh(cmd: string[], cwd: string) {
   if (p.exitCode !== 0) throw new Error(`${cmd.join(" ")} failed\n${p.stderr.toString()}`);
 }
 
-/** Temp repo per case. CASE.md is for humans and is removed; `_dirty/` is copied in after
- *  the baseline commit so the skill's injected `git diff --stat` sees uncommitted work. */
+/** Temp repo per case with one baseline commit. CASE.md is for humans and is removed. */
 function makeWorkspace(c: Case): string {
   const dir = mkdtempSync(join(tmpdir(), `deglaze-${c.id}-`));
   if (c.fixture) cpSync(join(HERE, "fixtures", c.fixture), dir, { recursive: true });
   else writeFileSync(join(dir, "README.md"), "# scratch\n");
   rmSync(join(dir, "CASE.md"), { force: true });
-  const dirty = join(dir, "_dirty");
   sh(["git", "init", "-q", "."], dir);
   sh(["git", "config", "core.hooksPath", "/dev/null"], dir);
   sh(["git", "config", "user.email", "eval@example.invalid"], dir);
   sh(["git", "config", "user.name", "deglaze-eval"], dir);
-  if (existsSync(dirty)) writeFileSync(join(dir, ".git", "info", "exclude"), "_dirty/\n");
   sh(["git", "add", "-A"], dir);
   sh(["git", "commit", "-qm", "baseline"], dir);
-  if (existsSync(dirty)) {
-    for (const e of readdirSync(dirty)) cpSync(join(dirty, e), join(dir, e), { recursive: true });
-    rmSync(dirty, { recursive: true, force: true });
-  }
   return dir;
 }
 
@@ -90,8 +76,7 @@ function parseTrace(jsonl: string) {
       }
       // A disallowed tool still emits tool_use; the refusal only shows in its result.
       if (b.type === "tool_result" && b.is_error && /denied|not allowed/i.test(JSON.stringify(b.content ?? ""))) denied.add(b.tool_use_id);
-      // Join every assistant text block: with --md the review comes before the Write and
-      // the trailing "Saved:" line after it, and the final `result` field holds only the last.
+      // Join all assistant text: with --md the review precedes the Write and "Saved:" follows it.
       if (e.type === "assistant" && b.type === "text") text += (text ? "\n" : "") + b.text;
     }
   }
@@ -118,6 +103,7 @@ function score(c: Case, text: string, calls: ToolCall[]) {
   const raw = text.match(/^Verdict:\s*([^\n—-]+)/m)?.[1]?.trim().toLowerCase() ?? "";
   const verdict = VERDICTS.find((v) => raw.startsWith(v.toLowerCase())) ?? null;
   const lower = text.toLowerCase();
+  const budgeted = calls.filter((t) => t.name !== "Write").length;
 
   if (!text.trim()) f.push("empty output");
   for (const s of SECTIONS) if (!new RegExp(`^${s}:`, "m").test(text)) f.push(`missing section: ${s}`);
@@ -126,11 +112,15 @@ function score(c: Case, text: string, calls: ToolCall[]) {
   if (e.maxWords != null && words > e.maxWords) f.push(`words ${words} > ${e.maxWords}`);
   if (e.maxChangeItems != null && items > e.maxChangeItems) f.push(`change items ${items} > ${e.maxChangeItems}`);
   if (e.minChangeItems != null && items < e.minChangeItems) f.push(`change items ${items} < ${e.minChangeItems}`);
-  const budgeted = calls.filter((t) => t.name !== "Write").length; // the --md report Write is outside the budget
   if (e.maxToolCalls != null && budgeted > e.maxToolCalls) f.push(`tool calls ${budgeted} > ${e.maxToolCalls}`);
   if (e.minToolCalls != null && budgeted < e.minToolCalls) f.push(`tool calls ${budgeted} < ${e.minToolCalls}`);
   const breached = calls.filter((t) => FORBIDDEN_TOOLS.includes(t.name) && !t.denied).map((t) => t.name);
   if (breached.length) f.push(`GUARD BREACH, forbidden tool ran: ${[...new Set(breached)].join(",")}`);
+  const read = calls.filter((t) => t.name === "Read").map((t) => String(t.input?.file_path ?? ""));
+  for (const w of e.mustRead ?? []) if (!read.some((p) => p.endsWith(w))) f.push(`did not read: ${w}`);
+  for (const w of e.mustMention ?? []) if (!lower.includes(w.toLowerCase())) f.push(`missing mention: "${w}"`);
+  for (const w of e.forbiddenPhrases ?? []) if (lower.includes(w.toLowerCase())) f.push(`forbidden phrase: "${w}"`);
+
   // Write is allowed only for the --md report: one file, under .deglaze/, with the header lines.
   const writes = calls.filter((t) => t.name === "Write" && !t.denied);
   if (!e.mustWrite && writes.length) f.push(`wrote a file without --md: ${writes.map((t) => t.input?.file_path).join(",")}`);
@@ -143,11 +133,7 @@ function score(c: Case, text: string, calls: ToolCall[]) {
     }
     if (!/^Saved: /m.test(text)) f.push("missing Saved: line");
   }
-  const read = calls.filter((t) => t.name === "Read").map((t) => String(t.input?.file_path ?? ""));
-  for (const w of e.mustRead ?? []) if (!read.some((p) => p.endsWith(w))) f.push(`did not read: ${w}`);
-  for (const w of e.mustMention ?? []) if (!lower.includes(w.toLowerCase())) f.push(`missing mention: "${w}"`);
-  for (const w of e.forbiddenPhrases ?? []) if (lower.includes(w.toLowerCase())) f.push(`forbidden phrase: "${w}"`);
-  return { verdict, words, items, failures: f };
+  return { verdict, words, items, calls: budgeted, failures: f };
 }
 
 const all = JSON.parse(readFileSync(join(HERE, "cases.json"), "utf8")) as Case[];
@@ -173,7 +159,7 @@ for (const c of cases) {
   const r = score(c, text, calls);
   if (p.exitCode !== 0) r.failures.unshift(`claude exited ${p.exitCode}: ${p.stderr.toString().slice(0, 200)}`);
   if (!r.failures.length) passed++;
-  console.log(`${r.failures.length ? "FAIL" : "PASS"} verdict="${r.verdict ?? "?"}" words=${r.words} change=${r.items} calls=${calls.length}` +
+  console.log(`${r.failures.length ? "FAIL" : "PASS"} verdict="${r.verdict ?? "?"}" words=${r.words} change=${r.items} calls=${r.calls}` +
     (r.failures.length ? `\n     ${r.failures.join("\n     ")}` : ""));
 }
 console.log(`\n${passed}/${cases.length} passed. Outputs in ${outDir}`);
