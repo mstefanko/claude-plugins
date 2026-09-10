@@ -8,7 +8,7 @@
  *
  * Each case runs headless in a temp git repo and is scored from the stream-json trace, the
  * only place tool calls, refused tools, and the --md Write are visible. The skill's own
- * !`git ...` context lines show up as Bash calls and are ignored. Output lands in
+ * !`.../scripts/context.sh` line shows up as a Bash call and is ignored. Output lands in
  * results-<date>/ (gitignored); read <id>.md by hand for the verdict, altitude, and voice.
  * Verdict labels move run to run on the same prompt, so they are parsed but never asserted.
  */
@@ -19,7 +19,7 @@ import { join, dirname, resolve } from "node:path";
 
 const HERE = dirname(new URL(import.meta.url).pathname);
 const PLUGIN_DIR = resolve(HERE, "..");
-const INJECTED_BASH = [/^git diff --stat HEAD/, /^git log --oneline -3/];
+const INJECTED_BASH = [/\/skills\/deglaze\/scripts\/context\.sh$/];
 const SECTIONS = ["Verdict", "Trying to do", "Keep", "Change", "Prove me wrong", "Confidence"];
 const VERDICTS = ["Nope", "Needs surgery", "Worth a cheap test", "Annoyingly solid"];
 const FORBIDDEN_TOOLS = ["Bash", "Agent", "Task", "Edit", "NotebookEdit", "EnterPlanMode",
